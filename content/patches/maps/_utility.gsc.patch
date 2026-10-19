@@ -1,0 +1,57 @@
+mw2coop patch for maps/_utility.gsc (Modern Warfare 2, 64-bit Steam build)
+
+1. A co-op session on a campaign map is the campaign, not Spec Ops.
+@@@ replace
+is_specialop()
+{
+	return GetDvar( "specialops" ) == "1";
+}
+@@@ with
+is_specialop()
+{
+	return GetDvar( "specialops" ) == "1" && !maps\_mw2coop::is_campaign_coop();
+}
+@@@ end
+
+2. Mission failure in co-op: both players restart from the last checkpoint.
+@@@ replace
+	if ( is_specialop() )
+	{
+		thread maps\_specialops_code::failure_summary_display();
+		return;
+	}
+
+	MissionFailed();
+@@@ with
+	if ( is_specialop() )
+	{
+		thread maps\_specialops_code::failure_summary_display();
+		return;
+	}
+
+	if ( maps\_mw2coop::is_campaign_coop() )
+	{
+		thread maps\_mw2coop::mission_failed();
+		return;
+	}
+
+	MissionFailed();
+@@@ end
+
+3. Mission end in co-op: both players move on together.
+@@@ replace
+nextmission()
+{
+	maps\_endmission::_nextmission();
+}
+@@@ with
+nextmission()
+{
+	if ( maps\_mw2coop::is_campaign_coop() )
+	{
+		maps\_mw2coop::mission_complete();
+		return;
+	}
+	maps\_endmission::_nextmission();
+}
+@@@ end

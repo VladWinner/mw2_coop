@@ -1,0 +1,12 @@
+mw2coop patch for maps/_load.gsc (Modern Warfare 2, 64-bit Steam build)
+
+1. Start the co-op campaign framework (it does nothing outside a co-op campaign session).
+@@@ replace
+	if ( is_coop() )
+		maps\_coop::main();
+@@@ with
+	if ( is_coop() )
+		maps\_coop::main();
+
+	maps\_mw2coop::main();
+@@@ end

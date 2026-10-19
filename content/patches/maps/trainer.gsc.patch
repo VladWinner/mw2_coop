@@ -1,0 +1,78 @@
+mw2coop patch for maps/trainer.gsc (S.S.D.D., Modern Warfare 2, 64-bit Steam build)
+
+1. Co-op settings: weapons picked up by either player go to both; checkpoints = start points.
+@@@ replace
+	level.color[ "blue" ] = ( .1, .3, 1 );
+@@@ with
+	level.color[ "blue" ] = ( .1, .3, 1 );
+
+	level.mw2coop_weapon_sync = "both";
+	maps\_mw2coop::add_checkpoint( "firing_range_hip_and_ads_done", "timed_ads" );
+	maps\_mw2coop::add_checkpoint( "firing_range_timed_ads_done", "bullet_penetration" );
+	maps\_mw2coop::add_checkpoint( "firing_range_penetration_done", "frag" );
+	maps\_mw2coop::add_checkpoint( "firing_range_frags_done", "pit" );
+	maps\_mw2coop::add_checkpoint( "sidearm_complete", "course" );
+	maps\_mw2coop::add_checkpoint( "player_done_with_course", "end" );
+@@@ end
+
+2. Endless ammo on the range for every player, not just player 1.
+@@@ replace
+	level.player thread never_run_out_of_ammo();
+}
+@@@ with
+	foreach ( player in level.players )
+		player thread never_run_out_of_ammo();
+}
+@@@ end
+
+@@@ replace
+		level.player waittill( "reload_start" );
+		if ( flag( "player_inside_course" ) )
+			break;
+		weaponName = self GetCurrentWeapon();
+		if ( level.player GetWeaponAmmoStock( weaponName ) < 100 )
+		{
+			level.player SetWeaponAmmoStock( weaponName, 9999 );
+@@@ with
+		self waittill( "reload_start" );
+		if ( flag( "player_inside_course" ) )
+			break;
+		weaponName = self GetCurrentWeapon();
+		if ( self GetWeaponAmmoStock( weaponName ) < 100 )
+		{
+			self SetWeaponAmmoStock( weaponName, 9999 );
+@@@ end
+
+3. Ending: both players are safe, slowed, cannot sprint and fade out together.
+@@@ replace
+	level.player enableinvulnerability( true );
+@@@ with
+	foreach ( player in level.players )
+		player enableinvulnerability( true );
+@@@ end
+
+@@@ replace
+	level.player allowsprint( false );
+@@@ with
+	foreach ( player in level.players )
+		player allowsprint( false );
+@@@ end
+
+@@@ replace
+		level.player SetMoveSpeedScale( currentMoveRate );
+@@@ with
+		foreach ( player in level.players )
+			player SetMoveSpeedScale( currentMoveRate );
+@@@ end
+
+@@@ replace
+	black_overlay = create_client_overlay( "black", 0, level.player );
+@@@ with
+	black_overlay = create_client_overlay( "black", 0, level.player );
+	if ( isdefined( level.player2 ) )
+	{
+		black_overlay2 = create_client_overlay( "black", 0, level.player2 );
+		black_overlay2 fadeOverTime( 1 );
+		black_overlay2.alpha = 1;
+	}
+@@@ end
