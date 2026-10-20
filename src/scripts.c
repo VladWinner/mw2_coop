@@ -31,6 +31,7 @@
 
 #include "game.h"
 #include "log.h"
+#include "scrdebug.h"
 #include "scripts.h"
 
 #define ASSET_TYPE_RAWFILE 0x24
@@ -115,6 +116,11 @@ static char *next_block(char **cursor, char *kind, int kind_size)
 	memcpy(kind, p + 4, k);
 	kind[k] = 0;
 	char *body = eol + 1;
+	if (strncmp(body, "@@@ ", 4) == 0) { // empty body, the next marker follows right away
+		*eol = 0;
+		*cursor = body;
+		return eol;
+	}
 	char *end = strstr(body, "\n@@@ ");
 	if (!end)
 		return NULL;
@@ -196,6 +202,7 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 	if (own) {
 		char *buf = to_hunk(own, size);
 		log_printf("scripts: %s <- mw2coop (%d bytes, hash %08x)", ext, size, fnv1a(own, size));
+		scrdebug_note_source(ext, own, size);
 		free(own);
 		return buf;
 	}
@@ -209,8 +216,10 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 	// Patch a working copy; the zone text keeps its '\r', which the compiler ignores.
 	int plen;
 	char *probe = read_mod_file("patches", ext, ".patch", &plen);
-	if (!probe)
+	if (!probe) {
+		scrdebug_note_source(ext, buf, len);
 		return buf;
+	}
 	free(probe);
 	int n = 0;
 	char *work = malloc(len + 1);
@@ -221,6 +230,7 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 	int applied, total;
 	work = apply_patches(ext, work, &n, &applied, &total);
 	char *out = to_hunk(work, n);
+	scrdebug_note_source(ext, work, n);
 	log_printf("scripts: %s <- zone + %d/%d patches (%d bytes, hash %08x)%s", ext, applied, total, n,
 		   fnv1a(work, n), applied == total ? "" : "  !!! PATCH FAILURES");
 	free(work);

@@ -14,6 +14,7 @@
 #include "control.h"
 #include "game.h"
 #include "log.h"
+#include "progress.h"
 
 #define MAX_WATCH 24
 
@@ -66,9 +67,16 @@ static void script_request(const char *cmd)
 		return;
 	if (strncmp(cmd, "restart", 7) == 0) {
 		game_cbuf_addtext("fast_restart\n"); // SV_MapRestart sends coopRestart to the client
+	} else if (strncmp(cmd, "checkpoint ", 11) == 0) {
+		char map[64] = "", start[64] = "";
+		if (sscanf(cmd + 11, "%63s %63s", map, start) == 2 && start[0] != '@')
+			progress_save(map, start);
 	} else if (strncmp(cmd, "nextmap ", 8) == 0) {
-		char map[64];
+		char map[64] = "";
 		sscanf(cmd + 8, "%63s", map);
+		if (map[0] == '@') // last mission: no next one
+			map[0] = 0;
+		progress_save(map, "");
 		log_printf("script: next map '%s' requested (transition not implemented yet)", map);
 	}
 }

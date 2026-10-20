@@ -1,0 +1,20 @@
+mw2coop patch for maps/_intelligence.gsc (Modern Warfare 2, 64-bit Steam build)
+
+1. No intel pickups in a co-op campaign session. Which intel is found lives in each player's
+   local profile (GetPlayerIntelIsFound); on the client the host's player is not local, the
+   call raises a script error there only, and the two lockstep machines drift apart.
+   Spec Ops removes intel the same way.
+@@@ replace
+	level.table_origins = create_array_of_origins_from_table();
+	initialize_intel();
+@@@ with
+	level.table_origins = create_array_of_origins_from_table();
+
+	if ( maps\_mw2coop::is_campaign_coop() )
+	{
+		remove_all_intel();
+		return;
+	}
+
+	initialize_intel();
+@@@ end

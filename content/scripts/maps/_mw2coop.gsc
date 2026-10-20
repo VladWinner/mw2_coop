@@ -51,6 +51,12 @@ main()
 
 	PrecacheString( &"SCRIPT_CHECKPOINT" );
 
+	// maps\_coop (revive) and kill_wrapper() read this Spec Ops flag in any co-op session;
+	// maps\_specialops creates it, the campaign does not. Set when the level ends, as in Spec Ops,
+	// so the revive HUD and downed-player threads stop.
+	if ( !flag_exist( "special_op_terminated" ) )
+		flag_init( "special_op_terminated" );
+
 	state( "level " + level.script + ", start dvar '" + GetDvar( "start" ) + "', qa '" + GetDvar( "mw2coop_qa" ) + "'" );
 
 	thread no_saves();
@@ -73,9 +79,29 @@ state( text )
 	SetDvar( "mw2coop_state", text );
 }
 
+// The DLL reads mw2coop_cmd every 250 ms, so requests are queued and sent 0.3 s apart.
 request( what )
 {
-	SetDvar( "mw2coop_cmd", what + " @" + GetTime() );
+	if ( !isdefined( level.mw2coop_requests ) )
+	{
+		level.mw2coop_requests = [];
+		level thread send_requests();
+	}
+	level.mw2coop_requests[ level.mw2coop_requests.size ] = what;
+	level notify( "mw2coop_request" );
+}
+
+send_requests()
+{
+	for ( ;; )
+	{
+		while ( level.mw2coop_requests.size == 0 )
+			level waittill( "mw2coop_request" );
+		what = level.mw2coop_requests[ 0 ];
+		level.mw2coop_requests = array_remove_index( level.mw2coop_requests, 0 );
+		SetDvar( "mw2coop_cmd", what + " @" + GetTime() );
+		wait 0.3;
+	}
 }
 
 // --------------------------------------------------------------------------------------------
@@ -137,13 +163,17 @@ teleport_to_partner( partner )
 	offsets[ offsets.size ] = forward * -48;
 	offsets[ offsets.size ] = right * 64 + forward * -48;
 	offsets[ offsets.size ] = right * -64 + forward * -48;
-	from = partner.origin + ( 0, 0, 32 );
+	chest = partner.origin + ( 0, 0, 48 );
 	foreach ( offset in offsets )
 	{
-		spot = partner.origin + offset + ( 0, 0, 32 );
-		if ( DistanceSquared( PlayerPhysicsTrace( from, spot ), spot ) > 1 )
+		spot = partner.origin + offset;
+		// a clear line from the partner (ignoring the partner's own body) ...
+		if ( !BulletTracePassed( chest, spot + ( 0, 0, 48 ), false, partner ) )
 			continue;
-		ground = PlayerPhysicsTrace( spot, spot - ( 0, 0, 160 ) );
+		// ... and floor under the spot, at about the partner's height
+		ground = PlayerPhysicsTrace( spot + ( 0, 0, 48 ), spot - ( 0, 0, 96 ) );
+		if ( abs( ground[ 2 ] - partner.origin[ 2 ] ) > 40 )
+			continue;
 		self SetOrigin( ground );
 		self SetPlayerAngles( yaw );
 		return true;
@@ -184,12 +214,24 @@ copy_weapons( to, from )
 		to SwitchToWeapon( current );
 }
 
+// Level loadouts (maps\_loadout) set first-person hands on level.player only. Without hands the
+// client's own player cannot draw a weapon: the engine raises "no viewmodel set" and drops the
+// co-op session. Player 2 always wears player 1's hands, also when a level changes them.
+sync_viewmodel()
+{
+	hands = level.player GetViewModel();
+	if ( hands != "" && level.player2 GetViewModel() != hands )
+		level.player2 SetViewModel( hands );
+}
+
 sync_weapons()
 {
 	level endon( "mw2coop_level_end" );
 	if ( !isdefined( level.player2 ) )
 		return;
+	sync_viewmodel();	// before any weapon reaches player 2
 	wait 0.15;	// after start points hand out weapons
+	sync_viewmodel();
 	copy_weapons( level.player2, level.player );
 	state( "player 2 weapons copied from player 1" );
 	prev1 = level.player GetWeaponsListAll();
@@ -197,6 +239,7 @@ sync_weapons()
 	for ( ;; )
 	{
 		wait 0.25;
+		sync_viewmodel();
 		now1 = level.player GetWeaponsListAll();
 		now2 = level.player2 GetWeaponsListAll();
 		// the revive system takes and returns weapons of a downed player: leave it alone
@@ -245,6 +288,7 @@ checkpoint_wait( index, cp )
 	level.mw2coop.checkpoint = index;
 	SetDvar( "start", cp.start );
 	state( "checkpoint " + cp.start );
+	request( "checkpoint " + level.script + " " + cp.start );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
 }
@@ -280,7 +324,8 @@ watch_failure()
 	while ( !isdefined( level.flag[ "coop_alldowned" ] ) )
 		wait 0.05;
 	flag_wait( "coop_alldowned" );
-	mission_failed();
+	// own thread: mission_failed() sends mw2coop_level_end, which would end this thread
+	level thread mission_failed();
 }
 
 // Replaces MissionFailed() in a co-op campaign session.
@@ -290,6 +335,7 @@ mission_failed()
 		return;
 	level.mw2coop.failing = true;
 	level notify( "mw2coop_level_end" );
+	flag_set( "special_op_terminated" );
 	state( "mission failed, restart at '" + GetDvar( "start" ) + "'" );
 	foreach ( player in level.players )
 	{
@@ -321,6 +367,7 @@ mission_complete()
 		return;
 	level.mw2coop.completing = true;
 	level notify( "mw2coop_level_end" );
+	flag_set( "special_op_terminated" );
 	level notify( "nextmission" );
 	level.nextmission = true;
 	foreach ( player in level.players )

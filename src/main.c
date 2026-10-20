@@ -7,6 +7,7 @@
 #include "log.h"
 #include "net.h"
 #include "party.h"
+#include "progress.h"
 #include "scrdebug.h"
 #include "scripts.h"
 
@@ -43,6 +44,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		scrdebug_install();
 		net_install();
 		party_install();
+		progress_install();
 		control_start();
 	}
 	return 0;

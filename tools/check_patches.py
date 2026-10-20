@@ -17,7 +17,7 @@ def blocks(text):
         if eol < 0:
             return
         kind = text[at + 4:eol]
-        end = text.find('\n@@@ ', eol + 1)
+        end = text.find('\n@@@ ', eol)  # from eol: an empty body ends right there
         if end < 0:
             return
         yield kind, text[eol + 1:end]

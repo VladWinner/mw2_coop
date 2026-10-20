@@ -24,6 +24,9 @@ main()
 		case "end":
 			ending();
 			break;
+		case "resume":
+			resume();
+			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
 	}
@@ -116,5 +119,13 @@ ending()
 	report( "ending running" );
 	wait 15;
 	check( isdefined( level.nextmission ), "mission end reached" );
+	report( "done" );
+}
+
+// Continued session (qa_pair.sh resume @continue): both machines start at the saved checkpoint.
+resume()
+{
+	common_checks();
+	check( isdefined( level.start_point ) && level.start_point != "default", "level started at the saved checkpoint '" + level.start_point + "'" );
 	report( "done" );
 }

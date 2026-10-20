@@ -1,0 +1,61 @@
+mw2coop patch for maps/_coop.gsc (Modern Warfare 2, 64-bit Steam build)
+
+1. Revive prompt: Spec Ops gives players body models (SetModelFunc), campaign levels do not,
+   so a campaign player has a model index but no DObj and linkTo( player, "tag_origin" )
+   raises a script error (link builtin @0x18ff30, "parent has no dobj" path). That ends the
+   downed thread before the revive prompt, HUD and bleed-out timer exist. Link to the player
+   entity itself instead (no tag) in a co-op campaign session.
+2. A downed player who bleeds out (or both down) is killed here, which in Spec Ops ends the
+   mission. In the campaign the mission is failed and restarted at the checkpoint by
+   maps\_mw2coop::mission_failed() instead; kill() would also fail on a player it has already
+   made invulnerable.
+3. Spec Ops never gets past player_coop_kill() in player_coop_downed(): the player dies and the
+   thread ends on "death". In the campaign the player lives on, so stop there once the level
+   has ended; otherwise the revive prompt and bleed-out HUD start after their cleanup ran.
+@@@ replace
+	level.revive_ent linkTo( self, "tag_origin" );
+@@@ with
+	if ( maps\_mw2coop::is_campaign_coop() )
+		level.revive_ent linkTo( self );
+	else
+		level.revive_ent linkTo( self, "tag_origin" );
+@@@ end
+@@@ replace
+	if ( flag( "coop_fail_when_all_dead" ) )
+		flag_wait( "coop_alldowned" );
+
+@@@ with
+	if ( flag( "coop_fail_when_all_dead" ) )
+		flag_wait( "coop_alldowned" );
+
+	if ( maps\_mw2coop::is_campaign_coop() )
+	{
+		level thread maps\_mw2coop::mission_failed();
+		return;
+	}
+
+@@@ end
+@@@ replace
+		self player_coop_kill();
+
+	self player_coop_create_use_target();
+@@@ with
+		self player_coop_kill();
+
+	if ( maps\_mw2coop::is_campaign_coop() && flag( "special_op_terminated" ) )
+		return;
+
+	self player_coop_create_use_target();
+@@@ end
+@@@ replace
+		self player_coop_kill();
+
+	self player_coop_set_original_attributes();
+@@@ with
+		self player_coop_kill();
+
+	if ( maps\_mw2coop::is_campaign_coop() && flag( "special_op_terminated" ) )
+		return;
+
+	self player_coop_set_original_attributes();
+@@@ end

@@ -1,11 +1,17 @@
 // Packet logging for QA: iw4sp.exe imports sendto (#20) and recvfrom (#17) from WSOCK32.dll by
 // ordinal; their IAT slots are pointed at wrappers that log the game's UDP traffic.
+// They also carry mw2coop's own packet: the start point, sent by the host just before each
+// coopLaunch it sends (see progress.c).
 #include <winsock2.h>
 #include <windows.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
+#include "game.h"
 #include "log.h"
 #include "net.h"
+#include "progress.h"
 
 typedef int(WINAPI *sendto_t)(SOCKET, const char *, int, int, const struct sockaddr *, int);
 typedef int(WINAPI *recvfrom_t)(SOCKET, char *, int, int, struct sockaddr *, int *);
@@ -40,8 +46,25 @@ static void log_packet(const char *dir, const struct sockaddr *sa, const char *b
 	log_printf("net: %s %s len %d: %s", dir, addr, len, text);
 }
 
+static int contains(const char *buf, int len, const char *word)
+{
+	int wl = (int)strlen(word);
+	for (int i = 0; i + wl <= len; i++)
+		if (memcmp(buf + i, word, wl) == 0)
+			return 1;
+	return 0;
+}
+
 static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
 {
+	// The party resends coopLaunch until the client acks it; the start packet goes along each time.
+	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) &&
+	    contains(buf, len, "coopLaunch")) {
+		char pkt[96];
+		int n = progress_launch_packet(pkt, sizeof(pkt));
+		log_packet("send", to, pkt, n);
+		real_sendto(s, pkt, n, flags, to, tolen);
+	}
 	log_packet("send", to, buf, len);
 	return real_sendto(s, buf, len, flags, to, tolen);
 }
@@ -49,8 +72,13 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
 {
 	int r = real_recvfrom(s, buf, len, flags, from, fromlen);
-	if (r > 0)
+	if (r > 0) {
 		log_packet("recv", from, buf, r);
+		if (progress_on_packet(buf, r)) {
+			WSASetLastError(WSAEWOULDBLOCK); // ours: the game sees "no packet this time"
+			return SOCKET_ERROR;
+		}
+	}
 	return r;
 }
 
