@@ -3,18 +3,21 @@
 Two-player co-op for the **Call of Duty: Modern Warfare 2 (2009) campaign**, on the current
 **64-bit Steam build**, using the co-op netcode the game already ships for Spec Ops.
 
-> **Alpha, work in progress. Not playable through yet.** Two copies of the game play
-> S.S.D.D. together (checkpoints, restart, saved progress), move on to Team Player together and
-> share its Humvee (one on the turret, one on a seat, swap by holding Use); the Wolverines!
-> Humvee rides seat both players. Other missions have no co-op fixes yet. This is for
-> developers and testers. See [Status](#status).
+> **Alpha, work in progress.** Most missions start together and S.S.D.D., Team Player,
+> Wolverines!, Takedown's car ride, The Only Easy Day's swim, Cliffhanger's climb and
+> snowmobiles, No Russian's elevator and ending, and the crash site and ISS of Second Sun are
+> reworked for two players. Other set pieces and the final knife fight are not done yet. See
+> [Status](#status). Download: [Releases](https://github.com/stxlvn/mw2_coop/releases)
+> (`mw2coop-<version>.zip`, see [Install](#install)).
 
 *Кратко по-русски:* мод для прохождения кампании MW2 (2009) вдвоём на актуальной 64-битной
-Steam-версии. Альфа, в разработке: S.S.D.D. идёт вдвоём (чекпоинты, рестарт, сохранение
-прогресса), игра вместе переходит в Team Player, где оба едут в одном Humvee (кто сел первым —
-за пулемётом, второй на сиденье, смена мест удержанием «Использовать»); в Wolverines! оба
-едут в машине. Остальные миссии пока не доработаны. На время тестов включён режим бога
-(`mw2coop_god 0` выключает).
+Steam-версии. Альфа: вдвоём переделаны S.S.D.D., Team Player (Humvee, смена мест удержанием
+«Использовать»), Wolverines!, поездка в машине в Takedown, заплыв и бесшумное убийство в The
+Only Easy Day, подъём по льду и снегоходы в Cliffhanger, лифт и концовка No Russian, крушение
+и МКС в Second Sun. Финальный бой на ножах и часть сцен ещё не готовы. Установка: скачайте
+архив из [Releases](https://github.com/stxlvn/mw2_coop/releases), распакуйте в папку игры,
+запускайте `mw2coop-host.bat` (хост) и `mw2coop-join.bat` (второй игрок); подробно в
+`INSTALL.txt` внутри архива.
 
 ## Status
 
@@ -35,8 +38,8 @@ Works:
   level restarts at the last checkpoint on both machines.
 - Mission end: both machines move on to the next mission together (S.S.D.D. → Team
   Player/`roadkill` checked).
-- Test god mode, on by default for now: players take no damage, so nobody is downed.
-  The host turns it off with `set mw2coop_god 0` before `coopLaunch`; the client follows.
+- Test god mode: players take no damage, so nobody is downed. On by default from the
+  console (QA); the release `.bat` files set `mw2coop_god 0` (edit `GOD=1` to turn it on).
 - Saved progress: the host keeps the last mission and checkpoint in
   `mw2coop\progress.txt`; `mw2coop_continue` starts there next time, and the client is sent
   the same start point automatically.
@@ -53,9 +56,13 @@ Works:
 - The Only Easy Day... (`oilrig`): both ride an SDV underwater (player 2 on the second one),
   both surface by the grate; whoever strikes first does the stealth kill, then the SEALs pull
   both out of the water.
-- No Russian (`airport`): player 2 has his own place in the elevator.
+- No Russian (`airport`): player 2 has his own place in the elevator; at the end Makarov
+  shoots the player at the van (or the nearer one), then turns and shoots the other.
 - Of Their Own Accord (end) and Second Sun (start): both wake up in the crashed Black Hawk,
   each with his own rifle; at the ISS both float side by side; both are let out of the wreck.
+  In the street a falling helicopter chases each player; the level goes on once both hide.
+- Endgame's ending map starts with the knife fight (it went to the free-roam museum in
+  co-op); the knife fight itself is not reworked for two yet.
 - Cliffhanger: both players climb the ice wall side by side, each with his own icepicks (left
   pick: Attack, right pick: Aim), make the big jump, and Soap catches each of them in turn (the
   second one hangs on until Soap is free); the level goes on once both are at the top. Each
@@ -64,16 +71,22 @@ Works:
   untested.
 
 Not working or not done:
-- Vehicles in other missions: Endgame (`af_chase`) boat and the rest: not done. No on-screen hint for the seat swap yet.
-- Cliffhanger: the climbing field of view and depth of field, and the slow motion of Soap's
-  catch, show on both screens whoever triggers them.
+- Endgame (`af_chase`) boat and the knife fight with Shepherd for two: not done. No on-screen
+  hint for the seat swap yet.
+- Global screen effects show on both screens whoever triggers them: Cliffhanger's climbing
+  field of view, depth of field and the slow motion of Soap's catch, The Only Easy Day's water
+  vision during the stealth kill.
+- No Russian's far ending (nobody at the van door) logs one script error after the second
+  shot (`_anim::anim_loop_packet`); the scene plays on.
 - Player 2 is only brought along when player 1 jumps far in one step; a slow scripted move can
   still leave him behind.
 - The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
-- Only S.S.D.D., Team Player, Wolverines!, Takedown (opening), The Only Easy Day... (opening), Cliffhanger, No Russian (elevator), Of Their Own Accord (crash) and Second Sun (opening) have level fixes. Other missions, their in-engine cutscenes for player 2 and
-  vehicle sections for two players are not done.
+- Level fixes so far: S.S.D.D., Team Player, Wolverines!, Takedown (opening), The Only Easy
+  Day... (opening), Cliffhanger, No Russian (elevator, ending), Of Their Own Accord (crash),
+  Second Sun (opening, street), The Gulag and Takedown seats. Other missions start with
+  player 2 next to player 1 but their scripted scenes are written for one player.
 - Joining a friend through a Steam invite (two Steam accounts) is untested.
-- No menu: hosting and joining use console commands (below).
+- No in-game menu: hosting and joining use the `.bat` files or console commands (below).
 
 ## Requirements
 
@@ -85,23 +98,38 @@ Not working or not done:
 - Each player owns the game. Both players use **the same mw2coop files**: co-op runs in
   lockstep (both PCs run the level scripts), so different scripts desync.
 
-## Install (testers)
+## Install
 
-Use a **copy** of the game folder, not your Steam install:
+For players, from a release archive (`mw2coop-<version>.zip`); `INSTALL.txt` inside says the
+same in Russian and English:
 
-1. Copy the game folder somewhere else, e.g. `D:\coop-test\mw2-64`.
-2. Put `winmm.dll` and the `mw2coop` folder (`scripts`, `patches`) from the release next to
-   `iw4sp.exe` in the copy.
-3. Start Steam, then start the copy with the environment variables `SteamAppId=10180` and
-   `SteamGameId=10180` set. Without them the Steam DRM wrapper exits and Steam starts your
-   **real** install instead. `tools/run_test.ps1` does this and kills any `iw4sp.exe`
-   outside your test folder.
-4. Logs: `mw2coop\mw2coop.log` in the game copy.
+1. Steam: Library -> Modern Warfare 2 -> Manage -> Browse local files (the folder with
+   `iw4sp.exe`).
+2. Copy everything from the archive there: `winmm.dll`, the `mw2coop` folder and the three
+   `.bat` files. No game file is replaced. Both players need the same archive.
+3. Host: run `mw2coop-host.bat` (the game starts through Steam; the window clears its start
+   commands after 2 minutes). Partner: once the host's game shows the main menu, run
+   `mw2coop-join.bat` and type the host's IP address. The mission starts for both.
+4. Carry on later: the host runs `mw2coop-continue.bat` (last mission and checkpoint, kept in
+   the host's `mw2coop\progress.txt`); the partner runs `mw2coop-join.bat` again.
 
-## Hosting and joining (alpha, console)
+`MISSION=` in `mw2coop-host.bat` picks the first mission (map names: trainer, roadkill,
+cliffhanger, airport, favela, invasion, arcadia, oilrig, gulag, dcburning, contingency,
+dcemp, dc_whitehouse, estate, boneyard, af_caves, af_chase); `GOD=1` turns on the test god
+mode. The host needs UDP 28960 reachable (port forward) or a shared LAN/VPN.
+Uninstall: delete `winmm.dll`, the `mw2coop` folder and the `mw2coop-*.bat` files.
 
-Commands are read from `mw2coop\commands.txt` (one per line, appended lines run as they
-arrive). The game must show its online connection first (about 10 s after start).
+For testers working on the mod: use a **copy** of the game folder, not your Steam install,
+and start it with the environment variables `SteamAppId=10180` and `SteamGameId=10180` (without
+them the Steam DRM wrapper exits and Steam starts your **real** install instead);
+`tools/run_test.ps1` does this and kills any `iw4sp.exe` outside the test folder. Logs:
+`mw2coop\mw2coop.log`.
+
+## Hosting and joining by hand (console)
+
+The `.bat` files write these lines to `mw2coop\commands.txt`, which the mod runs in order
+(appended lines run as they arrive; `!sleep <ms>` waits). The game must show its online
+connection first (about 10 s after start).
 
 Host:
 ```
@@ -110,20 +138,18 @@ listen
 coopLaunch
 ```
 `coopLaunch` can be given early: the game starts the mission once the partner has joined.
-
 To carry on where you stopped, the host replaces `set coop_mapName ...` with
-`mw2coop_continue` (mission and checkpoint from `mw2coop\progress.txt`). The client does
-nothing extra: the host sends it the start point with `coopLaunch`. To pick a checkpoint by
-hand, the host can `set start <start point>` before `coopLaunch`.
+`mw2coop_continue`. The client does nothing extra: the host sends it the start point with
+`coopLaunch`. To pick a checkpoint by hand, the host can `set start <start point>` before
+`coopLaunch`; `set mw2coop_god 0` turns the test god mode off (the client follows the host).
 
 Client (`8305` is port 28960 byte-swapped; the game's `connect` expects it that way):
 ```
 mw2coop_party_join
 connect <host IP> 8305
 ```
-Over the internet the host needs UDP 28960 reachable. `mw2coop_party_join` stands in for
-the Steam-lobby step of a normal invite; with two Steam accounts a normal Spec Ops invite
-may work instead (untested).
+`mw2coop_party_join` stands in for the Steam-lobby step of a normal invite; with two Steam
+accounts a normal Spec Ops invite may work instead (untested).
 
 ## How it works
 
@@ -155,19 +181,27 @@ Needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and a POSIX shell (Gi
 ```
 LLVM_MINGW=/path/to/llvm-mingw-ucrt-x86_64 ./build.sh release
 ```
+`tools/make_release.sh <version>` builds the release DLL (checked for local paths) and packs
+`dist/mw2coop-<version>.zip` with the scripts, patches, `.bat` launchers (`content/release`)
+and `INSTALL.txt`, plus its SHA-256.
 `tools/gen_winmm_proxy.py` regenerates the export stubs from the system `winmm.dll`.
 
 ## Testing
 
-`tools/qa_pair.sh <scenario>` starts a host and a client copy on one PC, connects them and
-runs an in-game check scenario from `content/scripts/maps/_mw2coop_qa.gsc` (S.S.D.D.:
-`intro`, `restart`, `end`, `resume`, `god`; Wolverines!: `ride`; Team Player: `rkintro`,
-`board`, `rideend`, `turret`), then prints both logs. Usage:
-`tools/qa_pair.sh <scenario> [start point] [seconds] [map]`. `tools/qa_pair.sh resume @continue`
-starts the host with `mw2coop_continue` and the client with no start point. Script errors
-are logged with the GSC call stack (`file::function +offset`). One Steam account is enough: the QA-only command
-`!xuid_add` gives the second copy a different player id. `tools/check_patches.py` checks
-the patches against extracted game scripts without starting the game.
+`tools/qa_pair.sh <scenario>` starts a host and a client copy on one PC, connects them,
+runs an in-game check scenario on both (`content/scripts/maps/_mw2coop_qa.gsc`; Cliffhanger's
+climb in `_mw2coop_climb_qa.gsc`), prints both logs and closes the copies once the scenario
+is done. Usage: `tools/qa_pair.sh <scenario> [start point] [seconds] [map]`. Scenarios:
+S.S.D.D. `intro`, `restart`, `end`, `resume` (`@continue`), `god`; Team Player `rkintro`,
+`board`, `rideend`, `turret`; Wolverines! `ride`; Takedown `takedown`, `takedown2`; The Only
+Easy Day `oilrig`, `oilrig2`; Cliffhanger `climb`, `snow`, `snowpick`; No Russian `nrend`,
+`nrend2` (start `escape`); crash site `crashsite` (dcburning, start `crash`), Second Sun
+`dcemp`, `street` (start `street`); any map `spawn`, `leash`. Bots drive the players (button
+holds, velocity pushes), so real mouse and keyboard input on these set pieces is untested.
+Script errors are logged with the GSC call stack (`file::function +offset`). One Steam account
+is enough: the QA-only command `!xuid_add` gives the second copy a different player id.
+`tools/check_patches.py` checks the patches against extracted game scripts without starting
+the game; `tools/gen_*_patches.py` generate the larger patches from the extracted scripts.
 
 ## Legal
 

@@ -3,3 +3,4 @@ build/
 *.log
 commands.txt
 __pycache__/
+/dist/

@@ -1,0 +1,60 @@
+mw2coop {VERSION}: campaign co-op for Call of Duty: Modern Warfare 2 (2009), two players
+https://github.com/stxlvn/mw2_coop
+
+=== По-русски ===
+
+Что это: кооператив на двоих для кампании MW2 (2009) в актуальной 64-битной Steam-версии.
+Альфа: не вся кампания доработана для двоих (список в README.md на GitHub).
+
+Нужно:
+- Windows 10/11, MW2 (2009) в Steam (appid 10180), 64-битная сборка (обновление сентября
+  2026). На другой сборке мод сам выключается и ничего не делает.
+- Игра у каждого из двух игроков, и ОДИНАКОВЫЕ файлы мода у обоих (иначе рассинхрон).
+- Хосту: открытый UDP-порт 28960 (проброс на роутере) или общая локальная сеть / VPN
+  (Radmin VPN, ZeroTier и т. п.).
+
+Установка (у обоих игроков):
+1. Steam -> Библиотека -> Modern Warfare 2 -> Управление -> Просмотреть локальные файлы.
+   Откроется папка с iw4sp.exe.
+2. Скопируйте туда всё из этого архива: winmm.dll, папку mw2coop и три файла .bat.
+   (Ничего из игры не заменяется: добавляются новые файлы.)
+
+Игра:
+1. Хост запускает mw2coop-host.bat (игра стартует через Steam). Окно .bat держите открытым
+   2 минуты, потом оно само закроется.
+2. Когда у хоста появилось главное меню, второй игрок запускает mw2coop-join.bat и вводит
+   IP-адрес хоста. Через ~25 секунд игра подключится, миссия начнётся у обоих.
+3. Продолжить с места остановки: хост запускает mw2coop-continue.bat (прогресс хранится у
+   хоста в mw2coop\progress.txt), второй игрок снова mw2coop-join.bat.
+Начать с другой миссии: откройте mw2coop-host.bat Блокнотом и поменяйте MISSION=trainer на
+имя карты (roadkill, cliffhanger, airport, favela, invasion, arcadia, oilrig, gulag, dcburning,
+contingency, dcemp, dc_whitehouse, estate, boneyard, af_caves, af_chase).
+Режим бога для проверки: GOD=1 в mw2coop-host.bat.
+
+Удаление: удалите из папки игры winmm.dll, папку mw2coop и файлы mw2coop-*.bat.
+Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
+
+=== English ===
+
+Two-player co-op for the MW2 (2009) campaign on the current 64-bit Steam build. Alpha: not
+every mission is reworked for two yet (see README.md on GitHub).
+
+Needs: Windows 10/11; MW2 (2009) on Steam (appid 10180), the 64-bit build (September 2026
+update; on any other build the mod switches itself off); the game and the SAME mod files on
+both PCs; for the host, UDP port 28960 reachable (port forward) or a shared LAN/VPN.
+
+Install (both players): Steam -> Library -> Modern Warfare 2 -> Manage -> Browse local files
+(the folder with iw4sp.exe). Copy everything from this archive there: winmm.dll, the mw2coop
+folder and the three .bat files. Nothing of the game is replaced.
+
+Play: the host runs mw2coop-host.bat (the game starts through Steam; keep the window open for
+2 minutes). Once the host's game shows the main menu, the partner runs mw2coop-join.bat and
+types the host's IP address; it connects after about 25 seconds and the mission starts for
+both. mw2coop-continue.bat (host) carries on from the last checkpoint (mw2coop\progress.txt).
+Edit MISSION= in mw2coop-host.bat to start another mission, GOD=1 for the test god mode.
+
+Uninstall: delete winmm.dll, the mw2coop folder and the mw2coop-*.bat files from the game
+folder. Problems: attach mw2coop\mw2coop.log from both players.
+
+Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT
+licensed (LICENSE.txt). No game files are included.
