@@ -4,12 +4,14 @@ Two-player co-op for the **Call of Duty: Modern Warfare 2 (2009) campaign**, on 
 **64-bit Steam build**, using the co-op netcode the game already ships for Spec Ops.
 
 > **Alpha. Not playable yet.** Two copies of the game play the first mission (S.S.D.D.)
-> together in co-op, with checkpoints, restart and saved progress, but the game does not move
-> on to the next mission yet. This is for developers and testers. See [Status](#status).
+> together in co-op, with checkpoints, restart and saved progress, and move on to the second
+> mission together; that mission and the rest have no co-op fixes yet. This is for developers
+> and testers. See [Status](#status).
 
 *Кратко по-русски:* мод для прохождения кампании MW2 (2009) вдвоём на актуальной 64-битной
 Steam-версии. Это альфа: первая миссия (S.S.D.D.) уже идёт вдвоём, с чекпоинтами, рестартом
-и сохранением прогресса, но перехода на следующую миссию пока нет.
+и сохранением прогресса, и игра вместе переходит на вторую миссию; остальные миссии пока не
+доработаны под кооп. На время тестов включён режим бога (`mw2coop_god 0` выключает).
 
 ## Status
 
@@ -28,14 +30,18 @@ Works:
   and first-person hands (S.S.D.D. intro).
 - Checkpoints: when both players are down (the game's revive system) or one bleeds out, the
   level restarts at the last checkpoint on both machines.
-- Mission end is detected and the next mission found.
+- Mission end: both machines move on to the next mission together (S.S.D.D. → Team
+  Player/`roadkill` checked).
+- Test god mode, on by default for now: players take no damage, so nobody is downed.
+  The host turns it off with `set mw2coop_god 0` before `coopLaunch`; the client follows.
 - Saved progress: the host keeps the last mission and checkpoint in
   `mw2coop\progress.txt`; `mw2coop_continue` starts there next time, and the client is sent
   the same start point automatically.
 
 Not working or not done:
-- **Moving on to the next mission**: the host saves it as progress, but the map does not
-  change yet. This is the next fix.
+- **Vehicles for two players** (both in the vehicle on different seats, one on the turret,
+  seats can be swapped): not done. Team Player (`roadkill`) starts in a convoy and puts only
+  player 1 in the vehicle; this is the next fix.
 - The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
 - Only S.S.D.D. has level fixes. Other missions, their in-engine cutscenes for player 2 and
   vehicle sections for two players are not done.

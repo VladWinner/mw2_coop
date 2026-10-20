@@ -63,6 +63,23 @@ static void script_request(const char *cmd)
 {
 	int host = (int)game_peek(RVA_PARTY_IS_HOST, 1);
 	log_printf("script: request '%s' (%s)", cmd, host ? "host, acting" : "client, host acts");
+	if (strncmp(cmd, "nextmap ", 8) == 0) {
+		char map[64] = "";
+		sscanf(cmd + 8, "%63s", map);
+		if (map[0] == '@') // last mission: no next one
+			map[0] = 0;
+		if (host)
+			progress_save(map, "");
+		// Both machines start the next mission themselves (see mw2coop_launch_map in party.c).
+		// ChangeLevel() cannot: its exit handler (rva 0x170e60) skips gameMode "so", which a
+		// co-op session uses.
+		if (map[0]) {
+			char launch[128];
+			snprintf(launch, sizeof(launch), "set coop_mapName %s\nmw2coop_launch_map\n", map);
+			game_cbuf_addtext(launch);
+		}
+		return;
+	}
 	if (!host)
 		return;
 	if (strncmp(cmd, "restart", 7) == 0) {
@@ -71,13 +88,6 @@ static void script_request(const char *cmd)
 		char map[64] = "", start[64] = "";
 		if (sscanf(cmd + 11, "%63s %63s", map, start) == 2 && start[0] != '@')
 			progress_save(map, start);
-	} else if (strncmp(cmd, "nextmap ", 8) == 0) {
-		char map[64] = "";
-		sscanf(cmd + 8, "%63s", map);
-		if (map[0] == '@') // last mission: no next one
-			map[0] = 0;
-		progress_save(map, "");
-		log_printf("script: next map '%s' requested (transition not implemented yet)", map);
 	}
 }
 
@@ -87,7 +97,7 @@ static void script_request(const char *cmd)
 // 0x100 (external). These are the ones mw2coop needs scripts to read: give them 0x80 as soon
 // as they exist (they keep 0x100, so script setdvar still works). The harness creates them
 // before the level starts, so both machines flag them before any script reads them.
-static const char *const synced_dvars[] = {"start", "mw2coop_qa", "mw2coop_qa_phase"};
+static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_qa", "mw2coop_qa_phase"};
 
 static void sync_dvar_flags(void)
 {

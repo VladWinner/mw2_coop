@@ -22,6 +22,8 @@
 #define RVA_PARTY_ACTIVATE       0x0d7380 // void Party_Activate(void): active = 1, member timers
 #define RVA_PARTY_AFTER_JOIN     0x0d6820 // void (void), called at the end of PartyClient_Join (0xd7cb0)
 #define RVA_SYS_MILLISECONDS     0x293dc0 // int Sys_Milliseconds(void)
+#define RVA_COOP_LAUNCH_MAP      0x22e1a0 // void (int localClient): coop slot state 3, net rates, "map <coop_mapName>"
+#define RVA_COOP_SLOT_STATE      0x533cb8 // int32 per local client (stride 16): 0 idle, 3 launched
 
 // Co-op lobby (see NOTES.md): listen @0xd25e0, connect @0xd23c0, coopLaunch @0xd25d0,
 // host-side coopConnect handler @0x22d830. Online gate @0x28fc00 needs Steam logged on and

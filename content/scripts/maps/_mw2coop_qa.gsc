@@ -2,7 +2,9 @@
 // deterministic). Chosen before launch with the dvar mw2coop_qa on BOTH machines:
 //   intro    - player 2 joins player 1 at the range, same weapons, gets the rifle with player 1
 //   restart  - reach a checkpoint, down both players, expect a restart at that checkpoint
-//   end      - (launch with "start end") run the ending, expect the next-mission request
+//   end      - (launch with "start end") run the ending, expect both machines on the next mission
+//   resume   - (qa_pair.sh resume @continue) both machines start at the saved checkpoint
+//   god      - with god mode on, heavy damage downs neither player
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -26,6 +28,9 @@ main()
 			break;
 		case "resume":
 			resume();
+			break;
+		case "god":
+			god();
 			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
@@ -110,7 +115,16 @@ restart()
 
 ending()
 {
+	if ( GetDvar( "mw2coop_qa_phase" ) == "after_end" )
+	{
+		SetDvar( "mw2coop_qa_phase", "" );
+		check( level.script == "roadkill", "next mission loaded (" + level.script + ")" );
+		common_checks();
+		report( "done" );
+		return;
+	}
 	common_checks();
+	SetDvar( "mw2coop_qa_phase", "after_end" );
 	flag_set( "player_exiting_course_00" );
 	wait 1;
 	flag_set( "player_exiting_course" );
@@ -118,8 +132,7 @@ ending()
 	flag_set( "player_exiting_course_02" );
 	report( "ending running" );
 	wait 15;
-	check( isdefined( level.nextmission ), "mission end reached" );
-	report( "done" );
+	report( "FAIL still on " + level.script + " 15 s after the ending" );
 }
 
 // Continued session (qa_pair.sh resume @continue): both machines start at the saved checkpoint.
@@ -127,5 +140,20 @@ resume()
 {
 	common_checks();
 	check( isdefined( level.start_point ) && level.start_point != "default", "level started at the saved checkpoint '" + level.start_point + "'" );
+	report( "done" );
+}
+
+// God mode (on by default, see maps\_mw2coop::god_mode()): heavy damage downs nobody.
+god()
+{
+	common_checks();
+	check( maps\_mw2coop::god_mode_on(), "god mode on (mw2coop_god '" + GetDvar( "mw2coop_god" ) + "')" );
+	wait 0.5;
+	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	level.player DoDamage( level.player.health + 500, level.player.origin );
+	wait 1;
+	check( IsAlive( level.player ) && IsAlive( level.player2 ), "both players alive after heavy damage" );
+	check( !level.player ent_flag( "coop_downed" ) && !level.player2 ent_flag( "coop_downed" ), "neither player downed" );
+	check( level.player.health > 0 && level.player2.health > 0, "health " + level.player.health + " / " + level.player2.health );
 	report( "done" );
 }

@@ -11,8 +11,9 @@
 //
 // The client must use the same start point, or the two lockstep machines run different level
 // scripts. When the host sends coopLaunch, net.c first sends the client an out-of-band packet
-// "mw2coop_start <start>" (progress_launch_packet); the client sets its start dvar from it
-// before the level loads (progress_on_packet).
+// "mw2coop_start start=<start> mw2coop_god=<0|1|>" (progress_launch_packet); the client sets
+// those dvars from it before the level loads (progress_on_packet). mw2coop_god is the test
+// god mode (_mw2coop.gsc), which must also match on both machines.
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -75,38 +76,53 @@ static void continue_f(void)
 	log_printf("progress: continue at map '%s' start '%s'", map, start);
 }
 
+// Host dvars the client must match before the level loads (level scripts read them).
+static const char *const session_dvars[] = {"start", "mw2coop_god"};
+#define SESSION_DVARS (int)(sizeof(session_dvars) / sizeof(session_dvars[0]))
+
 int progress_launch_packet(char *buf, int size)
 {
-	char start[64] = "";
-	// with no start point set, the level writes its list of start points into "start"
-	if (!game_dvar_raw("start", start, sizeof(start)) || !is_name(start))
-		start[0] = 0;
-	return snprintf(buf, size, "\xff\xff\xff\xffmw2coop_start %s", start);
+	int n = snprintf(buf, size, "\xff\xff\xff\xffmw2coop_start");
+	for (int i = 0; i < SESSION_DVARS && n < size; i++) {
+		char value[64] = "";
+		// with no start point set, the level writes its list of start points into "start"
+		if (!game_dvar_raw(session_dvars[i], value, sizeof(value)) || !is_name(value))
+			value[0] = 0;
+		n += snprintf(buf + n, size - n, " %s=%s", session_dvars[i], value);
+	}
+	return n < size ? n : size - 1;
 }
 
+// "mw2coop_start start=<value> mw2coop_god=<value>"
 int progress_on_packet(const char *buf, int len)
 {
 	static const char tag[] = "\xff\xff\xff\xffmw2coop_start";
 	int tl = (int)sizeof(tag) - 1;
 	if (len < tl || memcmp(buf, tag, tl) != 0)
 		return 0;
-	char start[64] = "";
-	int n = len - tl - 1;
-	if (n > 0 && buf[tl] == ' ') {
-		if (n >= (int)sizeof(start))
-			n = sizeof(start) - 1;
-		memcpy(start, buf + tl + 1, n);
-		start[n] = 0;
-	}
-	if (!is_name(start))
-		return 1;
-	char cur[64] = "";
-	game_dvar_raw("start", cur, sizeof(cur));
-	if (strcmp(cur, start) != 0) {
-		char cmd[96];
-		snprintf(cmd, sizeof(cmd), "set start \"%s\"\n", start);
-		game_cbuf_addtext(cmd);
-		log_printf("progress: host start point '%s'", start);
+	char text[256];
+	int n = len - tl < (int)sizeof(text) - 1 ? len - tl : (int)sizeof(text) - 1;
+	memcpy(text, buf + tl, n);
+	text[n] = 0;
+	for (char *tok = strtok(text, " "); tok; tok = strtok(NULL, " ")) {
+		char *eq = strchr(tok, '=');
+		if (!eq)
+			continue;
+		*eq = 0;
+		const char *value = eq + 1;
+		int known = 0;
+		for (int i = 0; i < SESSION_DVARS; i++)
+			known |= strcmp(tok, session_dvars[i]) == 0;
+		if (!known || !is_name(value))
+			continue;
+		char cur[64] = "";
+		game_dvar_raw(tok, cur, sizeof(cur));
+		if (strcmp(cur, value) != 0) {
+			char cmd[128];
+			snprintf(cmd, sizeof(cmd), "set %s \"%s\"\n", tok, value);
+			game_cbuf_addtext(cmd);
+			log_printf("progress: host %s '%s'", tok, value);
+		}
 	}
 	return 1;
 }

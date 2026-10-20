@@ -65,9 +65,38 @@ main()
 	thread sync_weapons();
 	thread track_checkpoints();
 	thread watch_failure();
+	if ( god_mode_on() )
+		thread god_mode();
 
 	if ( GetDvar( "mw2coop_qa" ) != "" )
 		thread maps\_mw2coop_qa::main();
+}
+
+// --------------------------------------------------------------------------------------------
+// God mode for testing: on unless the host sets "mw2coop_god 0" before coopLaunch (the DLL
+// sends the value to the client, so both lockstep machines agree). Players take no damage,
+// so they are never downed; scripted deaths and mission failures still happen.
+
+god_mode_on()
+{
+	return GetDvar( "mw2coop_god" ) != "0";
+}
+
+god_mode()
+{
+	state( "god mode on (mw2coop_god 0 before coopLaunch turns it off)" );
+	for ( ;; )
+	{
+		foreach ( player in level.players )
+		{
+			if ( !IsAlive( player ) )
+				continue;
+			player EnableInvulnerability();	// level scripts turn it off at times; put it back every frame
+			if ( player.health < player.maxhealth )
+				player.health = player.maxhealth;
+		}
+		wait 0.05;
+	}
 }
 
 // --------------------------------------------------------------------------------------------
@@ -351,6 +380,11 @@ mission_failed()
 
 // --------------------------------------------------------------------------------------------
 // Mission end: replaces maps\_endmission::_nextmission() in a co-op campaign session.
+// ChangeLevel() does nothing in a co-op session: its exit handler (rva 0x170e60) returns early
+// when gameMode is "so". The host's DLL starts the next mission the way the lobby does
+// (coop_mapName + coopLaunch, which also sends the client there). The game's records
+// (highestMission, difficulty) are local-player profile data and are not written.
+// Not handled yet: _nextmission()'s cliffhanger -> airport special case.
 
 next_level_name()
 {
@@ -375,5 +409,5 @@ mission_complete()
 	next = next_level_name();
 	SetDvar( "start", "" );
 	state( "mission complete " + level.script + ", next '" + next + "'" );
-	request( "nextmap " + next );
+	request( "nextmap " + next );	// the host saves it as progress and launches it
 }
