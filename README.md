@@ -47,15 +47,22 @@ Works:
   together. Start points `ride`, `ambush` and `ride_later` seat player 2 too.
 - Wolverines! (`invasion`): player 2 rides in the opening Humvee (on Worm's rear seat; Worm is
   left out in co-op) and gets into the Humvee at the end with player 1.
+- Cliffhanger: both players climb the ice wall side by side, each with his own icepicks (left
+  pick: Attack, right pick: Aim), make the big jump, and Soap catches each of them in turn (the
+  second one hangs on until Soap is free); the level goes on once both are at the top. Each
+  player gets his own snowmobile for the escape; the helicopter waits for both. Tested with a
+  bot playing both players (QA `climb`, `snow`, `snowpick`); real mouse input on the climb is
+  untested.
 
 Not working or not done:
-- Vehicles in other missions: Cliffhanger snowmobile (a second snowmobile, the end trigger
-  waits for both), Endgame (`af_chase`) boat, The Only Easy Day... (`oilrig`) underwater start
-  and the rest: not done. No on-screen hint for the seat swap yet.
+- Vehicles in other missions: Endgame (`af_chase`) boat, The Only Easy Day... (`oilrig`)
+  underwater start and the rest: not done. No on-screen hint for the seat swap yet.
+- Cliffhanger: the climbing field of view and depth of field, and the slow motion of Soap's
+  catch, show on both screens whoever triggers them.
 - Player 2 is only brought along when player 1 jumps far in one step; a slow scripted move can
   still leave him behind.
 - The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
-- Only S.S.D.D. has level fixes. Other missions, their in-engine cutscenes for player 2 and
+- Only S.S.D.D., Team Player, Wolverines! and Cliffhanger have level fixes. Other missions, their in-engine cutscenes for player 2 and
   vehicle sections for two players are not done.
 - Joining a friend through a Steam invite (two Steam accounts) is untested.
 - No menu: hosting and joining use console commands (below).

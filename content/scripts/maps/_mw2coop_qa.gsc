@@ -13,6 +13,8 @@
 //   leash    - player 2 far away comes back to player 1
 //   snow     - (cliffhanger, start "snowmobile") own snowmobiles; the ending waits for player 2
 //   snowpick - (cliffhanger, start "icepick") player 2 takes player 1's snowmobile first
+//   climb    - (cliffhanger, default start) both players climb the ice wall on their own lanes,
+//              make the big jump, Soap catches both, both climb to the top (bot input)
 //   spawn    - (any map/start) where player 2 is during the first 12 s
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
@@ -70,6 +72,14 @@ main()
 			break;
 		case "spawn":
 			spawn_audit();
+			break;
+		case "climb":
+			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
+			// other maps' zones do not have)
+			if ( isdefined( level.mw2coop_qa_climb ) )
+				[[ level.mw2coop_qa_climb ]]();
+			else
+				report( "climb: not on Cliffhanger" );
 			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );

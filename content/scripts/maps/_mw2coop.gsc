@@ -188,8 +188,10 @@ follow_leader_teleports()
 	{
 		wait 0.05;
 		now = level.player.origin;
-		// a seated or otherwise linked player 2 rides along with whatever holds him
-		if ( DistanceSquared( now, last ) > 512 * 512 && !level.player2 IsLinked() )
+		// a seated or otherwise linked player 2 rides along with whatever holds him; a level
+		// whose players go separate ways for a while (the Cliffhanger climb lanes) sets
+		// level.mw2coop_no_follow
+		if ( DistanceSquared( now, last ) > 512 * 512 && !level.player2 IsLinked() && !isdefined( level.mw2coop_no_follow ) )
 			follow = true;
 		last = now;
 		// player 1 may land in a scene or in the air: follow once he stands somewhere
@@ -227,6 +229,8 @@ leash_time()
 leash_applies()
 {
 	if ( isdefined( level.mw2coop_no_leash ) && level.mw2coop_no_leash )
+		return false;
+	if ( isdefined( level.mw2coop_no_follow ) )
 		return false;
 	if ( level.player IsLinked() || level.player2 IsLinked() )
 		return false;
