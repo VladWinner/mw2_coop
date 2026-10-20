@@ -3,13 +3,18 @@ script, taking every replaced text from that script so it matches byte for byte,
 each hunk as the DLL does (src/scripts.c) so later hunks see the text earlier ones left."""
 import os
 import re
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import check_patches  # noqa: E402
 
 
 def func(src, name):
-    """The whole top-level function, header to closing brace."""
-    i = src.index('\n' + name + '(') + 1
-    j = src.index('\n}\n', i) + 3
-    return src[i:j]
+    """The whole top-level function, header to its matching closing brace (comments and strings
+    skipped), as the DLL finds it (find_function in src/scripts.c and check_patches.py)."""
+    span = check_patches.find_function(src, name)
+    assert span, name
+    return src[span[0]:span[1]]
 
 
 class Patch:

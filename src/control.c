@@ -5,6 +5,7 @@
 //   !watch a b c ...  -> log those dvars whenever one of them changes (checked every 250 ms)
 //   !sleep <ms>       -> pause the queue
 //   !xuid_add <n>     -> QA only: shift this copy's XUID (two copies on one Steam account)
+//   !loc <NAME>       -> log a localized string's text and bytes
 //   !trace <rva>      -> QA: log calls of the builtin method whose table entry is at rva, with GSC stacks
 //   # comment
 #include <windows.h>
@@ -180,6 +181,17 @@ static void run_line(char *line)
 		char val[256];
 		for (char *tok = strtok(line + 7, " \t"); tok; tok = strtok(NULL, " \t"))
 			log_printf("dvar: %s = %s", tok, watch_value(tok, val, sizeof(val)));
+		return;
+	}
+	if (strncmp(line, "!loc ", 5) == 0) {
+		// a localized string's text and bytes (ASSET_TYPE_LOCALIZE_ENTRY 27: {value, name})
+		typedef void *(*find_t)(int, const char *);
+		const char **entry = ((find_t)((uint8_t *)GetModuleHandleA(NULL) + RVA_DB_FIND_HEADER))(27, line + 5);
+		const char *v = entry ? entry[0] : NULL;
+		char hex[512] = "";
+		for (int i = 0; v && v[i] && i < 80; i++)
+			snprintf(hex + strlen(hex), sizeof(hex) - strlen(hex), "%02x ", (unsigned char)v[i]);
+		log_printf("loc: %s = '%s' [%s]", line + 5, v ? v : "(none)", hex);
 		return;
 	}
 	if (strncmp(line, "!watch ", 7) == 0) {

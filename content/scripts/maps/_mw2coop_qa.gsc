@@ -26,6 +26,8 @@
 //              players have hidden (the bot moves them into the hiding place)
 //   nrend    - (airport, start "escape") the ending at the van: Makarov shoots both players
 //   nrend2   - same, player 1 at the van's door (the close ending), player 2 a little away
+//   knife    - (ending, start "wakeup") the knife fight: both wake up, player 1 strikes Shepherd
+//              and plays the scene, player 2 goes down and watches; knife2: player 2 strikes
 //   oilrig   - (oilrig, default start) both ride an SDV underwater, both surface; player 1 does
 //              the stealth kill, then both are pulled out of the water. oilrig2: player 2 kills
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
@@ -103,6 +105,10 @@ main()
 		case "nrend":
 		case "nrend2":
 			nrend();
+			break;
+		case "knife":
+		case "knife2":
+			knife();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -758,4 +764,120 @@ nrend()
 	check( p1 IsLinked() && p2 IsLinked(), "both down (linked " + p1 IsLinked() + " " + p2 IsLinked() + ")" );
 	report( "health p1 " + p1.health + " p2 " + p2.health );
 	report( "done" );
+}
+
+// Endgame knife fight (ending map, start "wakeup"). Names no knife fight script (not in other
+// zones): the bot strikes through player.mw2coop_qa_melee, holds the crawl and Use buttons
+// through player.mw2coop_qa_hold and throws with the "throw" notify. Only the striker is moved
+// (to Shepherd); the other player is left where he got up.
+knife()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	striker = level.player;
+	if ( GetDvar( "mw2coop_qa" ) == "knife2" )
+		striker = level.player2;
+	other = level.player;
+	if ( striker == level.player )
+		other = level.player2;
+	foreach ( player in level.players )
+	{
+		player.mw2coop_qa_hold = [];
+		player.mw2coop_qa_hold[ "use" ] = false;
+	}
+	wait 2;
+	d = Distance( level.player GetEye(), level.player2 GetEye() );
+	check( level.player IsLinked() && level.player2 IsLinked() && d < 140, "both wake up in the wreck (" + int( d ) + " units apart)" );
+	flag_wait( "player_standing" );
+	wait 2;
+	check( !level.player IsLinked() && !level.player2 IsLinked(), "both up after the wake-up" );
+	level.mw2coop_no_follow = true;
+	for ( t = 0; t < 60 && !isdefined( level.shepherd ); t += 0.5 )
+		wait 0.5;
+	check( isdefined( level.shepherd ), "Shepherd there" );
+	for ( t = 0; t < 60 && !flag( "turn_buckle_start" ); t += 0.25 )
+	{
+		fwd = AnglesToForward( ( 0, level.shepherd.angles[ 1 ], 0 ) );
+		at = level.shepherd.origin + fwd * 70;
+		if ( Distance( striker.origin, at ) > 30 )
+			striker SetOrigin( PlayerPhysicsTrace( at + ( 0, 0, 40 ), at - ( 0, 0, 80 ) ) );
+		striker SetPlayerAngles( VectorToAngles( level.shepherd GetTagOrigin( "tag_eye" ) - striker GetEye() ) );
+		striker.mw2coop_qa_melee = true;
+		wait 0.1;
+		striker.mw2coop_qa_melee = undefined;
+		wait 0.15;
+	}
+	check( flag( "turn_buckle_start" ), "a player strikes Shepherd (" + t + " s)" );
+	check( level.mw2coop_lead == striker, "the striker plays the scene" );
+	wait 2.5;
+	check( other IsLinked() && isdefined( other.mw2coop_awake ) && !other.mw2coop_awake, "the other player is down and out" );
+	level thread knife_watch_report( other );
+
+	// crawl to the revolver: alternate the two crawl buttons
+	report( "crawl" );
+	side = "left";
+	for ( t = 0; t < 200 && !flag( "player_looks_at_knife" ) && !flag( "player_uses_knife" ); t += 0.15 )
+	{
+		striker.mw2coop_qa_hold[ "left" ] = side == "left";
+		striker.mw2coop_qa_hold[ "right" ] = side == "right";
+		if ( side == "left" )
+			side = "right";
+		else
+			side = "left";
+		wait 0.15;
+	}
+	striker.mw2coop_qa_hold[ "left" ] = false;
+	striker.mw2coop_qa_hold[ "right" ] = false;
+	report( "knife: tap Use (" + t + " s)" );
+	level.mw2coop_qa_knife_out = false;
+	level thread knife_out_watch();
+	// pull the knife: many quick Use presses
+	for ( t = 0; t < 120 && !level.mw2coop_qa_knife_out && !flag( "shepherd_killed" ); t += 0.1 )
+	{
+		striker.mw2coop_qa_hold[ "use" ] = !striker.mw2coop_qa_hold[ "use" ];
+		wait 0.1;
+	}
+	striker.mw2coop_qa_hold[ "use" ] = false;
+	report( "throw (" + t + " s)" );
+	// aim at Shepherd and throw
+	other.mw2coop_saw_kill = false;
+	for ( t = 0; t < 60 && !flag( "shepherd_killed" ); t += 0.1 )
+	{
+		if ( other.mw2coop_awake )
+			other.mw2coop_saw_kill = true;
+		if ( isdefined( level.shepherd ) )
+			striker SetPlayerAngles( VectorToAngles( level.shepherd GetTagOrigin( "tag_eye" ) - striker GetEye() ) );
+		if ( flag( "player_aims_knife_at_shepherd" ) )
+			striker notify( "throw" );
+		wait 0.1;
+	}
+	check( flag( "shepherd_killed" ), "Shepherd killed by the striker's knife (" + t + " s)" );
+	check( other.mw2coop_awake, "the other player is awake as Shepherd dies" );
+	wait 3;
+	check( other.mw2coop_awake, "and still awake 3 s later" );
+	wait 27;	// Price wakes up: the witness stays awake (the lead has a full body there)
+	check( other IsLinked() && IsAlive( other ), "the other player watched the whole fight" );
+	report( "done" );
+}
+
+knife_out_watch()
+{
+	level waittill( "knife_pulled_out" );
+	level.mw2coop_qa_knife_out = true;
+}
+
+// Every 10 s: how far the other player's view is from the action and whether he sees it.
+knife_watch_report( other )
+{
+	level endon( "mw2coop_knife_witness_up" );
+	for ( ;; )
+	{
+		wait 10;
+		if ( !isdefined( level.shepherd ) )
+			continue;
+		eye = other GetEye();
+		focus = level.shepherd GetTagOrigin( "tag_eye" );
+		sees = BulletTracePassed( eye, focus, false, undefined );
+		dot = VectorDot( AnglesToForward( other GetPlayerAngles() ), VectorNormalize( focus - eye ) );
+		report( "witness: awake " + other.mw2coop_awake + ", " + int( Distance( eye, focus ) ) + " units from Shepherd, line " + sees + ", facing " + int( dot * 100 ) + "%" );
+	}
 }

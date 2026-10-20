@@ -5,6 +5,7 @@
 #include "control.h"
 #include "crash.h"
 #include "game.h"
+#include "localize.h"
 #include "log.h"
 #include "net.h"
 #include "party.h"
@@ -43,6 +44,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 	if (game_init()) {
 		crash_install();
 		scripts_install();
+		localize_install();
 		scrdebug_install();
 		net_install();
 		party_install();

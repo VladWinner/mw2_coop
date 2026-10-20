@@ -61,8 +61,12 @@ Works:
 - Of Their Own Accord (end) and Second Sun (start): both wake up in the crashed Black Hawk,
   each with his own rifle; at the ISS both float side by side; both are let out of the wreck.
   In the street a falling helicopter chases each player; the level goes on once both hide.
-- Endgame's ending map starts with the knife fight (it went to the free-roam museum in
-  co-op); the knife fight itself is not reworked for two yet.
+- Endgame's ending (knife fight with Shepherd): both wake up after the crash side by side;
+  whoever strikes Shepherd first plays the scene (stabbed, the monologue, the crawl to the
+  revolver, pulling out the knife, the throw). The other is stunned: his screen goes black
+  ("You are stunned. Wait for the other player", in the game's language), he comes to when
+  the knife is out and sees the throw, Shepherd's death and Price waking up, from beside the
+  fight and never facing the other player (the scene has first-person arms only).
 - Cliffhanger: both players climb the ice wall side by side, each with his own icepicks (left
   pick: Attack, right pick: Aim), make the big jump, and Soap catches each of them in turn (the
   second one hangs on until Soap is free); the level goes on once both are at the top. Each
@@ -71,7 +75,7 @@ Works:
   untested.
 
 Not working or not done:
-- Endgame (`af_chase`) boat and the knife fight with Shepherd for two: not done. No on-screen
+- Endgame (`af_chase`) boat for two: not done. No on-screen
   hint for the seat swap yet.
 - Global screen effects show on both screens whoever triggers them: Cliffhanger's climbing
   field of view, depth of field and the slow motion of Soap's catch, The Only Easy Day's water
@@ -196,7 +200,8 @@ S.S.D.D. `intro`, `restart`, `end`, `resume` (`@continue`), `god`; Team Player `
 `board`, `rideend`, `turret`; Wolverines! `ride`; Takedown `takedown`, `takedown2`; The Only
 Easy Day `oilrig`, `oilrig2`; Cliffhanger `climb`, `snow`, `snowpick`; No Russian `nrend`,
 `nrend2` (start `escape`); crash site `crashsite` (dcburning, start `crash`), Second Sun
-`dcemp`, `street` (start `street`); any map `spawn`, `leash`. Bots drive the players (button
+`dcemp`, `street` (start `street`); Endgame `knife`, `knife2` (ending, start `wakeup`); any map
+`spawn`, `leash`. Bots drive the players (button
 holds, velocity pushes), so real mouse and keyboard input on these set pieces is untested.
 Script errors are logged with the GSC call stack (`file::function +offset`). One Steam account
 is enough: the QA-only command `!xuid_add` gives the second copy a different player id.

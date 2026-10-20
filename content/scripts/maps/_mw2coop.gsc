@@ -39,6 +39,10 @@ add_checkpoint( flag_name, start_name )
 // Called from maps\_load::main() right after maps\_coop::main().
 main()
 {
+	// The player a one-player scene plays on: scenes the mod hands to either player (the knife
+	// fight) read level.mw2coop_lead where they read level.player. Single player too.
+	level.mw2coop_lead = level.player;
+
 	if ( !is_campaign_coop() )
 		return;
 
@@ -50,6 +54,7 @@ main()
 		level.mw2coop_weapon_sync = "leader";	// "leader": player 1's changes go to player 2; "both": gains go both ways
 
 	PrecacheString( &"SCRIPT_CHECKPOINT" );
+	PrecacheString( &"MW2COOP_STUNNED" );	// the mod's own, from its DLL (src/localize.c)
 
 	// maps\_coop (revive) and kill_wrapper() read this Spec Ops flag in any co-op session;
 	// maps\_specialops creates it, the campaign does not. Set when the level ends, as in Spec Ops,
