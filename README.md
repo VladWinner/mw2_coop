@@ -3,15 +3,18 @@
 Two-player co-op for the **Call of Duty: Modern Warfare 2 (2009) campaign**, on the current
 **64-bit Steam build**, using the co-op netcode the game already ships for Spec Ops.
 
-> **Alpha. Not playable yet.** Two copies of the game play the first mission (S.S.D.D.)
-> together in co-op, with checkpoints, restart and saved progress, and move on to the second
-> mission together; that mission and the rest have no co-op fixes yet. This is for developers
-> and testers. See [Status](#status).
+> **Alpha, work in progress. Not playable through yet.** Two copies of the game play
+> S.S.D.D. together (checkpoints, restart, saved progress), move on to Team Player together and
+> share its Humvee (one on the turret, one on a seat, swap by holding Use); the Wolverines!
+> Humvee rides seat both players. Other missions have no co-op fixes yet. This is for
+> developers and testers. See [Status](#status).
 
 *Кратко по-русски:* мод для прохождения кампании MW2 (2009) вдвоём на актуальной 64-битной
-Steam-версии. Это альфа: первая миссия (S.S.D.D.) уже идёт вдвоём, с чекпоинтами, рестартом
-и сохранением прогресса, и игра вместе переходит на вторую миссию; остальные миссии пока не
-доработаны под кооп. На время тестов включён режим бога (`mw2coop_god 0` выключает).
+Steam-версии. Альфа, в разработке: S.S.D.D. идёт вдвоём (чекпоинты, рестарт, сохранение
+прогресса), игра вместе переходит в Team Player, где оба едут в одном Humvee (кто сел первым —
+за пулемётом, второй на сиденье, смена мест удержанием «Использовать»); в Wolverines! оба
+едут в машине. Остальные миссии пока не доработаны. На время тестов включён режим бога
+(`mw2coop_god 0` выключает).
 
 ## Status
 
@@ -37,11 +40,20 @@ Works:
 - Saved progress: the host keeps the last mission and checkpoint in
   `mw2coop\progress.txt`; `mw2coop_continue` starts there next time, and the client is sent
   the same start point automatically.
+- Team Player (`roadkill`): both players are in Shepherd's opening scene; at the convoy,
+  whoever reaches the glowing seat first is the gunner, the other boards the same door onto a
+  seat and the convoy waits for him (30 s, then he is seated); **the passenger holds Use for a
+  second to swap places with the gunner**; at the end of the ride and in the crash both get out
+  together. Start points `ride`, `ambush` and `ride_later` seat player 2 too.
+- Wolverines! (`invasion`): player 2 rides in the opening Humvee (on Worm's rear seat; Worm is
+  left out in co-op) and gets into the Humvee at the end with player 1.
 
 Not working or not done:
-- **Vehicles for two players** (both in the vehicle on different seats, one on the turret,
-  seats can be swapped): not done. Team Player (`roadkill`) starts in a convoy and puts only
-  player 1 in the vehicle; this is the next fix.
+- Vehicles in other missions: Cliffhanger snowmobile (a second snowmobile, the end trigger
+  waits for both), Endgame (`af_chase`) boat, The Only Easy Day... (`oilrig`) underwater start
+  and the rest: not done. No on-screen hint for the seat swap yet.
+- Player 2 is only brought along when player 1 jumps far in one step; a slow scripted move can
+  still leave him behind.
 - The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
 - Only S.S.D.D. has level fixes. Other missions, their in-engine cutscenes for player 2 and
   vehicle sections for two players are not done.
@@ -117,7 +129,10 @@ may work instead (untested).
   dvar `mw2coop_cmd`.
 - In a co-op session GSC `getdvar` only returns dvars that have certain flags (the engine
   keeps both lockstep machines equal); the DLL flags `start` and the QA dvars so scripts can
-  read them.
+  read them, and every dvar a level script sets itself (equal on both machines), so levels
+  that read back their own dvars behave as in single player.
+- Diagnostics in `mw2coop.log`: GSC errors with the script call stack, crashes with the
+  faulting RVA and stack, and `!trace <rva>` logs every call of a builtin method with stacks.
 
 ## Build
 
@@ -130,8 +145,10 @@ LLVM_MINGW=/path/to/llvm-mingw-ucrt-x86_64 ./build.sh release
 ## Testing
 
 `tools/qa_pair.sh <scenario>` starts a host and a client copy on one PC, connects them and
-runs an in-game check scenario from `content/scripts/maps/_mw2coop_qa.gsc` (`intro`,
-`restart`, `end`, `resume`), then prints both logs. `tools/qa_pair.sh resume @continue`
+runs an in-game check scenario from `content/scripts/maps/_mw2coop_qa.gsc` (S.S.D.D.:
+`intro`, `restart`, `end`, `resume`, `god`; Wolverines!: `ride`; Team Player: `rkintro`,
+`board`, `rideend`, `turret`), then prints both logs. Usage:
+`tools/qa_pair.sh <scenario> [start point] [seconds] [map]`. `tools/qa_pair.sh resume @continue`
 starts the host with `mw2coop_continue` and the client with no start point. Script errors
 are logged with the GSC call stack (`file::function +offset`). One Steam account is enough: the QA-only command
 `!xuid_add` gives the second copy a different player id. `tools/check_patches.py` checks

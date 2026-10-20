@@ -7,6 +7,7 @@
 # any iw4sp.exe outside the test root within 200 ms, so your real install is never run.
 #   MW2COOP_TEST_ROOT  test root, POSIX path (default /d/coop-test)
 #   MW2COOP_QA_WATCH   extra dvars or memory (@rva:size, *rva+off:size) to log on change
+#   MW2COOP_QA_CMDS    extra commands.txt lines for both copies, separated by ";" (e.g. "!trace 342c88")
 #   MW2COOP_GOD        host's mw2coop_god (default: unset = god mode on; "restart" forces 0).
 #                      Set on the host only: the client gets it from the host's launch packet.
 SCEN=${1:?scenario}; START=${2:-}; LEVEL_S=${3:-60}; MAP=${4:-trainer}
@@ -19,7 +20,9 @@ HOST_START="$START"; LAUNCH="set coop_mapName $MAP"
 if [ "$START" = "@continue" ]; then HOST_START=""; START=""; LAUNCH="mw2coop_continue"; fi
 COMMON="!watch coop mapname sv_running specialops mw2coop_qa start mw2coop_god ${MW2COOP_QA_WATCH:-}
 set mw2coop_qa $SCEN
-set mw2coop_qa_phase \"\""
+set mw2coop_qa_phase \"\"
+$(printf '%s' "${MW2COOP_QA_CMDS:-}" | tr ';' '
+')"
 LONG=$(( (LEVEL_S + 30) * 1000 ))
 printf '# host\n%s\nset start "%s"\nset mw2coop_god "%s"\n!sleep 35000\n%s\nlisten\n!sleep 2000\ncoopLaunch\n!sleep %d\n' "$COMMON" "$HOST_START" "$GOD" "$LAUNCH" $LONG > $A/mw2coop/commands.txt
 printf '# client (QA: shifted XUID, party join without Steam lobby)\n%s\nset start "%s"\n!sleep 20000\n!xuid_add 1\n!sleep 19000\nmw2coop_party_join\n!sleep 1000\nconnect 127.0.0.1 8305\n!sleep %d\n' "$COMMON" "$START" $LONG > $B/mw2coop/commands.txt

@@ -6,6 +6,10 @@
 //   resume   - (qa_pair.sh resume @continue) both machines start at the saved checkpoint
 //   god      - with god mode on, heavy damage downs neither player
 //   ride     - (invasion) player 2 rides in player 1's vehicle and gets out with him
+//   turret   - (roadkill, start "ride") hand the Humvee turret from player 1 to player 2
+//   board    - (roadkill, start "convoy") first to board is the gunner, the other rides, swaps
+//   rideend  - (roadkill, start "ride_later") both get off at the end of the ride and the crash
+//   rkintro  - (roadkill, default start) both players in Shepherd's scene, together afterwards
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -35,6 +39,18 @@ main()
 			break;
 		case "ride":
 			ride();
+			break;
+		case "turret":
+			turret();
+			break;
+		case "board":
+			board();
+			break;
+		case "rideend":
+			rideend();
+			break;
+		case "rkintro":
+			rkintro();
 			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
@@ -189,5 +205,170 @@ ride()
 	wait 1.5;
 	check( !level.player2 IsLinked(), "player 2 got out" );
 	check( Distance( level.player.origin, level.player2.origin ) < 160, "player 2 next to player 1 (" + int( Distance( level.player.origin, level.player2.origin ) ) + " units)" );
+	report( "done" );
+}
+
+// Turret hand-over experiment (roadkill, start point "ride": player 1 starts on the Humvee
+// turret). Takes player 1 off with a second UseBy and puts player 2 on.
+turret()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	t = 0;
+	while ( !isdefined( level.player_turret ) && t < 20 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	turret = level.player_turret;
+	check( isdefined( turret ), "player turret exists" );
+	wait 2;
+	check( turret GetTurretOwner() == level.player, "player 1 is the gunner" );
+
+	level.player EnableTurretDismount();
+	turret UseBy( level.player );
+	wait 0.5;
+	owner = turret GetTurretOwner();
+	check( !isdefined( owner ), "second UseBy takes player 1 off the turret" );
+	report( "player 1 using a turret: " + level.player IsUsingTurret() + ", linked: " + level.player IsLinked() );
+
+	level.player2 PlayerLinkToDelta( level.player_humvee, "tag_player", 0.35, 360, 360, 45, 30, true );
+	turret MakeUsable();
+	turret UseBy( level.player2 );
+	turret MakeUnusable();
+	level.player2 DisableTurretDismount();
+	wait 0.5;
+	check( turret GetTurretOwner() == level.player2, "player 2 is the gunner now" );
+	report( "player 2 using a turret: " + level.player2 IsUsingTurret() + ", linked: " + level.player2 IsLinked() );
+	wait 3;
+	check( turret GetTurretOwner() == level.player2, "player 2 still on the turret after 3 s" );
+	report( "done" );
+}
+
+// Team Player boarding (roadkill, start point "convoy"): player 2 reaches the seat first and
+// becomes the gunner, player 1 boards the rear seat, the convoy leaves, the seats swap and swap
+// back (called directly: a script cannot hold the Use button), both stay in the moving Humvee.
+board()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	t = 0;
+	while ( !isdefined( level.chair ) && t < 60 )
+	{
+		wait 0.25;
+		t += 0.25;
+	}
+	check( isdefined( level.chair ), "glowing seat spawned" );
+	flag_set( "player_climbs_stairs" );	// a trigger player 1 would touch on the stairs: the convoy moment
+	// player 2 waits at the seat until someone boards
+	t = 0;
+	while ( !isdefined( level.mw2coop_gunner ) && t < 90 )
+	{
+		if ( isdefined( level.chair ) )
+			level.player2 SetOrigin( level.chair.origin + ( 0, 0, -10 ) );
+		wait 0.1;
+		t += 0.1;
+	}
+	check( isdefined( level.mw2coop_gunner ) && level.mw2coop_gunner == level.player2, "player 2 boarded first and is the gunner" );
+	t = 0;
+	while ( !( isdefined( level.player_turret ) && isdefined( level.player_turret GetTurretOwner() ) ) && t < 15 )
+	{
+		wait 0.25;
+		t += 0.25;
+	}
+	check( isdefined( level.player_turret ) && level.player_turret GetTurretOwner() == level.player2, "player 2 on the turret" );
+	check( !flag( "player_gets_in" ), "convoy waits for player 1" );
+	wait 1;
+	level.player SetOrigin( level.player_humvee GetTagOrigin( "tag_seat_rb_attach" ) + ( 0, 0, -10 ) );
+	wait 1;
+	check( level.player IsLinked(), "player 1 boarded the rear seat" );
+	check( flag( "player_gets_in" ), "convoy leaves once both are in" );
+	wait 2;
+
+	level.player_humvee maps\_mw2coop_roadkill::swap( level.mw2coop_roadkill_seat );
+	wait 1;
+	check( level.player_turret GetTurretOwner() == level.player && level.player2 IsLinked(), "swap: player 1 gunner, player 2 seated" );
+	level.player_humvee maps\_mw2coop_roadkill::swap( level.mw2coop_roadkill_seat );
+	wait 1;
+	check( level.player_turret GetTurretOwner() == level.player2 && level.player IsLinked(), "swap back: player 2 gunner, player 1 seated" );
+
+	wait 6;
+	d = Distance( level.player.origin, level.player2.origin );
+	check( d < 150 && level.player IsLinked() && level.player2 IsLinked(), "both riding the moving Humvee (" + int( d ) + " units apart)" );
+	report( "done" );
+}
+
+// Team Player ride end (roadkill, start point "ride_later": player 1 starts on the turret):
+// player 2 rides on a seat, both get off when the ride ends, player 2 lands next to player 1.
+rideend()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 3;
+	check( isdefined( level.player_turret ) && level.player_turret GetTurretOwner() == level.player, "player 1 on the turret" );
+	check( Distance( level.player.origin, level.player_turret.origin ) < 150, "player 1 at the turret (" + int( Distance( level.player.origin, level.player_turret.origin ) ) + " units)" );
+	check( level.player2 IsLinked(), "player 2 seated" );
+	report( "t 3: player 1 " + int( Distance( level.player.origin, level.player_turret.origin ) ) + " units from the turret, player 2 " + int( Distance( level.player2.origin, level.player_turret.origin ) ) );
+	t = 0;
+	while ( !flag( "player_is_dismounted" ) && t < 180 )
+	{
+		wait 0.5;
+		t += 0.5;
+		if ( t == int( t / 2 ) * 2 && t <= 12 || t == int( t / 10 ) * 10 )
+			report( "t " + t + ": turret " + level.player IsUsingTurret() + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " units, linked " + level.player IsLinked() + "/" + level.player2 IsLinked()
+				+ ", flags " + flag_text( "lead_vehicle_speeds_up" ) + flag_text( "resume_the_path" ) + flag_text( "player_is_pushing_truck" ) + flag_text( "player_goes_in_reverse" ) + flag_text( "player_vehicle_wipes_out" ) );
+	}
+	check( flag( "player_is_dismounted" ), "ride ended in the crash (" + t + " s)" );
+	wait 1;
+	check( !level.player IsLinked() && !level.player2 IsLinked(), "both off the Humvee" );
+	d = Distance( level.player.origin, level.player2.origin );
+	check( d < 200, "player 2 next to player 1 after the crash (" + int( d ) + " units)" );
+	report( "done" );
+}
+
+flag_text( name )
+{
+	if ( !isdefined( level.flag[ name ] ) )
+		return "?";
+	if ( flag( name ) )
+		return "1";
+	return "0";
+}
+
+// QA probe, started from maps\_mw2coop::main(): when player 1's link changes in the first 3 s.
+link_probe()
+{
+	text = "";
+	last = -1;
+	for ( i = 0; i < 60; i++ )
+	{
+		now = 0;
+		if ( level.player IsLinked() )
+			now = 1;
+		if ( now != last )
+			text += " frame " + i + ": " + now + " @" + int( level.player.origin[ 0 ] ) + "," + int( level.player.origin[ 1 ] );
+		last = now;
+		wait 0.05;
+	}
+	maps\_mw2coop::state( "link probe:" + text );
+}
+
+// Team Player opening (roadkill, default start): during Shepherd's "get on the line" scene both
+// players are on the view rig; afterwards both are free and together.
+rkintro()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	t = 0;
+	both = false;
+	while ( !flag( "get_on_the_line" ) && t < 90 )
+	{
+		if ( level.player IsLinked() && level.player2 IsLinked() )
+			both = true;
+		wait 0.25;
+		t += 0.25;
+	}
+	check( flag( "get_on_the_line" ), "Shepherd's scene ended (" + t + " s)" );
+	check( both, "both players were in the scene" );
+	wait 1;
+	check( !level.player IsLinked() && !level.player2 IsLinked(), "both free after the scene" );
+	d = Distance( level.player.origin, level.player2.origin );
+	check( d < 200, "player 2 next to player 1 (" + int( d ) + " units)" );
 	report( "done" );
 }

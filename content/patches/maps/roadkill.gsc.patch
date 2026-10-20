@@ -1,0 +1,20 @@
+mw2coop patch for maps/roadkill.gsc (Team Player, Modern Warfare 2, 64-bit Steam build)
+
+1. Ride end: the second player gets off too (the gunner may be player 2).
+@@@ replace
+	org = level.player.origin;
+//	level.player FreezeControls( true );
+@@@ with
+	maps\_mw2coop_roadkill::ride_ends();
+	org = level.player.origin;
+//	level.player FreezeControls( true );
+@@@ end
+
+2. Crash: player 2 lands next to player 1.
+@@@ replace
+	level.player SetOrigin( player_slide_crash.origin );
+@@@ with
+	level.player SetOrigin( player_slide_crash.origin );
+	if ( maps\_mw2coop::is_campaign_coop() )
+		level.player2 maps\_mw2coop::teleport_to_partner( level.player );
+@@@ end

@@ -5,8 +5,10 @@
 //   !watch a b c ...  -> log those dvars whenever one of them changes (checked every 250 ms)
 //   !sleep <ms>       -> pause the queue
 //   !xuid_add <n>     -> QA only: shift this copy's XUID (two copies on one Steam account)
+//   !trace <rva>      -> QA: log calls of the builtin method whose table entry is at rva, with GSC stacks
 //   # comment
 #include <windows.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +17,7 @@
 #include "game.h"
 #include "log.h"
 #include "progress.h"
+#include "scrdebug.h"
 
 #define MAX_WATCH 24
 
@@ -169,6 +172,10 @@ static void run_line(char *line)
 		game_log_commands();
 		return;
 	}
+	if (strncmp(line, "!trace ", 7) == 0) {
+		scrdebug_trace_method((uintptr_t)strtoull(line + 7, NULL, 16));
+		return;
+	}
 	if (strncmp(line, "!dvars ", 7) == 0) {
 		char val[256];
 		for (char *tok = strtok(line + 7, " \t"); tok; tok = strtok(NULL, " \t"))
@@ -224,9 +231,49 @@ static DWORD WINAPI control_thread(LPVOID path_arg)
 	return 0;
 }
 
+// A dvar a level script sets itself (GSC setdvar) has the same value on both lockstep machines,
+// so scripts may read it back. Without this, getdvar reads "" in co-op for any dvar the script
+// made: roadkill.gsc sets newintro 1 and then reads 0, which turns the SP-only slam-zoom intro
+// back on in co-op and unlinks player 1 from the opening scene. The builtin's table entry
+// ({name, func, developer}, rva 0x3c1568) is pointed at a wrapper that adds 0x80 after the set.
+#define RVA_FN_SETDVAR_ENTRY 0x3c1568
+#define RVA_SCR_GET_STRING   0x223440 // const char *Scr_GetString(unsigned int index)
+static void (*setdvar_orig)(void);
+
+static void setdvar_wrap(void)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	char name[64] = "";
+	const char *s = ((const char *(*)(unsigned int))(base + RVA_SCR_GET_STRING))(0);
+	if (s)
+		lstrcpynA(name, s, sizeof(name));
+	setdvar_orig();
+	dvar_t *d = game_find_dvar(name);
+	if (d && !(d->flags & 0x20c4))
+		d->flags |= 0x80;
+}
+
+static void hook_script_setdvar(void)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	uint8_t *entry = base + RVA_FN_SETDVAR_ENTRY;
+	if (lstrcmpA(*(const char **)entry, "setdvar") != 0) {
+		log_printf("control: no setdvar entry at rva 0x%x, script dvars stay unreadable in co-op", RVA_FN_SETDVAR_ENTRY);
+		return;
+	}
+	void (**func)(void) = (void (**)(void))(entry + 8);
+	setdvar_orig = *func;
+	DWORD old;
+	VirtualProtect(func, sizeof(*func), PAGE_READWRITE, &old);
+	*func = setdvar_wrap;
+	VirtualProtect(func, sizeof(*func), old, &old);
+	log_printf("control: dvars set by scripts are readable by co-op scripts");
+}
+
 void control_start(void)
 {
 	static char path[MAX_PATH];
+	hook_script_setdvar();
 	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
 	while (n > 0 && path[n - 1] != '\\')
 		n--;

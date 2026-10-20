@@ -1,0 +1,71 @@
+mw2coop patch for maps/_minigun_viewmodel.gsc (Team Player, Modern Warfare 2, 64-bit Steam build)
+
+1. The turret hands follow the gunner's buttons (player 1 outside co-op).
+@@@ replace
+	for(;;)
+	{
+		if( level.player [[checkFunc]]() )
+		{
+			thread player_viewhands_minigun_presed( hand );
+			while( level.player [[checkFunc]]() )
+				wait 0.05;
+		}
+		else
+		{
+			thread player_viewhands_minigun_idle( hand );
+			while( !level.player [[checkFunc]]() )
+				wait 0.05;
+		}
+	}
+@@@ with
+	for(;;)
+	{
+		gunner = maps\_mw2coop::vehicle_gunner();
+		if( gunner [[checkFunc]]() )
+		{
+			thread player_viewhands_minigun_presed( hand );
+			while( gunner [[checkFunc]]() )
+				wait 0.05;
+		}
+		else
+		{
+			thread player_viewhands_minigun_idle( hand );
+			while( !gunner [[checkFunc]]() )
+				wait 0.05;
+		}
+	}
+@@@ end
+
+2. Button checks run on the player they are called on.
+@@@ replace
+spinButtonPressed()
+{
+	if ( level.player AdsButtonPressed() )
+		return true;
+	if ( level.player AttackButtonPressed() )
+		return true;
+	return false;
+}
+@@@ with
+spinButtonPressed()
+{
+	if ( self AdsButtonPressed() )
+		return true;
+	if ( self AttackButtonPressed() )
+		return true;
+	return false;
+}
+@@@ end
+
+3. Same.
+@@@ replace
+fireButtonPressed()
+{
+	return level.player AttackButtonPressed();
+}
+@@@ with
+fireButtonPressed()
+{
+	return self AttackButtonPressed();
+}
+@@@ end

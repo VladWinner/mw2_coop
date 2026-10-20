@@ -69,7 +69,10 @@ main()
 		thread god_mode();
 
 	if ( GetDvar( "mw2coop_qa" ) != "" )
+	{
+		thread maps\_mw2coop_qa::link_probe();
 		thread maps\_mw2coop_qa::main();
+	}
 }
 
 // --------------------------------------------------------------------------------------------
@@ -439,8 +442,24 @@ free_seat_tag( skip_tag )
 	return undefined;
 }
 
-// self: vehicle. Returns the seat entity (pass it to partner_leaves_seat()).
-seat_partner_in_vehicle( player, right, left, up, down, skip_tag )
+// The player on a vehicle turret shared by two players (a level sets level.mw2coop_gunner).
+vehicle_gunner()
+{
+	if ( isdefined( level.mw2coop_gunner ) && IsAlive( level.mw2coop_gunner ) )
+		return level.mw2coop_gunner;
+	return level.player;
+}
+
+other_player( player )
+{
+	if ( player == level.player )
+		return level.player2;
+	return level.player;
+}
+
+// self: vehicle. Returns the seat entity (pass it to partner_leaves_seat() or release_seat()).
+//   skip_tag: player 1's seat (default tag_passenger; "" skips none); weapons: usable on the seat.
+seat_partner_in_vehicle( player, right, left, up, down, skip_tag, weapons )
 {
 	if ( !isdefined( player ) || !IsAlive( player ) )
 		return undefined;
@@ -464,26 +483,58 @@ seat_partner_in_vehicle( player, right, left, up, down, skip_tag )
 		tag = self free_seat_tag( skip_tag );
 	}
 	seat = spawn_tag_origin();
-	seat.mw2coop_player = player;
 	seat.mw2coop_vehicle = self;
-	seat.mw2coop_pos = self.mw2coop_seat_pos;
+	seat.mw2coop_arcs = [];
+	seat.mw2coop_arcs[ 0 ] = right;
+	seat.mw2coop_arcs[ 1 ] = left;
+	seat.mw2coop_arcs[ 2 ] = up;
+	seat.mw2coop_arcs[ 3 ] = down;
+	seat.mw2coop_weapons = isdefined( weapons ) && weapons;
 	if ( isdefined( tag ) )
 	{
+		seat.mw2coop_pos = self.mw2coop_seat_pos;
 		// same offset as maps\_utility::player_rides_shotgun_in_humvee() uses on tag_passenger
 		seat LinkTo( self, tag, ( -5, 10, -34 ), ( 0, 0, 0 ) );
-		state( "player 2 seated on " + tag + evicted );
+		state( "partner seated on " + tag + evicted );
 	}
 	else
 	{
 		seat LinkTo( self, "tag_body", ( -50, 0, 10 ), ( 0, 0, 0 ) );
-		state( "player 2: no free seat (" + self seats_text() + ")" + evicted + ", riding in the back" );
+		state( "partner: no free seat (" + self seats_text() + ")" + evicted + ", riding in the back" );
 	}
+	seat link_to_seat( player );
+	return seat;
+}
 
+// self: seat. Puts player on it (also used when two players swap places).
+link_to_seat( player )
+{
+	self.mw2coop_player = player;
 	player AllowCrouch( false );
 	player AllowProne( false );
-	player DisableWeapons();
-	player PlayerLinkTo( seat, "tag_origin", 0.8, right, left, up, down );
-	return seat;
+	if ( self.mw2coop_weapons )
+		player EnableWeapons();
+	else
+		player DisableWeapons();
+	player PlayerLinkTo( self, "tag_origin", 0.8, self.mw2coop_arcs[ 0 ], self.mw2coop_arcs[ 1 ], self.mw2coop_arcs[ 2 ], self.mw2coop_arcs[ 3 ] );
+}
+
+// self: seat. The player gets off where he is; the seat is freed.
+release_seat()
+{
+	player = self.mw2coop_player;
+	if ( isdefined( self.mw2coop_vehicle ) && isdefined( self.mw2coop_pos ) && isdefined( self.mw2coop_vehicle.usedPositions ) )
+		self.mw2coop_vehicle.usedPositions[ self.mw2coop_pos ] = false;
+	if ( isdefined( player ) && IsAlive( player ) )
+	{
+		org = player.origin;
+		player Unlink();
+		player SetOrigin( org );
+		player EnableWeapons();
+		player AllowCrouch( true );
+		player AllowProne( true );
+	}
+	self Delete();
 }
 
 // self: seat from seat_partner_in_vehicle().
@@ -497,7 +548,7 @@ partner_leaves_seat( delay )
 	if ( isdefined( player ) && IsAlive( player ) )
 	{
 		player Unlink();
-		player teleport_to_partner( level.player );
+		player teleport_to_partner( other_player( player ) );
 		player EnableWeapons();
 		player AllowCrouch( true );
 		player AllowProne( true );

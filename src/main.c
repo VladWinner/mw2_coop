@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "control.h"
+#include "crash.h"
 #include "game.h"
 #include "log.h"
 #include "net.h"
@@ -40,6 +41,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 	}
 	log_printf("main: game window %p after %lu ms", (void *)game, GetTickCount() - start);
 	if (game_init()) {
+		crash_install();
 		scripts_install();
 		scrdebug_install();
 		net_install();

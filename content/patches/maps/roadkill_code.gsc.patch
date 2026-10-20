@@ -1,0 +1,138 @@
+mw2coop patch for maps/roadkill_code.gsc (Team Player, Modern Warfare 2, 64-bit Steam build)
+Co-op logic lives in mw2coop/scripts/maps/_mw2coop_roadkill.gsc. Outside a co-op campaign
+session every change does what the original did.
+
+1. The glowing seat answers either player (player 1 first on a tie), and says who.
+@@@ replace
+		if ( Distance( self.origin, level.player.origin ) < 80 )
+			self notify( "trigger" );
+@@@ with
+		foreach ( player in level.players )
+			if ( Distance( self.origin, player.origin ) < 80 )
+				self notify( "trigger", player );
+@@@ end
+
+2. Whoever boards first is the gunner (maps\_mw2coop_roadkill::boarding_gunner; player 1
+   outside co-op).
+@@@ replace
+	chair waittill( "trigger" );
+	level.player DisableWeapons();
+@@@ with
+	chair waittill( "trigger", user );
+	gunner = maps\_mw2coop_roadkill::boarding_gunner( user );
+	gunner DisableWeapons();
+@@@ end
+
+3. In co-op the convoy leaves ("player_gets_in") once the second player has boarded too.
+@@@ replace
+	flag_set( "player_gets_in" );
+@@@ with
+	self maps\_mw2coop_roadkill::gunner_boarded();
+@@@ end
+
+4. The get-in animation is the gunner's.
+@@@ replace
+	level.player SetStance( "stand" );
+	level.player AllowCrouch( false );
+	level.player AllowProne( false );
+
+	level.player PlayerLinkToBlend( player_rig, "tag_player", 0.4, 0.2, 0.2 );
+@@@ with
+	gunner SetStance( "stand" );
+	gunner AllowCrouch( false );
+	gunner AllowProne( false );
+
+	gunner PlayerLinkToBlend( player_rig, "tag_player", 0.4, 0.2, 0.2 );
+@@@ end
+
+5. ... and so are the weapons afterwards.
+@@@ replace
+	level.player EnableWeapons();
+	player_gets_on_turret();
+@@@ with
+	gunner EnableWeapons();
+	player_gets_on_turret();
+@@@ end
+
+6. The turret goes to the gunner (maps\_mw2coop::vehicle_gunner(): player 1 outside co-op).
+@@@ replace
+player_gets_on_turret()
+{
+	thread warn_if_player_shoots_prematurely();
+
+	level.player AllowCrouch( true );
+	level.player AllowProne( true );
+
+	//level.player PlayerLinkTo( self, "tag_player", 0 );
+	level.player PlayerLinkToDelta( self, "tag_player", 0.35, 360, 360, 45, 30, true );
+	turret = self.mgturret[ 0 ];
+	turret SetModel( "weapon_suburban_minigun_viewmodel" );
+	turret MakeUsable();
+	turret SetMode( "manual" );
+	turret UseBy( level.player );
+	turret MakeUnusable();
+	//turret Hide();
+	level.player_turret = turret;
+	level.player SetPlayerAngles( ( 0, level.player_humvee.angles[ 1 ], 0 ) );
+
+//	thread player_viewhands_minigun( level.suburbans[ 2 ].mgturret[ 0 ] );
+	level.player DisableTurretDismount();
+
+	thread maps\_minigun_viewmodel::player_viewhands_minigun( turret );
+}
+@@@ with
+player_gets_on_turret()
+{
+	gunner = maps\_mw2coop::vehicle_gunner();
+	thread warn_if_player_shoots_prematurely();
+
+	gunner AllowCrouch( true );
+	gunner AllowProne( true );
+
+	//gunner PlayerLinkTo( self, "tag_player", 0 );
+	gunner PlayerLinkToDelta( self, "tag_player", 0.35, 360, 360, 45, 30, true );
+	turret = self.mgturret[ 0 ];
+	turret SetModel( "weapon_suburban_minigun_viewmodel" );
+	turret MakeUsable();
+	turret SetMode( "manual" );
+	turret UseBy( gunner );
+	turret MakeUnusable();
+	//turret Hide();
+	level.player_turret = turret;
+	gunner SetPlayerAngles( ( 0, level.player_humvee.angles[ 1 ], 0 ) );
+
+//	thread player_viewhands_minigun( level.suburbans[ 2 ].mgturret[ 0 ] );
+	gunner DisableTurretDismount();
+
+	thread maps\_minigun_viewmodel::player_viewhands_minigun( turret );
+}
+@@@ end
+
+7. Start points that begin on the turret: the second player rides on a rear seat.
+@@@ replace
+	self player_gets_on_turret();
+@@@ with
+	self player_gets_on_turret();
+	self thread maps\_mw2coop_roadkill::partner_rides_now();
+@@@ end
+
+8. Shepherd's "get on the line" scene: player 2 shares player 1's view rig (as COD-MOD did), so
+   both see the scene and start the fight in the same place.
+@@@ replace
+	level.player PlayerLinkToDelta( player_rig, "tag_player", 1, arc, arc, arc, arc, 1 );
+@@@ with
+	level.player PlayerLinkToDelta( player_rig, "tag_player", 1, arc, arc, arc, arc, 1 );
+	if ( maps\_mw2coop::is_campaign_coop() )
+		level.player2 maps\_mw2coop_roadkill::share_scene_rig( player_rig, arc );
+@@@ end
+
+9. ... and leaves it next to player 1.
+@@@ replace
+	struct waittill ( scene );
+	level.player unlink();
+@@@ with
+	struct waittill ( scene );
+	level.player unlink();
+	if ( maps\_mw2coop::is_campaign_coop() )
+		level.player2 maps\_mw2coop_roadkill::leave_scene_rig();
+@@@ end

@@ -305,3 +305,60 @@ void scrdebug_install(void)
 	log_printf("scrdebug: Scr_Error replaced (runtime script errors are logged)");
 	hook_end_load();
 }
+
+// Method tracing (QA): "!trace <rva>" in commands.txt points a builtin method table entry
+// ({const char *name; void (*func)(scr_entref_t); int developer}, e.g. unlink at rva 0x342c88)
+// at a wrapper that logs the entity and the GSC call stack, then calls the original. Scripts
+// compiled after that call the wrapper.
+#define TRACE_SLOTS 4
+#define TRACE_MAX_HITS 40
+typedef void (*method_t)(uintptr_t entref);
+static method_t trace_orig[TRACE_SLOTS];
+static const char *trace_name[TRACE_SLOTS];
+static volatile LONG trace_hits[TRACE_SLOTS];
+static int trace_count;
+
+static void trace_log(int i, uintptr_t entref)
+{
+	LONG n = InterlockedIncrement(&trace_hits[i]);
+	if (n > TRACE_MAX_HITS)
+		return;
+	log_printf("TRACE %s #%ld on entity %u (class %u)", trace_name[i], n, (unsigned)(entref & 0xffff),
+		   (unsigned)((entref >> 16) & 0xffff));
+	log_stack();
+}
+
+#define TRACE_WRAP(i)                                    \
+	static void trace_wrap##i(uintptr_t entref)      \
+	{                                                \
+		trace_log(i, entref);                    \
+		trace_orig[i](entref);                   \
+	}
+TRACE_WRAP(0)
+TRACE_WRAP(1)
+TRACE_WRAP(2)
+TRACE_WRAP(3)
+static const method_t trace_wraps[TRACE_SLOTS] = {trace_wrap0, trace_wrap1, trace_wrap2, trace_wrap3};
+
+void scrdebug_trace_method(uintptr_t entry_rva)
+{
+	if (trace_count >= TRACE_SLOTS) {
+		log_printf("trace: no free slot");
+		return;
+	}
+	uint8_t *entry = base + entry_rva;
+	const char *name = *(const char **)entry;
+	method_t *func = (method_t *)(entry + 8);
+	if ((uint8_t *)name < base || (uint8_t *)*func < base) {
+		log_printf("trace: rva 0x%llx is not a method table entry", (unsigned long long)entry_rva);
+		return;
+	}
+	int i = trace_count++;
+	trace_name[i] = name;
+	trace_orig[i] = *func;
+	DWORD old;
+	VirtualProtect(func, sizeof(*func), PAGE_READWRITE, &old);
+	*func = trace_wraps[i];
+	VirtualProtect(func, sizeof(*func), old, &old);
+	log_printf("trace: method %s (rva 0x%llx) is traced", name, (unsigned long long)((uint8_t *)trace_orig[i] - base));
+}
