@@ -19,6 +19,7 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   crashsite - (dcburning, start "crash") the same crash site at the end of dcburning
 //   dcemp    - (dcemp, default start) both wake up in the crashed Black Hawk, both get a rifle,
 //              both float at the ISS, both come back to the wreck and are let out
 //   oilrig   - (oilrig, default start) both ride an SDV underwater, both surface; player 1 does
@@ -89,6 +90,7 @@ main()
 			oilrig();
 			break;
 		case "dcemp":
+		case "crashsite":
 			dcemp();
 			break;
 		case "climb":
@@ -632,6 +634,14 @@ dcemp()
 	flag_wait( "give_player_weapon" );
 	wait 1;
 	check( p1 HasWeapon( "m4m203_eotech" ) && p2 HasWeapon( "m4m203_eotech" ), "both got a rifle" );
+	if ( level.script != "dcemp" )
+	{
+		// dcburning ends here: the crash site is its last scene
+		flag_wait( "end_sequence_starting" );
+		check( p1 IsLinked() && p2 IsLinked(), "both still in the wreck at the end" );
+		report( "done" );
+		return;
+	}
 	flag_wait( "iss_fx" );
 	wait 3;
 	d = Distance( p1 GetEye(), p2 GetEye() );

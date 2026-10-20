@@ -53,6 +53,9 @@ Works:
 - The Only Easy Day... (`oilrig`): both ride an SDV underwater (player 2 on the second one),
   both surface by the grate; whoever strikes first does the stealth kill, then the SEALs pull
   both out of the water.
+- No Russian (`airport`): player 2 has his own place in the elevator.
+- Of Their Own Accord (end) and Second Sun (start): both wake up in the crashed Black Hawk,
+  each with his own rifle; at the ISS both float side by side; both are let out of the wreck.
 - Cliffhanger: both players climb the ice wall side by side, each with his own icepicks (left
   pick: Attack, right pick: Aim), make the big jump, and Soap catches each of them in turn (the
   second one hangs on until Soap is free); the level goes on once both are at the top. Each
@@ -67,7 +70,7 @@ Not working or not done:
 - Player 2 is only brought along when player 1 jumps far in one step; a slow scripted move can
   still leave him behind.
 - The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
-- Only S.S.D.D., Team Player, Wolverines!, Takedown (opening), The Only Easy Day... (opening) and Cliffhanger have level fixes. Other missions, their in-engine cutscenes for player 2 and
+- Only S.S.D.D., Team Player, Wolverines!, Takedown (opening), The Only Easy Day... (opening), Cliffhanger, No Russian (elevator), Of Their Own Accord (crash) and Second Sun (opening) have level fixes. Other missions, their in-engine cutscenes for player 2 and
   vehicle sections for two players are not done.
 - Joining a friend through a Steam invite (two Steam accounts) is untested.
 - No menu: hosting and joining use console commands (below).
