@@ -94,3 +94,86 @@ free_exit_origin( end )
 	}
 	return end.origin;
 }
+
+// --------------------------------------------------------------------------------------------
+// The street: a falling helicopter chases the player until he hides with the team. In co-op
+// each player has his own, the street counts as safe once both have hidden, and "too far out
+// in the open" (street_insta_death) is each player's own.
+
+street_monitor()
+{
+	if ( !coop() )
+		return;
+	hide = flag_triggers( "street_player_hide" );
+	death = flag_triggers( "street_insta_death" );
+	while ( !flag( "street_safe" ) )
+	{
+		foreach ( player in level.players )
+		{
+			foreach ( trigger in hide )
+				if ( player IsTouching( trigger ) )
+					player.mw2coop_street_hidden = true;
+			foreach ( trigger in death )
+				if ( player IsTouching( trigger ) )
+					player.mw2coop_street_exposed = true;
+		}
+		wait 0.05;
+	}
+}
+
+flag_triggers( name )
+{
+	found = [];
+	foreach ( trigger in getEntArrayWithFlag( name ) )
+		found[ found.size ] = trigger;
+	return found;
+}
+
+// street_hide_moment(): the street is safe once every player has hidden (player 1 outside co-op).
+wait_players_hidden()
+{
+	if ( !coop() )
+	{
+		flag_wait( "street_player_hide" );
+		return;
+	}
+	for ( ;; )
+	{
+		all = true;
+		foreach ( player in level.players )
+			if ( IsAlive( player ) && !isdefined( player.mw2coop_street_hidden ) )
+				all = false;
+		if ( all )
+			break;
+		wait 0.05;
+	}
+	maps\_mw2coop::state( "dcemp street: both players hidden" );
+}
+
+// street_main(): a falling helicopter for every player.
+street_helis()
+{
+	if ( !coop() )
+	{
+		level.player thread maps\dcemp_code::street_heli_player_kill();
+		return;
+	}
+	thread street_monitor();
+	foreach ( player in level.players )
+		player thread maps\dcemp_code::street_heli_player_kill();
+}
+
+// self: the player a helicopter chases.
+street_safe_for()
+{
+	if ( !coop() )
+		return flag( "street_safe" );
+	return flag( "street_safe" ) || isdefined( self.mw2coop_street_hidden );
+}
+
+street_insta_death_for()
+{
+	if ( !coop() )
+		return flag( "street_insta_death" );
+	return isdefined( self.mw2coop_street_exposed );
+}

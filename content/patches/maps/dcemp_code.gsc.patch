@@ -9,3 +9,26 @@ level.player PlayerSetGroundReferenceEnt( camera );
 level.player PlayerSetGroundReferenceEnt( camera );
 	maps\_mw2coop_dcemp::partner_iss_camera( camera );
 @@@ end
+
+2. The street helicopter chases the player it was started for; the street is safe once every
+   player has hidden.
+@@@ subst street_heli_player_kill
+level.player
+@@@ to
+self
+@@@ end
+@@@ subst street_heli_player_kill
+flag( "street_safe" )
+@@@ to
+self maps\_mw2coop_dcemp::street_safe_for()
+@@@ end
+@@@ subst street_heli_player_kill
+flag( "street_insta_death" )
+@@@ to
+self maps\_mw2coop_dcemp::street_insta_death_for()
+@@@ end
+@@@ subst street_hide_moment
+flag_wait( "street_player_hide" );
+@@@ to
+maps\_mw2coop_dcemp::wait_players_hidden();
+@@@ end

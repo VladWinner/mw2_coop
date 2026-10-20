@@ -77,3 +77,10 @@ rig moveto( end.origin, time, time * .5, time * .5 );
 @@@ to
 rig moveto( self maps\_mw2coop_dcemp::free_exit_origin( end ), time, time * .5, time * .5 );
 @@@ end
+
+4. The street: a falling helicopter for every player, safe once both have hidden.
+@@@ subst street_main
+delaythread( 2.5 + newtime, ::street_heli_player_kill );
+@@@ to
+delaythread( 2.5 + newtime, maps\_mw2coop_dcemp::street_helis );
+@@@ end

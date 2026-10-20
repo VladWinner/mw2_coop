@@ -22,6 +22,8 @@
 //   crashsite - (dcburning, start "crash") the same crash site at the end of dcburning
 //   dcemp    - (dcemp, default start) both wake up in the crashed Black Hawk, both get a rifle,
 //              both float at the ISS, both come back to the wreck and are let out
+//   street   - (dcemp, start "street") the falling helicopters: the street is safe only once both
+//              players have hidden (the bot moves them into the hiding place)
 //   oilrig   - (oilrig, default start) both ride an SDV underwater, both surface; player 1 does
 //              the stealth kill, then both are pulled out of the water. oilrig2: player 2 kills
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
@@ -92,6 +94,9 @@ main()
 		case "dcemp":
 		case "crashsite":
 			dcemp();
+			break;
+		case "street":
+			street();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -655,6 +660,33 @@ dcemp()
 	wait 1;
 	d = Distance( p1.origin, p2.origin );
 	check( !p1 IsLinked() && !p2 IsLinked() && d < 150, "both out of the wreck (" + int( d ) + " units, after " + t + " s)" );
+	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
+	report( "done" );
+}
+
+// Second Sun street (start "street"). Names no dcemp script (not in other zones).
+street()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	p1 = level.player;
+	p2 = level.player2;
+	hide = getEntArrayWithFlag( "street_player_hide" );
+	check( hide.size > 0, "hiding place trigger found (" + hide.size + ")" );
+	if ( !hide.size )
+		return;
+	spot = hide[ 0 ].origin;
+	foreach ( guy in level.team )
+		guy ent_flag_wait( "street_hide" );
+	report( "team hidden, hiding place at " + spot );
+	level.mw2coop_no_follow = true;	// the bot teleports player 1: player 2 must not follow
+	p1 SetOrigin( PlayerPhysicsTrace( spot + ( 0, 0, 40 ), spot - ( 0, 0, 200 ) ) );
+	wait 2;
+	check( isdefined( p1.mw2coop_street_hidden ) && !flag( "street_safe" ), "player 1 hidden, street not safe while player 2 is out" );
+	p2 SetOrigin( PlayerPhysicsTrace( spot + ( 24, 0, 40 ), spot + ( 24, 0, -200 ) ) );
+	for ( t = 0; t < 5 && !flag( "street_safe" ); t += 0.1 )
+		wait 0.1;
+	check( flag( "street_safe" ), "street safe once both are hidden" );
+	wait 3;
 	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
 	report( "done" );
 }
