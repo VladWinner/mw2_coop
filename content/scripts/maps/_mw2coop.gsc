@@ -456,6 +456,13 @@ seat_partner_in_vehicle( player, right, left, up, down, skip_tag )
 		skip_tag = "tag_passenger";
 
 	tag = self free_seat_tag( skip_tag );
+	// a level can name a squadmate who gives up his seat (level.mw2coop_spare_rider)
+	evicted = "";
+	if ( !isdefined( tag ) && isdefined( level.mw2coop_spare_rider ) )
+	{
+		evicted = " spare " + level.mw2coop_spare_rider + ": " + self evict_rider( level.mw2coop_spare_rider );
+		tag = self free_seat_tag( skip_tag );
+	}
 	seat = spawn_tag_origin();
 	seat.mw2coop_player = player;
 	seat.mw2coop_vehicle = self;
@@ -464,12 +471,12 @@ seat_partner_in_vehicle( player, right, left, up, down, skip_tag )
 	{
 		// same offset as maps\_utility::player_rides_shotgun_in_humvee() uses on tag_passenger
 		seat LinkTo( self, tag, ( -5, 10, -34 ), ( 0, 0, 0 ) );
-		state( "player 2 seated on " + tag );
+		state( "player 2 seated on " + tag + evicted );
 	}
 	else
 	{
 		seat LinkTo( self, "tag_body", ( -50, 0, 10 ), ( 0, 0, 0 ) );
-		state( "player 2: no free seat (" + self seats_text() + "), riding in the back" );
+		state( "player 2: no free seat (" + self seats_text() + ")" + evicted + ", riding in the back" );
 	}
 
 	player AllowCrouch( false );
@@ -516,6 +523,48 @@ seats_text()
 		text += " " + pos + "=" + tag;
 		if ( used )
 			text += "*";
+		if ( isdefined( self.riders ) )
+			foreach ( guy in self.riders )
+				if ( isdefined( guy ) && isdefined( guy.vehicle_position ) && guy.vehicle_position == pos )
+					text += "(" + rider_name( guy ) + ")";
 	}
 	return text;
+}
+
+rider_name( guy )
+{
+	if ( isdefined( guy.animname ) )
+		return guy.animname;
+	if ( isdefined( guy.script_noteworthy ) )
+		return guy.script_noteworthy;
+	if ( isdefined( guy.targetname ) )
+		return guy.targetname;
+	return "ai";
+}
+
+// self: vehicle. Removes the rider with this name (a squadmate the level does not need)
+// so a player can take his seat. The vehicle frees the seat when the rider is gone
+// (maps\_vehicle_aianim::guy_deathhandle); done here too in case that runs later.
+evict_rider( animname )
+{
+	if ( !isdefined( self.riders ) )
+		return "no riders";
+	names = "";
+	foreach ( guy in self.riders )
+	{
+		if ( isdefined( guy ) )
+			names += rider_name( guy ) + " ";
+		// animname, or the spawner's script_noteworthy while spawn functions have not run yet
+		if ( !isdefined( guy ) || rider_name( guy ) != animname )
+			continue;
+		pos = guy.vehicle_position;
+		self.riders = array_remove( self.riders, guy );
+		if ( isdefined( guy.magic_bullet_shield ) )
+			guy stop_magic_bullet_shield();
+		guy Delete();
+		if ( isdefined( pos ) && isdefined( self.usedPositions ) )
+			self.usedPositions[ pos ] = false;
+		return "removed";
+	}
+	return "not among " + names;
 }

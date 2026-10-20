@@ -9,3 +9,57 @@ mw2coop patch for maps/invasion.gsc (Wolverines!, Modern Warfare 2, 64-bit Steam
 	if ( maps\_mw2coop::is_campaign_coop() )
 		humvee maps\_mw2coop::seat_partner_in_vehicle( level.player2, 180, 180, 40, 40, "tag_guy1" );
 @@@ end
+
+2. Opening ride: all seats of the player's Humvee hold AI, so Worm, a squadmate the mission
+   lets die later, gives up his rear seat when player 2 is seated
+   (maps\_mw2coop::seat_partner_in_vehicle); the opening's three uses of level.worm that do
+   not check he is alive get that check.
+@@@ replace
+	level.humvee_player = spawn_vehicle_from_targetname_and_drive( "humvee_player" );
+	level.humvee_player playsound( "scn_invasion_humvee_ridein" );
+@@@ with
+	level.humvee_player = spawn_vehicle_from_targetname_and_drive( "humvee_player" );
+	level.humvee_player playsound( "scn_invasion_humvee_ridein" );
+	level.mw2coop_spare_rider = "worm";
+@@@ end
+@@@ replace
+	level.taco pushplayer( true );
+	level.worm pushplayer( true );
+	level.worm thread magic_bullet_shield();
+@@@ with
+	level.taco pushplayer( true );
+	if ( isalive( level.worm ) )
+	{
+		level.worm pushplayer( true );
+		level.worm thread magic_bullet_shield();
+	}
+@@@ end
+@@@ replace
+	level.worm pushplayer( true );
+	
+	org player_leaves_humvee();
+	
+	thread dialog_go_to_yards();
+	
+	wait 1;
+	setSavedDvar( "hud_drawhud", "1" );
+	
+	level.raptor pushplayer( true );
+	level.taco pushplayer( true );
+	level.worm pushplayer( true );
+@@@ with
+	if ( isalive( level.worm ) )
+		level.worm pushplayer( true );
+	
+	org player_leaves_humvee();
+	
+	thread dialog_go_to_yards();
+	
+	wait 1;
+	setSavedDvar( "hud_drawhud", "1" );
+	
+	level.raptor pushplayer( true );
+	level.taco pushplayer( true );
+	if ( isalive( level.worm ) )
+		level.worm pushplayer( true );
+@@@ end
