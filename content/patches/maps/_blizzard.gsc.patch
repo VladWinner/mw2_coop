@@ -1,0 +1,23 @@
+mw2coop patch for maps/_blizzard.gsc (Cliffhanger, Modern Warfare 2, 64-bit Steam build)
+
+1. In co-op the blizzard effect is played on each player's "tag_origin", which campaign
+   players do not have (no body model): the call fails and the blizzard thread dies on both
+   machines. Play it on a tag_origin model that follows the player instead.
+@@@ replace
+blizzard_start_proc()
+{
+	while ( 1 )
+	{
+		if ( is_coop() )
+			PlayFXOnTagForClients( level._effect[ "blizzard_main" ], self, "tag_origin", self );
+@@@ with
+blizzard_start_proc()
+{
+	fx_ent = self;
+	if ( maps\_mw2coop::is_campaign_coop() )
+		fx_ent = self maps\_mw2coop::player_tag_ent();
+	while ( 1 )
+	{
+		if ( is_coop() )
+			PlayFXOnTagForClients( level._effect[ "blizzard_main" ], fx_ent, "tag_origin", self );
+@@@ end

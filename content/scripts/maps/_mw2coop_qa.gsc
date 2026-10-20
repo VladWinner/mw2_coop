@@ -10,12 +10,19 @@
 //   board    - (roadkill, start "convoy") first to board is the gunner, the other rides, swaps
 //   rideend  - (roadkill, start "ride_later") both get off at the end of the ride and the crash
 //   rkintro  - (roadkill, default start) both players in Shepherd's scene, together afterwards
+//   leash    - player 2 far away comes back to player 1
+//   snow     - (cliffhanger, start "snowmobile") own snowmobiles; the ending waits for player 2
+//   snowpick - (cliffhanger, start "icepick") player 2 takes player 1's snowmobile first
+//   spawn    - (any map/start) where player 2 is during the first 12 s
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
 
 main()
 {
+	// a scenario that ends the mission marks itself done, so the next map does not rerun it
+	if ( GetDvar( "mw2coop_qa_phase" ) == "done" )
+		return;
 	level.mw2coop_qa_n = 0;
 	maps\_mw2coop::state( "qa scenario " + GetDvar( "mw2coop_qa" ) + " started" );
 	wait 1.5;
@@ -51,6 +58,18 @@ main()
 			break;
 		case "rkintro":
 			rkintro();
+			break;
+		case "leash":
+			leash();
+			break;
+		case "snow":
+			snow();
+			break;
+		case "snowpick":
+			snowpick();
+			break;
+		case "spawn":
+			spawn_audit();
 			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
@@ -371,4 +390,126 @@ rkintro()
 	d = Distance( level.player.origin, level.player2.origin );
 	check( d < 200, "player 2 next to player 1 (" + int( d ) + " units)" );
 	report( "done" );
+}
+
+// Leash (S.S.D.D.): player 2 is put 4000 units away; within leash_time() + 2 s he is back
+// next to player 1.
+leash()
+{
+	common_checks();
+	level.player2 SetOrigin( level.player.origin + ( 4000, 0, 0 ) );
+	wait 1;
+	check( Distance( level.player.origin, level.player2.origin ) > 3000, "player 2 is far away (" + int( Distance( level.player.origin, level.player2.origin ) ) + " units)" );
+	wait maps\_mw2coop::leash_time() + 1;
+	d = Distance( level.player.origin, level.player2.origin );
+	check( d < 200, "leash brought player 2 back (" + int( d ) + " units)" );
+	report( "done" );
+}
+
+// Cliffhanger snowmobiles (start point "snowmobile"): each player on his own snowmobile; at the
+// helicopter the ending waits while player 2 is still on his snowmobile and goes on once he is
+// off next to player 1. (A script cannot drive, so the ride itself is skipped by setting the
+// level's flags.)
+snow()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 3;
+	check( isdefined( level.player.vehicle ), "player 1 on a snowmobile" );
+	check( isdefined( level.player2.vehicle ) && ( !isdefined( level.player.vehicle ) || level.player2.vehicle != level.player.vehicle ), "player 2 on his own snowmobile" );
+	foreach ( name in strtok( "player_reaches_hilltop there_is_chopper ending_heli_flies_in", " " ) )
+	{
+		qa_flag_set( name );
+		wait 1;
+	}
+	level.player player_dismount_vehicle();
+	wait 8;	// the radio lines between the flags
+	SetDvar( "mw2coop_qa_phase", "done" );
+	qa_flag_set( "end_begins" );
+	wait 5;
+	check( !level.mw2coop.completing, "ending waits while player 2 is on his snowmobile" );
+	level.player2 player_dismount_vehicle();
+	wait 1;
+	level.player2 maps\_mw2coop::teleport_to_partner( level.player );
+	t = 0;
+	while ( !level.mw2coop.completing && t < 15 )
+	{
+		wait 0.25;
+		t += 0.25;
+	}
+	check( level.mw2coop.completing, "mission ends once player 2 is there (" + t + " s)" );
+	report( "done" );
+}
+
+qa_flag_set( name )
+{
+	if ( !isdefined( level.flag[ name ] ) )
+		flag_init( name );
+	flag_set( name );
+}
+
+// Cliffhanger, start point "icepick": after Price's icepick fight two snowmobiles wait; player 2
+// takes the one the level made for player 1, player 1 takes the other, and the level goes on
+// with player 1's as level.player_snowmobile.
+snowpick()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	t = 0;
+	while ( !flag( "player_snowmobile_available" ) && t < 90 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "player_snowmobile_available" ), "snowmobiles available (" + t + " s)" );
+	wait 1;
+	check( isdefined( level.mw2coop_partner_snowmobile ), "second snowmobile spawned" );
+	level.player2 player_mount_vehicle( level.player_snowmobile );
+	wait 1;
+	level.player player_mount_vehicle( level.mw2coop_partner_snowmobile );
+	t = 0;
+	while ( !flag( "player_rides_snowmobile" ) && t < 10 )
+	{
+		wait 0.25;
+		t += 0.25;
+	}
+	check( flag( "player_rides_snowmobile" ), "the level goes on (player_rides_snowmobile)" );
+	check( isdefined( level.player.vehicle ) && level.player_snowmobile == level.player.vehicle, "level.player_snowmobile is player 1's" );
+	check( isdefined( level.player2.vehicle ) && level.player2.vehicle != level.player.vehicle, "player 2 on the other snowmobile" );
+	report( "done" );
+}
+
+// Spawn audit (any map, any start point): where player 2 ends up after the level start, over
+// 12 s. PASS when he is alive, up, within 300 units of player 1 and not far below him, and
+// either standing on ground or held by something (linked).
+spawn_audit()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	samples = [];
+	samples[ 0 ] = 0.5;
+	samples[ 1 ] = 3;
+	samples[ 2 ] = 10.5;
+	waited = 0;
+	foreach ( at in samples )
+	{
+		wait at - waited;
+		waited = at;
+		report( "t+" + ( at + 1.5 ) + " " + spawn_text() );
+	}
+	p1 = level.player;
+	p2 = level.player2;
+	d = Distance( p1.origin, p2.origin );
+	dz = p2.origin[ 2 ] - p1.origin[ 2 ];
+	check( IsAlive( p2 ) && !maps\_mw2coop::is_downed( p2 ), "player 2 alive and up" );
+	check( d < 300, "player 2 near player 1 (" + int( d ) + " units)" );
+	check( dz > -150, "player 2 not below player 1 (dz " + int( dz ) + ")" );
+	check( p2 IsOnGround() || p2 IsLinked(), "player 2 on ground or held" );
+	report( "done" );
+}
+
+spawn_text()
+{
+	p1 = level.player;
+	p2 = level.player2;
+	return "start " + level.start_point + ", d " + int( Distance( p1.origin, p2.origin ) ) + ", dz " + int( p2.origin[ 2 ] - p1.origin[ 2 ] )
+		+ ", p1 " + int( p1.origin[ 0 ] ) + "," + int( p1.origin[ 1 ] ) + "," + int( p1.origin[ 2 ] ) + " linked " + p1 IsLinked() + " ground " + p1 IsOnGround()
+		+ ", p2 linked " + p2 IsLinked() + " ground " + p2 IsOnGround() + " alive " + IsAlive( p2 );
 }

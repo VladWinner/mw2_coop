@@ -169,6 +169,7 @@ follow_leader_teleports()
 		return;
 	wait 0.15;
 	last = level.player.origin;
+	far_time = 0;
 	for ( ;; )
 	{
 		wait 0.05;
@@ -180,7 +181,40 @@ follow_leader_teleports()
 			state( "followed a teleport of player 1" );
 		}
 		last = now;
+
+		// Leash: a slow scripted move of player 1 (a blended link, a scene) or simply drifting
+		// apart leaves player 2 far behind; after a while bring him over. Only while both are
+		// free and up; a level can turn it off with level.mw2coop_no_leash.
+		if ( leash_applies() && DistanceSquared( now, level.player2.origin ) > leash_distance() * leash_distance() )
+			far_time += 0.05;
+		else
+			far_time = 0;
+		if ( far_time >= leash_time() )
+		{
+			far_time = 0;
+			level.player2 teleport_to_partner( level.player );
+			state( "leash: player 2 brought to player 1" );
+		}
 	}
+}
+
+leash_distance()
+{
+	return 3000;
+}
+
+leash_time()
+{
+	return 8;	// seconds
+}
+
+leash_applies()
+{
+	if ( isdefined( level.mw2coop_no_leash ) && level.mw2coop_no_leash )
+		return false;
+	if ( level.player IsLinked() || level.player2 IsLinked() )
+		return false;
+	return !is_downed( level.player ) && !is_downed( level.player2 );
 }
 
 // self: the player to move. Tries free spots beside and behind the partner.
@@ -394,6 +428,10 @@ next_level_name()
 {
 	settings = level.missionSettings;
 	index = settings maps\_endmission::getLevelIndex( level.script );
+	// This build's _nextmission() completes airport right after cliffhanger ("always skip
+	// airport for RUSSIAN PC BUILD", with no build check), so the campaign goes on with favela.
+	if ( level.script == "cliffhanger" )
+		index = settings maps\_endmission::getLevelIndex( "airport" );
 	if ( !isdefined( index ) || index + 1 >= settings.levels.size )
 		return "";
 	return settings maps\_endmission::getLevelName( index + 1 );
@@ -618,4 +656,20 @@ evict_rider( animname )
 		return "removed";
 	}
 	return "not among " + names;
+}
+
+// Campaign players have no body model (Spec Ops gives them coop_body_* models, which only the
+// so_* zones hold), so there is no "tag_origin" on them for effects or links. self: player.
+// Returns a tag_origin model that follows him, for code that plays effects on a player's tag.
+player_tag_ent()
+{
+	if ( !isdefined( self.mw2coop_tag_ent ) )
+	{
+		ent = spawn_tag_origin();
+		ent.origin = self.origin;
+		ent.angles = self.angles;
+		ent LinkTo( self );
+		self.mw2coop_tag_ent = ent;
+	}
+	return self.mw2coop_tag_ent;
 }
