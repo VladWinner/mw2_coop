@@ -19,6 +19,8 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   dcemp    - (dcemp, default start) both wake up in the crashed Black Hawk, both get a rifle,
+//              both float at the ISS, both come back to the wreck and are let out
 //   oilrig   - (oilrig, default start) both ride an SDV underwater, both surface; player 1 does
 //              the stealth kill, then both are pulled out of the water. oilrig2: player 2 kills
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
@@ -85,6 +87,9 @@ main()
 		case "oilrig":
 		case "oilrig2":
 			oilrig();
+			break;
+		case "dcemp":
+			dcemp();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -610,6 +615,36 @@ oilrig()
 	wait 1;
 	d = Distance( p1.origin, p2.origin );
 	check( !p1 IsLinked() && !p2 IsLinked() && d < 300 && abs( p1.origin[ 2 ] - p2.origin[ 2 ] ) < 30, "both out on the platform together (" + int( d ) + " units, p1 " + p1.origin + " linked " + p1 IsLinked() + ", p2 " + p2.origin + " linked " + p2 IsLinked() + ")" );
+	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
+	report( "done" );
+}
+
+// Second Sun opening (default start). Names no dcemp script (not in other zones).
+dcemp()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	p1 = level.player;
+	p2 = level.player2;
+	flag_wait( "crash_actors_ready" );
+	wait 0.5;
+	d = Distance( p1 GetEye(), p2 GetEye() );
+	check( p1 IsLinked() && p2 IsLinked() && d > 16 && d < 90, "both in the wreck (eyes " + int( d ) + " units apart)" );
+	flag_wait( "give_player_weapon" );
+	wait 1;
+	check( p1 HasWeapon( "m4m203_eotech" ) && p2 HasWeapon( "m4m203_eotech" ), "both got a rifle" );
+	flag_wait( "iss_fx" );
+	wait 3;
+	d = Distance( p1 GetEye(), p2 GetEye() );
+	check( p1 IsLinked() && p2 IsLinked() && d < 150, "both at the ISS (" + int( d ) + " units apart)" );
+	flag_wait( "iss_done" );
+	wait 4;
+	d = Distance( p1 GetEye(), p2 GetEye() );
+	check( p1 IsLinked() && p2 IsLinked() && d < 120, "both back in the wreck (" + int( d ) + " units apart)" );
+	for ( t = 0; t < 60 && ( p1 IsLinked() || p2 IsLinked() ); t += 0.25 )
+		wait 0.25;
+	wait 1;
+	d = Distance( p1.origin, p2.origin );
+	check( !p1 IsLinked() && !p2 IsLinked() && d < 150, "both out of the wreck (" + int( d ) + " units, after " + t + " s)" );
 	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
 	report( "done" );
 }
