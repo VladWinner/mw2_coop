@@ -7,7 +7,10 @@ param(
     # Folder holding the test copies; any iw4sp.exe outside it is killed.
     [string]$TestRoot = $(if ($env:MW2COOP_TEST_ROOT) { $env:MW2COOP_TEST_ROOT } else { 'D:\coop-test' }),
     # Your real game install: reported if any file in it changes during a run.
-    [string]$RealInstall = $env:MW2COOP_REAL_INSTALL
+    [string]$RealInstall = $env:MW2COOP_REAL_INSTALL,
+    # Stop early (close the test copies) once every one of these logs has a line matching $DonePattern.
+    [string]$DoneLogs = '',
+    [string]$DonePattern = 'qa: [0-9]+: done'
 )
 # Launch the TEST copies of iw4sp.exe (one process per folder in -Dirs, $Stagger s apart).
 # Guard: any iw4sp.exe whose path is not under $TestRoot (e.g. Steam relaunching your real
@@ -53,6 +56,13 @@ while ((Get-Date) -lt $deadline) {
             $seen[$q.ProcessId] = $true
             "[$Tag] pid $($q.ProcessId) running from $($q.ExecutablePath)"
         }
+    }
+    if ($DoneLogs) {
+        $all = $true
+        foreach ($log in ($DoneLogs -split ',')) {
+            if (-not (Test-Path $log) -or -not (Select-String -Path $log -Pattern $DonePattern -Quiet)) { $all = $false; break }
+        }
+        if ($all) { Start-Sleep -Seconds 2; "[$Tag] scenario done on all copies, closing them"; break }
     }
     if ($procs.Count -eq 0) {
         if (-not $idleSince) { $idleSince = Get-Date }

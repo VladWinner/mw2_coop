@@ -24,6 +24,8 @@
 //              both float at the ISS, both come back to the wreck and are let out
 //   street   - (dcemp, start "street") the falling helicopters: the street is safe only once both
 //              players have hidden (the bot moves them into the hiding place)
+//   nrend    - (airport, start "escape") the ending at the van: Makarov shoots both players
+//   nrend2   - same, player 1 at the van's door (the close ending), player 2 a little away
 //   oilrig   - (oilrig, default start) both ride an SDV underwater, both surface; player 1 does
 //              the stealth kill, then both are pulled out of the water. oilrig2: player 2 kills
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
@@ -97,6 +99,10 @@ main()
 			break;
 		case "street":
 			street();
+			break;
+		case "nrend":
+		case "nrend2":
+			nrend();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -518,6 +524,14 @@ snowpick()
 spawn_audit()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	starts = "";
+	if ( isdefined( level.start_functions ) )
+		foreach ( s in level.start_functions )
+			starts += s[ "name" ] + " ";
+	mode = "undefined";
+	if ( isdefined( level.level_mode ) )
+		mode = level.level_mode;
+	report( "start point " + level.start_point + ", level_mode " + mode + ", starts: " + starts );
 	samples = [];
 	samples[ 0 ] = 0.5;
 	samples[ 1 ] = 3;
@@ -688,5 +702,60 @@ street()
 	check( flag( "street_safe" ), "street safe once both are hidden" );
 	wait 3;
 	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
+	report( "done" );
+}
+
+// No Russian ending (start "escape"). Names no airport script (not in other zones): the bot puts
+// both players by the van's ending node and watches Makarov's shots.
+nrend()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	p1 = level.player;
+	p2 = level.player2;
+	node = getstruct( "escape_ending_node", "targetname" );
+	check( isdefined( node ), "ending node found" );
+	level.mw2coop_no_follow = true;
+	// follow Makarov along the escape (he waits for the player), then stand by the van
+	for ( t = 0; t < 150 && !flag( "escape_sequence_go" ); t += 0.5 )
+	{
+		foreach ( i, player in level.players )
+		{
+			if ( player IsLinked() || !isdefined( level.makarov ) )
+				continue;
+			if ( !flag( "escape_sequence_reach" ) )
+			{
+				back = AnglesToForward( ( 0, level.makarov.angles[ 1 ], 0 ) ) * -140;
+				right = AnglesToRight( ( 0, level.makarov.angles[ 1 ], 0 ) ) * ( 40 * ( i * 2 - 1 ) );
+				at = level.makarov.origin + back + right;
+				if ( Distance( player.origin, at ) > 220 )
+					player SetOrigin( PlayerPhysicsTrace( at + ( 0, 0, 40 ), at - ( 0, 0, 100 ) ) );
+			}
+			else if ( GetDvar( "mw2coop_qa" ) == "nrend2" && player == level.player && isdefined( level.escape_van_dummy ) )
+			{
+				// where the close ending's player rig starts, facing the van
+				van = level.escape_van_dummy;
+				anime = level.scr_anim[ "player_ending" ][ "end_player_shot" ];
+				at = GetStartOrigin( van GetTagOrigin( "origin_animate_jnt" ), van GetTagAngles( "origin_animate_jnt" ), anime );
+				if ( Distance( player.origin, at ) > 20 )
+					player SetOrigin( PlayerPhysicsTrace( at + ( 0, 0, 40 ), at - ( 0, 0, 100 ) ) );
+				player SetPlayerAngles( VectorToAngles( ( van.origin[ 0 ], van.origin[ 1 ], at[ 2 ] ) - at ) );
+			}
+			else
+			{
+				right = AnglesToRight( ( 0, node.angles[ 1 ], 0 ) );
+				at = node.origin + right * ( 50 * ( i * 2 - 1 ) );
+				if ( Distance( player.origin, at ) > 60 )
+					player SetOrigin( PlayerPhysicsTrace( at + ( 0, 0, 40 ), at - ( 0, 0, 100 ) ) );
+			}
+		}
+		wait 0.5;
+	}
+	check( flag( "escape_sequence_go" ), "the ending starts (" + t + " s)" );
+	for ( t = 0; t < 60 && ( !isdefined( level.mw2coop_ending_left ) || level.mw2coop_ending_left > 0 ); t += 0.25 )
+		wait 0.25;
+	check( isdefined( level.mw2coop_ending_left ) && level.mw2coop_ending_left == 0, "Makarov shot both players (" + t + " s)" );
+	wait 3;
+	check( p1 IsLinked() && p2 IsLinked(), "both down (linked " + p1 IsLinked() + " " + p2 IsLinked() + ")" );
+	report( "health p1 " + p1.health + " p2 " + p2.health );
 	report( "done" );
 }
