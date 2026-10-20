@@ -7,6 +7,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import gsc_patch  # noqa: E402
+
 gsc_root, out_dir = sys.argv[1], sys.argv[2]
 M = 'maps\\_mw2coop_climb::'
 
@@ -18,43 +21,13 @@ player_makes_the_jump player_hangs_on player_was_caught price_caught_player clim
 fade_to_death reached_top player_starts_climbing'''.split())
 
 
-def load(rel):
-    return open(os.path.join(gsc_root, rel), encoding='latin-1').read().replace('\r', '')
-
-
-def func(src, name):
-    i = src.index('\n' + name + '(') + 1
-    j = src.index('\n}\n', i) + 3
-    return src[i:j]
-
-
-class Patch:
+class Patch(gsc_patch.Patch):
     def __init__(self, rel):
-        self.src = load(rel)
-        self.out = []
-
-    def note(self, text):
-        self.out.append('\n' + text.strip('\n') + '\n')
-
-    def subst(self, fn, old, new):
-        """Whole-word replace inside one function, as the DLL does; applied here too, so later
-        hunks match the text the earlier ones left."""
-        body = func(self.src, fn)
-        lead = r'(?<![A-Za-z0-9_])' if re.match(r'\w', old[0]) else ''
-        trail = r'(?![A-Za-z0-9_])' if re.match(r'\w', old[-1]) else ''
-        body2, n = re.subn(lead + re.escape(old) + trail, lambda m: new, body)
-        assert n, (fn, old)
-        self.src = self.src.replace(body, body2, 1)
-        self.out.append('@@@ subst ' + fn + '\n' + old + '\n@@@ to\n' + new + '\n@@@ end\n')
-
-    def replace(self, old, new):
-        assert self.src.count(old) == 1, (self.src.count(old), old[:80])
-        self.src = self.src.replace(old, new)
-        self.out.append('@@@ replace\n' + old + '@@@ with\n' + new + '@@@ end\n')
+        super().__init__(gsc_root, rel, out_dir)
 
     def per_player(self, fn, who):
         """level.player -> who, per-player flags -> who's, in function fn."""
-        body = func(self.src, fn)
+        body = self.func(fn)
         if re.search(r'level\.player(?![A-Za-z0-9_])', body):
             self.subst(fn, 'level.player', who)
         for call, helper in (('flag', 'pflag'), ('flag_set', 'pflag_set'), ('flag_clear', 'pflag_clear'),
@@ -63,11 +36,8 @@ class Patch:
                 if name in PLAYER_FLAGS:
                     self.subst(fn, f'{call}( "{name}" )', f'{who} {M}{helper}( "{name}" )')
 
-    def write(self, name, header):
-        path = os.path.join(out_dir, name)
-        open(path, 'w', encoding='utf-8', newline='\n').write(header.strip('\n') + '\n' + ''.join(self.out))
-        print('wrote', path, sum(1 for x in self.out if x.startswith('@@@')), 'hunks')
 
+func = gsc_patch.func
 
 # ---------------------------------------------------------------- common/maps/_climb.gsc
 p = Patch('common/maps/_climb.gsc')

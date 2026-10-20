@@ -16,6 +16,9 @@
 //   climb    - (cliffhanger, default start) both players climb the ice wall on their own lanes,
 //              make the big jump, Soap catches both, both climb to the top (bot input)
 //   spawn    - (any map/start) where player 2 is during the first 12 s
+//   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
+//              both duck before Makarov's shots, both get out next to each other
+//   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -72,6 +75,10 @@ main()
 			break;
 		case "spawn":
 			spawn_audit();
+			break;
+		case "takedown":
+		case "takedown2":
+			takedown();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -522,4 +529,43 @@ spawn_text()
 	return "start " + level.start_point + ", d " + int( Distance( p1.origin, p2.origin ) ) + ", dz " + int( p2.origin[ 2 ] - p1.origin[ 2 ] )
 		+ ", p1 " + int( p1.origin[ 0 ] ) + "," + int( p1.origin[ 1 ] ) + "," + int( p1.origin[ 2 ] ) + " linked " + p1 IsLinked() + " standing " + maps\_mw2coop::is_standing( p1 )
 		+ ", p2 linked " + p2 IsLinked() + " standing " + maps\_mw2coop::is_standing( p2 ) + " alive " + IsAlive( p2 );
+}
+
+// Takedown opening car (default start). Names no favela script (they are not in other zones):
+// the bot ducks through the crouch command's notify, as NotifyOnPlayerCommand would send it.
+takedown()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 2;
+	p1 = level.player;
+	p2 = level.player2;
+	check( p1 IsLinked() && p2 IsLinked(), "both in the car (linked " + p1 IsLinked() + " " + p2 IsLinked() + ")" );
+	d = Distance( p1 GetEye(), p2 GetEye() );
+	check( d > 20 && d < 80, "player 2 on the back seat (eyes " + int( d ) + " units apart)" );
+	flag_wait( "car_getting_shot" );
+	if ( GetDvar( "mw2coop_qa" ) == "takedown2" )
+	{
+		p1 notify( "go_crouch" );
+		for ( t = 0; t < 8 && !isdefined( p2.mw2coop_shot ); t += 0.1 )
+			wait 0.1;
+		check( isdefined( p2.mw2coop_shot ) && !isdefined( p1.mw2coop_shot ), "Makarov hits player 2 (standing), not player 1 (ducking)" );
+		report( "done" );
+		return;
+	}
+	foreach ( player in level.players )
+		player notify( "go_crouch" );
+	wait 1;
+	check( isdefined( p1.mw2coop_ducking ) && p1.mw2coop_ducking && isdefined( p2.mw2coop_ducking ) && p2.mw2coop_ducking, "both duck" );
+	flag_wait( "start_chase" );
+	check( !isdefined( p1.mw2coop_shot ) && !isdefined( p2.mw2coop_shot ), "nobody shot while ducking" );
+	foreach ( player in level.players )
+		player notify( "go_stand" );
+	for ( t = 0; t < 10 && ( p1 IsLinked() || p2 IsLinked() ); t += 0.25 )
+		wait 0.25;
+	wait 0.5;
+	check( !p1 IsLinked() && !p2 IsLinked(), "both out of the car" );
+	d = Distance( p1.origin, p2.origin );
+	check( d < 120 && abs( p1.origin[ 2 ] - p2.origin[ 2 ] ) < 30, "out next to each other (" + int( d ) + " units)" );
+	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
+	report( "done" );
 }

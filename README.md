@@ -47,6 +47,9 @@ Works:
   together. Start points `ride`, `ambush` and `ride_later` seat player 2 too.
 - Wolverines! (`invasion`): player 2 rides in the opening Humvee (on Worm's rear seat; Worm is
   left out in co-op) and gets into the Humvee at the end with player 1.
+- Takedown (`favela`): both ride the opening car (player 2 on the back seat), each ducks on his
+  own crouch key; Makarov's shots kill whoever is not ducking (the mission fails, as in single
+  player); both get out through the open door.
 - Cliffhanger: both players climb the ice wall side by side, each with his own icepicks (left
   pick: Attack, right pick: Aim), make the big jump, and Soap catches each of them in turn (the
   second one hangs on until Soap is free); the level goes on once both are at the top. Each
@@ -62,7 +65,7 @@ Not working or not done:
 - Player 2 is only brought along when player 1 jumps far in one step; a slow scripted move can
   still leave him behind.
 - The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
-- Only S.S.D.D., Team Player, Wolverines! and Cliffhanger have level fixes. Other missions, their in-engine cutscenes for player 2 and
+- Only S.S.D.D., Team Player, Wolverines!, Takedown (opening) and Cliffhanger have level fixes. Other missions, their in-engine cutscenes for player 2 and
   vehicle sections for two players are not done.
 - Joining a friend through a Steam invite (two Steam accounts) is untested.
 - No menu: hosting and joining use console commands (below).
