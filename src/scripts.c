@@ -12,6 +12,11 @@
 //   @@@ append           text added at the end of the script (new functions)
 //   ...
 //   @@@ end
+//   @@@ subst <function> text replaced at every whole-word occurrence inside one function
+//   ...                  of the script (from its header to its closing brace); at least one
+//   @@@ to               occurrence must exist. Large reworks (say, level.player -> self in a
+//   ...                  function) need no game code in the patch this way.
+//   @@@ end
 // Lines outside blocks are comments.
 //
 // Co-op runs in lockstep (both PCs run the level scripts), so every machine must end up with
@@ -129,6 +134,100 @@ static char *next_block(char **cursor, char *kind, int kind_size)
 	return body;
 }
 
+static int is_ident_char(char c)
+{
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+// The top-level function `name` in src: [*start, *end) from the start of its header line to its
+// closing brace. A header starts a line; strings and comments are skipped when matching braces.
+static int find_function(const char *src, const char *name, const char **start, const char **end)
+{
+	size_t nl = strlen(name);
+	for (const char *p = strstr(src, name); p; p = strstr(p + 1, name)) {
+		if ((p != src && p[-1] != '\n') || is_ident_char(p[nl]))
+			continue;
+		const char *q = p + nl;
+		while (*q == ' ' || *q == '\t')
+			q++;
+		if (*q != '(')
+			continue;
+		const char *c = strchr(q, '{');
+		int depth = 0;
+		for (; c && *c; c++) {
+			if (c[0] == '/' && c[1] == '/') {
+				while (*c && *c != '\n')
+					c++;
+				if (!*c)
+					break;
+			} else if (c[0] == '/' && c[1] == '*') {
+				c = strstr(c + 2, "*/");
+				if (!c)
+					return 0;
+				c++;
+			} else if (*c == '"') {
+				for (c++; *c && *c != '"'; c++)
+					if (*c == '\\' && c[1])
+						c++;
+				if (!*c)
+					break;
+			} else if (*c == '{') {
+				depth++;
+			} else if (*c == '}' && --depth == 0) {
+				*start = p;
+				*end = c + 1;
+				return 1;
+			}
+		}
+		return 0;
+	}
+	return 0;
+}
+
+// Replaces every whole-word `from` with `to` inside function `name`. Returns the new malloc'd
+// text (src freed) and the number of replacements in *count (src unchanged when 0).
+static char *subst_in_function(char *src, int *len, const char *name, const char *from, const char *to, int *count)
+{
+	const char *fs, *fe;
+	*count = 0;
+	size_t fl = strlen(from), tl = strlen(to);
+	if (!fl || !find_function(src, name, &fs, &fe))
+		return src;
+	int lead = is_ident_char(from[0]), trail = is_ident_char(from[fl - 1]);
+	size_t cap = (size_t)*len + 1, n = 0;
+	char *out = malloc(cap);
+	size_t pre = fs - src;
+	memcpy(out, src, pre);
+	n = pre;
+	for (const char *p = fs; p < fe;) {
+		if ((size_t)(fe - p) >= fl && memcmp(p, from, fl) == 0 && !(lead && p > src && is_ident_char(p[-1])) &&
+		    !(trail && is_ident_char(p[fl]))) {
+			if (n + tl + (size_t)(*len - (p - src)) + 1 > cap) {
+				cap = (n + tl + (size_t)(*len - (p - src)) + 1) * 2;
+				out = realloc(out, cap);
+			}
+			memcpy(out + n, to, tl);
+			n += tl;
+			p += fl;
+			(*count)++;
+		} else {
+			out[n++] = *p++;
+		}
+	}
+	size_t rest = (size_t)*len - (fe - src);
+	if (n + rest + 1 > cap)
+		out = realloc(out, n + rest + 1);
+	memcpy(out + n, fe, rest + 1);
+	n += rest;
+	if (!*count) {
+		free(out);
+		return src;
+	}
+	free(src);
+	*len = (int)n;
+	return out;
+}
+
 // Applies <ext>.patch to src (malloc'd). Returns the new malloc'd text, or src unchanged.
 static char *apply_patches(const char *ext, char *src, int *len, int *applied, int *total)
 {
@@ -137,7 +236,7 @@ static char *apply_patches(const char *ext, char *src, int *len, int *applied, i
 	*applied = *total = 0;
 	if (!patch)
 		return src;
-	char *cursor = patch, kind[32];
+	char *cursor = patch, kind[128];
 	char *body;
 	while ((body = next_block(&cursor, kind, sizeof(kind))) != NULL) {
 		if (strcmp(kind, "replace") == 0) {
@@ -176,7 +275,21 @@ static char *apply_patches(const char *ext, char *src, int *len, int *applied, i
 			free(src);
 			src = out;
 			(*applied)++;
-		} else if (strcmp(kind, "end") != 0 && strcmp(kind, "with") != 0) {
+		} else if (strncmp(kind, "subst ", 6) == 0) {
+			char kind2[32];
+			char *to = next_block(&cursor, kind2, sizeof(kind2));
+			if (!to || strcmp(kind2, "to") != 0) {
+				log_printf("scripts: %s: malformed patch (subst without to)", ext);
+				break;
+			}
+			(*total)++;
+			int count;
+			src = subst_in_function(src, len, kind + 6, body, to, &count);
+			if (!count)
+				log_printf("scripts: %s: patch %d FAILED, '%.40s' not found in %s", ext, *total, body, kind + 6);
+			else
+				(*applied)++;
+		} else if (strcmp(kind, "end") != 0 && strcmp(kind, "with") != 0 && strcmp(kind, "to") != 0) {
 			log_printf("scripts: %s: unknown patch block '%s'", ext, kind);
 		}
 	}

@@ -24,10 +24,80 @@ def blocks(text):
         pos = end + 1
 
 
+def is_ident(c):
+    return c.isalnum() or c == '_'
+
+
+def find_function(src, name):
+    """(start, end) of the top-level function, like find_function() in scripts.c, or None."""
+    p = src.find(name)
+    while p >= 0:
+        q = p + len(name)
+        if (p == 0 or src[p - 1] == '\n') and not (q < len(src) and is_ident(src[q])):
+            while q < len(src) and src[q] in ' \t':
+                q += 1
+            if q < len(src) and src[q] == '(':
+                c = src.find('{', q)
+                depth = 0
+                while 0 <= c < len(src):
+                    if src.startswith('//', c):
+                        c = src.find('\n', c)
+                        if c < 0:
+                            return None
+                    elif src.startswith('/*', c):
+                        c = src.find('*/', c + 2)
+                        if c < 0:
+                            return None
+                        c += 1
+                    elif src[c] == '"':
+                        c += 1
+                        while c < len(src) and src[c] != '"':
+                            c += 2 if src[c] == '\\' else 1
+                    elif src[c] == '{':
+                        depth += 1
+                    elif src[c] == '}':
+                        depth -= 1
+                        if depth == 0:
+                            return p, c + 1
+                    c += 1
+                return None
+        p = src.find(name, p + 1)
+    return None
+
+
+def subst(src, name, old, new):
+    """Whole-word replace inside one function, like subst_in_function() in scripts.c."""
+    span = find_function(src, name)
+    if not span or not old:
+        return src, 0
+    start, end = span
+    lead, trail = is_ident(old[0]), is_ident(old[-1])
+    out, i, count = [], start, 0
+    while i < end:
+        if (src.startswith(old, i) and i + len(old) <= end
+                and not (lead and i > 0 and is_ident(src[i - 1]))
+                and not (trail and i + len(old) < len(src) and is_ident(src[i + len(old)]))):
+            out.append(new)
+            i += len(old)
+            count += 1
+        else:
+            out.append(src[i])
+            i += 1
+    return src[:start] + ''.join(out) + src[end:], count
+
+
 def apply(src, patch):
     results = []
     it = blocks(patch)
     for kind, body in it:
+        if kind.startswith('subst '):
+            kind2, to = next(it, (None, None))
+            if kind2 != 'to':
+                results.append(('malformed', body[:60]))
+                break
+            src, n = subst(src, kind[6:], body, to)
+            results.append(('ok' if n else 'FAILED x0', f'subst in {kind[6:]}: {body[:40]} ({n})'))
+            continue
         if kind == 'replace':
             kind2, with_ = next(it, (None, None))
             if kind2 != 'with':

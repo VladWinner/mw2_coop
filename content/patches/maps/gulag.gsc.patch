@@ -1,0 +1,12 @@
+mw2coop patch for maps/gulag.gsc (The Gulag, Modern Warfare 2, 64-bit Steam build)
+Co-op logic lives in mw2coop/scripts/maps/_mw2coop_gulag.gsc.
+
+1. Landing: player 2 gets off the helicopter with player 1.
+@@@ replace
+	level.player_view_controller Delete();
+	ent Delete();
+@@@ with
+	level.player_view_controller Delete();
+	ent Delete();
+	maps\_mw2coop_gulag::partner_leaves_heli();
+@@@ end

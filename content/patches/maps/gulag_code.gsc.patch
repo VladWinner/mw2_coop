@@ -1,0 +1,11 @@
+mw2coop patch for maps/gulag_code.gsc (The Gulag, Modern Warfare 2, 64-bit Steam build)
+Co-op logic lives in mw2coop/scripts/maps/_mw2coop_gulag.gsc.
+
+1. Fly-in: player 2 rides the same helicopter on his own view controller (he would otherwise
+   fall from the map's player start).
+@@@ replace
+	level.player PlayerLinkToDelta( player_view_controller, "TAG_aim", viewPercentFrac, -35, 40, -35, 40, true );
+@@@ with
+	level.player PlayerLinkToDelta( player_view_controller, "TAG_aim", viewPercentFrac, -35, 40, -35, 40, true );
+	maps\_mw2coop_gulag::partner_rides_heli();
+@@@ end

@@ -83,3 +83,15 @@ wait_partner_at_end()
 	}
 	maps\_mw2coop::state( "cliffhanger: both players at the helicopter" );
 }
+
+// Ice climb (cave_main): the game starts maps\_climb::climb_wall for every player, but the climb
+// code works on level.player throughout, so a second climb thread only acts on player 1 again
+// (script errors on both machines in the spawn audit). Player 2 does not climb: he waits below
+// and joins player 1 once he has made it to the top. self: player 2.
+partner_waits_for_climb()
+{
+	maps\_mw2coop::state( "cliffhanger: player 2 joins player 1 at the top of the climb" );
+	flag_wait( "reached_top" );
+	if ( self maps\_mw2coop::teleport_to_partner_when_safe( level.player, 30 ) )
+		maps\_mw2coop::state( "cliffhanger: player 2 at the top" );
+}

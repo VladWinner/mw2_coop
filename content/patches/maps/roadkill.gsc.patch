@@ -16,5 +16,5 @@ mw2coop patch for maps/roadkill.gsc (Team Player, Modern Warfare 2, 64-bit Steam
 @@@ with
 	level.player SetOrigin( player_slide_crash.origin );
 	if ( maps\_mw2coop::is_campaign_coop() )
-		level.player2 maps\_mw2coop::teleport_to_partner( level.player );
+		level.player2 thread maps\_mw2coop::teleport_to_partner_when_safe( level.player, 5 );
 @@@ end

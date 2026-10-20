@@ -447,7 +447,7 @@ qa_flag_set( name )
 	flag_set( name );
 }
 
-// Cliffhanger, start point "icepick": after Price's icepick fight two snowmobiles wait; player 2
+// Cliffhanger, start point "icepick": after Soap MacTavish's icepick fight (level.price in the scripts) two snowmobiles wait; player 2
 // takes the one the level made for player 1, player 1 takes the other, and the level goes on
 // with player 1's as level.player_snowmobile.
 snowpick()
@@ -501,7 +501,7 @@ spawn_audit()
 	check( IsAlive( p2 ) && !maps\_mw2coop::is_downed( p2 ), "player 2 alive and up" );
 	check( d < 300, "player 2 near player 1 (" + int( d ) + " units)" );
 	check( dz > -150, "player 2 not below player 1 (dz " + int( dz ) + ")" );
-	check( p2 IsOnGround() || p2 IsLinked(), "player 2 on ground or held" );
+	check( maps\_mw2coop::is_standing( p2 ) || p2 IsLinked(), "player 2 on ground or held" );
 	report( "done" );
 }
 
@@ -510,6 +510,6 @@ spawn_text()
 	p1 = level.player;
 	p2 = level.player2;
 	return "start " + level.start_point + ", d " + int( Distance( p1.origin, p2.origin ) ) + ", dz " + int( p2.origin[ 2 ] - p1.origin[ 2 ] )
-		+ ", p1 " + int( p1.origin[ 0 ] ) + "," + int( p1.origin[ 1 ] ) + "," + int( p1.origin[ 2 ] ) + " linked " + p1 IsLinked() + " ground " + p1 IsOnGround()
-		+ ", p2 linked " + p2 IsLinked() + " ground " + p2 IsOnGround() + " alive " + IsAlive( p2 );
+		+ ", p1 " + int( p1.origin[ 0 ] ) + "," + int( p1.origin[ 1 ] ) + "," + int( p1.origin[ 2 ] ) + " linked " + p1 IsLinked() + " standing " + maps\_mw2coop::is_standing( p1 )
+		+ ", p2 linked " + p2 IsLinked() + " standing " + maps\_mw2coop::is_standing( p2 ) + " alive " + IsAlive( p2 );
 }

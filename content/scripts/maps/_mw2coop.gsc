@@ -151,14 +151,27 @@ no_saves()
 // --------------------------------------------------------------------------------------------
 // Keeping player 2 with player 1
 
-// Start points move player 1 at the end of the first frame.
+// Start points move player 1 at the end of the first frame. If player 1 is not standing on
+// ground yet (a scene, a climb, a vehicle), wait until he is, or until a level script seats
+// player 2 somewhere itself.
 regroup_after_start()
 {
+	level endon( "mw2coop_level_end" );
 	if ( !isdefined( level.player2 ) )
 		return;
 	wait 0.1;
-	level.player2 teleport_to_partner( level.player );
-	state( "regrouped at start point " + level.start_point );
+	for ( waited = 0; waited < 120; waited += 0.25 )
+	{
+		if ( level.player2 IsLinked() )
+			return;
+		if ( level.player2 teleport_to_partner( level.player ) )
+		{
+			state( "regrouped at start point " + level.start_point );
+			return;
+		}
+		wait 0.25;
+	}
+	state( "no safe spot next to player 1 within 120 s" );
 }
 
 // When a script moves player 1 far in one step (teleport, start point), bring player 2 along.
@@ -170,17 +183,21 @@ follow_leader_teleports()
 	wait 0.15;
 	last = level.player.origin;
 	far_time = 0;
+	follow = false;
 	for ( ;; )
 	{
 		wait 0.05;
 		now = level.player.origin;
 		// a seated or otherwise linked player 2 rides along with whatever holds him
 		if ( DistanceSquared( now, last ) > 512 * 512 && !level.player2 IsLinked() )
+			follow = true;
+		last = now;
+		// player 1 may land in a scene or in the air: follow once he stands somewhere
+		if ( follow && !level.player2 IsLinked() && level.player2 teleport_to_partner( level.player ) )
 		{
-			level.player2 teleport_to_partner( level.player );
+			follow = false;
 			state( "followed a teleport of player 1" );
 		}
-		last = now;
 
 		// Leash: a slow scripted move of player 1 (a blended link, a scene) or simply drifting
 		// apart leaves player 2 far behind; after a while bring him over. Only while both are
@@ -189,10 +206,9 @@ follow_leader_teleports()
 			far_time += 0.05;
 		else
 			far_time = 0;
-		if ( far_time >= leash_time() )
+		if ( far_time >= leash_time() && level.player2 teleport_to_partner( level.player ) )
 		{
 			far_time = 0;
-			level.player2 teleport_to_partner( level.player );
 			state( "leash: player 2 brought to player 1" );
 		}
 	}
@@ -217,9 +233,14 @@ leash_applies()
 	return !is_downed( level.player ) && !is_downed( level.player2 );
 }
 
-// self: the player to move. Tries free spots beside and behind the partner.
+// self: the player to move. Tries free spots beside and behind the partner, each with a clear
+// line from him and floor at his height. Moves nobody and returns false while the partner is
+// not standing on ground (linked, falling, climbing): his origin may be over a drop, and a
+// player put there falls (Cliffhanger). Returns true once moved.
 teleport_to_partner( partner )
 {
+	if ( !IsAlive( partner ) || !is_standing( partner ) )
+		return false;
 	angles = partner GetPlayerAngles();
 	yaw = ( 0, angles[ 1 ], 0 );
 	forward = AnglesToForward( yaw );
@@ -245,9 +266,34 @@ teleport_to_partner( partner )
 		self SetPlayerAngles( yaw );
 		return true;
 	}
-	// nowhere free: share the spot, the players push apart
+	// nowhere free: share the spot he stands on, the players push apart
 	self SetOrigin( partner.origin );
 	self SetPlayerAngles( yaw );
+	return true;
+}
+
+// Free and on ground. IsOnGround() reads 0 for player 2 on both machines in co-op (seen in the
+// spawn audit), so ground under the feet is traced too.
+is_standing( player )
+{
+	if ( player IsLinked() )
+		return false;
+	if ( player IsOnGround() )
+		return true;
+	below = PlayerPhysicsTrace( player.origin + ( 0, 0, 8 ), player.origin - ( 0, 0, 24 ) );
+	return player.origin[ 2 ] - below[ 2 ] < 4;
+}
+
+// self: the player to move. teleport_to_partner(), retried for up to timeout seconds (the
+// partner may still be getting out of a vehicle or a scene).
+teleport_to_partner_when_safe( partner, timeout )
+{
+	for ( waited = 0; waited < timeout; waited += 0.1 )
+	{
+		if ( self teleport_to_partner( partner ) )
+			return true;
+		wait 0.1;
+	}
 	return false;
 }
 
@@ -429,9 +475,8 @@ next_level_name()
 	settings = level.missionSettings;
 	index = settings maps\_endmission::getLevelIndex( level.script );
 	// This build's _nextmission() completes airport right after cliffhanger ("always skip
-	// airport for RUSSIAN PC BUILD", with no build check), so the campaign goes on with favela.
-	if ( level.script == "cliffhanger" )
-		index = settings maps\_endmission::getLevelIndex( "airport" );
+	// airport for RUSSIAN PC BUILD", with no build check). The owner wants No Russian played:
+	// co-op always goes on with airport.
 	if ( !isdefined( index ) || index + 1 >= settings.levels.size )
 		return "";
 	return settings maps\_endmission::getLevelName( index + 1 );
@@ -586,10 +631,10 @@ partner_leaves_seat( delay )
 	if ( isdefined( player ) && IsAlive( player ) )
 	{
 		player Unlink();
-		player teleport_to_partner( other_player( player ) );
 		player EnableWeapons();
 		player AllowCrouch( true );
 		player AllowProne( true );
+		player thread teleport_to_partner_when_safe( other_player( player ), 5 );
 	}
 	self Delete();
 }

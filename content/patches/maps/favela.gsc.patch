@@ -1,0 +1,10 @@
+mw2coop patch for maps/favela.gsc (Takedown, Modern Warfare 2, 64-bit Steam build)
+Co-op logic lives in mw2coop/scripts/maps/_mw2coop_favela.gsc.
+
+1. Opening car ride: player 2 rides in the same car and gets out with player 1.
+@@@ replace
+	level.player playerLinkToDelta( player_rig, "tag_player", 1.0, MAX_ROTATE_ANG, MAX_ROTATE_ANG, 45, 20 );
+@@@ with
+	level.player playerLinkToDelta( player_rig, "tag_player", 1.0, MAX_ROTATE_ANG, MAX_ROTATE_ANG, 45, 20 );
+	vehicle maps\_mw2coop_favela::partner_rides( MAX_ROTATE_ANG );
+@@@ end

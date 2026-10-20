@@ -248,5 +248,5 @@ leave_scene_rig()
 
 teleport_next_to_player1()
 {
-	self maps\_mw2coop::teleport_to_partner( level.player );
+	self thread maps\_mw2coop::teleport_to_partner_when_safe( level.player, 5 );
 }
