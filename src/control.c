@@ -6,6 +6,7 @@
 //   !sleep <ms>       -> pause the queue
 //   !xuid_add <n>     -> QA only: shift this copy's XUID (two copies on one Steam account)
 //   !loc <NAME>       -> log a localized string's text and bytes
+//   !asset <type> <name>, !mem <address> <size> -> annotated memory dumps (memdump.c)
 //   !trace <rva>      -> QA: log calls of the builtin method whose table entry is at rva, with GSC stacks
 //   # comment
 #include <windows.h>
@@ -17,6 +18,8 @@
 #include "control.h"
 #include "game.h"
 #include "log.h"
+#include "memdump.h"
+#include "menus.h"
 #include "progress.h"
 #include "scrdebug.h"
 
@@ -194,6 +197,8 @@ static void run_line(char *line)
 		log_printf("loc: %s = '%s' [%s]", line + 5, v ? v : "(none)", hex);
 		return;
 	}
+	if (memdump_command(line))
+		return;
 	if (strncmp(line, "!watch ", 7) == 0) {
 		watch_set(line + 7);
 		watch_poll();
@@ -214,6 +219,7 @@ static DWORD WINAPI control_thread(LPVOID path_arg)
 	for (;;) {
 		Sleep(250);
 		watch_poll();
+		menus_poll();
 		HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
 				       OPEN_EXISTING, 0, NULL);
 		if (f == INVALID_HANDLE_VALUE)

@@ -8,6 +8,10 @@
 #define RVA_CBUF_ADDTEXT   0x1ee890  // void Cbuf_AddText(int localClientNum, const char *text); locks CS 0x24
 #define RVA_DVAR_FINDVAR   0x26bdf0  // dvar_t *Dvar_FindVar(const char *name); reader-locked, thread safe
 #define RVA_CMD_FUNCTIONS  0x1315308 // cmd_function_t *cmd_functions (list head)
+#define RVA_CMD_ARGS_NESTING 0x1315260 // int; argc int[nesting] at 0x13152a4, argv char**[nesting] at 0x13152c8 (devmap @0x22cb70)
+#define RVA_CMD_ARGC         0x13152a4
+#define RVA_CMD_ARGV         0x13152c8
+#define RVA_SV_CMD_DEVMAP    0x1904f60 // server cmd_function_t node of "devmap" (handler @0x22cb70)
 #define RVA_XUID_TABLE     0x1bbaad8 // uint64 xuid of local client i at +i*0x68 (Live_GetXuid, rva 0x28f8b0)
 
 // Co-op party (lobby) state
@@ -16,6 +20,7 @@
 #define RVA_PARTY_ACTIVE         0x5dd951 // uint8, gates the party frame (0xd74a0)
 #define RVA_PARTY_LAUNCH         0x5dd953 // uint8, set by coopLaunch (0xd7a50)
 #define RVA_PARTY_START_TIME     0x5dd954 // int32
+#define RVA_LOBBY_SLOT_USED      0x236bc0 // char (lobby, slot): slot taken (party state @0xd7ee0)
 #define RVA_PARTY_RESET          0x0d7dd0 // void Party_Reset(void)
 #define RVA_PARTY_CLEAR_MEMBERS  0x236920 // void (int)
 #define RVA_LOBBY_JOIN           0x236d50 // char Lobby_Join(lobby, localClient, 0x322, hostInfo[8], 0, 2, 0)

@@ -7,6 +7,7 @@
 #include "game.h"
 #include "localize.h"
 #include "log.h"
+#include "menus.h"
 #include "net.h"
 #include "party.h"
 #include "progress.h"
@@ -49,6 +50,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		net_install();
 		party_install();
 		progress_install();
+		menus_install();
 		control_start();
 	}
 	return 0;

@@ -31,16 +31,54 @@ typedef struct {
 	const char *name;
 	const char *ru;	// Windows-1251
 	const char *en;
-	LocalizeEntry entry;
 } ModString;
 
-// "Вы оглушены. Ожидайте второго игрока" in Windows-1251
-static ModString strings[] = {
-	{"MW2COOP_STUNNED",
-	 "\xc2\xfb \xee\xe3\xeb\xf3\xf8\xe5\xed\xfb. \xce\xe6\xe8\xe4\xe0\xe9\xf2\xe5 \xe2\xf2\xee\xf0\xee\xe3\xee "
-	 "\xe8\xe3\xf0\xee\xea\xe0",
-	 "You are stunned. Wait for the other player", {NULL, NULL}},
+static const ModString strings[] = {
+	// Вы оглушены. Ожидайте второго игрока
+	{"MW2COOP_STUNNED", "\xc2\xfb \xee\xe3\xeb\xf3\xf8\xe5\xed\xfb. \xce\xe6\xe8\xe4\xe0\xe9\xf2\xe5 \xe2\xf2\xee\xf0\xee\xe3\xee \xe8\xe3\xf0\xee\xea\xe0",
+	 "You are stunned. Wait for the other player"},
+	// Готов
+	{"MW2COOP_READY_SET", "\xc3\xee\xf2\xee\xe2",
+	 "Ready"},
+	// Не готов
+	{"MW2COOP_READY_UNSET", "\xcd\xe5 \xe3\xee\xf2\xee\xe2",
+	 "Not ready"},
+	// Старт
+	{"MW2COOP_START_GO", "\xd1\xf2\xe0\xf0\xf2",
+	 "Start"},
+	// Старт: нужен второй игрок
+	{"MW2COOP_START_NEED_PARTNER", "\xd1\xf2\xe0\xf0\xf2: \xed\xf3\xe6\xe5\xed \xe2\xf2\xee\xf0\xee\xe9 \xe8\xe3\xf0\xee\xea",
+	 "Start: a second player is needed"},
+	// Старт: вы не готовы
+	{"MW2COOP_START_WAIT_YOU", "\xd1\xf2\xe0\xf0\xf2: \xe2\xfb \xed\xe5 \xe3\xee\xf2\xee\xe2\xfb",
+	 "Start: you are not ready"},
+	// Старт: напарник не готов
+	{"MW2COOP_START_WAIT_PARTNER", "\xd1\xf2\xe0\xf0\xf2: \xed\xe0\xef\xe0\xf0\xed\xe8\xea \xed\xe5 \xe3\xee\xf2\xee\xe2",
+	 "Start: your partner is not ready"},
+	// Старт: ждём готовности
+	{"MW2COOP_START_WAIT_BOTH", "\xd1\xf2\xe0\xf0\xf2: \xe6\xe4\xb8\xec \xe3\xee\xf2\xee\xe2\xed\xee\xf1\xf2\xe8",
+	 "Start: waiting for both players"},
+	// Ждём старта от хоста
+	{"MW2COOP_START_HOST", "\xc6\xe4\xb8\xec \xf1\xf2\xe0\xf0\xf2\xe0 \xee\xf2 \xf5\xee\xf1\xf2\xe0",
+	 "Waiting for the host to start"},
 };
+#define STRING_COUNT (int)(sizeof(strings) / sizeof(strings[0]))
+
+// Names the menus show whose text the mod switches at run time (localize_select): the lobby's
+// ready and start buttons. The UI looks the entry up each frame, so a switch shows at once.
+typedef struct {
+	const char *name;
+	volatile LONG shown; // index into strings[]
+	LocalizeEntry entry;
+} Alias;
+
+static Alias aliases[] = {
+	{"MW2COOP_READY", 1, {NULL, NULL}},
+	{"MW2COOP_START", 3, {NULL, NULL}},
+};
+#define ALIAS_COUNT (int)(sizeof(aliases) / sizeof(aliases[0]))
+
+static LocalizeEntry entries[sizeof(strings) / sizeof(strings[0])];
 
 static int game_is_russian(void)
 {
@@ -52,18 +90,41 @@ static int game_is_russian(void)
 	return russian;
 }
 
+static const char *text_of(int i)
+{
+	return game_is_russian() ? strings[i].ru : strings[i].en;
+}
+
 static void *find_header(int type, const char *name)
 {
 	if (type == ASSET_TYPE_LOCALIZE_ENTRY && name && strncmp(name, "MW2COOP_", 8) == 0) {
-		for (size_t i = 0; i < sizeof(strings) / sizeof(strings[0]); i++) {
+		for (int i = 0; i < ALIAS_COUNT; i++) {
+			if (strcmp(name, aliases[i].name) != 0)
+				continue;
+			aliases[i].entry.name = aliases[i].name;
+			aliases[i].entry.value = text_of(aliases[i].shown);
+			return &aliases[i].entry;
+		}
+		for (int i = 0; i < STRING_COUNT; i++) {
 			if (strcmp(name, strings[i].name) != 0)
 				continue;
-			strings[i].entry.name = strings[i].name;
-			strings[i].entry.value = game_is_russian() ? strings[i].ru : strings[i].en;
-			return &strings[i].entry;
+			entries[i].name = strings[i].name;
+			entries[i].value = text_of(i);
+			return &entries[i];
 		}
 	}
 	return original(type, name);
+}
+
+void localize_select(const char *alias, const char *name)
+{
+	for (int a = 0; a < ALIAS_COUNT; a++) {
+		if (strcmp(alias, aliases[a].name) != 0)
+			continue;
+		for (int i = 0; i < STRING_COUNT; i++)
+			if (strcmp(name, strings[i].name) == 0)
+				InterlockedExchange(&aliases[a].shown, i);
+	}
 }
 
 static const uint8_t expected[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};

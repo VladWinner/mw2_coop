@@ -64,6 +64,16 @@ static int is_name(const char *s)
 	return 1;
 }
 
+int progress_last(char *map, int map_size, char *start, int start_size)
+{
+	char m[64], st[64];
+	if (!progress_load(m, sizeof(m), st, sizeof(st)) || !is_name(m) || !is_name(st))
+		return 0;
+	lstrcpynA(map, m, map_size);
+	lstrcpynA(start, st, start_size);
+	return 1;
+}
+
 static void continue_f(void)
 {
 	char map[64], start[64], cmd[192];
