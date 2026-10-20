@@ -19,6 +19,8 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   oilrig   - (oilrig, default start) both ride an SDV underwater, both surface; player 1 does
+//              the stealth kill, then both are pulled out of the water. oilrig2: player 2 kills
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -79,6 +81,10 @@ main()
 		case "takedown":
 		case "takedown2":
 			takedown();
+			break;
+		case "oilrig":
+		case "oilrig2":
+			oilrig();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -566,6 +572,44 @@ takedown()
 	check( !p1 IsLinked() && !p2 IsLinked(), "both out of the car" );
 	d = Distance( p1.origin, p2.origin );
 	check( d < 120 && abs( p1.origin[ 2 ] - p2.origin[ 2 ] ) < 30, "out next to each other (" + int( d ) + " units)" );
+	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
+	report( "done" );
+}
+
+// The Only Easy Day... opening (default start). Names no oilrig script (not in other zones).
+// The strike is forced through player.mw2coop_qa_melee (the bot cannot aim at the guard).
+oilrig()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	p1 = level.player;
+	p2 = level.player2;
+	flag_wait( "player_attached_to_sdv" );
+	wait 1;
+	check( p1 IsLinked() && p2 IsLinked(), "both on an SDV (linked " + p1 IsLinked() + " " + p2 IsLinked() + ")" );
+	d = Distance( p1.origin, p2.origin );
+	report( "underwater, players " + int( d ) + " units apart" );
+	flag_wait( "player_is_done_swimming" );
+	wait 2;
+	d = Distance( p1.origin, p2.origin );
+	check( p1 IsLinked() && p2 IsLinked() && d < 600, "both surfaced and swimming (" + int( d ) + " units apart, p1 " + p1.origin + " p2 " + p2.origin + ")" );
+	killer = p1;
+	other = p2;
+	if ( GetDvar( "mw2coop_qa" ) == "oilrig2" )
+	{
+		killer = p2;
+		other = p1;
+	}
+	wait 3;
+	killer.mw2coop_qa_melee = true;
+	for ( t = 0; t < 60 && !flag( "player_done_being_helped_from_water" ); t += 0.25 )
+		wait 0.25;
+	check( flag( "player_done_being_helped_from_water" ), "the killer is out of the water" );
+	for ( t = 0; t < 40 && !isdefined( other.mw2coop_out_of_water ); t += 0.25 )
+		wait 0.25;
+	check( isdefined( other.mw2coop_out_of_water ), "the other player is pulled out after him (" + t + " s)" );
+	wait 1;
+	d = Distance( p1.origin, p2.origin );
+	check( !p1 IsLinked() && !p2 IsLinked() && d < 300 && abs( p1.origin[ 2 ] - p2.origin[ 2 ] ) < 30, "both out on the platform together (" + int( d ) + " units, p1 " + p1.origin + " linked " + p1 IsLinked() + ", p2 " + p2.origin + " linked " + p2 IsLinked() + ")" );
 	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
 	report( "done" );
 }
