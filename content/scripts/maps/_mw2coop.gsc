@@ -170,7 +170,8 @@ follow_leader_teleports()
 	{
 		wait 0.05;
 		now = level.player.origin;
-		if ( DistanceSquared( now, last ) > 512 * 512 )
+		// a seated or otherwise linked player 2 rides along with whatever holds him
+		if ( DistanceSquared( now, last ) > 512 * 512 && !level.player2 IsLinked() )
 		{
 			level.player2 teleport_to_partner( level.player );
 			state( "followed a teleport of player 1" );
@@ -410,4 +411,111 @@ mission_complete()
 	SetDvar( "start", "" );
 	state( "mission complete " + level.script + ", next '" + next + "'" );
 	request( "nextmap " + next );	// the host saves it as progress and launches it
+}
+
+// --------------------------------------------------------------------------------------------
+// Vehicles: level scripts seat player 1 only. These seat the partner on a free seat of the
+// same vehicle (an AI seat the vehicle has not filled), linked the way the level links
+// player 1, and take him out next to player 1 again.
+
+// self: vehicle. A sittag no rider uses, rear seats first; skip_tag: player 1's seat.
+free_seat_tag( skip_tag )
+{
+	if ( !isdefined( self.vehicletype ) || !isdefined( level.vehicle_aianims ) || !isdefined( level.vehicle_aianims[ self.vehicletype ] ) )
+		return undefined;
+	seats = level.vehicle_aianims[ self.vehicletype ];
+	for ( pos = seats.size - 1; pos > 0; pos-- )	// never the driver (0)
+	{
+		if ( !isdefined( seats[ pos ].sittag ) || ( isdefined( skip_tag ) && seats[ pos ].sittag == skip_tag ) )
+			continue;
+		if ( isdefined( self.usedPositions ) && isdefined( self.usedPositions[ pos ] ) && self.usedPositions[ pos ] )
+			continue;
+		if ( IsSubStr( seats[ pos ].sittag, "turret" ) )
+			continue;
+		self.usedPositions[ pos ] = true;	// keep AI riders off it
+		self.mw2coop_seat_pos = pos;
+		return seats[ pos ].sittag;
+	}
+	return undefined;
+}
+
+// self: vehicle. Returns the seat entity (pass it to partner_leaves_seat()).
+seat_partner_in_vehicle( player, right, left, up, down, skip_tag )
+{
+	if ( !isdefined( player ) || !IsAlive( player ) )
+		return undefined;
+	if ( !isdefined( right ) )
+		right = 90;
+	if ( !isdefined( left ) )
+		left = 90;
+	if ( !isdefined( up ) )
+		up = 40;
+	if ( !isdefined( down ) )
+		down = 40;
+	if ( !isdefined( skip_tag ) )
+		skip_tag = "tag_passenger";
+
+	tag = self free_seat_tag( skip_tag );
+	seat = spawn_tag_origin();
+	seat.mw2coop_player = player;
+	seat.mw2coop_vehicle = self;
+	seat.mw2coop_pos = self.mw2coop_seat_pos;
+	if ( isdefined( tag ) )
+	{
+		// same offset as maps\_utility::player_rides_shotgun_in_humvee() uses on tag_passenger
+		seat LinkTo( self, tag, ( -5, 10, -34 ), ( 0, 0, 0 ) );
+		state( "player 2 seated on " + tag );
+	}
+	else
+	{
+		seat LinkTo( self, "tag_body", ( -50, 0, 10 ), ( 0, 0, 0 ) );
+		state( "player 2: no free seat (" + self seats_text() + "), riding in the back" );
+	}
+
+	player AllowCrouch( false );
+	player AllowProne( false );
+	player DisableWeapons();
+	player PlayerLinkTo( seat, "tag_origin", 0.8, right, left, up, down );
+	return seat;
+}
+
+// self: seat from seat_partner_in_vehicle().
+partner_leaves_seat( delay )
+{
+	if ( isdefined( delay ) )
+		wait delay;
+	player = self.mw2coop_player;
+	if ( isdefined( self.mw2coop_vehicle ) && isdefined( self.mw2coop_pos ) && isdefined( self.mw2coop_vehicle.usedPositions ) )
+		self.mw2coop_vehicle.usedPositions[ self.mw2coop_pos ] = false;
+	if ( isdefined( player ) && IsAlive( player ) )
+	{
+		player Unlink();
+		player teleport_to_partner( level.player );
+		player EnableWeapons();
+		player AllowCrouch( true );
+		player AllowProne( true );
+	}
+	self Delete();
+}
+
+// self: vehicle. "type: pos=tag used ..." for the log.
+seats_text()
+{
+	if ( !isdefined( self.vehicletype ) )
+		return "no vehicletype";
+	if ( !isdefined( level.vehicle_aianims ) || !isdefined( level.vehicle_aianims[ self.vehicletype ] ) )
+		return self.vehicletype + ": no seat anims";
+	text = self.vehicletype + ":";
+	seats = level.vehicle_aianims[ self.vehicletype ];
+	for ( pos = 0; pos < seats.size; pos++ )
+	{
+		tag = "?";
+		if ( isdefined( seats[ pos ].sittag ) )
+			tag = seats[ pos ].sittag;
+		used = isdefined( self.usedPositions ) && isdefined( self.usedPositions[ pos ] ) && self.usedPositions[ pos ];
+		text += " " + pos + "=" + tag;
+		if ( used )
+			text += "*";
+	}
+	return text;
 }

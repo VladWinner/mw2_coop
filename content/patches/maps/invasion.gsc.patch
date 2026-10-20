@@ -1,0 +1,11 @@
+mw2coop patch for maps/invasion.gsc (Wolverines!, Modern Warfare 2, 64-bit Steam build)
+
+1. Mission end: player 1 walks to the convoy Humvee and is seated on tag_guy1; seat player 2
+   on another free seat of the same Humvee.
+@@@ replace
+	level.player PlayerLinkTo( org, "tag_origin", 0.8, 180, 180, 40, 40 );
+@@@ with
+	level.player PlayerLinkTo( org, "tag_origin", 0.8, 180, 180, 40, 40 );
+	if ( maps\_mw2coop::is_campaign_coop() )
+		humvee maps\_mw2coop::seat_partner_in_vehicle( level.player2, 180, 180, 40, 40, "tag_guy1" );
+@@@ end

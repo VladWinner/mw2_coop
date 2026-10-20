@@ -5,6 +5,7 @@
 //   end      - (launch with "start end") run the ending, expect both machines on the next mission
 //   resume   - (qa_pair.sh resume @continue) both machines start at the saved checkpoint
 //   god      - with god mode on, heavy damage downs neither player
+//   ride     - (invasion) player 2 rides in player 1's vehicle and gets out with him
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -31,6 +32,9 @@ main()
 			break;
 		case "god":
 			god();
+			break;
+		case "ride":
+			ride();
 			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
@@ -155,5 +159,35 @@ god()
 	check( IsAlive( level.player ) && IsAlive( level.player2 ), "both players alive after heavy damage" );
 	check( !level.player ent_flag( "coop_downed" ) && !level.player2 ent_flag( "coop_downed" ), "neither player downed" );
 	check( level.player.health > 0 && level.player2.health > 0, "health " + level.player.health + " / " + level.player2.health );
+	report( "done" );
+}
+
+// Passenger ride (Wolverines! opening: start point default on invasion): player 2 rides on a
+// free seat of player 1's vehicle and gets out with him.
+ride()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	t = 0;
+	while ( !level.player IsLinked() && t < 30 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( level.player IsLinked(), "player 1 seated" );
+	wait 1.5;
+	check( level.player2 IsLinked(), "player 2 seated too" );
+	check( Distance( level.player.origin, level.player2.origin ) < 120, "player 2 in the same vehicle (" + int( Distance( level.player.origin, level.player2.origin ) ) + " units)" );
+	wait 6;
+	check( Distance( level.player.origin, level.player2.origin ) < 120, "still together while driving (" + int( Distance( level.player.origin, level.player2.origin ) ) + " units)" );
+	t = 0;
+	while ( level.player IsLinked() && t < 120 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( !level.player IsLinked(), "player 1 got out" );
+	wait 1.5;
+	check( !level.player2 IsLinked(), "player 2 got out" );
+	check( Distance( level.player.origin, level.player2.origin ) < 160, "player 2 next to player 1 (" + int( Distance( level.player.origin, level.player2.origin ) ) + " units)" );
 	report( "done" );
 }

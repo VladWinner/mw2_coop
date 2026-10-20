@@ -55,3 +55,31 @@ nextmission()
 	maps\_endmission::_nextmission();
 }
 @@@ end
+
+4. Passenger rides (Wolverines! opening, and any level using these helpers): player 2 rides on
+   a free seat of the same vehicle and gets out with player 1.
+@@@ replace
+	level.player DisableWeapons();
+	level.player PlayerLinkTo( org, "tag_origin", 0.8, right, left, up, down );
+
+	return org;
+@@@ with
+	level.player DisableWeapons();
+	level.player PlayerLinkTo( org, "tag_origin", 0.8, right, left, up, down );
+
+	if ( maps\_mw2coop::is_campaign_coop() )
+		org.mw2coop_partner_seat = self maps\_mw2coop::seat_partner_in_vehicle( level.player2, right, left, up, down, "tag_passenger" );
+
+	return org;
+@@@ end
+@@@ replace
+player_leaves_humvee()
+{
+	self Unlink();
+@@@ with
+player_leaves_humvee()
+{
+	if ( isdefined( self.mw2coop_partner_seat ) )
+		self.mw2coop_partner_seat thread maps\_mw2coop::partner_leaves_seat( 0.7 );
+	self Unlink();
+@@@ end
