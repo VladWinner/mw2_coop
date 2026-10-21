@@ -677,18 +677,29 @@ static void patch_lobby_mission(uint8_t *menu, int campaign)
 	if (!map[0] || strcmp(map, shown_map) == 0)
 		return;
 	lstrcpynA(shown_map, map, sizeof(shown_map));
+	// only the missions of the campaign list have a picture: asking the asset database for one
+	// that does not exist ("levelshot_mw2_ending") hung the game. The knife fight map (ending)
+	// shows Endgame's.
+	static const char *const listed[] = {"trainer", "roadkill", "cliffhanger", "airport", "favela", "invasion",
+		"favela_escape", "arcadia", "oilrig", "gulag", "dcburning", "contingency", "dcemp", "dc_whitehouse",
+		"estate", "boneyard", "af_caves", "af_chase"};
+	const char *shown = strcmp(map, "ending") == 0 ? "af_chase" : map;
+	int in_list = 0;
+	for (size_t i = 0; i < sizeof(listed) / sizeof(listed[0]); i++)
+		in_list |= strcmp(shown, listed[i]) == 0;
+	if (!in_list) {
+		log_printf("menus: no picture for '%s'", map);
+		return;
+	}
 	static char material[96], text[96];
-	snprintf(material, sizeof(material), "levelshot_mw2_%s", map);
+	snprintf(material, sizeof(material), "levelshot_mw2_%s", shown);
 	int n = snprintf(text, sizeof(text), "@MENU_SP_SP_");
-	for (const char *m = map; *m && n < (int)sizeof(text) - 1; m++)
+	for (const char *m = shown; *m && n < (int)sizeof(text) - 1; m++)
 		text[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
 	text[n] = 0;
 	typedef void *(*find_t)(int, const char *);
-	typedef int (*is_default_t)(int, const char *);
-	if (!((is_default_t)(base + RVA_DB_IS_DEFAULT))(ASSET_TYPE_MATERIAL, material)) {
-		*(void **)(pic_item + ITEM_MATERIAL_EXP) = NULL;
-		*(void **)(pic_item + ITEM_BACKGROUND) = ((find_t)(base + RVA_DB_FIND_HEADER))(ASSET_TYPE_MATERIAL, material);
-	}
+	*(void **)(pic_item + ITEM_MATERIAL_EXP) = NULL;
+	*(void **)(pic_item + ITEM_BACKGROUND) = ((find_t)(base + RVA_DB_FIND_HEADER))(ASSET_TYPE_MATERIAL, material);
 	*(void **)(name_item + ITEM_TEXT_EXP) = NULL;
 	*(const char **)(name_item + ITEM_TEXT) = text;
 	log_printf("menus: lobby shows %s (%s)", material, text);
