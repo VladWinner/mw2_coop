@@ -223,9 +223,13 @@ Easy Day `oilrig`, `oilrig2`; Cliffhanger `climb`, `snow`, `snowpick`; No Russia
 `dcemp`, `street` (start `street`); No Russian `cover` (start `stairs`); S.S.D.D. `pickups`
 (start "", `frag`, `pit`); Endgame `boat`, `boat2` (af_chase), `knife`, `knife2` (ending, start
 `wakeup`); any map `spawn`, `leash`, `look` (players face each other for screenshots),
-`targets` (whom the enemies fight). Bots drive the players (button
-holds, velocity pushes, scripted pickups: console button commands reach no player), so real
-mouse and keyboard input on these set pieces is checked by hand.
+`targets` (whom the enemies fight), `buttons` (real Forward and Use on each player's machine).
+A scenario can press a player's buttons for real: `press( player, "activate", ms )` makes that
+player's own machine run the key binding (`mw2coop_bind +activate`, see `src/control.c`), so
+the button reaches the server in his input like a key press (`pickups` takes the weapons this
+way and walks up to the frag box). Older scenarios still move the players through script
+(button holds, velocity pushes), so mouse and keyboard input on those set pieces is checked by
+hand.
 Script errors are logged with the GSC call stack (`file::function +offset`). One Steam account
 is enough: the QA-only command `!xuid_add` gives the second copy a different player id.
 `tools/check_patches.py` checks the patches against extracted game scripts without starting

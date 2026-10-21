@@ -1,6 +1,6 @@
 // mw2coop QA: scripted checks that run inside the game on both PCs (lockstep, so they must be
 // deterministic). Chosen before launch with the dvar mw2coop_qa on BOTH machines:
-//   intro    - player 2 joins player 1 at the range, same weapons, gets the rifle with player 1
+//   intro    - player 2 joins player 1 at the range, same weapons, not player 1's rifle
 //   restart  - reach a checkpoint, down both players, expect a restart at that checkpoint
 //   end      - (launch with "start end") run the ending, expect both machines on the next mission
 //   resume   - (qa_pair.sh resume @continue) both machines start at the saved checkpoint
@@ -36,6 +36,10 @@
 //   boat     - (af_chase, default start) the Endgame boat chase: player 1 boards and drives,
 //              player 2 rides as the gunner beside Price; the bot drives after the enemy boat.
 //              boat2: player 2 boards first and drives
+//   buttons  - (any map) real input: each player's own machine presses Forward and Use (press()),
+//              he walks forward and the server sees his Use button, not the other player's
+//   pickups  - (trainer; start "", "frag" or "pit") each player takes his own weapons off the
+//              tables (looks at them, presses Use) and walks up to the frag box (Forward)
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -138,6 +142,9 @@ main()
 		case "pickups":
 			pickups();
 			break;
+		case "buttons":
+			buttons();
+			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
 			// other maps' zones do not have)
@@ -187,11 +194,12 @@ intro()
 {
 	common_checks();
 	check( level.player2 GetWeaponsListAll().size == level.player GetWeaponsListAll().size, "same weapon count" );
-	// what picking the rifle off the range table does to player 1
+	// a rifle player 1 gets stays his: each player takes his own off the range table (since
+	// 2026-10-21; the real pickups are in the pickups scenario)
 	level.player GiveWeapon( "m4_grunt" );
 	level.player SwitchToWeapon( "m4_grunt" );
 	wait 1;
-	check( level.player2 HasWeapon( "m4_grunt" ), "player 2 got the rifle with player 1" );
+	check( !level.player2 HasWeapon( "m4_grunt" ), "player 2 does not get player 1's rifle" );
 	report( "done" );
 }
 
@@ -1251,13 +1259,12 @@ kit_checks()
 
 // --------------------------------------------------------------------------------------------
 // S.S.D.D. (trainer): each player takes his own weapons (maps\_mw2coop_trainer). Start point ""
-// tests the rifle, "frag" the grenade box, "pit" the pistol. A bot cannot press Use here (console
-// +activate, +forward and +gostand reached neither copy's player, 2026-10-21), so a table pickup
-// is done as the engine does it (the weapon goes to him, the item goes away) and the box through
-// its own trigger; the owner checked the real pickup by hand.
+// tests the rifle, "frag" the grenade box, "pit" the pistol. Each player stands by the weapon,
+// looks at it and presses Use on his own machine (press()), as the owner did by hand.
 pickups()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait_intro();	// player 1 can take nothing before
 	start = GetDvar( "start" );
 	if ( start == "frag" )
 	{
@@ -1275,13 +1282,16 @@ pickups()
 	flag_wait( "firing_range_initialized" );
 	wait 1;
 	check( !level.player HasWeapon( "m4_grunt" ) && !level.player2 HasWeapon( "m4_grunt" ), "no rifles at the range yet" );
-	// both inside the sandbag bay, player 1 on the left (maps\_mw2coop_trainer::range_places)
+	// both inside the sandbag bay, player 1 on the left and a little forward
+	// (maps\_mw2coop_trainer::range_place_1)
 	start_ent = GetEnt( "player_start_range", "targetname" );
 	right = AnglesToRight( ( 0, start_ent.angles[ 1 ], 0 ) );
 	side1 = int( VectorDot( level.player.origin - start_ent.origin, right ) );
 	side2 = int( VectorDot( level.player2.origin - start_ent.origin, right ) );
 	check( side1 < side2 - 30, "player 1 left of player 2 at the range (" + side1 + ", " + side2 + " from the start, to the right)" );
-	check( Distance2D( level.player2.origin, start_ent.origin ) < 8 && Distance2D( level.player.origin, start_ent.origin - right * 48 ) < 8, "both on their places in the sandbag bay" );
+	check( Distance2D( level.player2.origin, start_ent.origin ) < 8 && Distance2D( level.player.origin, start_ent.origin - right * 48 + AnglesToForward( ( 0, start_ent.angles[ 1 ], 0 ) ) * 16 ) < 8, "both on their places in the sandbag bay" );
+	foreach ( player in level.players )
+		check( !qa_stuck( player ), player_name( player ) + " is not stuck in anything solid at his place" );
 	check( abs( level.player.origin[ 2 ] - level.player2.origin[ 2 ] ) < 4, "both on the floor (" + int( level.player.origin[ 2 ] ) + ", " + int( level.player2.origin[ 2 ] ) + ")" );
 	// player 2 was brought along to the range: he must stand where he can walk away
 	report( "at the range: player 1 " + vec_int( level.player.origin ) + ", player 2 " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
@@ -1304,12 +1314,12 @@ pickup_table( name, weapon, what )
 	if ( !pickup_ready( name ) )
 		return;
 	first = level.mw2coop_pickups[ name ];
-	qa_take( level.player2, first, weapon );
+	qa_use_take( level.player2, first, weapon );
 	check( level.player2 HasWeapon( weapon ) && !level.player HasWeapon( weapon ), "player 2 takes the " + what + ", player 1 has none (" + weapons_text( level.player ) + ")" );
 	wait 1;
 	check( pickup_ready( name ) && level.mw2coop_pickups[ name ].model != "" && level.mw2coop_pickups[ name ].model != "_obj", "another " + what + " lies on the table (" + pickup_model( name ) + ")" );
 	if ( pickup_ready( name ) )
-		qa_take( level.player, level.mw2coop_pickups[ name ], weapon );
+		qa_use_take( level.player, level.mw2coop_pickups[ name ], weapon );
 	check( level.player HasWeapon( weapon ) && level.player2 HasWeapon( weapon ), "player 1 takes his own " + what );
 	wait 1;
 	check( !pickup_ready( name ), "no third " + what + " on the table" );
@@ -1327,7 +1337,8 @@ pickup_ready( name )
 	return isdefined( level.mw2coop_pickups ) && isdefined( level.mw2coop_pickups[ name ] );
 }
 
-// The box's own trigger (trainer.gsc spawn_frags()), set off by each player looking at the box.
+// The box (trainer.gsc spawn_frags()): its trigger is a touch trigger and the level checks that
+// he looks at the box, so each player walks up to it (real Forward presses) and looks at it.
 pickup_frags()
 {
 	flag_wait( "frags_have_been_spawned" );
@@ -1335,11 +1346,17 @@ pickup_frags()
 	trigger = GetEnt( "frag_trigger", "script_noteworthy" );
 	foreach ( n, player in level.players )
 	{
-		qa_stand_by( player, box.origin );
+		from = int( Distance2D( player.origin, box.origin ) );
+		for ( i = 0; i < 16 && !player IsTouching( trigger ); i++ )
+		{
+			player SetPlayerAngles( ( 0, VectorToAngles( box.origin - player.origin )[ 1 ], 0 ) );
+			press( player, "forward", 250 );
+			wait 0.2;
+		}
+		report( player_name( player ) + " walked up to the box: " + i + " Forward presses, from " + from + " to " + int( Distance2D( player.origin, box.origin ) ) + " units from it" );
 		for ( i = 0; i < 10 && player GetWeaponAmmoStock( "fraggrenade" ) < 3; i++ )
 		{
 			player SetPlayerAngles( VectorToAngles( box.origin - player GetEye() ) );
-			trigger notify( "trigger", player );
 			wait 0.5;
 		}
 		check( player HasWeapon( "fraggrenade" ) && player GetWeaponAmmoStock( "fraggrenade" ) >= 3, "player " + ( n + 1 ) + " takes frags from the box (" + player GetWeaponAmmoStock( "fraggrenade" ) + ")" );
@@ -1347,28 +1364,148 @@ pickup_frags()
 	report( "done" );
 }
 
-qa_stand_by( player, at )
+qa_stand_by( player, at, dist )
 {
+	if ( !isdefined( dist ) )
+		dist = 40;
 	away = ( player.origin[ 0 ] - at[ 0 ], player.origin[ 1 ] - at[ 1 ], 0 );
 	if ( Length( away ) < 1 )
 		away = ( 1, 0, 0 );
-	player SetOrigin( ( at[ 0 ], at[ 1 ], player.origin[ 2 ] ) + VectorNormalize( away ) * 40 );
+	// on the floor below that spot (a weapon lies on a table, the player may start on another level)
+	spot = at + VectorNormalize( away ) * dist;
+	player SetOrigin( PlayerPhysicsTrace( spot + ( 0, 0, 16 ), spot - ( 0, 0, 200 ) ) );
 	wait 0.1;
 }
 
-// A table pickup as the engine does it: he stands by the weapon, it goes to him (with the
-// item's full ammo), the item goes; then he walks back to where he stood.
-qa_take( player, item, weapon )
+// A table pickup by hand: he stands by the weapon, looks at it and presses Use (up to 4 tries);
+// then he walks back to where he stood.
+qa_use_take( player, item, weapon )
 {
 	back = player.origin;
 	qa_stand_by( player, item.origin );
-	player GiveWeapon( weapon );
-	player GiveMaxAmmo( weapon );
-	player SwitchToWeapon( weapon );
-	item Delete();
-	wait 0.5;
+	for ( i = 0; i < 4 && !player HasWeapon( weapon ); i++ )
+	{
+		if ( isdefined( item ) )
+			player SetPlayerAngles( VectorToAngles( item.origin - player GetEye() ) );
+		wait 0.2;
+		press( player, "activate", 500 );
+		for ( t = 0; t < 2 && !player HasWeapon( weapon ); t += 0.25 )
+			wait 0.25;
+		if ( !player HasWeapon( weapon ) && isdefined( item ) )
+			report( player_name( player ) + ": no " + weapon + " after Use " + ( i + 1 ) + " (" + int( Distance( player GetEye(), item.origin ) ) + " units from the eye to it; holds " + weapons_text( player ) + ")" );
+	}
+	report( player_name( player ) + " pressed Use " + i + " times for the " + weapon );
 	player SetOrigin( back );
 	wait 0.5;
+}
+
+// The level's intro (maps\_introscreen) freezes player 1 until its title has gone (player 2 is
+// not frozen: found by the buttons scenario, 2026-10-21). Most intros set the flag
+// introscreen_complete at the end, some only notify it (dc_whitehouse); none takes 15 s.
+wait_intro()
+{
+	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 15 );
+	wait 0.5;
+}
+
+// True when no 8-unit step is free in any direction: he stands inside something solid.
+qa_stuck( player )
+{
+	foreach ( yaw in strtok( "0 90 180 270", " " ) )
+	{
+		end = player.origin + AnglesToForward( ( 0, int( yaw ), 0 ) ) * 8 + ( 0, 0, 2 );
+		if ( Distance( PlayerPhysicsTrace( player.origin + ( 0, 0, 2 ), end ), end ) < 0.5 )
+			return false;
+	}
+	return true;
+}
+
+player_name( player )
+{
+	if ( player == level.player2 )
+		return "player 2";
+	return "player 1";
+}
+
+// Real input for a bot: the machine of that player presses the button as a key bound to it would
+// ("activate" for +activate, "forward", "gostand", ...) for ms milliseconds, in steps of 250 ms
+// (mw2coop_bind in the DLL, src/control.c). Both machines run this; only his acts on it. The DLL
+// reads the request every 250 ms, hence the wait.
+press( player, button, ms )
+{
+	if ( !isdefined( level.mw2coop_qa_presses ) )
+		level.mw2coop_qa_presses = 0;
+	level.mw2coop_qa_presses++;
+	n = 1;
+	if ( player == level.player2 )
+		n = 2;
+	SetDvar( "mw2coop_qa_press", n + " " + button + " " + ms + " " + level.mw2coop_qa_presses );
+	wait 0.3;
+}
+
+// --------------------------------------------------------------------------------------------
+// Real input (any map): each player's own machine presses Forward, then Use (press()). He walks
+// forward, and the server sees his Use button held, not the other player's.
+buttons()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 2;
+	foreach ( n, player in level.players )
+	{
+		other = level.players[ 1 - n ];
+		check( !qa_stuck( player ), player_name( player ) + " is not stuck in anything solid (at " + vec_int( player.origin ) + ")" );
+		// face the way with the most free floor (up to 100 units; the range's bays are narrow)
+		yaw = player GetPlayerAngles()[ 1 ];
+		room = 0;
+		best = yaw;
+		for ( turn = 0; turn < 360; turn += 45 )
+		{
+			from = player.origin + ( 0, 0, 8 );
+			end = from + AnglesToForward( ( 0, yaw + turn, 0 ) ) * 100;
+			free = Distance( from, PlayerPhysicsTrace( from, end ) );
+			if ( free > room + 1 )
+			{
+				room = free;
+				best = yaw + turn;
+			}
+		}
+		yaw = best;
+		need = min( 40, room * 0.5 );
+		player SetPlayerAngles( ( 0, yaw, 0 ) );
+		wait 0.2;
+		// a level may hold a player still for a while: try again a few times
+		moved = 0;
+		other_moved = 0;
+		for ( try = 1; try <= 5 && moved <= need; try++ )
+		{
+			if ( try > 1 )
+				wait 3;
+			from = player.origin;
+			other_from = other.origin;
+			press( player, "forward", 1000 );
+			wait 1.5;
+			moved = Distance2D( player.origin, from );
+			other_moved = Distance2D( other.origin, other_from );
+		}
+		check( moved > need, player_name( player ) + " walks forward on a Forward press (" + int( moved ) + " of " + int( room ) + " free units, press " + ( try - 1 ) + ")" );
+		check( other_moved < 8, "the other player stays (" + int( other_moved ) + " units)" );
+		press( player, "activate", 1000 );
+		held = false;
+		other_held = false;
+		for ( t = 0; t < 1.5 && !held; t += 0.05 )
+		{
+			held = player UseButtonPressed();
+			other_held = other UseButtonPressed();
+			wait 0.05;
+		}
+		check( held, "the server sees " + player_name( player ) + "'s Use button (" + t + " s)" );
+		check( !other_held, "and not the other player's" );
+		wait 1;
+	}
+	report( "done" );
 }
 
 vec_int( v )

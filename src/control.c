@@ -10,6 +10,7 @@
 //   !party            -> QA: log the party slots and timers
 //   !netlog <n>       -> QA: log the next n co-op packets
 //   !trace <rva>      -> QA: log calls of the builtin method whose table entry is at rva, with GSC stacks
+//   mw2coop_bind +activate (a plain line) -> QA: press a button as its key would (see bind_f)
 //   # comment
 #include <windows.h>
 #include <stdint.h>
@@ -146,11 +147,77 @@ static void partner_name_poll(void)
 	}
 }
 
+// QA input: a bot presses a button the way a key bound to it does. For a key the game looks the
+// binding's name up in its bind table (rva 0x3be770, the index is the name's place: +attack 1,
+// -attack 2, ..., +activate 0x31, -activate 0x32) and runs that index for the local client
+// (rva 0xce450): odd indices hold a kbutton down, even ones let it go, and the usercmd built from
+// the kbuttons carries the button to the server like any input. "+activate" in the console is
+// no command in this build (only +moveup, +speed, +throw and a few more are), so
+//   mw2coop_bind +activate | -activate | +forward | ...
+// runs the binding itself, on the main thread like any console command. The key number is one
+// no keyboard sends, so letting a real key go cannot end the press.
+#define RVA_BIND_INDEX   0x0d1810 // int (const char *name): the name's place in the bind table, 0 if none
+#define RVA_EXEC_BINDING 0x0ce450 // void (int localClient, int index, int key)
+#define QA_KEY           0x1ff
+
+static void bind_f(void)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	const char *name = game_cmd_argv(1);
+	int index = ((int (*)(const char *))(base + RVA_BIND_INDEX))(name);
+	if (!index) {
+		log_printf("control: no binding '%s'", name);
+		return;
+	}
+	((void (*)(int, int, int))(base + RVA_EXEC_BINDING))(0, index, QA_KEY);
+	log_printf("control: binding %s (%d)", name, index);
+}
+
+static cmd_function_t bind_cmd = {NULL, "mw2coop_bind", NULL, NULL, bind_f};
+
+// A QA scenario asks for a press with mw2coop_qa_press "<player 1|2> <button> <ms> <n>" (button
+// without the +, n counts the presses). Both machines run the scenario; the one whose own player
+// it is (the host plays player 1) holds the button down for ms (checked every 250 ms).
+#define MAX_HELD 8
+static char press_last[96];
+static char held_name[MAX_HELD][32];
+static DWORD held_until[MAX_HELD];
+
+static void press_poll(void)
+{
+	char v[96], cmd[64];
+	for (int i = 0; i < MAX_HELD; i++) {
+		if (held_name[i][0] && (int)(GetTickCount() - held_until[i]) >= 0) {
+			snprintf(cmd, sizeof(cmd), "mw2coop_bind -%s\n", held_name[i]);
+			game_cbuf_addtext(cmd);
+			held_name[i][0] = 0;
+		}
+	}
+	if (!game_dvar_raw("mw2coop_qa_press", v, sizeof(v)) || !v[0] || strcmp(v, press_last) == 0)
+		return;
+	lstrcpynA(press_last, v, sizeof(press_last));
+	int player, ms;
+	char name[32];
+	if (sscanf(v, "%d %31s %d", &player, name, &ms) != 3)
+		return;
+	if (player != (game_peek(RVA_PARTY_IS_HOST, 1) ? 1 : 2))
+		return;
+	int slot = 0;
+	while (slot < MAX_HELD - 1 && held_name[slot][0] && strcmp(held_name[slot], name) != 0)
+		slot++;
+	lstrcpynA(held_name[slot], name, sizeof(held_name[slot]));
+	held_until[slot] = GetTickCount() + ms;
+	log_printf("control: qa press %s for %d ms", name, ms);
+	snprintf(cmd, sizeof(cmd), "mw2coop_bind +%s\n", name);
+	game_cbuf_addtext(cmd);
+}
+
 static void script_channel_poll(void)
 {
 	char v[256];
 	sync_dvar_flags();
 	partner_name_poll();
+	press_poll();
 	if (game_dvar_raw("mw2coop_state", v, sizeof(v)) && strcmp(v, last_state) != 0) {
 		log_printf("script: %s", v);
 		lstrcpynA(last_state, v, sizeof(last_state));
@@ -329,6 +396,9 @@ void control_start(void)
 {
 	static char path[MAX_PATH];
 	hook_script_setdvar();
+	cmd_function_t **head = (cmd_function_t **)((uint8_t *)GetModuleHandleA(NULL) + RVA_CMD_FUNCTIONS);
+	bind_cmd.next = *head;
+	*head = &bind_cmd;
 	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
 	while (n > 0 && path[n - 1] != '\\')
 		n--;

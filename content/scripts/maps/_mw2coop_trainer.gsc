@@ -88,8 +88,16 @@ everyone_has_frags( count )
 // player 1 stands 48 units left of it and player 2 on it, both facing downrange, both inside the
 // sandbags (owner, 2026-10-21: player 2 was put behind the bags). Measured from the start in QA
 // pickups: the bags in front are 40 to 55 units ahead from 90 units left up to the start, the
-// rifle table 10 to 18 units ahead on its right, a post just behind it. After the level start's
-// regroup (maps\_mw2coop::regroup_after_start), which would otherwise move player 2 again.
+// rifle table 10 to 18 units ahead on its right, a post just behind it. The bay's back wall is
+// not square to the start: 48 units left it is 10 units further back, and a player put there
+// stood inside it and could not walk (QA buttons, real Forward presses), so player 1 stands 16
+// units further forward, free on all sides. After the level start's regroup
+// (maps\_mw2coop::regroup_after_start), which would otherwise move player 2 again.
+range_place_1( start )
+{
+	return start.origin - AnglesToRight( ( 0, start.angles[ 1 ], 0 ) ) * 48 + AnglesToForward( ( 0, start.angles[ 1 ], 0 ) ) * 16;
+}
+
 range_places( start )
 {
 	if ( !isdefined( level.player2 ) )
@@ -98,8 +106,7 @@ range_places( start )
 	while ( !flag_exist( "mw2coop_regrouped" ) )
 		wait 0.05;
 	flag_wait( "mw2coop_regrouped" );
-	right = AnglesToRight( ( 0, start.angles[ 1 ], 0 ) );
-	level.player SetOrigin( on_floor( start.origin - right * 48 ) );
+	level.player SetOrigin( on_floor( range_place_1( start ) ) );
 	level.player SetPlayerAngles( start.angles );
 	level.player2 SetOrigin( on_floor( start.origin ) );
 	level.player2 SetPlayerAngles( start.angles );
