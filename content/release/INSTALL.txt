@@ -16,22 +16,30 @@ https://github.com/stxlvn/mw2_coop
 Установка (у обоих игроков):
 1. Steam -> Библиотека -> Modern Warfare 2 -> Управление -> Просмотреть локальные файлы.
    Откроется папка с iw4sp.exe.
-2. Скопируйте туда всё из этого архива: winmm.dll, папку mw2coop и три файла .bat.
+2. Скопируйте туда всё из этого архива: winmm.dll, папку mw2coop и файлы .bat.
    (Ничего из игры не заменяется: добавляются новые файлы.)
 
-Игра:
-1. Хост запускает mw2coop-host.bat (игра стартует через Steam). Окно .bat держите открытым
-   2 минуты, потом оно само закроется.
-2. Когда у хоста появилось главное меню, второй игрок запускает mw2coop-join.bat и вводит
-   IP-адрес хоста. Через ~25 секунд игра подключится, миссия начнётся у обоих.
-3. Продолжить с места остановки: хост запускает mw2coop-continue.bat (прогресс хранится у
-   хоста в mw2coop\progress.txt), второй игрок снова mw2coop-join.bat.
-Начать с другой миссии: откройте mw2coop-host.bat Блокнотом и поменяйте MISSION=trainer на
-имя карты (roadkill, cliffhanger, airport, favela, invasion, arcadia, oilrig, gulag, dcburning,
-contingency, dcemp, dc_whitehouse, estate, boneyard, af_caves, af_chase).
-Режим бога для проверки: GOD=1 в mw2coop-host.bat.
+Игра (всё в меню игры):
+1. Хост: Кампания -> СЕТЕВАЯ ИГРА ВДВОЕМ. Откроется лобби с миссией, на которой вы
+   остановились (или первой). "Выбор операции" меняет миссию, "Доступ" - кто может войти:
+   свободный / только друзья Steam / по паролю.
+2. Второй игрок:
+   - друг по Steam: хост жмёт "Пригласить друга", друг принимает приглашение в Steam;
+   - по сети (одна локальная сеть или Radmin VPN): Кампания -> ПРИСОЕДИНИТЬСЯ К ИГРЕ,
+     выбрать игру в списке (или "Ввести адрес вручную..." и ввести IP хоста).
+3. Оба жмут "Готов", хост жмёт "Старт".
+Прогресс хранится у хоста (mw2coop\progress.txt): в следующий раз лобби откроется там же.
+
+Если второй игрок по сети не может подключиться: хост запускает mw2coop-firewall.bat (один
+раз; Windows спросит права администратора, только если правила для игры нет). Через интернет
+без общей сети хосту нужен проброс UDP-порта 28960 на роутере, либо Radmin VPN.
+Порт меняется в mw2coop\settings.ini (у обоих одинаковый).
+
+Старый способ без меню (на всякий случай): mw2coop-host.bat / mw2coop-continue.bat у хоста,
+mw2coop-join.bat у второго игрока.
 
 Удаление: удалите из папки игры winmm.dll, папку mw2coop и файлы mw2coop-*.bat.
+(Правило брандмауэра, если его добавлял mw2coop-firewall.bat: "Call of Duty MW2 co-op (mw2coop)".)
 Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
 
 === English ===
@@ -45,13 +53,19 @@ both PCs; for the host, UDP port 28960 reachable (port forward) or a shared LAN/
 
 Install (both players): Steam -> Library -> Modern Warfare 2 -> Manage -> Browse local files
 (the folder with iw4sp.exe). Copy everything from this archive there: winmm.dll, the mw2coop
-folder and the three .bat files. Nothing of the game is replaced.
+folder and the .bat files. Nothing of the game is replaced.
 
-Play: the host runs mw2coop-host.bat (the game starts through Steam; keep the window open for
-2 minutes). Once the host's game shows the main menu, the partner runs mw2coop-join.bat and
-types the host's IP address; it connects after about 25 seconds and the mission starts for
-both. mw2coop-continue.bat (host) carries on from the last checkpoint (mw2coop\progress.txt).
-Edit MISSION= in mw2coop-host.bat to start another mission, GOD=1 for the test god mode.
+Play (in the game's menus): the host picks Campaign -> TWO PLAYERS ONLINE; the lobby opens
+on the mission where you stopped (Change Op picks another; Access sets who may join: open,
+Steam friends only, or a password). The partner joins through a Steam invite (Invite Friend),
+or on a shared network (LAN, Radmin VPN) through Campaign -> JOIN A GAME (pick the game from
+the list, or enter the host's address). Both press Ready, the host presses Start. Progress is
+kept by the host (mw2coop\progress.txt).
+
+If the partner cannot join over the network, the host runs mw2coop-firewall.bat once (it asks
+for administrator rights only if the game has no firewall rule). Over the internet without a
+shared network the host needs UDP port 28960 forwarded, or Radmin VPN. The port can be changed
+in mw2coop\settings.ini (the same on both PCs). The old .bat launchers still work.
 
 Uninstall: delete winmm.dll, the mw2coop folder and the mw2coop-*.bat files from the game
 folder. Problems: attach mw2coop\mw2coop.log from both players.
