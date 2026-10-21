@@ -8,9 +8,10 @@
 #define RVA_CBUF_ADDTEXT   0x1ee890  // void Cbuf_AddText(int localClientNum, const char *text); locks CS 0x24
 #define RVA_DVAR_FINDVAR   0x26bdf0  // dvar_t *Dvar_FindVar(const char *name); reader-locked, thread safe
 #define RVA_CMD_FUNCTIONS  0x1315308 // cmd_function_t *cmd_functions (list head)
-#define RVA_CMD_ARGS_NESTING 0x1315260 // int; argc int[nesting] at 0x13152a4, argv char**[nesting] at 0x13152c8 (devmap @0x22cb70)
-#define RVA_CMD_ARGC         0x13152a4
-#define RVA_CMD_ARGV         0x13152c8
+// Console command arguments {int nesting; ...; int argc[8]; char **argv[8]}: console commands
+// (connect @0xd23c0) and server commands (devmap @0x22cb70) have one each.
+#define RVA_CMD_ARGS         0x13151b0 // nesting; argc +0x44, argv +0x68
+#define RVA_SV_CMD_ARGS      0x1315260 // nesting; argc +0x44, argv +0x68
 #define RVA_SV_CMD_DEVMAP    0x1904f60 // server cmd_function_t node of "devmap" (handler @0x22cb70)
 #define RVA_XUID_TABLE     0x1bbaad8 // uint64 xuid of local client i at +i*0x68 (Live_GetXuid, rva 0x28f8b0)
 
@@ -98,3 +99,8 @@ unsigned long long game_peek_ptr(unsigned long long rva, unsigned long long off,
 void game_xuid_add(long long delta);
 // Read 1/2/4/8 bytes of the game image at an RVA (0 outside the image).
 unsigned long long game_peek(unsigned long long rva, int width);
+
+// Argument i of the console (or server) command being run, "" if there is none; call from the
+// command function.
+const char *game_cmd_argv(int i);
+const char *game_sv_cmd_argv(int i);

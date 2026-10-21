@@ -8,13 +8,11 @@ if not exist "mw2coop\scripts" goto nomod
 set "HOST=%~1"
 if "%HOST%"=="" set /p "HOST=Host IP address: "
 if "%HOST%"=="" goto nohost
-rem port 28960; the game's connect command expects it byte-swapped (8305)
+rem mw2coop_join joins the host's party at that address (port 28960), then connects
 (
 echo # written by mw2coop-join.bat
 echo !sleep 25000
-echo mw2coop_party_join
-echo !sleep 1000
-echo connect %HOST% 8305
+echo mw2coop_join %HOST%
 ) > "mw2coop\commands.txt"
 echo mw2coop: joining %HOST%. The game starts now and connects after about 25 seconds.
 echo Keep this window open for 2 minutes (it then clears the start commands).

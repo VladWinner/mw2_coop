@@ -18,6 +18,7 @@ public static class C {
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint f, IntPtr e);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   public static IntPtr Find(uint want) {
     IntPtr found = IntPtr.Zero;
     EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);
@@ -32,7 +33,16 @@ $h = [C]::Find([uint32]$TargetPid)
 if ($h -eq [IntPtr]::Zero) { 'no IW4 window'; exit 1 }
 $SWP = 0x0001 -bor 0x0002 -bor 0x0040
 [C]::SetWindowPos($h, [IntPtr](-1), 0, 0, 0, 0, $SWP) | Out-Null
-[C]::SetForegroundWindow($h) | Out-Null
+# Windows only lets a process that got the last input bring a window forward: a tap of Alt counts.
+for ($try = 0; $try -lt 5 -and [C]::GetForegroundWindow() -ne $h; $try++) {
+  [C]::keybd_event(0x12, 0, 0, [IntPtr]::Zero); [C]::keybd_event(0x12, 0, 2, [IntPtr]::Zero)
+  [C]::SetForegroundWindow($h) | Out-Null
+  Start-Sleep -Milliseconds 300
+}
+if ([C]::GetForegroundWindow() -ne $h) {
+  [C]::SetWindowPos($h, [IntPtr](-2), 0, 0, 0, 0, $SWP) | Out-Null
+  'the game window could not be brought to the front; nothing clicked'; exit 1
+}
 Start-Sleep -Milliseconds 400
 if ($Key) {
   $vk = @{ ESC = 0x1b; ENTER = 0x0d; UP = 0x26; DOWN = 0x28 }[$Key]

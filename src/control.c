@@ -7,6 +7,8 @@
 //   !xuid_add <n>     -> QA only: shift this copy's XUID (two copies on one Steam account)
 //   !loc <NAME>       -> log a localized string's text and bytes
 //   !asset <type> <name>, !mem <address> <size> -> annotated memory dumps (memdump.c)
+//   !party            -> QA: log the party slots and timers
+//   !netlog <n>       -> QA: log the next n co-op packets
 //   !trace <rva>      -> QA: log calls of the builtin method whose table entry is at rva, with GSC stacks
 //   # comment
 #include <windows.h>
@@ -20,6 +22,8 @@
 #include "log.h"
 #include "memdump.h"
 #include "menus.h"
+#include "net.h"
+#include "party.h"
 #include "progress.h"
 #include "scrdebug.h"
 
@@ -163,6 +167,7 @@ static void run_line(char *line)
 		for (int t = 0; t < ms; t += 250) {
 			Sleep(250);
 			watch_poll();
+			menus_poll();
 		}
 		return;
 	}
@@ -195,6 +200,14 @@ static void run_line(char *line)
 		for (int i = 0; v && v[i] && i < 80; i++)
 			snprintf(hex + strlen(hex), sizeof(hex) - strlen(hex), "%02x ", (unsigned char)v[i]);
 		log_printf("loc: %s = '%s' [%s]", line + 5, v ? v : "(none)", hex);
+		return;
+	}
+	if (strcmp(line, "!party") == 0) {
+		party_log_state();
+		return;
+	}
+	if (strncmp(line, "!netlog ", 8) == 0) {
+		net_log_budget(atoi(line + 8));
 		return;
 	}
 	if (memdump_command(line))

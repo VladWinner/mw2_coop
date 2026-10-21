@@ -138,3 +138,22 @@ void game_log_commands(void)
 	log_printf("cmds: %s", line);
 	log_printf("cmds: %d commands registered", count);
 }
+
+static const char *cmd_args_argv(int rva, int i)
+{
+	uint8_t *args = (uint8_t *)GetModuleHandleA(NULL) + rva;
+	int nesting = *(int *)args;
+	if (nesting < 0 || nesting >= 8 || i < 0 || i >= *(int *)(args + 0x44 + nesting * 4))
+		return "";
+	return (*(const char ***)(args + 0x68 + nesting * 8))[i];
+}
+
+const char *game_cmd_argv(int i)
+{
+	return cmd_args_argv(RVA_CMD_ARGS, i);
+}
+
+const char *game_sv_cmd_argv(int i)
+{
+	return cmd_args_argv(RVA_SV_CMD_ARGS, i);
+}

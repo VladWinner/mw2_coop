@@ -1,5 +1,5 @@
 // Co-op in the game's own menus (no .bat files). This build has no menu text parser, so the
-// zone's menu assets (ASSET_TYPE_MENU 26) are changed in memory once the UI zone is loaded:
+// zone's menus (ASSET_TYPE_MENU 26, as the UI has loaded them) are changed in memory:
 //
 // - Campaign main menu (main_text): a "TWO PLAYERS ONLINE" button under Mission Select, cloned
 //   from Mission Select. It opens the game's own Spec Ops co-op lobby (coop_lobby: Steam friend
@@ -29,7 +29,6 @@
 #include "net.h"
 #include "progress.h"
 
-#define ASSET_TYPE_MENU 26
 #define ITEM_SIZE 0x1e8
 #define MENU_ITEM_COUNT 0xbc
 #define MENU_ITEMS 0x168
@@ -41,6 +40,10 @@
 #define ITEM_ON_FOCUS 0x138
 #define WINDOW_HASFOCUS 2
 #define BUTTON_HEIGHT 20.0f
+#define RVA_UI_CONTEXT 0x1a3ab00 // uiContext_t (Menus_OpenByName's first argument, "openmenu" @0x24ca10)
+#define UI_MENUS 0x38		 // menuDef_t *menus[]
+#define UI_MENU_COUNT 0x1438	 // int
+#define UI_MAX_MENUS 640	 // (0x1438 - 0x38) / 8
 
 typedef struct {
 	void *data;
@@ -57,13 +60,20 @@ typedef struct {
 static uint8_t *base;
 #define FN_SLOT_USED(lobby, i) ((char (*)(void *, int))(base + RVA_LOBBY_SLOT_USED))(lobby, i)
 
+// The menus the UI has loaded (the list Menus_FindByName, rva 0x259d30, searches): no asset
+// database call, which blocks while a zone loads (a control-thread lookup during a level load
+// hung both games after the briefing).
 static uint8_t *find_menu(const char *name)
 {
-	typedef void *(*find_t)(int, const char *);
-	typedef int (*is_default_t)(int, const char *);
-	if (((is_default_t)(base + RVA_DB_IS_DEFAULT))(ASSET_TYPE_MENU, name))
-		return NULL;
-	return ((find_t)(base + RVA_DB_FIND_HEADER))(ASSET_TYPE_MENU, name);
+	uint8_t *ui = base + RVA_UI_CONTEXT;
+	int count = *(int *)(ui + UI_MENU_COUNT);
+	uint8_t **menus = (uint8_t **)(ui + UI_MENUS);
+	for (int i = 0; i < count && i < UI_MAX_MENUS; i++) {
+		const char *n = menus[i] ? *(const char **)menus[i] : NULL;
+		if (n && lstrcmpiA(n, name) == 0)
+			return menus[i];
+	}
+	return NULL;
 }
 
 static int item_index(uint8_t *menu, const char *name)
@@ -343,18 +353,10 @@ static void online_f(void)
 // missions from the difficulty popup); it sets the lobby's mission instead of starting solo.
 static void (*devmap_native)(void);
 
-static const char *cmd_argv(int i)
-{
-	int nesting = *(int *)(base + RVA_CMD_ARGS_NESTING);
-	if (nesting < 0 || nesting >= 8 || i >= *(int *)(base + RVA_CMD_ARGC + nesting * 4))
-		return "";
-	return (*(const char ***)(base + RVA_CMD_ARGV + nesting * 8))[i];
-}
-
 static void devmap_f(void)
 {
 	char map[64];
-	lstrcpynA(map, cmd_argv(1), sizeof(map));
+	lstrcpynA(map, game_sv_cmd_argv(1), sizeof(map));
 	if (!campaign_lobby() || !base[RVA_PARTY_IS_HOST] || !map[0] || strpbrk(map, " \t;\"\n")) {
 		devmap_native();
 		return;
@@ -368,16 +370,40 @@ static void devmap_f(void)
 	log_printf("menus: campaign lobby mission -> '%s'", map);
 }
 
+static void tick_f(void);
+
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f},
 	{NULL, "mw2coop_start", NULL, NULL, start_f},
 	{NULL, "mw2coop_ready", NULL, NULL, ready_f},
+	{NULL, "mw2coop_menus_tick", NULL, NULL, tick_f},
 };
 
-// Called every 250 ms (control thread): the UI zone may be reloaded (back from a level), which
-// brings fresh menus without our changes.
+// The menu work runs on the game's main thread, between frames: the control thread only queues
+// "mw2coop_menus_tick" (every 250 ms, never while a level runs or loads). The UI zone may be
+// reloaded (back from a level), which brings fresh menus without our changes.
+static volatile LONG tick_queued;
+static volatile DWORD tick_queued_at;
+
 void menus_poll(void)
 {
+	if (!base)
+		return;
+	char v[8] = "";
+	game_dvar_raw("sv_running", v, sizeof(v));
+	if (v[0] == '1')
+		return;
+	// the queue is cleared by a map load; a tick queued before it never runs
+	if (tick_queued && GetTickCount() - tick_queued_at < 3000)
+		return;
+	tick_queued_at = GetTickCount();
+	InterlockedExchange(&tick_queued, 1);
+	game_cbuf_addtext("mw2coop_menus_tick\n");
+}
+
+static void tick_f(void)
+{
+	InterlockedExchange(&tick_queued, 0);
 	if (!base)
 		return;
 	patch_main_menu();

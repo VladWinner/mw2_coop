@@ -1,9 +1,19 @@
 // Console commands added by mw2coop, run on the game's main thread by Cbuf like any command.
 //
-// mw2coop_party_join (QA): the normal client path joins the host's Steam lobby first
-// (rva 0x28f1b0 -> 0x22dda0 -> PartyClient_Join 0xd7cb0), which activates the client party
-// before "connect ip port". Two test copies on one Steam account cannot join each other's Steam
-// lobby, so this does what PartyClient_Join does, minus the Steam lobby address lookup.
+// mw2coop_join <ip> [port]: join a host by address, without a Steam lobby. The normal client
+// path joins the host's Steam lobby first (rva 0x28f1b0 -> 0x22dda0 -> PartyClient_Join 0xd7cb0),
+// which puts the host's address info (64 bytes, from the Steam lobby) into the client's party
+// and activates it before "connect ip port". This does what PartyClient_Join does with that info
+// filled from the address, then connects. The party must know the host's address: the host's
+// lobby heartbeat ("hb", rva 0xd68b0) is only accepted from it, and a client that never answers
+// with "hba" is dropped by the host after coop_lobbyTimeout (12 s) and resets its own party.
+// Host info as Lobby_Join copies it (lobby +0x14) and rva 0x293cb0 reads it: +0 xuid,
+// +8 internal IPv4, +0xc external IPv4, +0x10 internal port, +0x12 external port (host order);
+// the internal pair is used when both PCs share the external address.
+//
+// mw2coop_party_join [ip [port]]: the same party join without the connect (the v0.2.0 join
+// launcher runs it before its own connect; with no address the host info stays empty, which
+// only holds for an immediate launch).
 //
 // mw2coop_launch_map: start coop_mapName on this machine the way the lobby launch does
 // (rva 0x22e1a0). Used for the next mission: in a level the party is inactive (rva 0x5dd951
@@ -12,6 +22,8 @@
 // request, so each DLL runs this itself; the rest of the session state is unchanged.
 #include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "game.h"
@@ -21,14 +33,36 @@
 static uint8_t *base;
 #define FN(rva, type) ((type)(base + (rva)))
 
-static void party_join_f(void)
+static int parse_address(const char *ip, const char *port_text, uint8_t addr[4], uint16_t *port)
+{
+	unsigned a, b, c, d;
+	char tail;
+	if (sscanf(ip, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 || a > 255 || b > 255 || c > 255 || d > 255)
+		return 0;
+	addr[0] = (uint8_t)a, addr[1] = (uint8_t)b, addr[2] = (uint8_t)c, addr[3] = (uint8_t)d;
+	unsigned p = port_text[0] ? (unsigned)atoi(port_text) : 28960;
+	if (p == 0 || p > 65535)
+		return 0;
+	*port = (uint16_t)p;
+	return 1;
+}
+
+// returns 1 if the party was joined
+static int party_join(const uint8_t *addr, uint16_t port)
 {
 	uint8_t *lobby = *(uint8_t **)(base + RVA_PARTY_LOBBY);
 	if (!lobby) {
 		log_printf("party: no lobby object");
-		return;
+		return 0;
 	}
 	uint64_t host_info[8] = {0};
+	if (addr) {
+		uint8_t *hi = (uint8_t *)host_info;
+		memcpy(hi + 8, addr, 4);
+		memcpy(hi + 0xc, addr, 4);
+		memcpy(hi + 0x10, &port, 2);
+		memcpy(hi + 0x12, &port, 2);
+	}
 	FN(RVA_PARTY_RESET, void (*)(void))();
 	FN(RVA_PARTY_CLEAR_MEMBERS, void (*)(int))(0);
 	base[RVA_PARTY_IS_HOST] = 0;
@@ -37,8 +71,43 @@ static void party_join_f(void)
 	*(int32_t *)(base + RVA_PARTY_START_TIME) = FN(RVA_SYS_MILLISECONDS, int (*)(void))();
 	FN(RVA_PARTY_ACTIVATE, void (*)(void))();
 	FN(RVA_PARTY_AFTER_JOIN, void (*)(void))();
-	log_printf("party: client party joined (lobby join %d, active %d, lobby+0x10 %d)", ok,
-		   base[RVA_PARTY_ACTIVE], lobby[0x10]);
+	log_printf("party: client party joined (lobby join %d, active %d, lobby+0x10 %d, host %u.%u.%u.%u:%u)", ok,
+		   base[RVA_PARTY_ACTIVE], lobby[0x10], addr ? addr[0] : 0, addr ? addr[1] : 0, addr ? addr[2] : 0,
+		   addr ? addr[3] : 0, addr ? port : 0);
+	return ok != 0;
+}
+
+static void party_join_f(void)
+{
+	uint8_t addr[4];
+	uint16_t port;
+	const char *ip = game_cmd_argv(1);
+	if (!ip[0]) {
+		party_join(NULL, 0);
+		return;
+	}
+	if (!parse_address(ip, game_cmd_argv(2), addr, &port)) {
+		log_printf("party: bad address '%s %s'", ip, game_cmd_argv(2));
+		return;
+	}
+	party_join(addr, port);
+}
+
+static void join_f(void)
+{
+	uint8_t addr[4];
+	uint16_t port;
+	if (!parse_address(game_cmd_argv(1), game_cmd_argv(2), addr, &port)) {
+		log_printf("party: usage: mw2coop_join <ip> [port]");
+		return;
+	}
+	if (!party_join(addr, port))
+		return;
+	// connect stores its port argument as-is into a network-order field
+	char cmd[64];
+	snprintf(cmd, sizeof(cmd), "connect %u.%u.%u.%u %u\n", addr[0], addr[1], addr[2], addr[3],
+		 (unsigned)(uint16_t)((port >> 8) | (port << 8)));
+	game_cbuf_addtext(cmd);
 }
 
 static void launch_map_f(void)
@@ -51,8 +120,32 @@ static void launch_map_f(void)
 		FN(RVA_COOP_LAUNCH_MAP, void (*)(int))(0);
 }
 
+// QA: the party's state (the host's heartbeat loop at rva 0xd7ee0 and timeout loop at 0xd74a0
+// read the same fields)
+void party_log_state(void)
+{
+	uint8_t *lobby = *(uint8_t **)(base + RVA_PARTY_LOBBY);
+	log_printf("party: active %d host %d launch %d lobby %p (+0x10 %d)", base[RVA_PARTY_ACTIVE], base[RVA_PARTY_IS_HOST],
+		   base[RVA_PARTY_LAUNCH], (void *)lobby, lobby ? lobby[0x10] : -1);
+	if (!lobby)
+		return;
+	int now = FN(RVA_SYS_MILLISECONDS, int (*)(void))();
+	for (int i = 0; i < 2; i++) {
+		char used = FN(RVA_LOBBY_SLOT_USED, char (*)(void *, int))(lobby, i);
+		uint64_t xuid = FN(0x236b30, uint64_t (*)(void *, int))(lobby, i);
+		char local = FN(0x28fdf0, char (*)(uint64_t))(xuid);
+		uint8_t addr[24] = {0};
+		FN(0x2367f0, void *(*)(void *, void *, int))(addr, lobby, i);
+		int heard = *(int *)(base + 0x5dd984 + i * 0x38), sent = *(int *)(base + 0x5dd980 + i * 0x38);
+		log_printf("party: slot %d used %d xuid %016llx local %d heard %d ms ago, sent %d ms ago, addr type %d %u.%u.%u.%u:%u",
+			   i, used, (unsigned long long)xuid, local, now - heard, now - sent, *(int *)addr, addr[4], addr[5],
+			   addr[6], addr[7], (unsigned)((addr[8] << 8) | addr[9]));
+	}
+}
+
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_party_join", NULL, NULL, party_join_f},
+	{NULL, "mw2coop_join", NULL, NULL, join_f},
 	{NULL, "mw2coop_launch_map", NULL, NULL, launch_map_f},
 };
 

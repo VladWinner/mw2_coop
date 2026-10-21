@@ -32,6 +32,8 @@ static void log_packet(const char *dir, const struct sockaddr *sa, const char *b
 	// skip DemonWare traffic (not 0xffffffff out-of-band) and the lobby bandwidth test ("bw")
 	if (len < 6 || *(const unsigned int *)buf != 0xffffffffu || (buf[4] == 'b' && buf[5] == 'w'))
 		return;
+	if (len >= 17 && memcmp(buf + 4, "mw2coop_ready", 13) == 0) // menus.c's, once a second
+		return;
 	if (InterlockedDecrement(&budget) < 0)
 		return;
 	char addr[64] = "?";
@@ -74,6 +76,12 @@ static void remember_peer(SOCKET s, const struct sockaddr *sa)
 		log_printf("net: co-op partner %u.%u.%u.%u:%u", ip[0], ip[1], ip[2], ip[3], ntohs(peer.sin_port));
 	}
 	LeaveCriticalSection(&peer_lock);
+}
+
+void net_log_budget(int packets)
+{
+	InterlockedExchange(&budget, packets);
+	log_printf("net: logging the next %d packets", packets);
 }
 
 int net_send_mod(const char *text)

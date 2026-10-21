@@ -25,7 +25,7 @@ $(printf '%s' "${MW2COOP_QA_CMDS:-}" | tr ';' '
 ')"
 LONG=$(( (LEVEL_S + 30) * 1000 ))
 printf '# host\n%s\nset start "%s"\nset mw2coop_god "%s"\n!sleep 35000\n%s\nlisten\n!sleep 2000\ncoopLaunch\n!sleep %d\n' "$COMMON" "$HOST_START" "$GOD" "$LAUNCH" $LONG > $A/mw2coop/commands.txt
-printf '# client (QA: shifted XUID, party join without Steam lobby)\n%s\nset start "%s"\n!sleep 20000\n!xuid_add 1\n!sleep 19000\nmw2coop_party_join\n!sleep 1000\nconnect 127.0.0.1 8305\n!sleep %d\n' "$COMMON" "$START" $LONG > $B/mw2coop/commands.txt
+printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\nset start "%s"\n!sleep 20000\n!xuid_add 1\n!sleep 19000\nmw2coop_join 127.0.0.1\n!sleep %d\n' "$COMMON" "$START" $LONG > $B/mw2coop/commands.txt
 rm -f $A/mw2coop/mw2coop.log $B/mw2coop/mw2coop.log
 TOTAL=$(( 50 + LEVEL_S ))
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/run_test.ps1" -Tag "qa-$SCEN" -Timeout $TOTAL -TestRoot "$(cygpath -w "$ROOT")" -Dirs "$(cygpath -w "$A"),$(cygpath -w "$B")" -DoneLogs "$(cygpath -w "$A/mw2coop/mw2coop.log"),$(cygpath -w "$B/mw2coop/mw2coop.log")" | grep -E "killing|exited|untouched|TOUCHED|WRONG|closing"
