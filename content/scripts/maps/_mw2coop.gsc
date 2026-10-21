@@ -54,7 +54,7 @@ main()
 	level.mw2coop.completing = false;
 	level.mw2coop.checkpoint = -1;
 	if ( !isdefined( level.mw2coop_weapon_sync ) )
-		level.mw2coop_weapon_sync = "leader";	// "leader": player 1's changes go to player 2; "both": gains go both ways
+		level.mw2coop_weapon_sync = "leader";	// "leader": player 1's changes go to player 2; "both": gains go both ways; "own": each player takes his own (only the start's weapons are copied)
 
 	PrecacheString( &"SCRIPT_CHECKPOINT" );
 	PrecacheString( &"MW2COOP_STUNNED" );	// the mod's own, from its DLL (src/localize.c)
@@ -68,6 +68,7 @@ main()
 	state( "level " + level.script + ", start dvar '" + GetDvar( "start" ) + "', qa '" + GetDvar( "mw2coop_qa" ) + "'" );
 
 	thread no_saves();
+	flag_init( "mw2coop_regrouped" );
 	thread regroup_after_start();
 	thread follow_leader_teleports();
 	set_bodies();
@@ -200,15 +201,18 @@ regroup_after_start()
 	for ( waited = 0; waited < 120; waited += 0.25 )
 	{
 		if ( level.player2 IsLinked() )
-			return;
+			break;
 		if ( level.player2 teleport_to_partner( level.player ) )
 		{
 			state( "regrouped at start point " + level.start_point );
-			return;
+			break;
 		}
 		wait 0.25;
 	}
-	state( "no safe spot next to player 1 within 120 s" );
+	if ( waited >= 120 )
+		state( "no safe spot next to player 1 within 120 s" );
+	// a level placing the two players itself waits for this (maps\_mw2coop_trainer)
+	flag_set( "mw2coop_regrouped" );
 }
 
 // When a script moves player 1 far in one step (teleport, start point), bring player 2 along.
@@ -292,7 +296,12 @@ teleport_to_partner( partner )
 	offsets[ offsets.size ] = forward * -48;
 	offsets[ offsets.size ] = right * 64 + forward * -48;
 	offsets[ offsets.size ] = right * -64 + forward * -48;
+	offsets[ offsets.size ] = forward * -96;
+	offsets[ offsets.size ] = right * 96;
+	offsets[ offsets.size ] = right * -96;
 	chest = partner.origin + ( 0, 0, 48 );
+	best = undefined;
+	best_open = -1;
 	foreach ( offset in offsets )
 	{
 		spot = partner.origin + offset;
@@ -303,7 +312,24 @@ teleport_to_partner( partner )
 		ground = PlayerPhysicsTrace( spot + ( 0, 0, 48 ), spot - ( 0, 0, 96 ) );
 		if ( abs( ground[ 2 ] - partner.origin[ 2 ] ) > 40 )
 			continue;
-		self SetOrigin( ground );
+		// ... with room around it: the S.S.D.D. range start had a free spot 48 units left of
+		// player 1 wedged between sandbags and the rifle table, open on 3 sides of 8 (owner's
+		// screenshot and QA pickups, 2026-10-21). The first open spot wins, else the most open.
+		open = open_sides( ground );
+		if ( open >= 5 )
+		{
+			best = ground;
+			break;
+		}
+		if ( open > best_open )
+		{
+			best = ground;
+			best_open = open;
+		}
+	}
+	if ( isdefined( best ) )
+	{
+		self SetOrigin( best );
 		self SetPlayerAngles( yaw );
 		return true;
 	}
@@ -311,6 +337,20 @@ teleport_to_partner( partner )
 	self SetOrigin( partner.origin );
 	self SetPlayerAngles( yaw );
 	return true;
+}
+
+// In how many of 8 directions a player standing at spot could walk 40 units (at knee height).
+open_sides( spot )
+{
+	open = 0;
+	from = spot + ( 0, 0, 18 );
+	for ( yaw = 0; yaw < 360; yaw += 45 )
+	{
+		to = from + AnglesToForward( ( 0, yaw, 0 ) ) * 40;
+		if ( Distance( PlayerPhysicsTrace( from, to ), to ) < 1 )
+			open++;
+	}
+	return open;
 }
 
 // Free and on ground. IsOnGround() reads 0 for player 2 on both machines in co-op (seen in the
@@ -419,7 +459,7 @@ sync_weapons()
 		now1 = level.player GetWeaponsListAll();
 		now2 = level.player2 GetWeaponsListAll();
 		// the revive system takes and returns weapons of a downed player: leave it alone
-		if ( !is_downed( level.player ) && !is_downed( level.player2 ) )
+		if ( level.mw2coop_weapon_sync != "own" && !is_downed( level.player ) && !is_downed( level.player2 ) )
 		{
 			foreach ( weapon in now1 )
 				if ( !is_in_array( prev1, weapon ) && !level.player2 HasWeapon( weapon ) )

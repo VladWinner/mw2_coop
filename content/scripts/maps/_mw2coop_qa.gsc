@@ -124,6 +124,9 @@ main()
 		case "boat2":
 			boat();
 			break;
+		case "pickups":
+			pickups();
+			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
 			// other maps' zones do not have)
@@ -1209,4 +1212,131 @@ loadout()
 	c2 = level.player2 GetOffhandSecondaryClass();
 	check( c1 == c2, "same second grenade class " + c1 + " (player 2: " + c2 + ")" );
 	report( "done" );
+}
+
+// --------------------------------------------------------------------------------------------
+// S.S.D.D. (trainer): each player takes his own weapons (maps\_mw2coop_trainer). Start point ""
+// tests the rifle, "frag" the grenade box, "pit" the pistol. A bot cannot press Use here (console
+// +activate, +forward and +gostand reached neither copy's player, 2026-10-21), so a table pickup
+// is done as the engine does it (the weapon goes to him, the item goes away) and the box through
+// its own trigger; the owner checked the real pickup by hand.
+pickups()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	start = GetDvar( "start" );
+	if ( start == "frag" )
+	{
+		level.mw2coop_no_follow = true;
+		pickup_frags();
+		return;
+	}
+	if ( start == "pit" )
+	{
+		level.mw2coop_no_follow = true;
+		pickup_table( "pickup_sidearm", "deserteagle", "pistol" );
+		report( "done" );
+		return;
+	}
+	flag_wait( "firing_range_initialized" );
+	wait 1;
+	check( !level.player HasWeapon( "m4_grunt" ) && !level.player2 HasWeapon( "m4_grunt" ), "no rifles at the range yet" );
+	// both inside the sandbag bay, player 1 on the left (maps\_mw2coop_trainer::range_places)
+	start_ent = GetEnt( "player_start_range", "targetname" );
+	right = AnglesToRight( ( 0, start_ent.angles[ 1 ], 0 ) );
+	side1 = int( VectorDot( level.player.origin - start_ent.origin, right ) );
+	side2 = int( VectorDot( level.player2.origin - start_ent.origin, right ) );
+	check( side1 < side2 - 30, "player 1 left of player 2 at the range (" + side1 + ", " + side2 + " from the start, to the right)" );
+	check( Distance2D( level.player2.origin, start_ent.origin ) < 8 && Distance2D( level.player.origin, start_ent.origin - right * 48 ) < 8, "both on their places in the sandbag bay" );
+	check( abs( level.player.origin[ 2 ] - level.player2.origin[ 2 ] ) < 4, "both on the floor (" + int( level.player.origin[ 2 ] ) + ", " + int( level.player2.origin[ 2 ] ) + ")" );
+	// player 2 was brought along to the range: he must stand where he can walk away
+	report( "at the range: player 1 " + vec_int( level.player.origin ) + ", player 2 " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	level.mw2coop_no_follow = true;
+	flag_wait( "foley_anim_pickup_weapon" );
+	wait 2;
+	pickup_table( "pickup_rifle", "m4_grunt", "rifle" );
+	for ( t = 0; t < 90 && !flag( "player_picked_up_rifle" ); t += 0.5 )
+		wait 0.5;
+	check( flag( "player_picked_up_rifle" ), "the drill goes on once both have rifles (" + t + " s)" );
+	report( "done" );
+}
+
+// Player 2 takes the weapon first, then player 1 the one that lies there again.
+pickup_table( name, weapon, what )
+{
+	for ( t = 0; t < 60 && !pickup_ready( name ); t += 0.5 )
+		wait 0.5;
+	check( pickup_ready( name ), "a " + what + " on the table" );
+	if ( !pickup_ready( name ) )
+		return;
+	first = level.mw2coop_pickups[ name ];
+	qa_take( level.player2, first, weapon );
+	check( level.player2 HasWeapon( weapon ) && !level.player HasWeapon( weapon ), "player 2 takes the " + what + ", player 1 has none (" + weapons_text( level.player ) + ")" );
+	wait 1;
+	check( pickup_ready( name ) && level.mw2coop_pickups[ name ].model != "" && level.mw2coop_pickups[ name ].model != "_obj", "another " + what + " lies on the table (" + pickup_model( name ) + ")" );
+	if ( pickup_ready( name ) )
+		qa_take( level.player, level.mw2coop_pickups[ name ], weapon );
+	check( level.player HasWeapon( weapon ) && level.player2 HasWeapon( weapon ), "player 1 takes his own " + what );
+	wait 1;
+	check( !pickup_ready( name ), "no third " + what + " on the table" );
+}
+
+pickup_model( name )
+{
+	if ( !pickup_ready( name ) )
+		return "none";
+	return level.mw2coop_pickups[ name ].model;
+}
+
+pickup_ready( name )
+{
+	return isdefined( level.mw2coop_pickups ) && isdefined( level.mw2coop_pickups[ name ] );
+}
+
+// The box's own trigger (trainer.gsc spawn_frags()), set off by each player looking at the box.
+pickup_frags()
+{
+	flag_wait( "frags_have_been_spawned" );
+	box = GetEnt( "grenade_box", "targetname" );
+	trigger = GetEnt( "frag_trigger", "script_noteworthy" );
+	foreach ( n, player in level.players )
+	{
+		qa_stand_by( player, box.origin );
+		for ( i = 0; i < 10 && player GetWeaponAmmoStock( "fraggrenade" ) < 3; i++ )
+		{
+			player SetPlayerAngles( VectorToAngles( box.origin - player GetEye() ) );
+			trigger notify( "trigger", player );
+			wait 0.5;
+		}
+		check( player HasWeapon( "fraggrenade" ) && player GetWeaponAmmoStock( "fraggrenade" ) >= 3, "player " + ( n + 1 ) + " takes frags from the box (" + player GetWeaponAmmoStock( "fraggrenade" ) + ")" );
+	}
+	report( "done" );
+}
+
+qa_stand_by( player, at )
+{
+	away = ( player.origin[ 0 ] - at[ 0 ], player.origin[ 1 ] - at[ 1 ], 0 );
+	if ( Length( away ) < 1 )
+		away = ( 1, 0, 0 );
+	player SetOrigin( ( at[ 0 ], at[ 1 ], player.origin[ 2 ] ) + VectorNormalize( away ) * 40 );
+	wait 0.1;
+}
+
+// A table pickup as the engine does it: he stands by the weapon, it goes to him (with the
+// item's full ammo), the item goes; then he walks back to where he stood.
+qa_take( player, item, weapon )
+{
+	back = player.origin;
+	qa_stand_by( player, item.origin );
+	player GiveWeapon( weapon );
+	player GiveMaxAmmo( weapon );
+	player SwitchToWeapon( weapon );
+	item Delete();
+	wait 0.5;
+	player SetOrigin( back );
+	wait 0.5;
+}
+
+vec_int( v )
+{
+	return int( v[ 0 ] ) + " " + int( v[ 1 ] ) + " " + int( v[ 2 ] );
 }

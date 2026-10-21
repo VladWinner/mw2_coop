@@ -1,12 +1,12 @@
 mw2coop patch for maps/trainer.gsc (S.S.D.D., Modern Warfare 2, 64-bit Steam build)
 
-1. Co-op settings: weapons picked up by either player go to both; checkpoints = start points.
+1. Co-op settings: each player takes his own weapons (section 4); checkpoints = start points.
 @@@ replace
 	level.color[ "blue" ] = ( .1, .3, 1 );
 @@@ with
 	level.color[ "blue" ] = ( .1, .3, 1 );
 
-	level.mw2coop_weapon_sync = "both";
+	level.mw2coop_weapon_sync = "own";
 	maps\_mw2coop::add_checkpoint( "firing_range_hip_and_ads_done", "timed_ads" );
 	maps\_mw2coop::add_checkpoint( "firing_range_timed_ads_done", "bullet_penetration" );
 	maps\_mw2coop::add_checkpoint( "firing_range_penetration_done", "frag" );
@@ -75,4 +75,120 @@ mw2coop patch for maps/trainer.gsc (S.S.D.D., Modern Warfare 2, 64-bit Steam bui
 		black_overlay2 fadeOverTime( 1 );
 		black_overlay2.alpha = 1;
 	}
+@@@ end
+
+4. Weapons on the range: each player takes his own (maps\_mw2coop_trainer). The rifle and the
+   pistol on the tables lie there again until both have one, the frag box serves whoever uses
+   it, and the level goes on once both players have them.
+@@@ replace
+	level.gunSidearm = "deserteagle";
+@@@ with
+	level.gunSidearm = "deserteagle";
+	level thread maps\_mw2coop_trainer::own_pickup( "pickup_rifle", level.gunPrimary, maps\_mw2coop_trainer::rifle_hidden_parts() );
+	level thread maps\_mw2coop_trainer::own_pickup( "pickup_sidearm", level.gunSidearm );
+@@@ end
+
+@@@ replace
+	level.player takeallweapons();
+@@@ with
+	foreach ( player in level.players )
+		player takeallweapons();
+@@@ end
+
+@@@ replace
+	if ( level.player HasWeapon( level.gunPrimary ) )
+@@@ with
+	if ( maps\_mw2coop_trainer::everyone_has( level.gunPrimary ) )
+@@@ end
+
+@@@ replace
+	if ( !level.player HasWeapon( level.gunSidearm ) )
+@@@ with
+	if ( !maps\_mw2coop_trainer::everyone_has( level.gunSidearm ) )
+@@@ end
+
+@@@ replace
+	while ( ! level.player HasWeapon( level.gunSidearm ) )
+@@@ with
+	while ( !maps\_mw2coop_trainer::everyone_has( level.gunSidearm ) )
+@@@ end
+
+@@@ subst firing_range_frags
+level.player GetWeaponAmmoStock( "fraggrenade" ) < 3
+@@@ to
+!maps\_mw2coop_trainer::everyone_has_frags( 3 )
+@@@ end
+
+@@@ replace
+		frag_trigger waittill( "trigger" );
+@@@ with
+		frag_trigger waittill( "trigger", who );
+		if ( !isdefined( who ) || !IsPlayer( who ) )
+			continue;
+@@@ end
+
+@@@ subst spawn_frags
+level.player
+@@@ to
+who
+@@@ end
+
+@@@ replace
+		if ( !flag( "player_picked_up_frags" ) )
+		{
+			flag_set( "player_picked_up_frags" );
+			who giveWeapon( "fraggrenade" );
+@@@ with
+		if ( !who HasWeapon( "fraggrenade" ) )
+		{
+			flag_set( "player_picked_up_frags" );
+			who giveWeapon( "fraggrenade" );
+@@@ end
+
+@@@ replace
+			hide_frags_till_player_not_looking( fragsToHide );
+@@@ with
+			hide_frags_till_player_not_looking( fragsToHide, who );
+@@@ end
+
+@@@ replace
+hide_frags_till_player_not_looking( fragsToHide )
+{
+@@@ with
+hide_frags_till_player_not_looking( fragsToHide, who )
+{
+@@@ end
+
+@@@ subst hide_frags_till_player_not_looking
+level.player
+@@@ to
+who
+@@@ end
+
+@@@ replace
+	thread show_me_when_player_not_looking_or_timeout( hiddenFrags, 3 );
+@@@ with
+	thread show_me_when_player_not_looking_or_timeout( hiddenFrags, 3, who );
+@@@ end
+
+@@@ replace
+show_me_when_player_not_looking_or_timeout( hiddenFrags, timeout )
+{
+@@@ with
+show_me_when_player_not_looking_or_timeout( hiddenFrags, timeout, who )
+{
+@@@ end
+
+@@@ subst show_me_when_player_not_looking_or_timeout
+level.player
+@@@ to
+who
+@@@ end
+
+5. The firing range: both players inside the sandbag bay, player 1 on the left.
+@@@ replace
+	level.player SetPlayerAngles( player_start_range.angles );
+@@@ with
+	level.player SetPlayerAngles( player_start_range.angles );
+	level thread maps\_mw2coop_trainer::range_places( player_start_range );
 @@@ end
