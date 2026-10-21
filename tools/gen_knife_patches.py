@@ -43,6 +43,18 @@ c.note('''2. Who strikes Shepherd: the nearer player at each check; a melee by e
 c.subst('wait_for_player_to_melee_shepherd', 'dist_to_shepherd = Distance( level.player.origin, level.shepherd.origin );',
         M + 'choose_lead();\n\t\tdist_to_shepherd = Distance( level.player.origin, level.shepherd.origin );')
 c.subst('track_melee', 'level.player IsMeleeing()', M + 'any_meleeing()')
+c.note('''2b. Shepherd at the truck is hidden until the stumbling Shepherd (a second actor) has walked
+   there, and the stumbler starts only when the player sees him. In co-op either player's sight
+   starts him, and nobody can strike the hidden Shepherd before the swap (the scene would play
+   with an invisible Shepherd).''')
+c.subst('shepherd_stumbles', 'level.shepherd hide();', 'level.shepherd hide();\n\t' + M + 'shepherd_hidden( true );')
+c.subst('shepherd_stumbles', 'level.shepherd show();', 'level.shepherd show();\n\t' + M + 'shepherd_hidden( false );')
+c.subst('shepherd_stumbles', 'trace_passed = shep_trace_passed();',
+        'trace_passed = shep_trace_passed() || ' + M + 'partner_sees( self );')
+c.subst('wait_for_player_to_melee_shepherd', 'if ( player_touches_shepherd( dist_to_shepherd ) )',
+        'if ( ' + M + 'shepherd_ready() && player_touches_shepherd( dist_to_shepherd ) )')
+c.subst('wait_for_player_to_melee_shepherd', 'if ( player_melees_shepherd( dist_to_shepherd ) )',
+        'if ( ' + M + 'shepherd_ready() && player_melees_shepherd( dist_to_shepherd ) )')
 c.note('''3. The scene's fades on both screens in co-op.''')
 c.subst('get_black_overlay', 'create_client_overlay( "black", 0, level.player )', M + 'black_overlay()')
 c.note('''4. Everything else of the scene plays on the lead.''')

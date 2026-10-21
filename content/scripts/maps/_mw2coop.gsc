@@ -43,6 +43,9 @@ main()
 	// fight) read level.mw2coop_lead where they read level.player. Single player too.
 	level.mw2coop_lead = level.player;
 
+	// a scene hid the partner's name (maps\_mw2coop_knife::lead_decided()): show it again
+	SetDvar( "mw2coop_hide_names", "" );
+
 	if ( !is_campaign_coop() )
 		return;
 

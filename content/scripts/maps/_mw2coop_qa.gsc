@@ -797,21 +797,54 @@ knife()
 	for ( t = 0; t < 60 && !isdefined( level.shepherd ); t += 0.5 )
 		wait 0.5;
 	check( isdefined( level.shepherd ), "Shepherd there" );
-	for ( t = 0; t < 60 && !flag( "turn_buckle_start" ); t += 0.25 )
+	// Shepherd at the truck is hidden until the stumbling Shepherd walked there: a strike now
+	// must not count (the scene would play with an invisible Shepherd)
+	for ( t = 0; t < 2 && shepherd_hidden(); t += 0.25 )
+		knife_strike_try( striker );
+	check( !flag( "turn_buckle_start" ), "no strike while Shepherd is still hidden (hidden " + shepherd_hidden() + ")" );
+	// the striker waits near the truck where he cannot see the stumbler (he stays the lead:
+	// nearer to Shepherd), so only the other player's sight can start him
+	for ( t = 0; t < 20 && !isdefined( level.shepherd_stumble ); t += 0.5 )
+		wait 0.5;
+	wait_spot = undefined;
+	if ( isdefined( level.shepherd_stumble ) )
+		wait_spot = sight_spot( level.shepherd_stumble, level.shepherd.origin, "150 250 350", false );
+	check( isdefined( wait_spot ), "a spot by the truck without sight of the stumbling Shepherd" );
+	if ( isdefined( wait_spot ) )
+		striker SetOrigin( wait_spot );
+	// a player walking on sets the map's trigger flag shepherd_can_run; the bot does not walk
+	if ( shepherd_hidden() && flag_exist( "shepherd_can_run" ) && !flag( "shepherd_can_run" ) )
 	{
-		fwd = AnglesToForward( ( 0, level.shepherd.angles[ 1 ], 0 ) );
-		at = level.shepherd.origin + fwd * 70;
-		if ( Distance( striker.origin, at ) > 30 )
-			striker SetOrigin( PlayerPhysicsTrace( at + ( 0, 0, 40 ), at - ( 0, 0, 80 ) ) );
-		striker SetPlayerAngles( VectorToAngles( level.shepherd GetTagOrigin( "tag_eye" ) - striker GetEye() ) );
-		striker.mw2coop_qa_melee = true;
-		wait 0.1;
-		striker.mw2coop_qa_melee = undefined;
-		wait 0.15;
+		report( "QA sets shepherd_can_run (the bot does not walk)" );
+		flag_set( "shepherd_can_run" );
 	}
+	// the stumbler runs off when a player sees him: the other player goes where he would see
+	// him coming over the dunes, so the co-op sight check is what starts him
+	level.mw2coop_qa_stumbler_runs = false;
+	level thread stumbler_runs_watch();
+	spot = undefined;
+	if ( isdefined( level.shepherd_stumble ) )
+		spot = sight_spot( level.shepherd_stumble, level.shepherd_stumble.origin, "150 250 350 500 700", true );
+	check( isdefined( spot ), "a spot where the stumbling Shepherd can be seen" );
+	if ( isdefined( spot ) )
+	{
+		other SetOrigin( spot );
+		other SetPlayerAngles( VectorToAngles( level.shepherd_stumble GetEye() - other GetEye() ) );
+		report( "other player at " + spot + ", " + int( Distance( spot, level.shepherd_stumble.origin ) ) + " units from the stumbler; sight: lead" + sight_text( level.mw2coop_lead, level.shepherd_stumble ) + " / other" + sight_text( other, level.shepherd_stumble ) );
+	}
+	for ( t = 0; t < 10 && shepherd_hidden() && !level.mw2coop_qa_stumbler_runs; t += 0.5 )
+		wait 0.5;
+	other thread watch_stumbler();
+	check( level.mw2coop_qa_stumbler_runs, "the stumbling Shepherd runs off when the other player sees him (" + t + " s)" );
+	for ( t = 0; t < 90 && shepherd_hidden(); t += 0.5 )
+		wait 0.5;
+	check( !shepherd_hidden(), "the stumbling Shepherd reached the truck (" + t + " s)" );
+	for ( t = 0; t < 60 && !flag( "turn_buckle_start" ); t += 0.25 )
+		knife_strike_try( striker );
 	check( flag( "turn_buckle_start" ), "a player strikes Shepherd (" + t + " s)" );
 	check( level.mw2coop_lead == striker, "the striker plays the scene" );
 	wait 2.5;
+	check( icon_hidden( striker ) && icon_hidden( other ) && GetDvar( "mw2coop_hide_names" ) == "1", "no partner icon or name on either screen" );
 	check( isdefined( other.laststand ) && other.laststand && isdefined( other.mw2coop_awake ) && !other.mw2coop_awake, "the other player is down and out" );
 	d = Distance( other.origin, level.shepherd.origin );
 	check( d < 400, "and lies near the fight (" + int( d ) + " units from Shepherd)" );
@@ -862,6 +895,88 @@ knife()
 	wait 27;	// Price wakes up: the witness stays awake
 	check( other.laststand && IsAlive( other ), "the other player watched the whole fight, down" );
 	report( "done" );
+}
+
+// shep_trace_passed()'s four traces from a player to the stumbler: fraction and surface.
+sight_text( player, stumbler )
+{
+	text = "";
+	for ( offset = 0; offset <= 48; offset += 16 )
+	{
+		trace = BulletTrace( player.origin + ( 0, 0, 32 ), stumbler GetEye() + ( 0, 0, offset ), false, undefined );
+		text += " " + int( trace[ "fraction" ] * 100 ) + trace[ "surfacetype" ];
+	}
+	return text;
+}
+
+// self: a player; he keeps his eyes on the running stumbler (screenshots of him).
+watch_stumbler()
+{
+	for ( t = 0; t < 12 && shepherd_hidden() && isdefined( level.shepherd_stumble ); t += 0.05 )
+	{
+		self SetPlayerAngles( VectorToAngles( level.shepherd_stumble GetEye() - self GetEye() ) );
+		wait 0.05;
+	}
+}
+
+icon_hidden( player )
+{
+	return !isdefined( player.friendlyIcon ) || player.friendlyIcon.alpha == 0;
+}
+
+stumbler_runs_watch()
+{
+	level waittill( "run_shep_run" );
+	level.mw2coop_qa_stumbler_runs = true;
+}
+
+// A floor spot at one of the distances from center where the stumbler is (or is not) in
+// shep_trace_passed()'s sight.
+sight_spot( stumbler, center, dists, want_sight )
+{
+	foreach ( dist in strtok( dists, " " ) )
+	{
+		for ( yaw = 0; yaw < 360; yaw += 20 )
+		{
+			at = center + AnglesToForward( ( 0, yaw, 0 ) ) * int( dist );
+			floor = PlayerPhysicsTrace( at + ( 0, 0, 150 ), at - ( 0, 0, 300 ) );
+			if ( abs( floor[ 2 ] - center[ 2 ] ) > 150 )
+				continue;
+			if ( sees_stumbler( floor, stumbler ) == want_sight )
+				return floor;
+		}
+	}
+	return undefined;
+}
+
+sees_stumbler( origin, stumbler )
+{
+	for ( offset = 0; offset <= 48; offset += 16 )
+	{
+		trace = BulletTrace( origin + ( 0, 0, 32 ), stumbler GetEye() + ( 0, 0, offset ), false, undefined );
+		if ( trace[ "fraction" ] >= 1 || trace[ "surfacetype" ] == "none" )
+			return true;
+	}
+	return false;
+}
+
+shepherd_hidden()
+{
+	return isdefined( level.mw2coop_shepherd_hidden ) && level.mw2coop_shepherd_hidden;
+}
+
+// One strike attempt: in front of Shepherd, looking at his eyes, melee (0.25 s).
+knife_strike_try( striker )
+{
+	fwd = AnglesToForward( ( 0, level.shepherd.angles[ 1 ], 0 ) );
+	at = level.shepherd.origin + fwd * 70;
+	if ( Distance( striker.origin, at ) > 30 )
+		striker SetOrigin( PlayerPhysicsTrace( at + ( 0, 0, 40 ), at - ( 0, 0, 80 ) ) );
+	striker SetPlayerAngles( VectorToAngles( level.shepherd GetTagOrigin( "tag_eye" ) - striker GetEye() ) );
+	striker.mw2coop_qa_melee = true;
+	wait 0.1;
+	striker.mw2coop_qa_melee = undefined;
+	wait 0.15;
 }
 
 knife_out_watch()

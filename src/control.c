@@ -123,10 +123,34 @@ static void sync_dvar_flags(void)
 	}
 }
 
+// A film-like scene hides the partner's name over his head (maps\_mw2coop_knife: the knife
+// fight). The level hides friendly names with g_friendlyNameDist 0, but a co-op player's name is
+// drawn at coopNameFontSize, which scripts may not set (not a saved dvar). While a script holds
+// mw2coop_hide_names "1" the size is 0 here; drawing only, both lockstep machines stay the same.
+static void partner_name_poll(void)
+{
+	static float saved = -1;
+	char v[16];
+	int hide = game_dvar_raw("mw2coop_hide_names", v, sizeof(v)) && strcmp(v, "1") == 0;
+	dvar_t *d = game_find_dvar("coopNameFontSize");
+	if (!d || d->type != DVAR_TYPE_FLOAT)
+		return;
+	if (hide && saved < 0) {
+		saved = d->current.value;
+		d->current.value = 0;
+		log_printf("control: partner name hidden (coopNameFontSize %.2f -> 0)", saved);
+	} else if (!hide && saved >= 0) {
+		d->current.value = saved;
+		log_printf("control: partner name shown again (coopNameFontSize %.2f)", saved);
+		saved = -1;
+	}
+}
+
 static void script_channel_poll(void)
 {
 	char v[256];
 	sync_dvar_flags();
+	partner_name_poll();
 	if (game_dvar_raw("mw2coop_state", v, sizeof(v)) && strcmp(v, last_state) != 0) {
 		log_printf("script: %s", v);
 		lstrcpynA(last_state, v, sizeof(last_state));

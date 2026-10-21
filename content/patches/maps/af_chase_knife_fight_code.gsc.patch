@@ -41,6 +41,38 @@ level.player IsMeleeing()
 maps\_mw2coop_knife::any_meleeing()
 @@@ end
 
+2b. Shepherd at the truck is hidden until the stumbling Shepherd (a second actor) has walked
+   there, and the stumbler starts only when the player sees him. In co-op either player's sight
+   starts him, and nobody can strike the hidden Shepherd before the swap (the scene would play
+   with an invisible Shepherd).
+@@@ subst shepherd_stumbles
+level.shepherd hide();
+@@@ to
+level.shepherd hide();
+	maps\_mw2coop_knife::shepherd_hidden( true );
+@@@ end
+@@@ subst shepherd_stumbles
+level.shepherd show();
+@@@ to
+level.shepherd show();
+	maps\_mw2coop_knife::shepherd_hidden( false );
+@@@ end
+@@@ subst shepherd_stumbles
+trace_passed = shep_trace_passed();
+@@@ to
+trace_passed = shep_trace_passed() || maps\_mw2coop_knife::partner_sees( self );
+@@@ end
+@@@ subst wait_for_player_to_melee_shepherd
+if ( player_touches_shepherd( dist_to_shepherd ) )
+@@@ to
+if ( maps\_mw2coop_knife::shepherd_ready() && player_touches_shepherd( dist_to_shepherd ) )
+@@@ end
+@@@ subst wait_for_player_to_melee_shepherd
+if ( player_melees_shepherd( dist_to_shepherd ) )
+@@@ to
+if ( maps\_mw2coop_knife::shepherd_ready() && player_melees_shepherd( dist_to_shepherd ) )
+@@@ end
+
 3. The scene's fades on both screens in co-op.
 @@@ subst get_black_overlay
 create_client_overlay( "black", 0, level.player )

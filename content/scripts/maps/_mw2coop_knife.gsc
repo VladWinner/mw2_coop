@@ -85,6 +85,53 @@ wounded_walk()
 }
 
 // --------------------------------------------------------------------------------------------
+// The stumbling Shepherd. Shepherd (level.shepherd) waits at the truck hidden while a second
+// actor stumbles out of the helicopter and walks there; then they swap. The stumbler starts when
+// the player sees him (shep_trace_passed(), the lead only). In co-op the other player's sight
+// starts him too, and a strike before the swap does not count: the scene would play with the
+// hidden Shepherd (owner, 2026-10-21: "Shepherd was not visible when he stabs").
+
+// shepherd_stumbles(), when it hides and shows level.shepherd.
+shepherd_hidden( hidden )
+{
+	level.mw2coop_shepherd_hidden = hidden;
+	if ( coop() && !hidden )
+		maps\_mw2coop::state( "knife fight: the stumbling Shepherd reached the truck" );
+}
+
+// wait_for_player_to_melee_shepherd(): Shepherd can be struck.
+shepherd_ready()
+{
+	if ( !coop() )
+		return true;
+	return !isdefined( level.mw2coop_shepherd_hidden ) || !level.mw2coop_shepherd_hidden;
+}
+
+// shepherd_stumbles(), self: the stumbler. The same trace as shep_trace_passed(), from the
+// players other than the lead.
+partner_sees( stumbler )
+{
+	if ( !coop() )
+		return false;
+	foreach ( player in level.players )
+	{
+		if ( player == level.mw2coop_lead )
+			continue;
+		start = player.origin + ( 0, 0, 32 );
+		offset = 0;
+		for ( i = 0; i <= 3; i++ )
+		{
+			end = stumbler GetEye() + ( 0, 0, offset );
+			offset += 16;
+			trace = BulletTrace( start, end, false, undefined );
+			if ( trace[ "fraction" ] >= 1 || trace[ "surfacetype" ] == "none" )
+				return true;
+		}
+	}
+	return false;
+}
+
+// --------------------------------------------------------------------------------------------
 // Who is the scene's player
 
 // wait_for_player_to_melee_shepherd(), each check: the player nearer to Shepherd is the one who
@@ -117,6 +164,13 @@ lead_decided()
 		return;
 	lead = level.mw2coop_lead;
 	maps\_mw2coop::state( "knife fight: " + player_name( lead ) + " strikes Shepherd" );
+	// from here to the credits the scene is a film: no partner icon (maps\_coop's green
+	// diamond at the screen edge) on either screen, over the stab or the black screen
+	if ( flag_exist( "coop_show_constant_icon" ) )
+		flag_clear( "coop_show_constant_icon" );
+	// nor the partner's name over his head (the DLL hides it, src/control.c; the next level
+	// load shows it again, maps\_mw2coop::main())
+	SetDvar( "mw2coop_hide_names", "1" );
 	witness = maps\_mw2coop::other_player( lead );
 	if ( isdefined( witness ) && IsAlive( witness ) )
 		witness thread witness_think();
@@ -141,7 +195,10 @@ witness_think()
 	self AllowSprint( false );
 	self ShellShock( "af_chase_ending_wakeup", 6 );
 	self.mw2coop_blackout = maps\_hud_util::create_client_overlay( "black", 0, self );
-	self.mw2coop_blackout.sort = 1000;
+	// under the subtitles (owner, 2026-10-21: he hears Shepherd and reads him), as the scene's
+	// own fade (get_black_overlay()): a foreground overlay hides them
+	self.mw2coop_blackout.sort = -1;
+	self.mw2coop_blackout.foreground = false;
 	self.mw2coop_blackout FadeOverTime( 1.5 );
 	self.mw2coop_blackout.alpha = 1;
 	// owner (2026-10-20): the black screen says why ("You are stunned, wait for the other player")
