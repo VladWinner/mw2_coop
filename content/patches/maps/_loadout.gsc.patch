@@ -1,0 +1,26 @@
+mw2coop patch for maps/_loadout.gsc (common zone; Modern Warfare 2, 64-bit Steam build)
+
+1. Loose Ends (estate) in co-op: the loadout's own co-op branch (left in by Infinity Ward)
+   dresses both players in ghillie suits, coop_body_ghillie_forest, which no zone loaded with
+   estate has: both drew as the red default model with their weapons floating behind (owner's
+   screenshot, 2026-10-21). They wear the TF141 forest uniform instead, the one the level's
+   Spec Ops mission (so_takeover_estate, woodland) loads and maps\_mw2coop_bodies picks.
+@@@ replace
+			level.player SetModelFunc( ::so_body_player_ghillie );
+			level.player2 SetModelFunc( ::so_body_player_ghillie );
+
+			level.player giveWeapon( "claymore" );
+			level.player givemaxammo( "claymore" );
+			level.player SetActionSlot( 4, "weapon", "claymore" );
+
+			level.player2 giveWeapon( "m4_grenadier" );
+@@@ with
+			level.player SetModelFunc( ::so_body_player_woodland );
+			level.player2 SetModelFunc( ::so_body_player_woodland );
+
+			level.player giveWeapon( "claymore" );
+			level.player givemaxammo( "claymore" );
+			level.player SetActionSlot( 4, "weapon", "claymore" );
+
+			level.player2 giveWeapon( "m4_grenadier" );
+@@@ end

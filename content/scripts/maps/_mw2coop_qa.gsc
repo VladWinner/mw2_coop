@@ -124,6 +124,12 @@ main()
 		case "boat2":
 			boat();
 			break;
+		case "look":
+			look();
+			break;
+		case "targets":
+			targets();
+			break;
 		case "pickups":
 			pickups();
 			break;
@@ -1339,4 +1345,78 @@ qa_take( player, item, weapon )
 vec_int( v )
 {
 	return int( v[ 0 ] ) + " " + int( v[ 1 ] ) + " " + int( v[ 2 ] );
+}
+
+// --------------------------------------------------------------------------------------------
+// Who the enemies fight (any map, a start point with a fight): over 45 s, every 0.5 s, whose
+// player each axis AI has as its enemy, and the hits each player takes from axis AI.
+targets()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	foreach ( player in level.players )
+	{
+		player.mw2coop_qa_hits = 0;
+		player thread count_hits();
+	}
+	on1 = 0;
+	on2 = 0;
+	other = 0;
+	samples = 0;
+	most = 0;
+	for ( t = 0; t < 45; t += 0.5 )
+	{
+		ai = GetAIArray( "axis" );
+		most = max( most, ai.size );
+		foreach ( guy in ai )
+		{
+			if ( !isdefined( guy.enemy ) )
+				continue;
+			samples++;
+			if ( guy.enemy == level.player )
+				on1++;
+			else if ( guy.enemy == level.player2 )
+				on2++;
+			else
+				other++;
+		}
+		wait 0.5;
+	}
+	report( "enemy samples " + samples + " (up to " + most + " axis AI): on player 1 " + on1 + ", on player 2 " + on2 + ", on allies " + other );
+	report( "hits from axis AI: player 1 " + level.player.mw2coop_qa_hits + ", player 2 " + level.player2.mw2coop_qa_hits + "; players " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	check( on2 > 0, "enemies take player 2 as their enemy too" );
+	check( level.player2.mw2coop_qa_hits > 0 || on2 == 0, "and hit him" );
+	report( "done" );
+}
+
+count_hits()
+{
+	self endon( "death" );
+	for ( ;; )
+	{
+		self waittill( "damage", amount, attacker );
+		if ( isdefined( attacker ) && IsAI( attacker ) && attacker.team == "axis" )
+			self.mw2coop_qa_hits++;
+	}
+}
+
+// --------------------------------------------------------------------------------------------
+// Bodies check (any map): the players stand 120 units apart facing each other for 20 s, for
+// screenshots of each one's body on the other's screen.
+look()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait 3;
+	fwd = AnglesToForward( ( 0, level.player GetPlayerAngles()[ 1 ], 0 ) );
+	spot = PlayerPhysicsTrace( level.player.origin + fwd * 120 + ( 0, 0, 48 ), level.player.origin + fwd * 120 - ( 0, 0, 96 ) );
+	level.player2 SetOrigin( spot );
+	for ( t = 0; t < 20; t += 0.1 )
+	{
+		level.player SetPlayerAngles( VectorToAngles( level.player2 GetEye() - ( 0, 0, 20 ) - level.player GetEye() ) );
+		level.player2 SetPlayerAngles( VectorToAngles( level.player GetEye() - ( 0, 0, 20 ) - level.player2 GetEye() ) );
+		if ( t == 2 )
+			report( "facing each other: player 2 model " + level.player2.model + ", player 1 model " + level.player.model );
+		wait 0.1;
+	}
+	report( "done" );
 }
