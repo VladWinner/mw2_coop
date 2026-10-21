@@ -942,7 +942,27 @@ boat_poses_text( other )
 	text = "Price " + level.price.a.boat_pose + " eye " + boat_local( level.price GetTagOrigin( "tag_eye" ) ) + bones_text( level.price );
 	if ( isdefined( level.mw2coop_boat_body ) )
 		text += ", body " + level.mw2coop_boat_body.mw2coop_pose + " eye " + boat_local( level.mw2coop_boat_body GetTagOrigin( "tag_eye" ) ) + bones_text( level.mw2coop_boat_body );
-	return text + ", passenger eye " + boat_local( other GetEye() );
+	text += ", passenger eye " + boat_local( other GetEye() );
+	// where the guns and the view point, degrees from the bow, to the left positive
+	text += "; yaw: Price gun " + gun_yaw( level.price ) + " (his aim " + int( level.price.a.boatAimYaw ) + ")";
+	if ( isdefined( level.mw2coop_boat_body ) )
+		text += ", body gun " + gun_yaw( level.mw2coop_boat_body );
+	return text + ", passenger view " + view_yaw( other );
+}
+
+view_yaw( player )
+{
+	return int( AngleClamp180( player GetPlayerAngles()[ 1 ] - level.players_boat.angles[ 1 ] ) );
+}
+
+gun_follows_view( player )
+{
+	return isdefined( level.mw2coop_boat_body ) && abs( AngleClamp180( gun_yaw( level.mw2coop_boat_body ) - view_yaw( player ) ) ) < 8;
+}
+
+gun_yaw( ent )
+{
+	return int( AngleClamp180( ent GetTagAngles( "tag_flash" )[ 1 ] - level.players_boat.angles[ 1 ] ) );
 }
 
 // Bones every human model has: root, pelvis, head.
@@ -1126,6 +1146,8 @@ boat()
 	}
 	report( text );
 	report( "poses: " + boat_poses_text( other ) );
+	check( gun_follows_view( other ), "his body's gun points where he looks (gun " + gun_yaw( level.mw2coop_boat_body ) + ", view " + view_yaw( other ) + ")" );
+	check( abs( view_yaw( other ) ) < 10, "he starts looking ahead over the bow (" + view_yaw( other ) + ")" );
 	check( across_from_price( other ), "the passenger lies across from Price (" + int( boat_side( other ) ) + ", Price " + int( price_side() ) + ")" );
 	// he looks as far right, then left, as he can (screenshots: his body's gun follows)
 	foreach ( turn in strtok( "-60 60", " " ) )
@@ -1133,10 +1155,11 @@ boat()
 		report( "passenger looks " + turn );
 		for ( t = 0; t < 3; t += 0.05 )
 		{
-			other SetPlayerAngles( ( 0, level.players_boat.angles[ 1 ] + 36 + int( turn ), 0 ) );
+			other SetPlayerAngles( ( 0, level.players_boat.angles[ 1 ] - 36 + int( turn ), 0 ) );
 			wait 0.05;
 		}
 	}
+	check( gun_follows_view( other ), "after looking about, the gun still follows (gun " + gun_yaw( level.mw2coop_boat_body ) + ", view " + view_yaw( other ) + ")" );
 	// the level's triggers that would turn Price over (af_chase_code::price_position_switch())
 	// leave him on his tube in co-op: set them all off
 	switches = GetEntArray( "price_position_switch", "targetname" );

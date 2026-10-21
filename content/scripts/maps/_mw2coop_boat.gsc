@@ -60,8 +60,8 @@ boat_boarded()
 }
 
 // self: the passenger. He lies at the bow as Price does, with Price's own boat animations
-// (maps\_zodiac_ai): Price's "left" pose lies on the right tube and aims ahead and right,
-// "right" is the mirror. In co-op Price keeps his "left" pose (price_keeps_tube) and the
+// (maps\_zodiac_ai): Price's "left" pose lies on the right tube and aims ahead and across to the
+// left, "right" is the mirror. In co-op Price keeps his "left" pose (price_keeps_tube) and the
 // passenger takes the other, so each covers a side; should anything still turn Price over, the
 // passenger turns too. A player's body cannot play those animations, so his own model is
 // removed and a body plays them (attached at tag_guy2, as Price is); his view is at its eyes,
@@ -112,7 +112,8 @@ passenger_ride( boat )
 	self AllowStand( false );
 	self AllowProne( false );
 	self EnableWeapons();
-	self SetPlayerAngles( seat.angles );
+	// he starts looking ahead over the bow, as Price does when he has nobody to shoot at
+	self SetPlayerAngles( ( 0, boat.angles[ 1 ], 0 ) );
 	// he looks only as far as the body can aim (maps\_zodiac_ai: 48 to 51 degrees either way
 	// of the pose), so the body's gun always points where his shots go; the poses do not aim up
 	// or down, so little of that
@@ -166,12 +167,15 @@ other_pose( pose )
 	return "left";
 }
 
-// The boat-relative yaw a pose aims along (maps\_zodiac_ai::getDesiredBoatAimYaw()).
+// The boat-relative yaw a pose aims along, as a view angle (to the left positive).
+// maps\_zodiac_ai::getDesiredBoatAimYaw() has 40.5 and -36 the other way round: the AI's yaws
+// (animscripts\utility::GetYawToSpot()) are to the right positive. (Taking them as view angles
+// put the passenger's view 37 degrees left while his body's gun pointed 35 right.)
 pose_center( pose )
 {
 	if ( pose == "left" )
-		return -40.5;
-	return 36;
+		return 40.5;
+	return -36;
 }
 
 // self: the passenger's body. A pose's aim, centred.
@@ -208,7 +212,8 @@ body_aims( body, boat )
 		if ( isdefined( body.mw2coop_turning ) )
 			continue;
 		anims = anim.boatanims[ body.mw2coop_pose ];
-		aim = AngleClamp180( self GetPlayerAngles()[ 1 ] - boat.angles[ 1 ] - pose_center( body.mw2coop_pose ) );
+		// the AI's aim yaw: from the pose's centre, to the right positive
+		aim = AngleClamp180( boat.angles[ 1 ] + pose_center( body.mw2coop_pose ) - self GetPlayerAngles()[ 1 ] );
 		if ( aim < 0 )
 		{
 			frac = min( aim / anims.leftAimLimit, 1 );
