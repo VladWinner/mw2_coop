@@ -112,6 +112,12 @@ static const ModString strings[] = {
 	// КАМПАНИЯ
 	{"MW2COOP_CAMPAIGN", "\xca\xc0\xcc\xcf\xc0\xcd\xc8\xdf",
 	 "CAMPAIGN"},
+	// Брандмауэр Windows
+	{"MW2COOP_FIREWALL_TITLE", "\xc1\xf0\xe0\xed\xe4\xec\xe0\xf3\xfd\xf0 Windows",
+	 "Windows Firewall"},
+	// Второй игрок не сможет войти. / Разрешить доступ?
+	{"MW2COOP_FIREWALL_TEXT", "\xc2\xf2\xee\xf0\xee\xe9 \xe8\xe3\xf0\xee\xea \xed\xe5 \xf1\xec\xee\xe6\xe5\xf2 \xe2\xee\xe9\xf2\xe8.\n\xd0\xe0\xe7\xf0\xe5\xf8\xe8\xf2\xfc \xe4\xee\xf1\xf2\xf3\xef?",
+	 "The other player cannot get in.\nAllow access?"},
 };
 #define STRING_COUNT (int)(sizeof(strings) / sizeof(strings[0]))
 

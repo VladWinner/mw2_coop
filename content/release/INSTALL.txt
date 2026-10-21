@@ -16,7 +16,7 @@ https://github.com/stxlvn/mw2_coop
 Установка (у обоих игроков):
 1. Steam -> Библиотека -> Modern Warfare 2 -> Управление -> Просмотреть локальные файлы.
    Откроется папка с iw4sp.exe.
-2. Скопируйте туда всё из этого архива: winmm.dll, папку mw2coop и файлы .bat.
+2. Скопируйте туда всё из этого архива: winmm.dll и папку mw2coop.
    (Ничего из игры не заменяется: добавляются новые файлы.)
 
 Игра (всё в меню игры):
@@ -30,16 +30,13 @@ https://github.com/stxlvn/mw2_coop
 3. Оба жмут "Готов", хост жмёт "Старт".
 Прогресс хранится у хоста (mw2coop\progress.txt): в следующий раз лобби откроется там же.
 
-Если второй игрок по сети не может подключиться: хост запускает mw2coop-firewall.bat (один
-раз; Windows спросит права администратора, только если правила для игры нет). Через интернет
-без общей сети хосту нужен проброс UDP-порта 28960 на роутере, либо Radmin VPN.
-Порт меняется в mw2coop\settings.ini (у обоих одинаковый).
+Если брандмауэр Windows не пускает второго игрока, игра сама предложит это исправить, когда
+хост откроет лобби (Windows один раз спросит права администратора). Через интернет без общей
+сети: роутер хоста сам откроет порт, если на нём включён UPnP; иначе нужен проброс UDP-порта
+28960 или Radmin VPN. Порт меняется в mw2coop\settings.ini (у обоих одинаковый).
 
-Старый способ без меню (на всякий случай): mw2coop-host.bat / mw2coop-continue.bat у хоста,
-mw2coop-join.bat у второго игрока.
-
-Удаление: удалите из папки игры winmm.dll, папку mw2coop и файлы mw2coop-*.bat.
-(Правило брандмауэра, если его добавлял mw2coop-firewall.bat: "Call of Duty MW2 co-op (mw2coop)".)
+Удаление: удалите из папки игры winmm.dll и папку mw2coop.
+(Правило брандмауэра, если его добавлял мод: "Call of Duty MW2 co-op (mw2coop)".)
 Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
 
 === English ===
@@ -52,8 +49,8 @@ update; on any other build the mod switches itself off); the game and the SAME m
 both PCs; for the host, UDP port 28960 reachable (port forward) or a shared LAN/VPN.
 
 Install (both players): Steam -> Library -> Modern Warfare 2 -> Manage -> Browse local files
-(the folder with iw4sp.exe). Copy everything from this archive there: winmm.dll, the mw2coop
-folder and the .bat files. Nothing of the game is replaced.
+(the folder with iw4sp.exe). Copy everything from this archive there: winmm.dll and the
+mw2coop folder. Nothing of the game is replaced.
 
 Play (in the game's menus): the host picks Campaign -> TWO PLAYERS ONLINE; the lobby opens
 on the mission where you stopped (Change Op picks another; Access sets who may join: open,
@@ -62,13 +59,12 @@ or on a shared network (LAN, Radmin VPN) through Campaign -> JOIN A GAME (pick t
 the list, or enter the host's address). Both press Ready, the host presses Start. Progress is
 kept by the host (mw2coop\progress.txt).
 
-If the partner cannot join over the network, the host runs mw2coop-firewall.bat once (it asks
-for administrator rights only if the game has no firewall rule). Over the internet without a
-shared network the host needs UDP port 28960 forwarded, or Radmin VPN. The port can be changed
-in mw2coop\settings.ini (the same on both PCs). The old .bat launchers still work.
+If Windows Firewall would keep the partner out, the game offers to fix it when the host opens
+the lobby (Windows asks for administrator rights once). Over the internet without a shared
+network: the host's router opens the port itself if UPnP is on; otherwise forward UDP port
+28960, or use Radmin VPN. The port can be changed in mw2coop\settings.ini (the same on both PCs).
 
-Uninstall: delete winmm.dll, the mw2coop folder and the mw2coop-*.bat files from the game
-folder. Problems: attach mw2coop\mw2coop.log from both players.
+Uninstall: delete winmm.dll and the mw2coop folder from the game folder. Problems: attach mw2coop\mw2coop.log from both players.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT
 licensed (LICENSE.txt). No game files are included.

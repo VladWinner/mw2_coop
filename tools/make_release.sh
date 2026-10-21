@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the release archive: an optimized, stripped winmm.dll, the mod's scripts and patches,
-# the .bat launchers and INSTALL.txt, ready to copy into the game folder.
+# settings.ini, the firewall helper script and INSTALL.txt, ready to copy into the game folder.
 # Usage: tools/make_release.sh <version>      e.g. tools/make_release.sh v0.2.0-alpha
 # Output: dist/mw2coop-<version>.zip and dist/mw2coop-<version>.zip.sha256
 set -e
@@ -16,7 +16,6 @@ rm -rf "$OUT" "$OUT.zip"
 mkdir -p "$OUT/mw2coop"
 cp build/winmm.dll "$OUT/"
 cp -r content/scripts content/patches "$OUT/mw2coop/"
-cp content/release/*.bat "$OUT/"
 cp content/release/settings.ini content/release/mw2coop-firewall.ps1 "$OUT/mw2coop/"
 sed "s/{VERSION}/$VERSION/" content/release/INSTALL.txt | sed 's/$/\r/' > "$OUT/INSTALL.txt"
 sed 's/$/\r/' LICENSE > "$OUT/LICENSE.txt"

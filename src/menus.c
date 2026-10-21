@@ -25,6 +25,7 @@
 
 #include "game.h"
 #include "access.h"
+#include "firewall.h"
 #include "localize.h"
 #include "log.h"
 #include "settings.h"
@@ -824,6 +825,7 @@ static void tick_f(void)
 	int campaign = campaign_lobby();
 	patch_lobby(campaign);
 	access_tick(campaign, base[RVA_PARTY_IS_HOST]);
+	firewall_tick(campaign && base[RVA_PARTY_IS_HOST]);
 	if (!campaign) {
 		InterlockedExchange(&my_ready, 0);
 		InterlockedExchange(&partner_ready, 0);

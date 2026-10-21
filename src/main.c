@@ -5,6 +5,7 @@
 #include "access.h"
 #include "control.h"
 #include "crash.h"
+#include "firewall.h"
 #include "game.h"
 #include "localize.h"
 #include "log.h"
@@ -58,6 +59,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		access_install();
 		upnp_install();
 		steamnet_install();
+		firewall_install();
 		control_start();
 	}
 	return 0;
