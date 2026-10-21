@@ -3,6 +3,7 @@
 // own menu assets).
 //   !asset <type> <name>  -> DB_FindXAssetHeader(type, name), then dump 0x180 bytes of it
 //   !menu <name> [item]  -> a menu's items with their string fields, or one item dumped
+//   !menus                -> the names of the menus the UI has loaded
 //   !mem <address> <size> -> dump <size> bytes at an absolute address (hex)
 // Each qword is printed with what it points to: a string, or "ptr" to readable memory.
 #include <windows.h>
@@ -207,6 +208,23 @@ int memdump_command(char *line)
 			}
 			log_printf("mem: %s", line_buf);
 		}
+		return 1;
+	}
+	if (strcmp(line, "!menus") == 0) {
+		// the UI's loaded menus (uiContext rva 0x1a3ab00: menus +0x38, count +0x1438)
+		uint8_t *ui = (uint8_t *)GetModuleHandleA(NULL) + 0x1a3ab00;
+		int count = *(int *)(ui + 0x1438);
+		char buf[1024];
+		int n = 0;
+		for (int i = 0; i < count && i < 640; i++) {
+			uint8_t *m = ((uint8_t **)(ui + 0x38))[i];
+			n += snprintf(buf + n, sizeof(buf) - n, "%s ", m ? *(const char **)m : "?");
+			if (n > 900) {
+				log_printf("mem: menus: %s", buf);
+				n = 0;
+			}
+		}
+		log_printf("mem: menus: %s (%d)", buf, count);
 		return 1;
 	}
 	if (strncmp(line, "!mem ", 5) == 0) {

@@ -2,6 +2,7 @@
 // Milestone 2: run console commands from a file and watch dvars (QA remote control).
 #include <windows.h>
 
+#include "access.h"
 #include "control.h"
 #include "crash.h"
 #include "game.h"
@@ -12,6 +13,7 @@
 #include "party.h"
 #include "progress.h"
 #include "scrdebug.h"
+#include "settings.h"
 #include "scripts.h"
 
 int proxy_init(void);
@@ -51,6 +53,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		party_install();
 		progress_install();
 		menus_install();
+		access_install();
 		control_start();
 	}
 	return 0;
@@ -63,6 +66,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 		return TRUE;
 	DisableThreadLibraryCalls(self);
 	log_open();
+	settings_load(); // before the game registers net_port
 
 	char exe[MAX_PATH];
 	GetModuleFileNameA(NULL, exe, MAX_PATH);

@@ -18,6 +18,7 @@ for t in "$@"; do
 	rm -rf "$t/mw2coop/scripts" "$t/mw2coop/patches"
 	mkdir -p "$t/mw2coop"
 	cp -r content/scripts content/patches "$t/mw2coop/"
+	[ -f "$t/mw2coop/settings.ini" ] || cp content/release/settings.ini "$t/mw2coop/"
 	rm -f "$t/mw2coop/mw2coop.log"
 	echo "deployed to $t"
 done

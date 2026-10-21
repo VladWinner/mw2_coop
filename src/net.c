@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "access.h"
 #include "game.h"
 #include "log.h"
 #include "net.h"
@@ -86,6 +87,20 @@ void net_log_budget(int packets)
 {
 	InterlockedExchange(&budget, packets);
 	log_printf("net: logging the next %d packets", packets);
+}
+
+int net_send_mod_to(const uint8_t ip[4], uint16_t port, const char *text)
+{
+	SOCKET s = game_socket;
+	char pkt[128];
+	int n = snprintf(pkt, sizeof(pkt), "\xff\xff\xff\xff%s", text);
+	if (s == INVALID_SOCKET || !real_sendto || n <= 0 || n >= (int)sizeof(pkt))
+		return 0;
+	struct sockaddr_in to = {0};
+	to.sin_family = AF_INET;
+	to.sin_port = htons(port);
+	memcpy(&to.sin_addr, ip, 4);
+	return real_sendto(s, pkt, n, 0, (struct sockaddr *)&to, sizeof(to)) == n;
 }
 
 int net_send_mod(const char *text)
@@ -174,7 +189,9 @@ static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
 		if (r > 4 && *(const unsigned int *)buf == 0xffffffffu && from && from->sa_family == AF_INET) {
 			const struct sockaddr_in *in = (const struct sockaddr_in *)from;
 			game_socket = s;
-			lobby = menus_on_lobby_packet(buf, r, (const uint8_t *)&in->sin_addr, ntohs(in->sin_port), reply,
+			lobby = access_on_packet(buf, r, (const uint8_t *)&in->sin_addr, ntohs(in->sin_port), reply,
+						 sizeof(reply), &reply_len) ||
+				menus_on_lobby_packet(buf, r, (const uint8_t *)&in->sin_addr, ntohs(in->sin_port), reply,
 						      sizeof(reply), &reply_len);
 			if (reply_len > 0 && reply_len < (int)sizeof(reply))
 				real_sendto(s, reply, reply_len, 0, from, sizeof(struct sockaddr_in));

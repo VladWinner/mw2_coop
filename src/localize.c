@@ -76,6 +76,42 @@ static const ModString strings[] = {
 	// Игры в сети
 	{"MW2COOP_LOBBIES", "\xc8\xe3\xf0\xfb \xe2 \xf1\xe5\xf2\xe8",
 	 "Games on the network"},
+	// Доступ: свободный
+	{"MW2COOP_ACCESS_OPEN", "\xc4\xee\xf1\xf2\xf3\xef: \xf1\xe2\xee\xe1\xee\xe4\xed\xfb\xe9",
+	 "Access: open"},
+	// Доступ: по паролю
+	{"MW2COOP_ACCESS_PASSWORD", "\xc4\xee\xf1\xf2\xf3\xef: \xef\xee \xef\xe0\xf0\xee\xeb\xfe",
+	 "Access: password"},
+	// Доступ: только друзья Steam
+	{"MW2COOP_ACCESS_STEAM", "\xc4\xee\xf1\xf2\xf3\xef: \xf2\xee\xeb\xfc\xea\xee \xe4\xf0\xf3\xe7\xfc\xff Steam",
+	 "Access: Steam friends only"},
+	// Пароль сессии
+	{"MW2COOP_EDIT_PASSWORD", "\xcf\xe0\xf0\xee\xeb\xfc \xf1\xe5\xf1\xf1\xe8\xe8",
+	 "Session password"},
+	// Адрес хоста
+	{"MW2COOP_EDIT_ADDRESS", "\xc0\xe4\xf0\xe5\xf1 \xf5\xee\xf1\xf2\xe0",
+	 "Host address"},
+	// Пароль:
+	{"MW2COOP_LABEL_PASSWORD", "\xcf\xe0\xf0\xee\xeb\xfc:",
+	 "Password:"},
+	// Адрес:
+	{"MW2COOP_LABEL_ADDRESS", "\xc0\xe4\xf0\xe5\xf1:",
+	 "Address:"},
+	// Ввести адрес вручную...
+	{"MW2COOP_BY_ADDRESS", "\xc2\xe2\xe5\xf1\xf2\xe8 \xe0\xe4\xf0\xe5\xf1 \xe2\xf0\xf3\xf7\xed\xf3\xfe...",
+	 "Enter an address..."},
+	// (пароль)
+	{"MW2COOP_LOCKED", "(\xef\xe0\xf0\xee\xeb\xfc)",
+	 "(password)"},
+	// Неверный пароль
+	{"MW2COOP_BAD_PASSWORD", "\xcd\xe5\xe2\xe5\xf0\xed\xfb\xe9 \xef\xe0\xf0\xee\xeb\xfc",
+	 "Wrong password"},
+	// Хост пускает только друзей Steam
+	{"MW2COOP_FRIENDS_ONLY", "\xd5\xee\xf1\xf2 \xef\xf3\xf1\xea\xe0\xe5\xf2 \xf2\xee\xeb\xfc\xea\xee \xe4\xf0\xf3\xe7\xe5\xe9 Steam",
+	 "The host only lets Steam friends in"},
+	// КАМПАНИЯ
+	{"MW2COOP_CAMPAIGN", "\xca\xc0\xcc\xcf\xc0\xcd\xc8\xdf",
+	 "CAMPAIGN"},
 };
 #define STRING_COUNT (int)(sizeof(strings) / sizeof(strings[0]))
 
@@ -85,19 +121,22 @@ static const ModString strings[] = {
 // entry up each frame, so a switch shows at once.
 typedef struct {
 	const char *name;
-	volatile LONG shown; // index into strings[], or -1 for text
+	const char *first; // the string shown until a switch, NULL for text
+	volatile LONG shown; // index into strings[], -1 for text, -2 until <first> is looked up
 	char text[128];
 	LocalizeEntry entry;
 } Alias;
 
 static Alias aliases[] = {
-	{"MW2COOP_READY", 1, "", {NULL, NULL}},
-	{"MW2COOP_START", 3, "", {NULL, NULL}},
-	{"MW2COOP_JOIN", 9, "", {NULL, NULL}},
-	{"MW2COOP_LOBBY_1", -1, "", {NULL, NULL}},
-	{"MW2COOP_LOBBY_2", -1, "", {NULL, NULL}},
-	{"MW2COOP_LOBBY_3", -1, "", {NULL, NULL}},
-	{"MW2COOP_LOBBY_4", -1, "", {NULL, NULL}},
+	{"MW2COOP_READY", "MW2COOP_READY_SET", -2, "", {NULL, NULL}},
+	{"MW2COOP_START", "MW2COOP_START_GO", -2, "", {NULL, NULL}},
+	{"MW2COOP_JOIN", "MW2COOP_JOIN_IDLE", -2, "", {NULL, NULL}},
+	{"MW2COOP_ACCESS", "MW2COOP_ACCESS_OPEN", -2, "", {NULL, NULL}},
+	{"MW2COOP_EDIT_TITLE", "MW2COOP_EDIT_PASSWORD", -2, "", {NULL, NULL}},
+	{"MW2COOP_EDIT_LABEL", "MW2COOP_LABEL_PASSWORD", -2, "", {NULL, NULL}},
+	{"MW2COOP_LOBBY_1", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_LOBBY_2", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_LOBBY_3", NULL, -1, "", {NULL, NULL}},
 };
 #define ALIAS_COUNT (int)(sizeof(aliases) / sizeof(aliases[0]))
 
@@ -118,12 +157,22 @@ static const char *text_of(int i)
 	return game_is_russian() ? strings[i].ru : strings[i].en;
 }
 
+static int string_index(const char *name)
+{
+	for (int i = 0; i < STRING_COUNT; i++)
+		if (strcmp(name, strings[i].name) == 0)
+			return i;
+	return -1;
+}
+
 static void *find_header(int type, const char *name)
 {
 	if (type == ASSET_TYPE_LOCALIZE_ENTRY && name && strncmp(name, "MW2COOP_", 8) == 0) {
 		for (int i = 0; i < ALIAS_COUNT; i++) {
 			if (strcmp(name, aliases[i].name) != 0)
 				continue;
+			if (aliases[i].shown == -2)
+				InterlockedCompareExchange(&aliases[i].shown, string_index(aliases[i].first), -2);
 			aliases[i].entry.name = aliases[i].name;
 			aliases[i].entry.value = aliases[i].shown < 0 ? aliases[i].text : text_of(aliases[i].shown);
 			return &aliases[i].entry;
@@ -144,9 +193,9 @@ void localize_select(const char *alias, const char *name)
 	for (int a = 0; a < ALIAS_COUNT; a++) {
 		if (strcmp(alias, aliases[a].name) != 0)
 			continue;
-		for (int i = 0; i < STRING_COUNT; i++)
-			if (strcmp(name, strings[i].name) == 0)
-				InterlockedExchange(&aliases[a].shown, i);
+		int i = string_index(name);
+		if (i >= 0)
+			InterlockedExchange(&aliases[a].shown, i);
 	}
 }
 
@@ -162,7 +211,7 @@ void localize_set_text(const char *alias, const char *text)
 
 const char *localize_text(const char *name)
 {
-	LocalizeEntry *e = original(ASSET_TYPE_LOCALIZE_ENTRY, name);
+	LocalizeEntry *e = find_header(ASSET_TYPE_LOCALIZE_ENTRY, name);
 	return e && e->value && e->name && strcmp(e->name, name) == 0 ? e->value : NULL;
 }
 

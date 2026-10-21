@@ -24,23 +24,15 @@
 #include <string.h>
 
 #include "game.h"
+#include "access.h"
 #include "localize.h"
 #include "log.h"
+#include "settings.h"
 #include "menus.h"
+#include "menus_ui.h"
 #include "net.h"
 #include "progress.h"
 
-#define ITEM_SIZE 0x1e8
-#define MENU_ITEM_COUNT 0xbc
-#define MENU_ITEMS 0x168
-#define ITEM_RECT_Y 0x0c
-#define ITEM_RECT_CLIENT_Y 0x20
-#define ITEM_DYNAMIC_FLAGS 0x50
-#define ITEM_TEXT 0xf0
-#define ITEM_ACTION 0x128
-#define ITEM_ON_FOCUS 0x138
-#define WINDOW_HASFOCUS 2
-#define BUTTON_HEIGHT 20.0f
 #define RVA_UI_CONTEXT 0x1a3ab00 // uiContext_t (Menus_OpenByName's first argument, "openmenu" @0x24ca10)
 #define UI_MENUS 0x38		 // menuDef_t *menus[]
 #define UI_MENU_COUNT 0x1438	 // int
@@ -64,7 +56,7 @@ static uint8_t *base;
 // The menus the UI has loaded (the list Menus_FindByName, rva 0x259d30, searches): no asset
 // database call, which blocks while a zone loads (a control-thread lookup during a level load
 // hung both games after the briefing).
-static uint8_t *find_menu(const char *name)
+uint8_t *ui_find_menu(const char *name)
 {
 	uint8_t *ui = base + RVA_UI_CONTEXT;
 	int count = *(int *)(ui + UI_MENU_COUNT);
@@ -77,7 +69,7 @@ static uint8_t *find_menu(const char *name)
 	return NULL;
 }
 
-static int item_index(uint8_t *menu, const char *name)
+int ui_item_index(uint8_t *menu, const char *name)
 {
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
@@ -91,7 +83,7 @@ static int item_index(uint8_t *menu, const char *name)
 
 // A handler set running one menu script, e.g. "\"open\" \"levels\" ;" (the parsed form the
 // zone stores: quoted tokens, commands ended by ';').
-static MenuEventHandlerSet *script_set(const char *script)
+void *ui_script_set(const char *script)
 {
 	MenuEventHandlerSet *set = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*set));
 	MenuEventHandler **list = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*list));
@@ -102,6 +94,40 @@ static MenuEventHandlerSet *script_set(const char *script)
 	set->count = 1;
 	set->handlers = list;
 	return set;
+}
+
+uint8_t *ui_clone_item(uint8_t *from, uint8_t *parent_menu)
+{
+	uint8_t *it = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
+	memcpy(it, from, ITEM_SIZE);
+	*(uint8_t **)(it + ITEM_PARENT) = parent_menu;
+	*(uint32_t *)(it + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
+	return it;
+}
+
+uint8_t *ui_clone_menu(uint8_t *from, const char *name)
+{
+	uint8_t *menu = HeapAlloc(GetProcessHeap(), 0, MENU_SIZE);
+	memcpy(menu, from, MENU_SIZE);
+	*(const char **)menu = name;
+	int count = *(int *)(from + MENU_ITEM_COUNT);
+	uint8_t **src = *(uint8_t ***)(from + MENU_ITEMS);
+	uint8_t **items = HeapAlloc(GetProcessHeap(), 0, count * sizeof(*items));
+	for (int i = 0; i < count; i++)
+		items[i] = ui_clone_item(src[i], menu);
+	*(uint8_t ***)(menu + MENU_ITEMS) = items;
+	return menu;
+}
+
+int ui_register_menu(uint8_t *menu)
+{
+	uint8_t *ui = base + RVA_UI_CONTEXT;
+	int count = *(int *)(ui + UI_MENU_COUNT);
+	if (count >= UI_MAX_MENUS)
+		return 0;
+	((uint8_t **)(ui + UI_MENUS))[count] = menu;
+	*(int *)(ui + UI_MENU_COUNT) = count + 1;
+	return 1;
 }
 
 // ---------------------------------------------------------------- campaign main menu button
@@ -132,15 +158,15 @@ static const struct {
 
 static void patch_main_menu(void)
 {
-	uint8_t *menu = find_menu("main_text");
+	uint8_t *menu = ui_find_menu("main_text");
 	if (!menu)
 		return;
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	if (items == main_items)
 		return;
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
-	int at = item_index(menu, "levelselect");
-	if (at < 0 || item_index(menu, main_buttons[0].name) >= 0) {
+	int at = ui_item_index(menu, "levelselect");
+	if (at < 0 || ui_item_index(menu, main_buttons[0].name) >= 0) {
 		log_printf("menus: main_text has no levelselect button, no co-op buttons added");
 		main_items = items;
 		return;
@@ -156,7 +182,7 @@ static void patch_main_menu(void)
 		float y = y0 + b * BUTTON_HEIGHT;
 		*(const char **)item = main_buttons[b].name;
 		*(const char **)(item + ITEM_TEXT) = main_buttons[b].text;
-		*(MenuEventHandlerSet **)(item + ITEM_ACTION) = script_set(main_buttons[b].action);
+		*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(main_buttons[b].action);
 		*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
 		*(float *)(item + ITEM_RECT_Y) = y;
 		*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
@@ -182,18 +208,21 @@ static void patch_main_menu(void)
 // mw2coop_find: the campaign menu's join button. Asks every network the PC is on (LAN, Radmin
 // VPN and the like: each adapter's broadcast address, net.c) for campaign lobbies for 2 s, then
 // lists the hosts that answered in a popup ("mw2coop_lobbies", built from the difficulty popup);
-// the player picks one (mw2coop_join_found <n>). A host answers while it holds a campaign lobby
-// with a free slot: "mw2coop_here <host xuid> <map> <host name>" (a host on several networks
-// answers on each; the XUID keeps it to one row).
+// the player picks one (mw2coop_join_found <n>; a locked lobby asks for its password, access.c)
+// or enters an address. A host answers while it holds a campaign lobby with a free slot that
+// is open to the network: "mw2coop_here <host xuid> <p|-> <map> <host name>" (p: password; a
+// host on several networks answers on each, the XUID keeps it to one row).
 #define FIND_TAG "mw2coop_find"
 #define HERE_TAG "mw2coop_here "
 #define FIND_MS 2000
-#define MAX_LOBBIES 4
+#define LIST_ROWS 4
+#define MAX_LOBBIES (LIST_ROWS - 1) // the last row enters an address
 
 typedef struct {
 	uint8_t ip[4];
 	uint16_t port;
 	uint64_t xuid;
+	int locked;
 	char map[32];
 	char name[48];
 } Lobby;
@@ -203,6 +232,9 @@ static Lobby lobbies[MAX_LOBBIES];
 static int lobby_count;
 static volatile LONG finding;
 static volatile DWORD find_started, find_sent, join_text_until;
+static int find_target; // asking one address (typed in) instead of every network
+static uint8_t target_ip[4];
+static uint16_t target_port;
 
 static void find_f(void)
 {
@@ -213,6 +245,7 @@ static void find_f(void)
 	LeaveCriticalSection(&lobby_lock);
 	find_started = GetTickCount();
 	find_sent = 0;
+	find_target = 0;
 	InterlockedExchange(&finding, 1);
 	localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_SEARCHING");
 	log_printf("menus: looking for campaign lobbies on the network");
@@ -227,7 +260,17 @@ static void lobby_row(const Lobby *l, char *out, int size)
 		key[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
 	key[n] = 0;
 	const char *mission = localize_text(key);
-	snprintf(out, size, "%s - %s", l->name[0] ? l->name : "?", mission ? mission : l->map);
+	const char *lock = l->locked ? localize_text("MW2COOP_LOCKED") : NULL;
+	snprintf(out, size, "%s - %s%s%s", l->name[0] ? l->name : "?", mission ? mission : l->map, lock ? " " : "",
+		 lock ? lock : "");
+}
+
+void menus_find_at(const uint8_t ip[4], uint16_t port)
+{
+	find_f();
+	memcpy(target_ip, ip, 4);
+	target_port = port;
+	find_target = 1;
 }
 
 static void find_tick(void)
@@ -237,11 +280,23 @@ static void find_tick(void)
 		if (now - find_started < FIND_MS) {
 			if (!find_sent || now - find_sent >= 700) {
 				find_sent = now;
-				net_broadcast_mod(FIND_TAG, 28960);
+				if (find_target)
+					net_send_mod_to(target_ip, target_port, FIND_TAG);
+				else
+					net_broadcast_mod(FIND_TAG, settings_port());
 			}
 			return;
 		}
 		InterlockedExchange(&finding, 0);
+		if (find_target) {
+			// the address typed in: join it whether or not it answered (an answer tells if it is locked)
+			EnterCriticalSection(&lobby_lock);
+			int locked = lobby_count ? lobbies[0].locked : 0;
+			LeaveCriticalSection(&lobby_lock);
+			localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_IDLE");
+			access_join(target_ip, target_port, locked);
+			return;
+		}
 		EnterCriticalSection(&lobby_lock);
 		int count = lobby_count;
 		for (int i = 0; i < MAX_LOBBIES; i++) {
@@ -253,13 +308,26 @@ static void find_tick(void)
 		}
 		LeaveCriticalSection(&lobby_lock);
 		log_printf("menus: %d campaign lobb%s answered", count, count == 1 ? "y" : "ies");
-		if (count) {
-			localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_IDLE");
-			game_cbuf_addtext("openmenu mw2coop_lobbies\n");
-		} else {
-			localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_NONE");
-			join_text_until = now + 4000;
+		// rows without a lobby are hidden (WINDOW_VISIBLE in dynamicFlags), so the focus starts on
+		// the first lobby, or on the address row
+		uint8_t *list = ui_find_menu("mw2coop_lobbies");
+		for (int i = 0; list && i < MAX_LOBBIES; i++) {
+			char row[24];
+			snprintf(row, sizeof(row), "mw2coop_lobby_%d", i + 1);
+			int at = ui_item_index(list, row);
+			if (at < 0)
+				continue;
+			uint32_t *flags = (uint32_t *)((*(uint8_t ***)(list + MENU_ITEMS))[at] + ITEM_DYNAMIC_FLAGS);
+			if (i < count)
+				*flags |= WINDOW_VISIBLE;
+			else
+				*flags &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
 		}
+		// the list opens even when nothing answered: its last row enters an address
+		localize_select("MW2COOP_JOIN", count ? "MW2COOP_JOIN_IDLE" : "MW2COOP_JOIN_NONE");
+		if (!count)
+			join_text_until = now + 4000;
+		game_cbuf_addtext("openmenu mw2coop_lobbies\n");
 		return;
 	}
 	if (join_text_until && (int)(now - join_text_until) > 0) {
@@ -272,54 +340,40 @@ static void find_tick(void)
 static void join_found_f(void)
 {
 	int n = atoi(game_cmd_argv(1)) - 1;
-	char cmd[64] = "";
+	Lobby l;
 	EnterCriticalSection(&lobby_lock);
-	if (n >= 0 && n < lobby_count)
-		snprintf(cmd, sizeof(cmd), "mw2coop_join %u.%u.%u.%u %u\n", lobbies[n].ip[0], lobbies[n].ip[1],
-			 lobbies[n].ip[2], lobbies[n].ip[3], lobbies[n].port);
+	int ok = n >= 0 && n < lobby_count;
+	if (ok)
+		l = lobbies[n];
 	LeaveCriticalSection(&lobby_lock);
-	if (!cmd[0])
+	if (!ok)
 		return;
-	localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_CONNECTING");
-	join_text_until = GetTickCount() + 6000;
-	log_printf("menus: joining %s", cmd);
-	game_cbuf_addtext(cmd);
+	if (!l.locked) {
+		localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_CONNECTING");
+		join_text_until = GetTickCount() + 6000;
+	}
+	access_join(l.ip, l.port, l.locked);
 }
 
 // The list popup: a copy of the difficulty popup (title, four buttons, the description lines)
 // with our texts and actions. It is added to the UI's menu list, which a UI zone reload rebuilds.
-#define MENU_SIZE 0x200 // menuDef_t is smaller; the copy only needs the fields up to items (+0x168)
-#define ITEM_PARENT 0x100
-#define ITEM_LEAVE_FOCUS 0x140
-#define ITEM_TEXT_EXP 0x1b0
-#define MENU_ON_OPEN 0xe0
 
 static void add_lobbies_menu(void)
 {
-	if (find_menu("mw2coop_lobbies"))
+	if (ui_find_menu("mw2coop_lobbies"))
 		return;
-	uint8_t *src = find_menu("popmenu_difficulty");
-	uint8_t *ui = base + RVA_UI_CONTEXT;
-	int ui_count = *(int *)(ui + UI_MENU_COUNT);
-	if (!src || ui_count >= UI_MAX_MENUS)
-		return;
-	static const char *const buttons[MAX_LOBBIES] = {"newgame_easy", "newgame_regular", "newgame_hardened",
-							 "newgame_veteran"};
-	int first = item_index(src, buttons[0]);
+	uint8_t *src = ui_find_menu("popmenu_difficulty");
+	static const char *const buttons[LIST_ROWS] = {"newgame_easy", "newgame_regular", "newgame_hardened",
+						       "newgame_veteran"};
+	int first = src ? ui_item_index(src, buttons[0]) : -1;
 	if (first < 0)
 		return;
-	uint8_t *menu = HeapAlloc(GetProcessHeap(), 0, MENU_SIZE);
-	memcpy(menu, src, MENU_SIZE);
-	*(const char **)menu = "mw2coop_lobbies";
-	*(MenuEventHandlerSet **)(menu + MENU_ON_OPEN) = script_set("\"focusfirst\" ; ");
-	int count = *(int *)(src + MENU_ITEM_COUNT);
-	uint8_t **from = *(uint8_t ***)(src + MENU_ITEMS);
-	uint8_t **items = HeapAlloc(GetProcessHeap(), 0, count * sizeof(*items));
+	uint8_t *menu = ui_clone_menu(src, "mw2coop_lobbies");
+	*(void **)(menu + MENU_ON_OPEN) = ui_script_set("\"focusfirst\" ; ");
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	for (int i = 0; i < count; i++) {
-		uint8_t *it = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
-		memcpy(it, from[i], ITEM_SIZE);
-		*(uint8_t **)(it + ITEM_PARENT) = menu;
-		*(uint32_t *)(it + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
+		uint8_t *it = items[i];
 		const char *text = *(const char **)(it + ITEM_TEXT);
 		if (text && strcmp(text, "@MENU_SELECT_DIFFICULTY") == 0)
 			*(const char **)(it + ITEM_TEXT) = "@MW2COOP_LOBBIES";
@@ -328,30 +382,34 @@ static void add_lobbies_menu(void)
 			*(const char **)(it + ITEM_TEXT) = "";
 			*(void **)(it + ITEM_TEXT_EXP) = NULL;
 		}
-		items[i] = it;
 	}
-	for (int b = 0; b < MAX_LOBBIES; b++) {
-		int i = item_index(src, buttons[b]);
+	// rows 1..3: the lobbies found; row 4: enter an address
+	for (int b = 0; b < LIST_ROWS; b++) {
+		int i = ui_item_index(src, buttons[b]);
 		if (i < 0)
 			continue;
 		uint8_t *it = items[i];
-		static char names[MAX_LOBBIES][24], texts[MAX_LOBBIES][24], actions[MAX_LOBBIES][128];
+		static char names[LIST_ROWS][24], texts[LIST_ROWS][24], actions[LIST_ROWS][128];
 		snprintf(names[b], sizeof(names[b]), "mw2coop_lobby_%d", b + 1);
-		snprintf(texts[b], sizeof(texts[b]), "@MW2COOP_LOBBY_%d", b + 1);
-		snprintf(actions[b], sizeof(actions[b]),
-			 "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found %d\" ; ", b + 1);
+		if (b < MAX_LOBBIES) {
+			snprintf(texts[b], sizeof(texts[b]), "@MW2COOP_LOBBY_%d", b + 1);
+			snprintf(actions[b], sizeof(actions[b]),
+				 "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found %d\" ; ", b + 1);
+		} else {
+			snprintf(texts[b], sizeof(texts[b]), "@MW2COOP_BY_ADDRESS");
+			snprintf(actions[b], sizeof(actions[b]),
+				 "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_address\" ; ");
+		}
 		*(const char **)it = names[b];
 		*(const char **)(it + ITEM_TEXT) = texts[b];
-		*(MenuEventHandlerSet **)(it + ITEM_ACTION) = script_set(actions[b]);
-		*(MenuEventHandlerSet **)(it + ITEM_ON_FOCUS) =
-			script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ");
-		*(MenuEventHandlerSet **)(it + ITEM_LEAVE_FOCUS) =
-			script_set("\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; ");
+		*(void **)(it + ITEM_ACTION) = ui_script_set(actions[b]);
+		*(void **)(it + ITEM_ON_FOCUS) =
+			ui_script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ");
+		*(void **)(it + ITEM_LEAVE_FOCUS) =
+			ui_script_set("\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; ");
 	}
-	*(uint8_t ***)(menu + MENU_ITEMS) = items;
-	((uint8_t **)(ui + UI_MENUS))[ui_count] = menu;
-	*(int *)(ui + UI_MENU_COUNT) = ui_count + 1;
-	log_printf("menus: list of games on the network added (%d items)", count);
+	if (ui_register_menu(menu))
+		log_printf("menus: list of games on the network added (%d items)", count);
 }
 
 // ---------------------------------------------------------------- the lobby with a campaign mission
@@ -373,7 +431,7 @@ static int campaign_lobby(void)
 // Items changed while the lobby holds a campaign mission; the native values are kept to switch
 // back for Spec Ops.
 typedef struct {
-	const char *item;   // name, or "name+1" for the unnamed item right after it
+	const char *item;   // name, "name+1" for the unnamed item right after it, or "@TEXT" for the item showing it
 	int offset;
 	const char *script; // replacement action ...
 	const void *value;  // ... or replacement pointer (NULL clears a statement)
@@ -383,6 +441,8 @@ typedef struct {
 } LobbySwap;
 
 static LobbySwap lobby_swaps[] = {
+	// the title: "SPECIAL OPS : Two players online" -> "CAMPAIGN : ..."
+	{"@MENU_SPECIAL_OPS", ITEM_TEXT, NULL, "@MW2COOP_CAMPAIGN", NULL, NULL, NULL},
 	// Change Op: the campaign missions
 	{"selectmap", ITEM_ACTION, "\"play\" \"mouse_click\" ; \"open\" \"levels\" ; ", NULL, NULL, NULL, NULL},
 	// Start: the native button needs coopready(), which counts the Steam lobby's members; a
@@ -403,9 +463,22 @@ static LobbySwap lobby_swaps[] = {
 
 static int lobby_campaign_set;
 
+// the item showing <text> natively (or our text, once swapped: the swap remembers its item)
+static int item_by_text(uint8_t *menu, const char *text, const LobbySwap *w)
+{
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	for (int i = 0; i < count; i++) {
+		const char *t = *(const char **)(items[i] + ITEM_TEXT);
+		if (items[i] == w->seen || (t && strcmp(t, text) == 0))
+			return i;
+	}
+	return -1;
+}
+
 static void patch_lobby(int campaign)
 {
-	uint8_t *menu = find_menu("coop_lobby");
+	uint8_t *menu = ui_find_menu("coop_lobby");
 	if (!menu)
 		return;
 	int changed = 0;
@@ -416,7 +489,7 @@ static void patch_lobby(int campaign)
 		char *plus = strchr(name, '+');
 		if (plus)
 			*plus = 0;
-		int i = item_index(menu, name);
+		int i = name[0] == '@' ? item_by_text(menu, name, w) : ui_item_index(menu, name);
 		if (i < 0)
 			continue;
 		if (plus && ++i >= *(int *)(menu + MENU_ITEM_COUNT))
@@ -428,7 +501,7 @@ static void patch_lobby(int campaign)
 			w->native = *field;
 		}
 		if (!w->campaign)
-			w->campaign = w->script ? script_set(w->script) : (void *)w->value;
+			w->campaign = w->script ? ui_script_set(w->script) : (void *)w->value;
 		void *want = campaign ? w->campaign : w->native;
 		if (*field != want) {
 			*field = want;
@@ -479,13 +552,14 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 	static const char here[] = "\xff\xff\xff\xff" HERE_TAG;
 	if (len == (int)sizeof(find) - 1 && memcmp(buf, find, len) == 0) {
 		// answer only while hosting a campaign lobby that still has room
-		if (base[RVA_PARTY_IS_HOST] && lobby_campaign_set && !party_full()) {
+		char lock = access_lobby_flag();
+		if (base[RVA_PARTY_IS_HOST] && lobby_campaign_set && !party_full() && lock) {
 			char map[64] = "", name[33] = "";
 			game_dvar_raw("coop_mapName", map, sizeof(map));
 			// the host's name as its party has it (slot 0, rva 0x5dd960, set by the party join 0xd7220)
 			lstrcpynA(name, (const char *)base + RVA_PARTY_MEMBER_NAMES, sizeof(name));
 			uint64_t xuid = *(uint64_t *)(base + RVA_XUID_TABLE);
-			*reply_len = snprintf(reply, reply_size, "%s%016llx %s %s", here, (unsigned long long)xuid, map, name);
+			*reply_len = snprintf(reply, reply_size, "%s%016llx %c %s %s", here, (unsigned long long)xuid, lock, map, name);
 			log_printf("menus: answered a lobby query from %u.%u.%u.%u:%u", from_ip[0], from_ip[1], from_ip[2],
 				   from_ip[3], from_port);
 		}
@@ -494,16 +568,17 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 	if (len >= (int)sizeof(here) - 1 && memcmp(buf, here, sizeof(here) - 1) == 0) {
 		if (!finding)
 			return 1;
-		// "<xuid> <map> <host name>"
+		// "<xuid> <p|-> <map> <host name>"
 		char text[128];
 		int n = len - ((int)sizeof(here) - 1);
 		n = n < (int)sizeof(text) - 1 ? n : (int)sizeof(text) - 1;
 		memcpy(text, buf + sizeof(here) - 1, n);
 		text[n] = 0;
-		char *map = strchr(text, ' ');
-		if (!map)
+		char *flag = strchr(text, ' ');
+		if (!flag || flag[1] == 0 || flag[2] != ' ')
 			return 1;
-		*map++ = 0;
+		*flag++ = 0;
+		char *map = flag + 2;
 		char *name = strchr(map, ' ');
 		if (name)
 			*name++ = 0;
@@ -517,10 +592,11 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 			memcpy(l->ip, from_ip, 4);
 			l->port = from_port;
 			l->xuid = xuid;
+			l->locked = *flag == 'p';
 			lstrcpynA(l->map, map, sizeof(l->map));
 			lstrcpynA(l->name, name ? name : "", sizeof(l->name));
-			log_printf("menus: lobby at %u.%u.%u.%u:%u: %s, host '%s'", from_ip[0], from_ip[1], from_ip[2],
-				   from_ip[3], from_port, l->map, l->name);
+			log_printf("menus: lobby at %u.%u.%u.%u:%u: %s, host '%s'%s", from_ip[0], from_ip[1], from_ip[2],
+				   from_ip[3], from_port, l->map, l->name, l->locked ? ", password" : "");
 		}
 		LeaveCriticalSection(&lobby_lock);
 		return 1;
@@ -665,6 +741,7 @@ static void tick_f(void)
 	find_tick();
 	int campaign = campaign_lobby();
 	patch_lobby(campaign);
+	access_tick(campaign, base[RVA_PARTY_IS_HOST]);
 	if (!campaign) {
 		InterlockedExchange(&my_ready, 0);
 		InterlockedExchange(&partner_ready, 0);

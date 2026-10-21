@@ -2,6 +2,8 @@
 #include <stdint.h>
 
 void menus_install(void);
+// Ask one address for its lobby (an address typed in), then join it like a row of the list.
+void menus_find_at(const uint8_t ip[4], uint16_t port);
 void menus_poll(void); // control thread, every 250 ms: queues the menu work for the main thread
 
 // net.c: a packet from the partner; 1 if it was mw2coop's lobby packet (the game must not see it).

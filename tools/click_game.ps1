@@ -1,6 +1,6 @@
-param([int]$X, [int]$Y, [int]$TargetPid = 0, [string]$Key = '')
+param([int]$X, [int]$Y, [int]$TargetPid = 0, [string]$Key = '', [string]$Text = '')
 # Click the TEST game's menu at pixel (X, Y) of its client area (the same pixels as a
-# shot_game.ps1 screenshot), or press a key (-Key ESC|ENTER|UP|DOWN). The 'IW4' window is made
+# shot_game.ps1 screenshot), press a key (-Key ESC|ENTER|UP|DOWN|BACK) or type text (-Text). The 'IW4' window is made
 # TOPMOST + foreground first so the click cannot land in another window; it is released after.
 # Use only on test copies started by run_test.ps1.
 Add-Type @"
@@ -19,6 +19,15 @@ public static class C {
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint f, IntPtr e);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort vk, scan; public uint flags, time; public IntPtr extra; }
+  [StructLayout(LayoutKind.Explicit, Size=40)] public struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
+  [DllImport("user32.dll")] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
+  public static void TypeChar(char c) {
+    var i = new INPUT[2];
+    i[0].type = 1; i[0].ki.scan = c; i[0].ki.flags = 4;          // KEYEVENTF_UNICODE
+    i[1].type = 1; i[1].ki.scan = c; i[1].ki.flags = 4 | 2;      // + KEYUP
+    SendInput(2, i, System.Runtime.InteropServices.Marshal.SizeOf(typeof(INPUT)));
+  }
   public static IntPtr Find(uint want) {
     IntPtr found = IntPtr.Zero;
     EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);
@@ -44,8 +53,11 @@ if ([C]::GetForegroundWindow() -ne $h) {
   'the game window could not be brought to the front; nothing clicked'; exit 1
 }
 Start-Sleep -Milliseconds 400
-if ($Key) {
-  $vk = @{ ESC = 0x1b; ENTER = 0x0d; UP = 0x26; DOWN = 0x28 }[$Key]
+if ($Text) {
+  foreach ($ch in $Text.ToCharArray()) { [C]::TypeChar($ch); Start-Sleep -Milliseconds 40 }
+  "typed $($Text.Length) characters"
+} elseif ($Key) {
+  $vk = @{ ESC = 0x1b; ENTER = 0x0d; UP = 0x26; DOWN = 0x28; BACK = 0x08 }[$Key]
   [C]::keybd_event([byte]$vk, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60
   [C]::keybd_event([byte]$vk, 0, 2, [IntPtr]::Zero)
   "key $Key"

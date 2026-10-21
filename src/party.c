@@ -28,6 +28,7 @@
 
 #include "game.h"
 #include "log.h"
+#include "settings.h"
 #include "party.h"
 
 static uint8_t *base;
@@ -40,7 +41,7 @@ static int parse_address(const char *ip, const char *port_text, uint8_t addr[4],
 	if (sscanf(ip, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 || a > 255 || b > 255 || c > 255 || d > 255)
 		return 0;
 	addr[0] = (uint8_t)a, addr[1] = (uint8_t)b, addr[2] = (uint8_t)c, addr[3] = (uint8_t)d;
-	unsigned p = port_text[0] ? (unsigned)atoi(port_text) : 28960;
+	unsigned p = port_text[0] ? (unsigned)atoi(port_text) : settings_port();
 	if (p == 0 || p > 65535)
 		return 0;
 	*port = (uint16_t)p;

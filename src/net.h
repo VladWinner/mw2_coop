@@ -12,4 +12,6 @@ void net_log_budget(int packets);
 
 // Send "\xff\xff\xff\xff<text>" to <port> on every IPv4 network's broadcast address; the number
 // of packets sent.
+// Send "\xff\xff\xff\xff<text>" to one address (port in host order) on the game's socket.
+int net_send_mod_to(const uint8_t ip[4], uint16_t port, const char *text);
 int net_broadcast_mod(const char *text, uint16_t port);
