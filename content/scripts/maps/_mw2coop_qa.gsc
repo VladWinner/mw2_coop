@@ -812,7 +812,9 @@ knife()
 	check( flag( "turn_buckle_start" ), "a player strikes Shepherd (" + t + " s)" );
 	check( level.mw2coop_lead == striker, "the striker plays the scene" );
 	wait 2.5;
-	check( other IsLinked() && isdefined( other.mw2coop_awake ) && !other.mw2coop_awake, "the other player is down and out" );
+	check( isdefined( other.laststand ) && other.laststand && isdefined( other.mw2coop_awake ) && !other.mw2coop_awake, "the other player is down and out" );
+	d = Distance( other.origin, level.shepherd.origin );
+	check( d < 400, "and lies near the fight (" + int( d ) + " units from Shepherd)" );
 	level thread knife_watch_report( other );
 
 	// crawl to the revolver: alternate the two crawl buttons
@@ -857,8 +859,8 @@ knife()
 	check( other.mw2coop_awake, "the other player is awake as Shepherd dies" );
 	wait 3;
 	check( other.mw2coop_awake, "and still awake 3 s later" );
-	wait 27;	// Price wakes up: the witness stays awake (the lead has a full body there)
-	check( other IsLinked() && IsAlive( other ), "the other player watched the whole fight" );
+	wait 27;	// Price wakes up: the witness stays awake
+	check( other.laststand && IsAlive( other ), "the other player watched the whole fight, down" );
 	report( "done" );
 }
 

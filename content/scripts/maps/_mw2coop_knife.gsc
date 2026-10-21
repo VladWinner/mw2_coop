@@ -122,22 +122,23 @@ lead_decided()
 		witness thread witness_think();
 }
 
-// self: the other player (owner's decision 2026-10-20: he drifts in and out of consciousness).
-// The scene has first-person arm animations only for the lead and players have no body model in
-// the campaign, so whoever looked at the lead would see floating arms. The witness passes out
-// when the lead strikes (his own black screen, breathing and heartbeat), comes to for the wide
-// moments - Price fighting Shepherd, the knife in Shepherd's eye - and passes out again before
-// the end. While awake his view is held at ground level beside the fight, turned so that the
-// lead is always outside what he can see; if the lead or a wall gets in the way he blacks out
-// for a moment and wakes up in a better spot. No weapons, no damage.
+// self: the other player (owner's decisions 2026-10-20/21: he drifts in and out of
+// consciousness, and lies as a downed player of the revive system does). He goes down and is
+// laid at a spot beside the fight under his black screen (the downed pose of maps\_coop:
+// laststand); he cannot move but can look around. He passes out (his own black screen with
+// "You are stunned...", breathing and heartbeat), comes to for the knife in Shepherd's eye and
+// stays down until the end. No weapons, no damage.
 witness_think()
 {
 	level.mw2coop_knife_witness = self;
 	self EnableInvulnerability();
 	self DisableWeapons();
-	// no stance limits: the engine drops the session when a linked player may neither stand nor
-	// crouch ("All stances ... disallowed for linked player"); the view is the camera's anyway
-	self SetStance( "prone" );
+	self DisableWeaponSwitch();
+	self DisableOffhandWeapons();
+	self.laststand = true;
+	self SetMoveSpeedScale( 0 );
+	self AllowJump( false );
+	self AllowSprint( false );
 	self ShellShock( "af_chase_ending_wakeup", 6 );
 	self.mw2coop_blackout = maps\_hud_util::create_client_overlay( "black", 0, self );
 	self.mw2coop_blackout.sort = 1000;
@@ -148,20 +149,12 @@ witness_think()
 	self stunned_texts_fade( 1, 1.5 );
 	self.mw2coop_awake = false;
 	wait 1.5;
-	// out cold where he lies; a place to watch from is found when he comes to
-	cam = Spawn( "script_model", self.origin + ( 0, 0, 14 ) );
-	cam SetModel( "tag_origin" );
-	cam.angles = ( 0, self.angles[ 1 ], 0 );
-	level.mw2coop_knife_cam = cam;
-	self PlayerLinkToDelta( cam, "tag_origin", 1, 25, 25, 15, 10, true );
-	// the view sits above the tag by the player's eye height (standing height even when he was
-	// set prone): measured once, the camera goes that much lower than the eye point it serves
-	wait 0.1;
-	eye = self GetEye();
-	self.mw2coop_eye_dz = eye[ 2 ] - cam.origin[ 2 ];
-	maps\_mw2coop::state( "knife fight: " + player_name( self ) + " is down and passes out" );
+	// owner (2026-10-20): he must see the scene from a place next to it, never from wherever he
+	// happened to be; under the black screen he is laid down there
+	placed = self place_near_fight();
+	maps\_mw2coop::state( "knife fight: " + player_name( self ) + " is down and passes out" + ter( placed, " near the fight", "" ) );
 	self thread witness_breathing();
-	self thread witness_follow( cam );
+	self thread witness_follow();
 }
 
 // The other player is the lead's partner; whoever is not the lead.
@@ -183,8 +176,8 @@ witness_wakes()
 	maps\_mw2coop::state( "knife fight: " + player_name( w ) + " comes to" );
 }
 
-// Passes out again (not used at the moment: he stays awake through Price waking up, where the
-// lead has a full body, and passes out at the walk to the helicopter, witness_gets_up()).
+// Passes out again (not used at the moment: he stays awake to the end and passes out at the walk
+// to the helicopter, witness_gets_up()).
 witness_passes_out()
 {
 	w = witness();
@@ -223,25 +216,11 @@ scene_focus()
 	return sum * ( 1.0 / pts.size );
 }
 
-// Is the lead (his first-person arms) outside what the witness can see from eye, looking at
-// focus? max_dot 0.15 = more than ~81 degrees apart (his view arcs, 25 degrees each side, plus
-// half the field of view); 0.5 = 60 degrees.
-lead_out_of_view( eye, focus, max_dot )
-{
-	if ( !isdefined( max_dot ) )
-		max_dot = 0.5;
-	lead = level.mw2coop_lead GetEye();
-	to_focus = VectorNormalize( ( focus[ 0 ] - eye[ 0 ], focus[ 1 ] - eye[ 1 ], 0 ) );
-	to_lead = VectorNormalize( ( lead[ 0 ] - eye[ 0 ], lead[ 1 ] - eye[ 1 ], 0 ) );
-	return VectorDot( to_focus, to_lead ) < max_dot;
-}
-
-// A spot on the ground 120-240 units from the focus with floor near the focus' height, a clear
-// line to it, and the lead out of view (the widest angle first). The eye is low, as a man lying
-// on the ground.
+// A spot on the ground 120-240 units from the focus, floor near the focus' height, a clear line
+// to it, preferring spots where the lead (his scene rig) is not in front of the witness.
 watch_spot( focus )
 {
-	foreach ( max_dot in strtok( "0.15 0.34 0.5", " " ) )
+	foreach ( max_dot in strtok( "0.15 0.5 1.1", " " ) )
 	{
 		spot = watch_spot_within( focus, float_of( max_dot ) );
 		if ( isdefined( spot ) )
@@ -254,11 +233,20 @@ float_of( text )
 {
 	if ( text == "0.15" )
 		return 0.15;
-	if ( text == "0.34" )
-		return 0.34;
-	return 0.5;
+	if ( text == "0.5" )
+		return 0.5;
+	return 1.1;
 }
 
+lead_out_of_view( eye, focus, max_dot )
+{
+	lead = level.mw2coop_lead GetEye();
+	to_focus = VectorNormalize( ( focus[ 0 ] - eye[ 0 ], focus[ 1 ] - eye[ 1 ], 0 ) );
+	to_lead = VectorNormalize( ( lead[ 0 ] - eye[ 0 ], lead[ 1 ] - eye[ 1 ], 0 ) );
+	return VectorDot( to_focus, to_lead ) < max_dot;
+}
+
+// returns the floor point (where the downed player lies)
 watch_spot_within( focus, max_dot )
 {
 	lead = level.mw2coop_lead;
@@ -273,21 +261,31 @@ watch_spot_within( focus, max_dot )
 			floor = PlayerPhysicsTrace( ( at[ 0 ], at[ 1 ], ground[ 2 ] + 60 ), ( at[ 0 ], at[ 1 ], ground[ 2 ] - 80 ) );
 			if ( abs( floor[ 2 ] - ground[ 2 ] ) > 48 )
 				continue;
-			eye = floor + ( 0, 0, 22 );
-			if ( !BulletTracePassed( eye, focus, false, undefined ) )
+			if ( !BulletTracePassed( floor + ( 0, 0, 22 ), focus, false, undefined ) )
 				continue;
-			if ( !lead_out_of_view( eye, focus, max_dot ) )
+			if ( !lead_out_of_view( floor + ( 0, 0, 22 ), focus, max_dot ) )
 				continue;
-			return eye;
+			return floor;
 		}
 	}
 	return undefined;
 }
 
-// self: the witness. While he should be awake and a good spot exists, his screen clears; when
-// the lead or a wall comes into the way, or the fight moves off, he blacks out for a moment and
-// comes to in a new spot.
-witness_follow( cam )
+// self: the witness, under his black screen: lie at a watch spot near the fight, facing it.
+place_near_fight()
+{
+	focus = scene_focus();
+	spot = watch_spot( focus );
+	if ( !isdefined( spot ) )
+		return false;
+	self SetOrigin( spot );
+	self SetPlayerAngles( VectorToAngles( focus - ( spot + ( 0, 0, 22 ) ) ) );
+	return true;
+}
+
+// self: the witness. His screen follows mw2coop_want_awake; when the scene moves Shepherd and
+// Price between its parts (under the lead's fades) he is out at once, so the jump never shows.
+witness_follow()
 {
 	level endon( "mw2coop_knife_witness_up" );
 	self.mw2coop_want_awake = false;
@@ -295,36 +293,27 @@ witness_follow( cam )
 	for ( ;; )
 	{
 		wait 0.05;
-		if ( !isdefined( cam ) )
-			return;
 		focus = scene_focus();
-		// the scene moves Shepherd and Price between its parts under the lead's fades or out of
-		// his view; from the witness' spot that would show, so he is out then
 		jumped = Distance( focus, last_focus ) > 80;
 		last_focus = focus;
-		eye = self GetEye();
-		ok = !jumped && Distance2D( eye, focus ) < 320 && BulletTracePassed( eye, focus, false, undefined ) && lead_out_of_view( eye, focus );
 		if ( self.mw2coop_awake && jumped )
 		{
-			self.mw2coop_blackout.alpha = 1;	// at once, before the jump shows
+			self.mw2coop_blackout.alpha = 1;
 			self stunned_texts_fade( 1, 0 );
 			self.mw2coop_awake = false;
+			wait 0.5;	// the moved actors settle before he comes to again
+			continue;
 		}
-		if ( self.mw2coop_awake && ( !self.mw2coop_want_awake || !ok ) )
+		if ( self.mw2coop_awake && !self.mw2coop_want_awake )
 			self witness_black( true );
 		if ( !self.mw2coop_awake && self.mw2coop_want_awake )
 		{
-			if ( !ok )
-			{
-				spot = watch_spot( focus );
-				if ( !isdefined( spot ) )
-					continue;
-				cam.origin = spot - ( 0, 0, self.mw2coop_eye_dz );
-			}
-			cam.angles = VectorToAngles( focus - self GetEye() );
+			// the fight moved (Shepherd, Price) while he was out: lie near it again first
+			eye = self GetEye();
+			if ( Distance2D( eye, focus ) > 320 || !BulletTracePassed( eye, focus, false, undefined ) )
+				self place_near_fight();
 			self witness_black( false );
 		}
-		cam RotateTo( VectorToAngles( focus - self GetEye() ), 0.4, 0.15, 0.15 );
 	}
 }
 
@@ -354,6 +343,13 @@ witness_gets_up()
 	if ( !isdefined( w ) )
 		return;
 	w.mw2coop_want_awake = false;
+}
+
+ter( cond, a, b )
+{
+	if ( cond )
+		return a;
+	return b;
 }
 
 // --------------------------------------------------------------------------------------------
