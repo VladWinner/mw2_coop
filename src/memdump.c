@@ -4,6 +4,7 @@
 //   !asset <type> <name>  -> DB_FindXAssetHeader(type, name), then dump 0x180 bytes of it
 //   !menu <name> [item]  -> a menu's items with their string fields, or one item dumped
 //   !menus                -> the names of the menus the UI has loaded
+//   !rva <rva> <size>     -> the same at an address relative to the exe
 //   !mem <address> <size> -> dump <size> bytes at an absolute address (hex)
 // Each qword is printed with what it points to: a string, or "ptr" to readable memory.
 #include <windows.h>
@@ -231,6 +232,30 @@ int memdump_command(char *line)
 			}
 		}
 		log_printf("mem: menus: %s (%d)", buf, count);
+		return 1;
+	}
+	if (strcmp(line, "!weapons") == 0) {
+		// the loaded weapons: WeaponCompleteDef *[] at rva 0x3edce0 (name first), WeaponDef *[] at
+		// 0x3ee320 (BG_GetWeaponDef 0x85850); ints +0x40..+0x64 of each WeaponDef
+		uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+		for (int i = 1; i < 256; i++) {
+			uint8_t *complete = ((uint8_t **)(base + 0x3edce0))[i];
+			uint8_t *def = ((uint8_t **)(base + 0x3ee320))[i];
+			if (!complete || !def || !readable((uintptr_t)complete, 8) || !readable((uintptr_t)def, 0x68))
+				break;
+			const char *name = *(const char **)complete;
+			int *f = (int *)(def + 0x40);
+			log_printf("mem: weapon %d %s: %d %d %d %d %d %d %d %d %d %d", i, readable((uintptr_t)name, 1) ? name : "?",
+				   f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9]);
+		}
+		return 1;
+	}
+	if (strncmp(line, "!rva ", 5) == 0) {
+		// "!rva <rva> <size>": like !mem, at an address relative to the exe
+		char *end;
+		uintptr_t rva = (uintptr_t)strtoull(line + 5, &end, 16);
+		size_t size = (size_t)strtoull(end, NULL, 16);
+		memdump((uintptr_t)GetModuleHandleA(NULL) + rva, size ? size : 0x80);
 		return 1;
 	}
 	if (strncmp(line, "!mem ", 5) == 0) {

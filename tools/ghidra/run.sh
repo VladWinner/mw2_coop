@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run XrefStrings.java on an iw4sp.exe already imported and analyzed in a Ghidra project.
+# Run XrefStrings.java (or $GHIDRA_SCRIPT, e.g. FindDisp.java) on an iw4sp.exe already imported and analyzed in a Ghidra project.
 # Args go straight to the script; '%' is escaped for cmd.exe. Prints the script's lines.
 #
 # Environment (Windows paths):
@@ -20,6 +20,7 @@ for a in "$@"; do
 done
 eval cmd //c "\"$GHIDRA_DIR\\support\\analyzeHeadless.bat\"" \
 	"\"$GHIDRA_PROJECT\"" mw2sp64 -process iw4sp.exe -noanalysis -readOnly \
-	-scriptPath "\"$HERE\"" -postScript XrefStrings.java $ARGS > "$LOG" 2>&1
-sed -n '/XrefStrings.java>/,$p' "$LOG" | sed -E 's/^INFO  XrefStrings.java> //; s/ \(GhidraScript\)  $//' |
+	-scriptPath "\"$HERE\"" -postScript ${GHIDRA_SCRIPT:-XrefStrings.java} $ARGS > "$LOG" 2>&1
+SCRIPT=${GHIDRA_SCRIPT:-XrefStrings.java}
+sed -n "/$SCRIPT>/,\$p" "$LOG" | sed -E "s/^INFO  $SCRIPT> //; s/ \(GhidraScript\)  \$//" |
 	grep -v -E '^(INFO|WARN)  '

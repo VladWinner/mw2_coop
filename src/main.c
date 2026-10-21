@@ -17,6 +17,7 @@
 #include "settings.h"
 #include "steamnet.h"
 #include "upnp.h"
+#include "zones.h"
 #include "scripts.h"
 
 int proxy_init(void);
@@ -50,6 +51,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 	if (game_init()) {
 		crash_install();
 		scripts_install();
+		zones_install();
 		localize_install();
 		scrdebug_install();
 		net_install();

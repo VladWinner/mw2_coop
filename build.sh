@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")"
 LLVM_MINGW=${LLVM_MINGW:-../tools/llvm-mingw/llvm-mingw-20261006-ucrt-x86_64}
 CC="$LLVM_MINGW/bin/x86_64-w64-mingw32-clang"
-SRC="src/main.c src/log.c src/proxy.c src/hooks.c src/game.c src/control.c src/crash.c src/scripts.c src/localize.c src/memdump.c src/menus.c src/access.c src/settings.c src/upnp.c src/steamnet.c src/firewall.c src/net.c
+SRC="src/main.c src/log.c src/proxy.c src/hooks.c src/game.c src/control.c src/crash.c src/scripts.c src/localize.c src/memdump.c src/menus.c src/access.c src/settings.c src/upnp.c src/steamnet.c src/firewall.c src/zones.c src/net.c
 	src/party.c src/progress.c src/scrdebug.c src/winmm_stubs.S src/winmm.def"
 mkdir -p build
 if [ "$1" = release ]; then

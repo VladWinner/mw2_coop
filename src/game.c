@@ -110,10 +110,24 @@ void game_xuid_add(long long delta)
 int game_dvar_raw(const char *name, char *buf, int size)
 {
 	dvar_t *d = game_find_dvar(name);
-	if (!d || d->type != DVAR_TYPE_STRING || !d->current.string)
+	if (!d)
 		return 0;
-	lstrcpynA(buf, d->current.string, size);
-	return 1;
+	switch (d->type) {
+	case DVAR_TYPE_STRING:
+		if (!d->current.string)
+			return 0;
+		lstrcpynA(buf, d->current.string, size);
+		return 1;
+	case DVAR_TYPE_BOOL:
+		snprintf(buf, size, "%d", d->current.enabled);
+		return 1;
+	case DVAR_TYPE_INT:
+	case DVAR_TYPE_ENUM:
+		snprintf(buf, size, "%d", d->current.integer);
+		return 1;
+	default:
+		return 0;
+	}
 }
 
 void game_log_commands(void)

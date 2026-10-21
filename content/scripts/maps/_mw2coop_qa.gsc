@@ -110,6 +110,9 @@ main()
 		case "knife2":
 			knife();
 			break;
+		case "body":
+			body();
+			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
 			// other maps' zones do not have)
@@ -881,3 +884,24 @@ knife_watch_report( other )
 		report( "witness: awake " + other.mw2coop_awake + ", " + int( Distance( eye, focus ) ) + " units from Shepherd, line " + sees + ", facing " + int( dot * 100 ) + "%" );
 	}
 }
+
+// QA body: put player 2 in front of player 1, facing him (the bodies come from _mw2coop);
+// screenshots show how each sees the other.
+body()
+{
+	wait 3;
+	angles = level.player GetPlayerAngles();
+	yaw = angles[ 1 ];
+	forward = AnglesToForward( ( 0, yaw, 0 ) );
+	level.player2 SetOrigin( level.player.origin + forward * 120 );
+	level.player SetPlayerAngles( ( 0, yaw, 0 ) );
+	level.player2 SetPlayerAngles( ( 0, yaw + 180, 0 ) );
+	report( "body: models set, player 2 in front of player 1" );
+	report( "body: weapons " + level.player GetCurrentWeapon() + " / " + level.player2 GetCurrentWeapon() );
+	wait 15;
+	level.player2 SetStance( "crouch" );
+	report( "body: player 2 crouches" );
+	wait 25;
+	report( "done" );
+}
+

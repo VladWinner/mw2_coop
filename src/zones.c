@@ -1,0 +1,118 @@
+// The Spec Ops add-on zone of a campaign level, loaded with the level in a co-op session. Players
+// have a third-person body only in Spec Ops: the coop_body_* / coop_head_* models, the only ones
+// the player animations fit (an AI soldier body set on a player stays in its bind pose), live in
+// the so_* zones. Each so_* zone sits on top of a campaign level's zone (so_killspree_trainer on
+// trainer) and holds little else (its map entities, its scripts, the Spec Ops table).
+//
+// The level zone loader (rva 0xf09b0, (map name, flag)) loads a Spec Ops map's own zone and then
+// its base level, which it reads from the name (so_<op>_<base>). In a co-op campaign session the
+// loader is given the Spec Ops name of the level instead, so both zones load exactly as for that
+// Spec Ops map. A level without its own Spec Ops zone gets another level's zone with the same
+// uniform after its own (DB_LoadXAssets, rva 0xf0ae0); its few references to that other level's
+// assets fall back to defaults. The game's own files only: nothing is shipped.
+#include <windows.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "game.h"
+#include "log.h"
+#include "zones.h"
+
+#define RVA_LOAD_LEVEL_ZONES 0x0f09b0
+#define RVA_DB_LOAD_XASSETS  0x0f0ae0
+
+typedef struct {
+	const char *name;
+	uint32_t alloc_flags;
+	uint32_t free_flags;
+} XZoneInfo;
+
+typedef void (*load_level_zones_t)(const char *map, int flag);
+typedef void (*db_load_xassets_t)(XZoneInfo *zones, uint32_t count, int sync);
+
+static load_level_zones_t original;
+
+static const struct {
+	const char *level, *spec_ops; // own: the Spec Ops map built on the level
+	int own;
+} zones[] = {
+	{"trainer", "so_killspree_trainer", 1},
+	{"invasion", "so_killspree_invasion", 1},
+	{"arcadia", "so_download_arcadia", 1},
+	{"airport", "so_escape_airport", 1},
+	{"favela", "so_killspree_favela", 1},
+	{"favela_escape", "so_defuse_favela_escape", 1},
+	{"cliffhanger", "so_sabotage_cliffhanger", 1},
+	{"contingency", "so_rooftop_contingency", 1},
+	{"oilrig", "so_assault_oilrig", 1},
+	{"gulag", "so_showers_gulag", 1},
+	{"estate", "so_takeover_estate", 1},
+	{"boneyard", "so_intel_boneyard", 1},
+	// no Spec Ops map of their own: a zone with the same uniform
+	{"roadkill", "so_killspree_invasion", 0},
+	{"dcburning", "so_killspree_invasion", 0},
+	{"dcemp", "so_killspree_invasion", 0},
+	{"dc_whitehouse", "so_killspree_invasion", 0},
+	{"af_caves", "so_killspree_favela", 0},
+	{"af_chase", "so_killspree_favela", 0},
+	{"ending", "so_killspree_favela", 0},
+};
+
+static void load_level_zones(const char *map, int flag)
+{
+	char coop[8] = "";
+	game_dvar_string("coop", coop, sizeof(coop)); // a bool: "0" / "1"
+	log_printf("zones: loading level zones for '%s' (coop '%s', flag %d)", map ? map : "", coop, flag);
+	if (coop[0] == '1' && map) {
+		for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
+			if (strcmp(map, zones[i].level) != 0)
+				continue;
+			if (zones[i].own) {
+				log_printf("zones: %s with its Spec Ops zone %s (co-op player bodies)", map, zones[i].spec_ops);
+				original(zones[i].spec_ops, flag);
+				return;
+			}
+			original(map, flag);
+			XZoneInfo extra = {zones[i].spec_ops, 4, 0};
+			((db_load_xassets_t)((uint8_t *)GetModuleHandleA(NULL) + RVA_DB_LOAD_XASSETS))(&extra, 1, 0);
+			log_printf("zones: %s with %s (co-op player bodies)", map, zones[i].spec_ops);
+			return;
+		}
+	}
+	original(map, flag);
+}
+
+// mov rax,rsp; mov [rax+8],rbx; mov [rax+10h],rbp; mov [rax+18h],rsi; push rdi
+static const uint8_t expected[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48,
+				   0x89, 0x68, 0x10, 0x48, 0x89, 0x70, 0x18, 0x57};
+
+void zones_install(void)
+{
+	uint8_t *target = (uint8_t *)GetModuleHandleA(NULL) + RVA_LOAD_LEVEL_ZONES;
+	if (memcmp(target, expected, sizeof(expected)) != 0) {
+		log_printf("zones: unexpected bytes at the level zone loader, not hooking");
+		return;
+	}
+	uint8_t *tramp = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	if (!tramp)
+		return;
+	memcpy(tramp, target, sizeof(expected));
+	uint8_t back[14] = {0xff, 0x25, 0, 0, 0, 0};
+	uint64_t to = (uint64_t)(uintptr_t)(target + sizeof(expected));
+	memcpy(back + 6, &to, 8);
+	memcpy(tramp + sizeof(expected), back, sizeof(back));
+	FlushInstructionCache(GetCurrentProcess(), tramp, 64);
+	original = (load_level_zones_t)tramp;
+
+	uint8_t jmp[16] = {0xff, 0x25, 0, 0, 0, 0};
+	to = (uint64_t)(uintptr_t)load_level_zones;
+	memcpy(jmp + 6, &to, 8);
+	jmp[14] = 0xcc;
+	jmp[15] = 0xcc;
+	DWORD old;
+	VirtualProtect(target, sizeof(jmp), PAGE_EXECUTE_READWRITE, &old);
+	memcpy(target, jmp, sizeof(jmp));
+	VirtualProtect(target, sizeof(jmp), old, &old);
+	FlushInstructionCache(GetCurrentProcess(), target, sizeof(jmp));
+	log_printf("zones: level zone loader hooked");
+}

@@ -67,6 +67,7 @@ main()
 	thread no_saves();
 	thread regroup_after_start();
 	thread follow_leader_teleports();
+	set_bodies();
 	thread sync_weapons();
 	thread track_checkpoints();
 	thread watch_failure();
@@ -78,6 +79,34 @@ main()
 		thread maps\_mw2coop_qa::link_probe();
 		thread maps\_mw2coop_qa::main();
 	}
+}
+
+// --------------------------------------------------------------------------------------------
+// Third-person bodies: campaign players have no model, so the partner was invisible, or only the
+// first-person arms of a scene rig showed where he stood. Each player gets the Spec Ops co-op
+// body of the level's uniform (maps\_mw2coop_bodies; the DLL loads the zone that holds it);
+// _loadout's UpdateModel, as in Spec Ops, sets it and keeps the current weapon's model attached.
+// A player never sees his own body. Precached here, before the level's first wait.
+
+set_bodies()
+{
+	models = maps\_mw2coop_bodies::bodies( level.script );
+	if ( !isdefined( models ) )
+		return;
+	PrecacheModel( models[ 0 ] );
+	PrecacheModel( models[ 1 ] );
+	foreach ( player in level.players )
+	{
+		player.mw2coop_body = models[ 0 ];
+		player.mw2coop_head = models[ 1 ];
+		player maps\_mw2coop_bodies::give_body( ::body_model );
+	}
+}
+
+body_model()
+{
+	self SetModel( self.mw2coop_body );
+	self Attach( self.mw2coop_head, "", true );
 }
 
 // --------------------------------------------------------------------------------------------

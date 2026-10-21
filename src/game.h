@@ -92,7 +92,7 @@ dvar_t *game_find_dvar(const char *name);
 // Formats a dvar's current value into buf; returns buf ("<missing>" when not registered).
 const char *game_dvar_string(const char *name, char *buf, int size);
 void game_log_commands(void);
-// Copies a string dvar's current value into buf; 0 if missing or not a string dvar.
+// Copies a dvar's current value into buf (a string, or a bool/int as a number); 0 if missing or another type.
 int game_dvar_raw(const char *name, char *buf, int size);
 // Read the pointer stored at rva, then width bytes at pointer+off (0 if null/unreadable).
 unsigned long long game_peek_ptr(unsigned long long rva, unsigned long long off, int width);
