@@ -368,6 +368,27 @@ copy_weapons( to, from )
 		to SwitchToWeapon( current );
 }
 
+// A loadout gives weapons and then switches to one (airport: m4_grenadier, m240, then
+// SwitchToWeapon m240); while player 1 raises it his current weapon is still the first one, so
+// copy_weapons() put player 2 on the M4 (owner, 2026-10-21: "the client got a rifle instead of
+// the machine gun"). Player 2 holds whatever player 1 settles on during the first seconds.
+follow_first_weapon_switch()
+{
+	level endon( "mw2coop_level_end" );
+	asked = level.player2 GetCurrentWeapon();
+	for ( t = 0; t < 4; t += 0.1 )
+	{
+		wait 0.1;
+		current = level.player GetCurrentWeapon();
+		if ( current != "none" && current != asked && level.player2 HasWeapon( current ) && level.player2 GetCurrentWeapon() != current )
+		{
+			asked = current;
+			level.player2 SwitchToWeapon( current );
+			state( "player 2 raises " + current + " as player 1 does" );
+		}
+	}
+}
+
 // Level loadouts (maps\_loadout) set first-person hands on level.player only. Without hands the
 // client's own player cannot draw a weapon: the engine raises "no viewmodel set" and drops the
 // co-op session. Player 2 always wears player 1's hands, also when a level changes them.
@@ -388,6 +409,7 @@ sync_weapons()
 	sync_viewmodel();
 	copy_weapons( level.player2, level.player );
 	state( "player 2 weapons copied from player 1" );
+	thread follow_first_weapon_switch();
 	prev1 = level.player GetWeaponsListAll();
 	prev2 = level.player2 GetWeaponsListAll();
 	for ( ;; )

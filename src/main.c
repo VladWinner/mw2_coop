@@ -10,6 +10,7 @@
 #include "localize.h"
 #include "log.h"
 #include "menus.h"
+#include "mirror.h"
 #include "net.h"
 #include "party.h"
 #include "progress.h"
@@ -51,6 +52,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 	if (game_init()) {
 		crash_install();
 		scripts_install();
+		mirror_install();
 		zones_install();
 		localize_install();
 		scrdebug_install();

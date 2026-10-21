@@ -30,6 +30,10 @@
 //              and plays the scene, player 2 goes down and watches; knife2: player 2 strikes
 //   oilrig   - (oilrig, default start) both ride an SDV underwater, both surface; player 1 does
 //              the stealth kill, then both are pulled out of the water. oilrig2: player 2 kills
+//   loadout  - (any map) after the level's loadout both players hold the same weapon
+//   boat     - (af_chase, default start) the Endgame boat chase: player 1 boards and drives,
+//              player 2 rides as the gunner beside Price; the bot drives after the enemy boat.
+//              boat2: player 2 boards first and drives
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -112,6 +116,13 @@ main()
 			break;
 		case "body":
 			body();
+			break;
+		case "loadout":
+			loadout();
+			break;
+		case "boat":
+		case "boat2":
+			boat();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -924,6 +935,52 @@ icon_hidden( player )
 	return !isdefined( player.friendlyIcon ) || player.friendlyIcon.alpha == 0;
 }
 
+// Price's eyes, the passenger's body's eyes and the passenger's own eyes in the boat's frame
+// (forward, right, up), with the poses.
+boat_poses_text( other )
+{
+	text = "Price " + level.price.a.boat_pose + " eye " + boat_local( level.price GetTagOrigin( "tag_eye" ) ) + bones_text( level.price );
+	if ( isdefined( level.mw2coop_boat_body ) )
+		text += ", body " + level.mw2coop_boat_body.mw2coop_pose + " eye " + boat_local( level.mw2coop_boat_body GetTagOrigin( "tag_eye" ) ) + bones_text( level.mw2coop_boat_body );
+	return text + ", passenger eye " + boat_local( other GetEye() );
+}
+
+// Bones every human model has: root, pelvis, head.
+bones_text( ent )
+{
+	return " root " + boat_local( ent GetTagOrigin( "tag_origin" ) ) + " pelvis " + boat_local( ent GetTagOrigin( "j_mainroot" ) ) + " head " + boat_local( ent GetTagOrigin( "j_head" ) );
+}
+
+boat_local( pos )
+{
+	boat = level.players_boat;
+	d = pos - boat.origin;
+	return int( VectorDot( d, AnglesToForward( boat.angles ) ) ) + " " + int( VectorDot( d, AnglesToRight( boat.angles ) ) ) + " " + int( VectorDot( d, AnglesToUp( boat.angles ) ) );
+}
+
+// Price's eyes from the boat's long axis, to the right positive.
+price_side()
+{
+	boat = level.players_boat;
+	return VectorDot( level.price GetTagOrigin( "tag_eye" ) - boat.origin, AnglesToRight( boat.angles ) );
+}
+
+// The passenger's eyes on the other side of the boat's long axis from Price's (his "left" pose
+// lies on the right tube: QA boat measured it).
+across_from_price( other )
+{
+	boat = level.players_boat;
+	side = VectorDot( other GetEye() - boat.origin, AnglesToRight( boat.angles ) );
+	return side * price_side() < 0 && abs( side ) > 8;
+}
+
+// The player's distance from the boat's long axis, to the right positive.
+boat_side( player )
+{
+	boat = level.players_boat;
+	return VectorDot( player.origin - boat.origin, AnglesToRight( boat.angles ) );
+}
+
 stumbler_runs_watch()
 {
 	level waittill( "run_shep_run" );
@@ -1022,3 +1079,111 @@ body()
 	report( "done" );
 }
 
+
+// Endgame boat chase (af_chase, default start). Names no chase script (not in other zones): the
+// bot boards through the jetty trigger and drives with level.mw2coop_qa_boat_autopilot.
+boat()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	driver = level.player;
+	if ( GetDvar( "mw2coop_qa" ) == "boat2" )
+		driver = level.player2;
+	other = maps\_mw2coop::other_player( driver );
+	trigger = GetEnt( "boat_mount", "targetname" );
+	check( isdefined( trigger ), "the jetty's boat trigger" );
+	wait 2;
+	driver SetOrigin( PlayerPhysicsTrace( trigger.origin + ( 0, 0, 40 ), trigger.origin - ( 0, 0, 200 ) ) );
+	for ( t = 0; t < 3 && !flag( "player_on_boat" ); t += 0.25 )
+		wait 0.25;
+	if ( !flag( "player_on_boat" ) )
+	{
+		report( "QA sets off the boat trigger (standing in it did not)" );
+		trigger notify( "trigger", driver );
+	}
+	for ( t = 0; t < 10 && !flag( "player_on_boat" ); t += 0.25 )
+		wait 0.25;
+	check( flag( "player_on_boat" ), "on the boat (" + t + " s)" );
+	wait 1;
+	check( level.mw2coop_lead == driver, "the boarding player drives" );
+	check( isdefined( driver.drivingVehicle ) && driver.drivingVehicle == level.players_boat, "and is at the wheel" );
+	d = Distance( other.origin, level.players_boat.origin );
+	// he is seated once Price has settled in the boat (up to 5 s)
+	for ( t = 0; t < 7 && !isdefined( level.mw2coop_boat_seat ); t += 0.25 )
+		wait 0.25;
+	d = Distance( other.origin, level.players_boat.origin );
+	check( other IsLinked() && d < 150, "the other player rides in the boat (" + int( d ) + " units from it, seated after " + t + " s)" );
+	if ( isdefined( level.mw2coop_qa_boat_autopilot ) )
+		level.players_boat thread [[ level.mw2coop_qa_boat_autopilot ]]( 60 );
+	// the body's eyes (forward right up in the boat's frame) every 0.5 s
+	text = "body samples:";
+	for ( t = 0; t < 3; t += 0.5 )
+	{
+		if ( isdefined( level.mw2coop_boat_body ) )
+			text += " " + boat_local( level.mw2coop_boat_body GetTagOrigin( "tag_eye" ) );
+		else
+			text += " -";
+		wait 0.5;
+	}
+	report( text );
+	report( "poses: " + boat_poses_text( other ) );
+	check( across_from_price( other ), "the passenger lies across from Price (" + int( boat_side( other ) ) + ", Price " + int( price_side() ) + ")" );
+	// he looks as far right, then left, as he can (screenshots: his body's gun follows)
+	foreach ( turn in strtok( "-60 60", " " ) )
+	{
+		report( "passenger looks " + turn );
+		for ( t = 0; t < 3; t += 0.05 )
+		{
+			other SetPlayerAngles( ( 0, level.players_boat.angles[ 1 ] + 36 + int( turn ), 0 ) );
+			wait 0.05;
+		}
+	}
+	// the level's triggers that would turn Price over (af_chase_code::price_position_switch())
+	// leave him on his tube in co-op: set them all off
+	switches = GetEntArray( "price_position_switch", "targetname" );
+	foreach ( s in switches )
+		s notify( "trigger", level.mw2coop_lead );
+	wait 3;
+	report( "poses: " + boat_poses_text( other ) );
+	check( switches.size > 0 && level.price.a.boat_pose == "left" && !isdefined( level.price.scripted_boat_pose ), "Price keeps his tube through the level's " + switches.size + " position triggers" );
+	check( across_from_price( other ), "the passenger still lies across from him (" + int( boat_side( other ) ) + ", Price " + int( price_side() ) + ")" );
+	price_turns = 0;
+	// 30 s: the QA autopilot is slower than a player, and by 35 to 45 s Shepherd's boat gets
+	// away and the level fails the mission as it would for a player that slow
+	for ( t = 0; t < 30; t += 10 )
+	{
+		// Price's root and eyes against the tag, and the body's eyes: what moves while riding
+		for ( s = 0; s < 10; s += 2 )
+		{
+			wait 2;
+			if ( level.price.a.boat_pose != "left" )
+				price_turns++;
+			if ( isdefined( level.mw2coop_boat_body ) )
+				report( "drift: Price " + level.price.a.boat_pose + " root " + boat_local( level.price.origin ) + " eye " + boat_local( level.price GetTagOrigin( "tag_eye" ) ) + ", body " + level.mw2coop_boat_body.mw2coop_pose + " eye " + boat_local( level.mw2coop_boat_body GetTagOrigin( "tag_eye" ) ) );
+		}
+		report( "ride " + ( t + 10 ) + " s: boat speed " + int( level.players_boat Vehicle_GetSpeed() ) + ", passenger " + int( Distance( other.origin, level.players_boat.origin ) ) + " units from it, linked " + other IsLinked() + ", health " + other.health + ", enemy boat " + int( Distance( level.players_boat.origin, level.enemy_boat.origin ) ) );
+	}
+	check( IsAlive( other ) && other IsLinked(), "the passenger rode along" );
+	check( price_turns == 0, "Price stayed on his tube the whole ride (" + price_turns + " samples off it)" );
+	report( "done" );
+}
+
+// The level's loadout (maps\_loadout): player 2 has player 1's weapons and holds the same one.
+loadout()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 5;
+	a = level.player GetCurrentWeapon();
+	b = level.player2 GetCurrentWeapon();
+	report( "player 1: " + a + " | " + weapons_text( level.player ) );
+	report( "player 2: " + b + " | " + weapons_text( level.player2 ) );
+	check( a == b && a != "none", "both hold " + a + " (player 2: " + b + ")" );
+	missing = "";
+	foreach ( weapon in level.player GetWeaponsListAll() )
+		if ( !level.player2 HasWeapon( weapon ) )
+			missing += weapon + " ";
+	check( missing == "", "player 2 has all of player 1's weapons (missing: " + missing + ")" );
+	c1 = level.player GetOffhandSecondaryClass();
+	c2 = level.player2 GetOffhandSecondaryClass();
+	check( c1 == c2, "same second grenade class " + c1 + " (player 2: " + c2 + ")" );
+	report( "done" );
+}
