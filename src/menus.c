@@ -462,6 +462,7 @@ static LobbySwap lobby_swaps[] = {
 };
 
 static int lobby_campaign_set;
+static void patch_lobby_mission(uint8_t *menu, int campaign);
 
 // the item showing <text> natively (or our text, once swapped: the swap remembers its item)
 static int item_by_text(uint8_t *menu, const char *text, const LobbySwap *w)
@@ -508,9 +509,86 @@ static void patch_lobby(int campaign)
 			changed = 1;
 		}
 	}
+	patch_lobby_mission(menu, campaign);
 	if (changed || campaign != lobby_campaign_set)
 		log_printf("menus: coop_lobby set for %s", campaign ? "a campaign mission" : "Spec Ops");
 	lobby_campaign_set = campaign;
+}
+
+// The lobby's mission picture and name: Spec Ops ops get them from sp/specOpsTable.csv (the
+// picture's materialExp, the name's textExp); a campaign mission has no row there and showed a
+// checkerboard. With a campaign mission the expressions are switched off and the item shows the
+// mission list's own: material "levelshot_mw2_<map>", text "@MENU_SP_SP_<MAP>".
+#define ASSET_TYPE_MATERIAL 5
+#define ITEM_BACKGROUND 0xa8 // window background Material *
+#define ITEM_MATERIAL_EXP 0x1b8
+static uint8_t *pic_item, *name_item;
+static void *pic_native_material, *pic_native_exp, *name_native_exp;
+static const char *name_native_text;
+static char shown_map[64];
+
+static void find_mission_items(uint8_t *menu)
+{
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	uint8_t *pic = NULL, *name = NULL;
+	for (int i = 0; i < count; i++) {
+		float *r = (float *)(items[i] + 8);
+		if (r[2] == 216 && r[3] == 120 && *(void **)(items[i] + ITEM_MATERIAL_EXP))
+			pic = items[i];
+	}
+	for (int i = 0; pic && i < count; i++) {
+		float *r = (float *)(items[i] + 8), *pr = (float *)(pic + 8);
+		if (r[2] == 216 && r[3] == 20 && r[1] == pr[1] - 20 && *(void **)(items[i] + ITEM_TEXT_EXP))
+			name = items[i];
+	}
+	if (!pic || !name)
+		return;
+	if (pic != pic_item) {
+		pic_item = pic;
+		pic_native_material = *(void **)(pic + ITEM_BACKGROUND);
+		pic_native_exp = *(void **)(pic + ITEM_MATERIAL_EXP);
+	}
+	if (name != name_item) {
+		name_item = name;
+		name_native_exp = *(void **)(name + ITEM_TEXT_EXP);
+		name_native_text = *(const char **)(name + ITEM_TEXT);
+	}
+}
+
+static void patch_lobby_mission(uint8_t *menu, int campaign)
+{
+	find_mission_items(menu);
+	if (!pic_item || !name_item)
+		return;
+	if (!campaign) {
+		*(void **)(pic_item + ITEM_MATERIAL_EXP) = pic_native_exp;
+		*(void **)(pic_item + ITEM_BACKGROUND) = pic_native_material;
+		*(void **)(name_item + ITEM_TEXT_EXP) = name_native_exp;
+		*(const char **)(name_item + ITEM_TEXT) = name_native_text;
+		shown_map[0] = 0;
+		return;
+	}
+	char map[64] = "";
+	game_dvar_raw("coop_mapName", map, sizeof(map));
+	if (!map[0] || strcmp(map, shown_map) == 0)
+		return;
+	lstrcpynA(shown_map, map, sizeof(shown_map));
+	static char material[96], text[96];
+	snprintf(material, sizeof(material), "levelshot_mw2_%s", map);
+	int n = snprintf(text, sizeof(text), "@MENU_SP_SP_");
+	for (const char *m = map; *m && n < (int)sizeof(text) - 1; m++)
+		text[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+	text[n] = 0;
+	typedef void *(*find_t)(int, const char *);
+	typedef int (*is_default_t)(int, const char *);
+	if (!((is_default_t)(base + RVA_DB_IS_DEFAULT))(ASSET_TYPE_MATERIAL, material)) {
+		*(void **)(pic_item + ITEM_MATERIAL_EXP) = NULL;
+		*(void **)(pic_item + ITEM_BACKGROUND) = ((find_t)(base + RVA_DB_FIND_HEADER))(ASSET_TYPE_MATERIAL, material);
+	}
+	*(void **)(name_item + ITEM_TEXT_EXP) = NULL;
+	*(const char **)(name_item + ITEM_TEXT) = text;
+	log_printf("menus: lobby shows %s (%s)", material, text);
 }
 
 // Ready state: each PC sends its own to the partner every second while the lobby is open

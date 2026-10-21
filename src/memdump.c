@@ -89,6 +89,12 @@ static void print_handlers(const char *what, uint8_t *set, int depth)
 			log_printf("mem: %s %*selse {", what, depth * 2, "");
 			print_handlers(what, data, depth + 1);
 			log_printf("mem: %s %*s}", what, depth * 2, "");
+		} else if (type >= 3 && type <= 6 && readable((uintptr_t)data, 16)) {
+			// SetLocalVarData {const char *name; Statement *expression}: 3 bool, 4 int, 5 float, 6 string
+			char d[96];
+			describe(*(uint64_t *)data, d, sizeof(d));
+			log_printf("mem: %s %*ssetLocalVar(%d) %s =", what, depth * 2, "", type, d);
+			print_statement("    value", *(uint8_t **)(data + 8));
 		} else {
 			char d[96];
 			describe((uint64_t)(uintptr_t)data, d, sizeof(d));
