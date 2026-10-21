@@ -118,6 +118,12 @@ static const ModString strings[] = {
 	// Второй игрок не сможет войти. / Разрешить доступ?
 	{"MW2COOP_FIREWALL_TEXT", "\xc2\xf2\xee\xf0\xee\xe9 \xe8\xe3\xf0\xee\xea \xed\xe5 \xf1\xec\xee\xe6\xe5\xf2 \xe2\xee\xe9\xf2\xe8.\n\xd0\xe0\xe7\xf0\xe5\xf8\xe8\xf2\xfc \xe4\xee\xf1\xf2\xf3\xef?",
 	 "The other player cannot get in.\nAllow access?"},
+	// ПРОДОЛЖИТЬ: 
+	{"MW2COOP_CONTINUE_PREFIX", "\xcf\xd0\xce\xc4\xce\xcb\xc6\xc8\xd2\xdc: ",
+	 "CONTINUE: "},
+	// НОВАЯ КАМПАНИЯ
+	{"MW2COOP_NEW_CAMPAIGN", "\xcd\xce\xc2\xc0\xdf \xca\xc0\xcc\xcf\xc0\xcd\xc8\xdf",
+	 "NEW CAMPAIGN"},
 };
 #define STRING_COUNT (int)(sizeof(strings) / sizeof(strings[0]))
 
@@ -140,6 +146,7 @@ static Alias aliases[] = {
 	{"MW2COOP_ACCESS", "MW2COOP_ACCESS_OPEN", -2, "", {NULL, NULL}},
 	{"MW2COOP_EDIT_TITLE", "MW2COOP_EDIT_PASSWORD", -2, "", {NULL, NULL}},
 	{"MW2COOP_EDIT_LABEL", "MW2COOP_LABEL_PASSWORD", -2, "", {NULL, NULL}},
+	{"MW2COOP_CONTINUE", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_LOBBY_1", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_LOBBY_2", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_LOBBY_3", NULL, -1, "", {NULL, NULL}},

@@ -11,9 +11,10 @@
 //
 // The client must use the same start point, or the two lockstep machines run different level
 // scripts. When the host sends coopLaunch, net.c first sends the client an out-of-band packet
-// "mw2coop_start start=<start> mw2coop_god=<0|1|>" (progress_launch_packet); the client sets
-// those dvars from it before the level loads (progress_on_packet). mw2coop_god is the test
-// god mode (_mw2coop.gsc), which must also match on both machines.
+// "mw2coop_start start=<start> mw2coop_god=<0|1|> g_gameskill=<0..3>" (progress_launch_packet);
+// the client sets those dvars from it before the level loads (progress_on_packet). mw2coop_god
+// is the test god mode (_mw2coop.gsc); g_gameskill is the difficulty the host picked. Both must
+// match on the two machines.
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -87,7 +88,7 @@ static void continue_f(void)
 }
 
 // Host dvars the client must match before the level loads (level scripts read them).
-static const char *const session_dvars[] = {"start", "mw2coop_god"};
+static const char *const session_dvars[] = {"start", "mw2coop_god", "g_gameskill"};
 #define SESSION_DVARS (int)(sizeof(session_dvars) / sizeof(session_dvars[0]))
 
 int progress_launch_packet(char *buf, int size)

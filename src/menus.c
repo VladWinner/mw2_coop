@@ -136,13 +136,7 @@ int ui_register_menu(uint8_t *menu)
 
 static uint8_t **main_items; // our items array for main_text, NULL until patched
 
-static const char online_action[] =
-	"\"play\" \"mouse_click\" ; "
-	"\"setdvar\" \"arcademode\" 0 ; \"setdvar\" \"arcademode_full\" 0 ; \"setdvar\" \"solo_play\" 0 ; "
-	"\"setdvar\" \"ui_skip_level_select\" 1 ; "
-	"\"setdvar\" \"so_ophud_player0\" 0 ; \"setdvar\" \"so_ophud_player1\" 0 ; "
-	"\"exec\" \"xrequirelivesignin\" ; "
-	"\"exec\" \"stopListening; mw2coop_online; listen\" ; ";
+static const char online_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_host_menu\" ; ";
 
 static const char join_action[] =
 	"\"play\" \"mouse_click\" ; "
@@ -229,6 +223,7 @@ typedef struct {
 	char name[48];
 } Lobby;
 
+static void show_row(uint8_t *menu, const char *row, int visible);
 static CRITICAL_SECTION lobby_lock; // the packet thread adds, the main thread reads
 static Lobby lobbies[MAX_LOBBIES];
 static int lobby_count;
@@ -310,20 +305,12 @@ static void find_tick(void)
 		}
 		LeaveCriticalSection(&lobby_lock);
 		log_printf("menus: %d campaign lobb%s answered", count, count == 1 ? "y" : "ies");
-		// rows without a lobby are hidden (WINDOW_VISIBLE in dynamicFlags), so the focus starts on
-		// the first lobby, or on the address row
+		// rows without a lobby are hidden, so the focus starts on the first lobby or the address row
 		uint8_t *list = ui_find_menu("mw2coop_lobbies");
-		for (int i = 0; list && i < MAX_LOBBIES; i++) {
+		for (int i = 0; i < MAX_LOBBIES; i++) {
 			char row[24];
 			snprintf(row, sizeof(row), "mw2coop_lobby_%d", i + 1);
-			int at = ui_item_index(list, row);
-			if (at < 0)
-				continue;
-			uint32_t *flags = (uint32_t *)((*(uint8_t ***)(list + MENU_ITEMS))[at] + ITEM_DYNAMIC_FLAGS);
-			if (i < count)
-				*flags |= WINDOW_VISIBLE;
-			else
-				*flags &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
+			show_row(list, row, i < count);
 		}
 		// the list opens even when nothing answered: its last row enters an address
 		localize_select("MW2COOP_JOIN", count ? "MW2COOP_JOIN_IDLE" : "MW2COOP_JOIN_NONE");
@@ -360,17 +347,18 @@ static void join_found_f(void)
 // The list popup: a copy of the difficulty popup (title, four buttons, the description lines)
 // with our texts and actions. It is added to the UI's menu list, which a UI zone reload rebuilds.
 
-static void add_lobbies_menu(void)
+// A popup with a title and four rows, copied from the difficulty popup (its rows are the four
+// difficulty buttons; the descriptions and the checkpoint warning are blanked).
+static const char *const popup_rows[LIST_ROWS] = {"newgame_easy", "newgame_regular", "newgame_hardened", "newgame_veteran"};
+
+static uint8_t *rows_popup(const char *name, const char *title, const char *const row_names[LIST_ROWS],
+			   const char *const row_texts[LIST_ROWS], const char *const row_actions[LIST_ROWS])
 {
-	if (ui_find_menu("mw2coop_lobbies"))
-		return;
 	uint8_t *src = ui_find_menu("popmenu_difficulty");
-	static const char *const buttons[LIST_ROWS] = {"newgame_easy", "newgame_regular", "newgame_hardened",
-						       "newgame_veteran"};
-	int first = src ? ui_item_index(src, buttons[0]) : -1;
+	int first = src ? ui_item_index(src, popup_rows[0]) : -1;
 	if (first < 0)
-		return;
-	uint8_t *menu = ui_clone_menu(src, "mw2coop_lobbies");
+		return NULL;
+	uint8_t *menu = ui_clone_menu(src, name);
 	*(void **)(menu + MENU_ON_OPEN) = ui_script_set("\"focusfirst\" ; ");
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
@@ -378,40 +366,153 @@ static void add_lobbies_menu(void)
 		uint8_t *it = items[i];
 		const char *text = *(const char **)(it + ITEM_TEXT);
 		if (text && strcmp(text, "@MENU_SELECT_DIFFICULTY") == 0)
-			*(const char **)(it + ITEM_TEXT) = "@MW2COOP_LOBBIES";
+			*(const char **)(it + ITEM_TEXT) = title;
 		else if (i > first - 6 && i < first) {
-			// the difficulty descriptions and the checkpoint warning
 			*(const char **)(it + ITEM_TEXT) = "";
 			*(void **)(it + ITEM_TEXT_EXP) = NULL;
 		}
 	}
-	// rows 1..3: the lobbies found; row 4: enter an address
-	for (int b = 0; b < LIST_ROWS; b++) {
-		int i = ui_item_index(src, buttons[b]);
+	for (int r = 0; r < LIST_ROWS; r++) {
+		int i = ui_item_index(src, popup_rows[r]);
 		if (i < 0)
 			continue;
 		uint8_t *it = items[i];
-		static char names[LIST_ROWS][24], texts[LIST_ROWS][24], actions[LIST_ROWS][128];
-		snprintf(names[b], sizeof(names[b]), "mw2coop_lobby_%d", b + 1);
-		if (b < MAX_LOBBIES) {
-			snprintf(texts[b], sizeof(texts[b]), "@MW2COOP_LOBBY_%d", b + 1);
-			snprintf(actions[b], sizeof(actions[b]),
-				 "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found %d\" ; ", b + 1);
-		} else {
-			snprintf(texts[b], sizeof(texts[b]), "@MW2COOP_BY_ADDRESS");
-			snprintf(actions[b], sizeof(actions[b]),
-				 "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_address\" ; ");
-		}
-		*(const char **)it = names[b];
-		*(const char **)(it + ITEM_TEXT) = texts[b];
-		*(void **)(it + ITEM_ACTION) = ui_script_set(actions[b]);
+		*(const char **)it = row_names[r];
+		*(const char **)(it + ITEM_TEXT) = row_texts[r];
+		*(void **)(it + ITEM_ACTION) = ui_script_set(row_actions[r]);
 		*(void **)(it + ITEM_ON_FOCUS) =
 			ui_script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ");
 		*(void **)(it + ITEM_LEAVE_FOCUS) =
 			ui_script_set("\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; ");
 	}
-	if (ui_register_menu(menu))
-		log_printf("menus: list of games on the network added (%d items)", count);
+	return ui_register_menu(menu) ? menu : NULL;
+}
+
+// show or hide a popup row (WINDOW_VISIBLE in dynamicFlags; a hidden row cannot have the focus)
+static void show_row(uint8_t *menu, const char *row, int visible)
+{
+	int at = menu ? ui_item_index(menu, row) : -1;
+	if (at < 0)
+		return;
+	uint32_t *flags = (uint32_t *)((*(uint8_t ***)(menu + MENU_ITEMS))[at] + ITEM_DYNAMIC_FLAGS);
+	if (visible)
+		*flags |= WINDOW_VISIBLE;
+	else
+		*flags &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
+}
+
+static void add_lobbies_menu(void)
+{
+	if (ui_find_menu("mw2coop_lobbies"))
+		return;
+	// rows 1..3: the lobbies found; row 4: enter an address
+	static const char *const names[LIST_ROWS] = {"mw2coop_lobby_1", "mw2coop_lobby_2", "mw2coop_lobby_3", "mw2coop_lobby_4"};
+	static const char *const texts[LIST_ROWS] = {"@MW2COOP_LOBBY_1", "@MW2COOP_LOBBY_2", "@MW2COOP_LOBBY_3", "@MW2COOP_BY_ADDRESS"};
+	static const char *const actions[LIST_ROWS] = {
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found 1\" ; ",
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found 2\" ; ",
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found 3\" ; ",
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_address\" ; "};
+	if (rows_popup("mw2coop_lobbies", "@MW2COOP_LOBBIES", names, texts, actions))
+		log_printf("menus: list of games on the network added");
+}
+
+// ---------------------------------------------------------------- hosting: continue, new, pick
+
+// The campaign menu's "two players online" opens a popup: continue where the players stopped
+// (progress.txt; the row is hidden without progress), a new campaign (the game's difficulty
+// popup, then The Pit), or a mission from the campaign list (then its difficulty popup). The
+// pick ends in the game's own "devmap <map>", which the devmap hook turns into the lobby.
+static volatile LONG picking; // a new campaign or a mission is being picked for the lobby
+static DWORD picking_seen;    // last tick one of the picking menus was open
+
+static void add_host_menu(void)
+{
+	if (ui_find_menu("mw2coop_host"))
+		return;
+	static const char *const names[LIST_ROWS] = {"mw2coop_continue", "mw2coop_new", "mw2coop_pick", "mw2coop_host_4"};
+	static const char *const texts[LIST_ROWS] = {"@MW2COOP_CONTINUE", "@MW2COOP_NEW_CAMPAIGN", "@MENU_MISSION_SELECT_CAPS", ""};
+	static const char *const actions[LIST_ROWS] = {
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_go\" ; ",
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_new\" ; ",
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_pick\" ; ",
+		"\"play\" \"mouse_click\" ; "};
+	uint8_t *menu = rows_popup("mw2coop_host", "@MENU_SP_TWO_PLAYER_ONLINE", names, texts, actions);
+	if (menu) {
+		show_row(menu, "mw2coop_host_4", 0);
+		log_printf("menus: host popup added");
+	}
+}
+
+// mw2coop_host_menu: the campaign menu's button
+static void host_menu_f(void)
+{
+	uint8_t *menu = ui_find_menu("mw2coop_host");
+	char map[64], start[64];
+	int have = progress_last(map, sizeof(map), start, sizeof(start));
+	if (have) {
+		char key[80] = "MENU_SP_SP_", text[160];
+		int n = (int)strlen(key);
+		for (const char *m = map; *m && n < (int)sizeof(key) - 1; m++)
+			key[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+		key[n] = 0;
+		const char *prefix = localize_text("MW2COOP_CONTINUE_PREFIX"), *mission = localize_text(key);
+		snprintf(text, sizeof(text), "%s%s", prefix ? prefix : "", mission ? mission : map);
+		localize_set_text("MW2COOP_CONTINUE", text);
+	}
+	show_row(menu, "mw2coop_continue", have);
+	show_row(menu, "mw2coop_host_4", 0);
+	game_cbuf_addtext("openmenu mw2coop_host\n");
+}
+
+// Host a lobby: what the Spec Ops "two players online" button runs, then mw2coop_online [map].
+static void host_lobby(const char *map)
+{
+	char cmd[512];
+	snprintf(cmd, sizeof(cmd),
+		 "set arcademode 0\nset arcademode_full 0\nset solo_play 0\nset ui_skip_level_select 1\n"
+		 "set so_ophud_player0 0\nset so_ophud_player1 0\nxrequirelivesignin\n"
+		 "stopListening\nset arcademode_lives 2\nset arcademode_combined_score 0\nset mblur_enable 0\n"
+		 "mw2coop_online %s\nlisten\n",
+		 map ? map : "");
+	game_cbuf_addtext(cmd);
+}
+
+static void host_go_f(void)
+{
+	host_lobby(NULL);
+}
+
+static void host_new_f(void)
+{
+	InterlockedExchange(&picking, 1);
+	picking_seen = GetTickCount();
+	game_cbuf_addtext("set ui_load_level trainer\nopenmenu popmenu_difficulty\n");
+}
+
+static void host_pick_f(void)
+{
+	InterlockedExchange(&picking, 1);
+	picking_seen = GetTickCount();
+	game_cbuf_addtext("setdvar arcademode 0\nopenmenu levels\n");
+}
+
+// Picking ends when its menus are all closed without a devmap (Esc): menuDef dynamicFlags
+// (+0x50) has WINDOW_VISIBLE while a menu is open.
+static void picking_tick(void)
+{
+	if (!picking)
+		return;
+	static const char *const menus[] = {"levels", "popmenu_act1", "popmenu_act2", "popmenu_act3", "popmenu_difficulty"};
+	for (size_t i = 0; i < sizeof(menus) / sizeof(menus[0]); i++) {
+		uint8_t *m = ui_find_menu(menus[i]);
+		if (m && (*(uint32_t *)(m + ITEM_DYNAMIC_FLAGS) & WINDOW_VISIBLE))
+			picking_seen = GetTickCount();
+	}
+	if (GetTickCount() - picking_seen > 1500) {
+		InterlockedExchange(&picking, 0);
+		log_printf("menus: mission pick for the lobby cancelled");
+	}
 }
 
 // ---------------------------------------------------------------- the lobby with a campaign mission
@@ -748,7 +849,11 @@ static void start_f(void)
 static void online_f(void)
 {
 	char map[64] = "trainer", start[64] = "";
-	if (progress_last(map, sizeof(map), start, sizeof(start)))
+	const char *chosen = game_cmd_argv(1);
+	if (chosen[0] && !strpbrk(chosen, " \t;\"\n")) {
+		lstrcpynA(map, chosen, sizeof(map));
+		log_printf("menus: campaign lobby with '%s' from the start", map);
+	} else if (progress_last(map, sizeof(map), start, sizeof(start)))
 		log_printf("menus: campaign lobby, continuing at '%s' start '%s'", map, start);
 	else
 		log_printf("menus: campaign lobby, no progress yet: '%s'", map);
@@ -765,6 +870,13 @@ static void devmap_f(void)
 {
 	char map[64];
 	lstrcpynA(map, game_sv_cmd_argv(1), sizeof(map));
+	if (picking && map[0] && !strpbrk(map, " \t;\"\n")) {
+		InterlockedExchange(&picking, 0);
+		game_cbuf_addtext("closemenu popmenu_act1\nclosemenu popmenu_act2\nclosemenu popmenu_act3\nclosemenu levels\n");
+		log_printf("menus: hosting '%s' (picked from the list)", map);
+		host_lobby(map);
+		return;
+	}
 	if (!campaign_lobby() || !base[RVA_PARTY_IS_HOST] || !map[0] || strpbrk(map, " \t;\"\n")) {
 		devmap_native();
 		return;
@@ -782,6 +894,10 @@ static void tick_f(void);
 
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f},
+	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f},
+	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f},
+	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f},
+	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f},
 	{NULL, "mw2coop_start", NULL, NULL, start_f},
 	{NULL, "mw2coop_ready", NULL, NULL, ready_f},
 	{NULL, "mw2coop_menus_tick", NULL, NULL, tick_f},
@@ -821,6 +937,8 @@ static void tick_f(void)
 		return;
 	patch_main_menu();
 	add_lobbies_menu();
+	add_host_menu();
+	picking_tick();
 	find_tick();
 	int campaign = campaign_lobby();
 	patch_lobby(campaign);
