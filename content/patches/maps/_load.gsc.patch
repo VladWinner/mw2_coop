@@ -10,3 +10,11 @@ mw2coop patch for maps/_load.gsc (Modern Warfare 2, 64-bit Steam build)
 
 	maps\_mw2coop::main();
 @@@ end
+
+2. A trigger that sends a group of enemies to hunt "the player" sends each to the closest player
+   still up (maps\_mw2coop::seek_player; player 1 outside co-op).
+@@@ replace
+			ai[ i ] SetGoalEntity( level.player );
+@@@ with
+			ai[ i ] SetGoalEntity( maps\_mw2coop::seek_player( ai[ i ].origin ) );
+@@@ end

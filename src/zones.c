@@ -53,10 +53,39 @@ static const struct {
 	{"dcburning", "so_killspree_invasion", 0},
 	{"dcemp", "so_killspree_invasion", 0},
 	{"dc_whitehouse", "so_killspree_invasion", 0},
-	{"af_caves", "so_killspree_favela", 0},
+	{"af_caves", "so_killspree_favela", 0}, // needs more loaded_sound room (pool_extend)
 	{"af_chase", "so_killspree_favela", 0},
 	{"ending", "so_killspree_favela", 0},
 };
+
+// Asset pools. An extra zone on top of a level also needs room in the pools: Just Like Old Times
+// (af_caves) with any Spec Ops zone stopped at load with "Exceeded limit of 1350 'loaded_sound'
+// assets" (QA 2026-10-21; so_killspree_favela, so_defuse_favela_escape, so_intel_boneyard alike).
+// Each pool is { free list head; entries[size] }, a free entry's first 8 bytes point to the next
+// free one (the pool alloc at rva 0xeee20: mov rax,[rcx]; mov rdx,[rax]; mov [rcx],rdx), and
+// DB_Init (rva 0xeff10) builds the lists from the size table. The asset alloc (rva 0xeee30) fails
+// with that message when the list is empty. More entries are linked in front of the list; the
+// ones in use stay where they are. The size table is only read for that message and DB_Init.
+#define RVA_POOL_SIZES 0x3bf930 // int[43]
+#define RVA_POOLS      0x3bfe00 // void *[43]
+#define ASSET_TYPE_LOADED_SOUND 13
+
+static void pool_extend(int type, int extra, size_t entry_size)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	void **head = ((void ***)(base + RVA_POOLS))[type];
+	int *sizes = (int *)(base + RVA_POOL_SIZES);
+	uint8_t *more = VirtualAlloc(NULL, (size_t)extra * entry_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (!head || !more) {
+		log_printf("zones: pool %d not extended", type);
+		return;
+	}
+	for (int i = 0; i < extra; i++)
+		*(void **)(more + (size_t)i * entry_size) = i + 1 < extra ? more + (size_t)(i + 1) * entry_size : *head;
+	*head = more;
+	log_printf("zones: pool %d: %d entries more (%d -> %d)", type, extra, sizes[type], sizes[type] + extra);
+	sizes[type] += extra;
+}
 
 static void load_level_zones(const char *map, int flag)
 {
@@ -64,6 +93,11 @@ static void load_level_zones(const char *map, int flag)
 	game_dvar_string("coop", coop, sizeof(coop)); // a bool: "0" / "1"
 	log_printf("zones: loading level zones for '%s' (coop '%s', flag %d)", map ? map : "", coop, flag);
 	if (coop[0] == '1' && map) {
+		// once, before the first co-op level's zones: the database thread is idle here
+		static int extended;
+		if (!extended++)
+			pool_extend(ASSET_TYPE_LOADED_SOUND, 650, 64); // 64: the pool's span / 1350
+
 		for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
 			if (strcmp(map, zones[i].level) != 0)
 				continue;

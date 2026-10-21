@@ -13,3 +13,16 @@ climb_starts[ index ].angles
 @@@ to
 maps\_mw2coop_climb::climb_start( climb_starts, index ).angles
 @@@ end
+
+2. Enemies sent at "the player" (the hangar path) go for the closest player still up
+   (maps\_mw2coop::seek_player; player 1 outside co-op).
+@@@ subst hangerpath_main
+mf.favoriteenemy = level.player
+@@@ to
+mf.favoriteenemy = maps\_mw2coop::seek_player( mf.origin )
+@@@ end
+@@@ subst hangerpath_main
+mf setgoalentity( level.player )
+@@@ to
+mf setgoalentity( maps\_mw2coop::seek_player( mf.origin ) )
+@@@ end

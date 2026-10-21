@@ -136,3 +136,58 @@ player_gets_on_turret()
 	if ( maps\_mw2coop::is_campaign_coop() )
 		level.player2 maps\_mw2coop_roadkill::leave_scene_rig();
 @@@ end
+
+10. The enemy behind the corner (corner_hider_spawner) goes for the closest player still up
+   (maps\_mw2coop::seek_player; player 1 outside co-op).
+@@@ replace
+	self.favoriteenemy = level.player;
+@@@ with
+	self.favoriteenemy = maps\_mw2coop::seek_player( self.origin );
+@@@ end
+
+11. How well enemies hit "the player" and how much they want him (attackeraccuracy, threatbias)
+   is set on both players (maps\_mw2coop::players_attackeraccuracy, players_threatbias): the
+   partner is in the same scene.
+@@@ replace
+
+			level.player.attackeraccuracy = 0;
+@@@ with
+
+			maps\_mw2coop::players_attackeraccuracy( 0 );
+@@@ end
+
+   (same)
+@@@ replace
+
+	level.player.threatbias = 5000;
+@@@ with
+
+	maps\_mw2coop::players_threatbias( 5000 );
+@@@ end
+
+   (same)
+@@@ replace
+
+	level.player.threatbias = 150;
+@@@ with
+
+	maps\_mw2coop::players_threatbias( 150 );
+@@@ end
+
+   (same)
+@@@ replace
+
+		level.player.threatbias = 50000;
+@@@ with
+
+		maps\_mw2coop::players_threatbias( 50000 );
+@@@ end
+
+   (same)
+@@@ replace
+
+		level.player.threatbias = 150;
+@@@ with
+
+		maps\_mw2coop::players_threatbias( 150 );
+@@@ end

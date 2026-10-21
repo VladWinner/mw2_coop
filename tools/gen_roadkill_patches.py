@@ -80,6 +80,21 @@ old = unique(code, '\tstruct waittill ( scene );\n\tlevel.player unlink();\n')
 hunks.append(('''9. ... and leaves it next to player 1.''', old,
               old + '\tif ( ' + COOP + ' )\n\t\tlevel.player2 maps\\_mw2coop_roadkill::leave_scene_rig();\n'))
 
+old = unique(code, '\tself.favoriteenemy = level.player;\n')
+hunks.append(('''10. The enemy behind the corner (corner_hider_spawner) goes for the closest player still up
+   (maps\\_mw2coop::seek_player; player 1 outside co-op).''', old,
+              '\tself.favoriteenemy = maps\\_mw2coop::seek_player( self.origin );\n'))
+
+note = '''11. How well enemies hit "the player" and how much they want him (attackeraccuracy, threatbias)
+   is set on both players (maps\\_mw2coop::players_attackeraccuracy, players_threatbias): the
+   partner is in the same scene.'''
+for line in ('\t\t\tlevel.player.attackeraccuracy = 0;', '\tlevel.player.threatbias = 5000;', '\tlevel.player.threatbias = 150;',
+             '\t\tlevel.player.threatbias = 50000;', '\t\tlevel.player.threatbias = 150;'):
+    old = unique(code, '\n' + line + '\n')
+    m = re.match(r'(\t*)level\.player\.(\w+) = (.+);', line)
+    hunks.append((note, old, '\n' + m.group(1) + 'maps\\_mw2coop::players_' + m.group(2) + '( ' + m.group(3) + ' );\n'))
+    note = '   (same)'
+
 write('roadkill_code.gsc.patch', '''mw2coop patch for maps/roadkill_code.gsc (Team Player, Modern Warfare 2, 64-bit Steam build)
 Co-op logic lives in mw2coop/scripts/maps/_mw2coop_roadkill.gsc. Outside a co-op campaign
 session every change does what the original did.''', hunks)
@@ -93,6 +108,9 @@ hunks.append(('''1. Ride end: the second player gets off too (the gunner may be 
 old = unique(main, '\tlevel.player SetOrigin( player_slide_crash.origin );\n')
 hunks.append(('''2. Crash: player 2 lands next to player 1.''', old,
               old + '\tif ( ' + COOP + ' )\n\t\tlevel.player2 thread maps\\_mw2coop::teleport_to_partner_when_safe( level.player, 5 );\n'))
+old = unique(main, '\tlevel.player.ignoreme = false;\n')
+hunks.append(('''3. After the crazy ride enemies see both players again, not only player 1
+   (maps\\_mw2coop::players_ignoreme).''', old, '\tmaps\\_mw2coop::players_ignoreme( false );\n'))
 write('roadkill.gsc.patch', '''mw2coop patch for maps/roadkill.gsc (Team Player, Modern Warfare 2, 64-bit Steam build)''', hunks)
 
 # ---------------------------------------------------------------- _minigun_viewmodel.gsc

@@ -31,6 +31,8 @@
 //   oilrig   - (oilrig, default start) both ride an SDV underwater, both surface; player 1 does
 //              the stealth kill, then both are pulled out of the water. oilrig2: player 2 kills
 //   loadout  - (any map) after the level's loadout both players hold the same weapon
+//   cover    - (airport, start "stairs") player 2 fires at Makarov's squad: the cover is blown,
+//              Makarov shoots both players and the mission fails for both
 //   boat     - (af_chase, default start) the Endgame boat chase: player 1 boards and drives,
 //              player 2 rides as the gunner beside Price; the bot drives after the enemy boat.
 //              boat2: player 2 boards first and drives
@@ -116,6 +118,9 @@ main()
 			break;
 		case "body":
 			body();
+			break;
+		case "cover":
+			cover();
 			break;
 		case "loadout":
 			loadout();
@@ -550,6 +555,14 @@ snowpick()
 // Spawn audit (any map, any start point): where player 2 ends up after the level start, over
 // 12 s. PASS when he is alive, up, within 300 units of player 1 and not far below him, and
 // either standing on ground or held by something (linked).
+bias_group( player )
+{
+	group = player GetThreatBiasGroup();
+	if ( !isdefined( group ) )
+		return "none";
+	return group;
+}
+
 spawn_audit()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
@@ -580,6 +593,7 @@ spawn_audit()
 	check( d < 300, "player 2 near player 1 (" + int( d ) + " units)" );
 	check( dz > -150, "player 2 not below player 1 (dz " + int( dz ) + ")" );
 	check( maps\_mw2coop::is_standing( p2 ) || p2 IsLinked(), "player 2 on ground or held" );
+	kit_checks();
 	report( "done" );
 }
 
@@ -1204,20 +1218,35 @@ loadout()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
 	wait 5;
-	a = level.player GetCurrentWeapon();
-	b = level.player2 GetCurrentWeapon();
-	report( "player 1: " + a + " | " + weapons_text( level.player ) );
-	report( "player 2: " + b + " | " + weapons_text( level.player2 ) );
-	check( a == b && a != "none", "both hold " + a + " (player 2: " + b + ")" );
+	kit_checks();
+	report( "done" );
+}
+
+// What the level gave player 1, player 2 has too: weapons (maps\_mw2coop::sync_weapons), the one
+// in his hands, the second grenade class (src/mirror.c), the enemies' threat bias group (mirror)
+// and threat bias and accuracy against him (maps\_mw2coop::players_threatbias,
+// players_attackeraccuracy).
+kit_checks()
+{
+	p1 = level.player;
+	p2 = level.player2;
+	a = p1 GetCurrentWeapon();
+	b = p2 GetCurrentWeapon();
+	report( "player 1: " + a + " | " + weapons_text( p1 ) );
+	report( "player 2: " + b + " | " + weapons_text( p2 ) );
+	check( a == b, "both hold " + a + " (player 2: " + b + ")" );
 	missing = "";
-	foreach ( weapon in level.player GetWeaponsListAll() )
-		if ( !level.player2 HasWeapon( weapon ) )
+	foreach ( weapon in p1 GetWeaponsListAll() )
+		if ( !p2 HasWeapon( weapon ) )
 			missing += weapon + " ";
 	check( missing == "", "player 2 has all of player 1's weapons (missing: " + missing + ")" );
-	c1 = level.player GetOffhandSecondaryClass();
-	c2 = level.player2 GetOffhandSecondaryClass();
+	c1 = p1 GetOffhandSecondaryClass();
+	c2 = p2 GetOffhandSecondaryClass();
 	check( c1 == c2, "same second grenade class " + c1 + " (player 2: " + c2 + ")" );
-	report( "done" );
+	g1 = bias_group( p1 );
+	g2 = bias_group( p2 );
+	check( g1 == g2, "same threat bias group '" + g1 + "' (player 2: '" + g2 + "')" );
+	report( "threatbias " + p1.threatbias + "/" + p2.threatbias + ", attackeraccuracy " + p1.attackeraccuracy + "/" + p2.attackeraccuracy );
 }
 
 // --------------------------------------------------------------------------------------------
@@ -1418,5 +1447,28 @@ look()
 			report( "facing each other: player 2 model " + level.player2.model + ", player 1 model " + level.player.model );
 		wait 0.1;
 	}
+	report( "done" );
+}
+
+// No Russian's cover (airport, start "stairs"): player 2's shots at Makarov's squad blow it (the
+// level only checks IsPlayer( attacker )); Makarov then shoots both and the mission fails for
+// both (maps\_mw2coop_airport::makarov_kills_players). Names no airport script.
+cover()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	for ( t = 0; t < 30 && !isdefined( level.makarov ); t += 0.5 )
+		wait 0.5;
+	check( isdefined( level.makarov ), "Makarov there" );
+	wait 3;
+	for ( i = 0; i < 6 && !flag( "friendly_fire_warning" ); i++ )
+	{
+		level.makarov DoDamage( 1, level.makarov.origin, level.player2 );
+		wait 0.5;
+	}
+	check( flag( "friendly_fire_warning" ), "player 2's shots at Makarov's squad blew the cover (" + i + " hits)" );
+	SetDvar( "mw2coop_qa_phase", "done" );	// the failure restarts the level
+	for ( t = 0; t < 40 && !level.mw2coop.failing; t += 0.5 )
+		wait 0.5;
+	check( level.mw2coop.failing, "Makarov's squad turned on them and the mission failed for both (" + t + " s)" );
 	report( "done" );
 }

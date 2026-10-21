@@ -143,3 +143,34 @@ if ( ( isdefined( other ) ) && ( isPlayer ( other ) ) )
 @@@ to
 if ( ( isdefined( other ) ) && ( isPlayer ( other ) ) && maps\_mw2coop_oilrig::ocean_can_kill( other ) )
 @@@ end
+
+5. The rappel and the squad's quiet moments hide both players from enemies, not only player 1
+   (maps\_mw2coop::players_ignoreme): the partner is in the same scene.
+@@@ subst rappel_ignoreme
+level.player.ignoreme = true;
+@@@ to
+maps\_mw2coop::players_ignoreme( true );
+@@@ end
+@@@ subst rappel_ignoreme
+level.player.ignoreme = false;
+@@@ to
+maps\_mw2coop::players_ignoreme( false );
+@@@ end
+@@@ subst ignoreme_on_squad_and_player
+level.player.ignoreme = true;
+@@@ to
+maps\_mw2coop::players_ignoreme( true );
+@@@ end
+@@@ subst ignoreme_off_squad_and_player
+level.player.ignoreme = false;
+@@@ to
+maps\_mw2coop::players_ignoreme( false );
+@@@ end
+
+6. How much enemies want "the player" (threatbias) is set on both players
+   (maps\_mw2coop::players_threatbias): the partner is in the same scene.
+@@@ subst init_difficulty
+level.player.threatbias = level.player.threatbias + playerThreatAdditional;
+@@@ to
+maps\_mw2coop::players_threatbias( level.player.threatbias + playerThreatAdditional );
+@@@ end

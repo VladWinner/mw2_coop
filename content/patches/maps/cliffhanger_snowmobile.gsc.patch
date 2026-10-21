@@ -32,3 +32,11 @@ session every change does what the original did.
 	flag_wait( "end_begins" );
 	maps\_mw2coop_cliffhanger::wait_partner_at_end();
 @@@ end
+
+5. Enemies cannot hit "the player" during the avalanche: both players
+   (maps\_mw2coop::players_attackeraccuracy), both ride through it.
+@@@ subst avalanche_main
+level.player.attackeraccuracy = 0;
+@@@ to
+maps\_mw2coop::players_attackeraccuracy( 0 );
+@@@ end

@@ -63,3 +63,21 @@ mw2coop patch for maps/invasion.gsc (Wolverines!, Modern Warfare 2, 64-bit Steam
 	if ( isalive( level.worm ) )
 		level.worm pushplayer( true );
 @@@ end
+
+3. Enemies sent at "the player" (the diner's back door, Burger Town's defenders) go for the
+   closest player still up (maps\_mw2coop::seek_player; player 1 outside co-op).
+@@@ subst setup_diner_backdoor_attackers
+self.favoriteenemy = level.player
+@@@ to
+self.favoriteenemy = maps\_mw2coop::seek_player( self.origin )
+@@@ end
+@@@ subst setup_diner_backdoor_attackers
+self setgoalentity( level.player )
+@@@ to
+self setgoalentity( maps\_mw2coop::seek_player( self.origin ) )
+@@@ end
+@@@ subst setup_BT_enemy_defenders
+self setgoalentity( level.player )
+@@@ to
+self setgoalentity( maps\_mw2coop::seek_player( self.origin ) )
+@@@ end

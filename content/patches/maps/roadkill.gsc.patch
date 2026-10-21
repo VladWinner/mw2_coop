@@ -18,3 +18,11 @@ mw2coop patch for maps/roadkill.gsc (Team Player, Modern Warfare 2, 64-bit Steam
 	if ( maps\_mw2coop::is_campaign_coop() )
 		level.player2 thread maps\_mw2coop::teleport_to_partner_when_safe( level.player, 5 );
 @@@ end
+
+3. After the crazy ride enemies see both players again, not only player 1
+   (maps\_mw2coop::players_ignoreme).
+@@@ replace
+	level.player.ignoreme = false;
+@@@ with
+	maps\_mw2coop::players_ignoreme( false );
+@@@ end

@@ -339,6 +339,53 @@ teleport_to_partner( partner )
 	return true;
 }
 
+// The player an enemy goes for (maps\_spawner, maps\_load: "player seekers", a favourite enemy
+// "player"): the closest one alive and up, as Spec Ops does with
+// maps\_utility::get_closest_player_healthy() (that one needs the revive flags, which a campaign
+// level may not have yet). Player 1 outside co-op, as the original.
+seek_player( origin )
+{
+	if ( !isdefined( level.player2 ) )
+		return level.player;
+	best = level.player;
+	best_d = undefined;
+	foreach ( player in level.players )
+	{
+		if ( !IsAlive( player ) || is_downed( player ) )
+			continue;
+		d = DistanceSquared( origin, player.origin );
+		if ( !isdefined( best_d ) || d < best_d )
+		{
+			best = player;
+			best_d = d;
+		}
+	}
+	return best;
+}
+
+// A scene that hides "the player" from enemies (level.player.ignoreme) hides both players: the
+// partner is in the same scene (tools/seek_patch.py). Player 1 alone outside co-op.
+players_ignoreme( on )
+{
+	foreach ( player in level.players )
+		player.ignoreme = on;
+}
+
+// A scene that sets how well enemies hit "the player" (level.player.attackeraccuracy, e.g. 0 while
+// he cannot fight back) or how much they want him (level.player.threatbias) sets it on both: the
+// partner is in the same scene.
+players_attackeraccuracy( value )
+{
+	foreach ( player in level.players )
+		player.attackeraccuracy = value;
+}
+
+players_threatbias( value )
+{
+	foreach ( player in level.players )
+		player.threatbias = value;
+}
+
 // In how many of 8 directions a player standing at spot could walk 40 units (at knee height).
 open_sides( spot )
 {

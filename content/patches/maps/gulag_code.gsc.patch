@@ -9,3 +9,41 @@ Co-op logic lives in mw2coop/scripts/maps/_mw2coop_gulag.gsc.
 	level.player PlayerLinkToDelta( player_view_controller, "TAG_aim", viewPercentFrac, -35, 40, -35, 40, true );
 	maps\_mw2coop_gulag::partner_rides_heli();
 @@@ end
+
+2. The helicopter's turn around the gulag hides both players from enemies, not only player 1
+   (maps\_mw2coop::players_ignoreme): both ride in it.
+@@@ subst player_heli_rotates_properly_around_gulag
+level.player.ignoreme = true;
+@@@ to
+maps\_mw2coop::players_ignoreme( true );
+@@@ end
+@@@ subst player_heli_rotates_properly_around_gulag
+level.player.ignoreme = false;
+@@@ to
+maps\_mw2coop::players_ignoreme( false );
+@@@ end
+
+3. The riot shield watcher runs on each player (self, see maps/gulag.gsc): whoever carries the
+   shield is the one enemies want and the nearest enemy aims well at; the armory's accuracy
+   change for the whole level runs once, from player 1's watcher.
+@@@ subst player_riotshield_threatbias
+level.player
+@@@ to
+self
+@@@ end
+@@@ subst player_riotshield_threatbias
+	thread modulate_player_attacker_accuracy_for_armory();
+@@@ to
+	if ( self == level.player )
+		thread modulate_player_attacker_accuracy_for_armory();
+@@@ end
+@@@ subst player_riotshield_threatbias
+			thread accurate_vs_nearest_baddie();
+@@@ to
+			self thread accurate_vs_nearest_baddie();
+@@@ end
+@@@ subst accurate_vs_nearest_baddie
+level.player
+@@@ to
+self
+@@@ end

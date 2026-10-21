@@ -5,23 +5,26 @@ Two-player co-op for the **Call of Duty: Modern Warfare 2 (2009) campaign**, on 
 
 > **Alpha, work in progress.** Most missions start together and S.S.D.D., Team Player,
 > Wolverines!, Takedown's car ride, The Only Easy Day's swim, Cliffhanger's climb and
-> snowmobiles, No Russian's elevator and ending, and the crash site and ISS of Second Sun are
-> reworked for two players. Other set pieces and the final knife fight are not done yet. See
-> [Status](#status). Download: [Releases](https://github.com/stxlvn/mw2_coop/releases)
-> (`mw2coop-<version>.zip`, see [Install](#install)).
+> snowmobiles, No Russian's elevator, cover and ending, the crash site and ISS of Second Sun,
+> Endgame's boat chase and the final knife fight are reworked for two players; enemies fight
+> both players. Other set pieces are still written for one player. See [Status](#status).
+> Download: [Releases](https://github.com/stxlvn/mw2_coop/releases) (`mw2coop-<version>.zip`,
+> see [Install](#install)).
 
 *Кратко по-русски:* мод для прохождения кампании MW2 (2009) вдвоём на актуальной 64-битной
-Steam-версии. Альфа: вдвоём переделаны S.S.D.D., Team Player (Humvee, смена мест удержанием
-«Использовать»), Wolverines!, поездка в машине в Takedown, заплыв и бесшумное убийство в The
-Only Easy Day, подъём по льду и снегоходы в Cliffhanger, лифт и концовка No Russian, крушение
-и МКС в Second Sun. Финальный бой на ножах и часть сцен ещё не готовы. Установка: скачайте
-архив из [Releases](https://github.com/stxlvn/mw2_coop/releases), распакуйте в папку игры,
-запускайте `mw2coop-host.bat` (хост) и `mw2coop-join.bat` (второй игрок); подробно в
-`INSTALL.txt` внутри архива.
+Steam-версии. Альфа: вдвоём переделаны S.S.D.D. (каждый берёт своё оружие), Team Player,
+Wolverines!, поездка в машине в Takedown, заплыв и бесшумное убийство в The Only Easy Day,
+подъём по льду и снегоходы в Cliffhanger, лифт, прикрытие и концовка No Russian, крушение и МКС
+в Second Sun, лодка в Endgame (второй игрок лежит на носу напротив Прайса и стреляет) и
+финальный бой на ножах. Враги воюют с обоими игроками. Остальные сцены ещё рассчитаны на
+одного. Установка: распакуйте архив из
+[Releases](https://github.com/stxlvn/mw2_coop/releases) в папку игры; хост: Кампания ->
+СЕТЕВАЯ ИГРА ВДВОЕМ, второй игрок: ПРИСОЕДИНИТЬСЯ К ИГРЕ или приглашение Steam (подробно в
+`INSTALL.txt` внутри архива).
 
 ## Status
 
-Verified with two copies of the game on one PC (host + client), last on 2026-10-20, by the
+Verified with two copies of the game on one PC (host + client), last on 2026-10-21, by the
 QA scenarios in [Testing](#testing); every run below ended with no script errors on either
 machine:
 
@@ -73,10 +76,30 @@ Works:
   player gets his own snowmobile for the escape; the helicopter waits for both. Tested with a
   bot playing both players (QA `climb`, `snow`, `snowpick`); real mouse input on the climb is
   untested.
+- S.S.D.D.: both start inside the range's sandbag bay (player 1 on the left); each player takes
+  his own rifle and pistol off the table (another lies there until both have one) and his own
+  frags from the box; the drills go on once both have them.
+- Endgame's boat chase: whoever mounts the boat first drives; the other lies at the bow across
+  from Price (Price keeps his side), on a body with Price's boat animations, and shoots where he
+  looks within the pose's arc.
+- Enemies fight both players: the engine already picks either player (QA `targets`: 151 and 129
+  of 918 enemy samples on players 1 and 2); enemies a level sends at "the player" (player
+  seekers, a favourite enemy, attack triggers) go for the closest player still up; scenes that
+  hide the player from enemies, and a level's accuracy and threat settings for the player,
+  cover both. No Russian: straying from the squad and grenades count for either player; when
+  the cover is blown Makarov shoots both and the mission fails.
+- Loose Ends: both players wear the TF141 forest uniform (the level's leftover co-op loadout
+  asked for ghillie suits no zone has: red placeholder bodies). Just Like Old Times loads (it
+  overflowed the 1350 `loaded_sound` limit with the co-op body zone; the pool is raised to 2000).
+- In-game co-op: Campaign -> co-op host lobby (mission select, access: open / Steam friends /
+  password), join from the list of games on the network, by address or by Steam invite; the
+  host gets an in-game Windows Firewall popup and UPnP port forwarding.
+- Last spawn check (2026-10-21, QA `spawn` with weapon and threat checks): S.S.D.D., Team
+  Player, Cliffhanger, No Russian, Takedown, Wolverines! pass with no script errors; the other
+  levels' runs with this build were not finished.
 
 Not working or not done:
-- Endgame (`af_chase`) boat for two: not done. No on-screen
-  hint for the seat swap yet.
+- No on-screen hint for Team Player's seat swap yet.
 - Global screen effects show on both screens whoever triggers them: Cliffhanger's climbing
   field of view, depth of field and the slow motion of Soap's catch, The Only Easy Day's water
   vision during the stealth kill.
@@ -90,7 +113,6 @@ Not working or not done:
   Second Sun (opening, street), The Gulag and Takedown seats. Other missions start with
   player 2 next to player 1 but their scripted scenes are written for one player.
 - Joining a friend through a Steam invite (two Steam accounts) is untested.
-- No in-game menu: hosting and joining use the `.bat` files or console commands (below).
 
 ## Requirements
 
@@ -109,19 +131,17 @@ same in Russian and English:
 
 1. Steam: Library -> Modern Warfare 2 -> Manage -> Browse local files (the folder with
    `iw4sp.exe`).
-2. Copy everything from the archive there: `winmm.dll`, the `mw2coop` folder and the three
-   `.bat` files. No game file is replaced. Both players need the same archive.
-3. Host: run `mw2coop-host.bat` (the game starts through Steam; the window clears its start
-   commands after 2 minutes). Partner: once the host's game shows the main menu, run
-   `mw2coop-join.bat` and type the host's IP address. The mission starts for both.
-4. Carry on later: the host runs `mw2coop-continue.bat` (last mission and checkpoint, kept in
-   the host's `mw2coop\progress.txt`); the partner runs `mw2coop-join.bat` again.
+2. Copy everything from the archive there: `winmm.dll` and the `mw2coop` folder. No game file
+   is replaced. Both players need the same archive.
+3. Host: Campaign -> co-op (two players). The lobby opens on the mission you stopped at
+   (progress is kept in the host's `mw2coop\progress.txt`); mission select and access (open,
+   Steam friends only, password) are in the lobby.
+4. Partner: accept the host's Steam invite, or Campaign -> join a game and pick it from the
+   list (same LAN or VPN) or type the host's address. Both press Ready, the host Start.
 
-`MISSION=` in `mw2coop-host.bat` picks the first mission (map names: trainer, roadkill,
-cliffhanger, airport, favela, invasion, arcadia, oilrig, gulag, dcburning, contingency,
-dcemp, dc_whitehouse, estate, boneyard, af_caves, af_chase); `GOD=1` turns on the test god
-mode. The host needs UDP 28960 reachable (port forward) or a shared LAN/VPN.
-Uninstall: delete `winmm.dll`, the `mw2coop` folder and the `mw2coop-*.bat` files.
+Over the internet the host's router opens UDP 28960 by itself if UPnP is on; else forward the
+port or use a VPN. The port is set in `mw2coop\settings.ini` (the same on both PCs).
+Uninstall: delete `winmm.dll` and the `mw2coop` folder.
 
 For testers working on the mod: use a **copy** of the game folder, not your Steam install,
 and start it with the environment variables `SteamAppId=10180` and `SteamGameId=10180` (without
@@ -131,7 +151,7 @@ them the Steam DRM wrapper exits and Steam starts your **real** install instead)
 
 ## Hosting and joining by hand (console)
 
-The `.bat` files write these lines to `mw2coop\commands.txt`, which the mod runs in order
+For testing, these lines go into `mw2coop\commands.txt`, which the mod runs in order
 (appended lines run as they arrive; `!sleep <ms>` waits). The game must show its online
 connection first (about 10 s after start).
 
@@ -186,8 +206,8 @@ Needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and a POSIX shell (Gi
 LLVM_MINGW=/path/to/llvm-mingw-ucrt-x86_64 ./build.sh release
 ```
 `tools/make_release.sh <version>` builds the release DLL (checked for local paths) and packs
-`dist/mw2coop-<version>.zip` with the scripts, patches, `.bat` launchers (`content/release`)
-and `INSTALL.txt`, plus its SHA-256.
+`dist/mw2coop-<version>.zip` with the scripts, patches, `content/release` (`INSTALL.txt`,
+`settings.ini`, the firewall helper), plus its SHA-256.
 `tools/gen_winmm_proxy.py` regenerates the export stubs from the system `winmm.dll`.
 
 ## Testing
@@ -200,9 +220,12 @@ S.S.D.D. `intro`, `restart`, `end`, `resume` (`@continue`), `god`; Team Player `
 `board`, `rideend`, `turret`; Wolverines! `ride`; Takedown `takedown`, `takedown2`; The Only
 Easy Day `oilrig`, `oilrig2`; Cliffhanger `climb`, `snow`, `snowpick`; No Russian `nrend`,
 `nrend2` (start `escape`); crash site `crashsite` (dcburning, start `crash`), Second Sun
-`dcemp`, `street` (start `street`); Endgame `knife`, `knife2` (ending, start `wakeup`); any map
-`spawn`, `leash`. Bots drive the players (button
-holds, velocity pushes), so real mouse and keyboard input on these set pieces is untested.
+`dcemp`, `street` (start `street`); No Russian `cover` (start `stairs`); S.S.D.D. `pickups`
+(start "", `frag`, `pit`); Endgame `boat`, `boat2` (af_chase), `knife`, `knife2` (ending, start
+`wakeup`); any map `spawn`, `leash`, `look` (players face each other for screenshots),
+`targets` (whom the enemies fight). Bots drive the players (button
+holds, velocity pushes, scripted pickups: console button commands reach no player), so real
+mouse and keyboard input on these set pieces is checked by hand.
 Script errors are logged with the GSC call stack (`file::function +offset`). One Steam account
 is enough: the QA-only command `!xuid_add` gives the second copy a different player id.
 `tools/check_patches.py` checks the patches against extracted game scripts without starting

@@ -10,3 +10,25 @@ Co-op logic lives in mw2coop/scripts/maps/_mw2coop_gulag.gsc.
 	ent Delete();
 	maps\_mw2coop_gulag::partner_leaves_heli();
 @@@ end
+
+2. Enemies cannot hit "the player" in the bathroom and rescue scenes: both players
+   (maps\_mw2coop::players_attackeraccuracy), the partner is in the same scene.
+@@@ subst gulag_bathroom
+level.player.attackeraccuracy = 0;
+@@@ to
+maps\_mw2coop::players_attackeraccuracy( 0 );
+@@@ end
+@@@ subst gulag_rescue
+level.player.attackeraccuracy = 0;
+@@@ to
+maps\_mw2coop::players_attackeraccuracy( 0 );
+@@@ end
+
+3. The riot shield draws enemies' fire to whoever carries it: each player has his own watcher
+   (maps\gulag_code::player_riotshield_threatbias on self, player 1 alone outside co-op).
+@@@ subst main
+	thread player_riotshield_threatbias();
+@@@ to
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player thread player_riotshield_threatbias();
+@@@ end

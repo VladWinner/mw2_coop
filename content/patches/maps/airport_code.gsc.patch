@@ -68,3 +68,61 @@ level.player SetContents( 0 );
 @@@ to
 self.mw2coop_victim SetContents( 0 );
 @@@ end
+
+3. Enemies sent at "the player" (the tarmac sniper, the final guys, the team once the cover
+   is blown) go for the closest player still up (maps\_mw2coop::seek_player).
+@@@ subst tarmac_littlebird_sniper
+self.favoriteenemy = level.player
+@@@ to
+self.favoriteenemy = maps\_mw2coop::seek_player( self.origin )
+@@@ end
+@@@ subst escape_final_guys
+self.favoriteenemy = level.player
+@@@ to
+self.favoriteenemy = maps\_mw2coop::seek_player( self.origin )
+@@@ end
+@@@ subst friendly_fire_kill_player
+self.favoriteenemy = level.player
+@@@ to
+self.favoriteenemy = maps\_mw2coop::seek_player( self.origin )
+@@@ end
+@@@ subst friendly_fire_kill_player
+self SetGoalEntity( level.player )
+@@@ to
+self SetGoalEntity( maps\_mw2coop::seek_player( self.origin ) )
+@@@ end
+
+4. The cover: firing at Makarov's squad already counts for either player. Straying from the
+   squad counts for the player furthest from it, both players' grenades count, and when the
+   cover is blown Makarov shoots both (maps\_mw2coop_airport: in co-op the revive system stays
+   on and the mission fails after his shots).
+@@@ subst friendly_fire_distance_check
+Distance( level.team_origin, self.origin )
+@@@ to
+maps\_mw2coop_airport::farthest_from( level.team_origin, self )
+@@@ end
+@@@ subst friendly_fire
+level.player thread friendly_fire_nade_throw();
+@@@ to
+array_thread( level.players, ::friendly_fire_nade_throw );
+@@@ end
+@@@ subst friendly_fire
+level.player EnableDeathShield( false );
+	level.player EnableHealthShield( false );
+@@@ to
+maps\_mw2coop_airport::cover_blown_shields();
+@@@ end
+@@@ subst friendly_fire
+	MagicBullet( member.weapon, member GetTagOrigin( "tag_flash" ), level.player.origin + ( 0, 0, 64 ) );
+	wait .2;
+	MagicBullet( member.weapon, member GetTagOrigin( "tag_flash" ), level.player.origin + ( 0, 0, 64 ) );
+	wait .2;
+	MagicBullet( member.weapon, member GetTagOrigin( "tag_flash" ), level.player.origin + ( 0, 0, 64 ) );
+	wait .2;
+	MagicBullet( member.weapon, member GetTagOrigin( "tag_flash" ), level.player.origin + ( 0, 0, 64 ) );
+	level.player Kill();
+
+@@@ to
+	maps\_mw2coop_airport::makarov_kills_players( member );
+
+@@@ end

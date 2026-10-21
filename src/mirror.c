@@ -7,6 +7,8 @@
 //   setactionslot             night vision, claymore, C4, Predator and Cobra on the D-pad
 //   setoffhandsecondaryclass  flash or smoke as the second grenade
 //   givemaxammo, givestartammo  ammo refills (they skip a weapon the player does not have)
+//   setthreatbiasgroup        the group enemies' threat biases are set against ("player" in 12
+//                             levels): the partner is in the same group
 // Mirrored one way, player 1 to player 2, as the weapon sync. Both lockstep machines run the
 // same scripts, so both mirror the same calls.
 //
@@ -37,6 +39,7 @@ static const struct {
 	{0x339308, "setoffhandsecondaryclass"},
 	{0x339110, "givemaxammo"},
 	{0x3390f8, "givestartammo"},
+	{0x348c50, "setthreatbiasgroup"}, // in the AI (sentient) method table
 };
 #define MIRRORED (sizeof(mirrored) / sizeof(mirrored[0]))
 
@@ -70,7 +73,8 @@ WRAP(0)
 WRAP(1)
 WRAP(2)
 WRAP(3)
-static const method_t wrappers[MIRRORED] = {wrap0, wrap1, wrap2, wrap3};
+WRAP(4)
+static const method_t wrappers[MIRRORED] = {wrap0, wrap1, wrap2, wrap3, wrap4};
 
 void mirror_install(void)
 {

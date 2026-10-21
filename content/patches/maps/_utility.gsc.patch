@@ -83,3 +83,31 @@ player_leaves_humvee()
 		self.mw2coop_partner_seat thread maps\_mw2coop::partner_leaves_seat( 0.7 );
 	self Unlink();
 @@@ end
+
+5. Enemies cannot hit "the player" during a scene (player_cant_be_shot(), the Gulag fly-in):
+   both players, the partner is in the same scene; player_can_be_shot() gives both their
+   difficulty's accuracy back.
+@@@ subst player_cant_be_shot
+	level.player ent_flag_set( "player_zero_attacker_accuracy" );
+	level.player.attackeraccuracy = 0;
+	level.player.IgnoreRandomBulletDamage = true;
+@@@ to
+	foreach ( player in level.players )
+	{
+		player ent_flag_set( "player_zero_attacker_accuracy" );
+		player.attackeraccuracy = 0;
+		player.IgnoreRandomBulletDamage = true;
+	}
+@@@ end
+@@@ subst player_can_be_shot
+	level.player ent_flag_clear( "player_zero_attacker_accuracy" );
+	level.player.IgnoreRandomBulletDamage = false;
+	level.player maps\_gameskill::update_player_attacker_accuracy();
+@@@ to
+	foreach ( player in level.players )
+	{
+		player ent_flag_clear( "player_zero_attacker_accuracy" );
+		player.IgnoreRandomBulletDamage = false;
+		player maps\_gameskill::update_player_attacker_accuracy();
+	}
+@@@ end

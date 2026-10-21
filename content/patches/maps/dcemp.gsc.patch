@@ -84,3 +84,11 @@ delaythread( 2.5 + newtime, ::street_heli_player_kill );
 @@@ to
 delaythread( 2.5 + newtime, maps\_mw2coop_dcemp::street_helis );
 @@@ end
+
+5. The lobby lets enemies see both players again, not only player 1
+   (maps\_mw2coop::players_ignoreme).
+@@@ subst lobby_main
+level.player.ignoreme = false;
+@@@ to
+maps\_mw2coop::players_ignoreme( false );
+@@@ end

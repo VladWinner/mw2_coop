@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gsc_patch import Patch  # noqa: E402
+from seek_patch import both_fields, both_ignoreme  # noqa: E402
 
 gsc_root, out_dir = sys.argv[1], sys.argv[2]
 M = 'maps\\_mw2coop_oilrig::'
@@ -61,6 +62,12 @@ p.subst('player_in_water_monitor', 'level.player', 'self')
 p.subst('player_out_of_water_monitor', 'level.player', 'self')
 p.subst('killtrigger_ocean_on', 'if ( ( isdefined( other ) ) && ( isPlayer ( other ) ) )',
         'if ( ( isdefined( other ) ) && ( isPlayer ( other ) ) && ' + M + 'ocean_can_kill( other ) )')
+p.note('''5. The rappel and the squad's quiet moments hide both players from enemies, not only player 1
+   (maps\\_mw2coop::players_ignoreme): the partner is in the same scene.''')
+both_ignoreme(p, ['rappel_ignoreme', 'ignoreme_on_squad_and_player', 'ignoreme_off_squad_and_player'])
+p.note('''6. How much enemies want "the player" (threatbias) is set on both players
+   (maps\_mw2coop::players_threatbias): the partner is in the same scene.''')
+assert both_fields(p)
 
 p.write('oilrig.gsc.patch', '''
 mw2coop patch for maps/oilrig.gsc (The Only Easy Day... Modern Warfare 2, 64-bit Steam build)

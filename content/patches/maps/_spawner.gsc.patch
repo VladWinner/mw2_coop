@@ -1,0 +1,28 @@
+mw2coop patch for maps/_spawner.gsc (common zone; Modern Warfare 2, 64-bit Steam build)
+
+1. Enemies placed to hunt "the player" go for the closest player still up
+   (maps\_mw2coop::seek_player, as Spec Ops' get_closest_player_healthy): a spawner's favourite
+   enemy "player", script_playerseek and script_delayed_playerseek. Outside co-op that is
+   player 1, as before. (The engine itself already lets enemies fight both players: QA
+   targets, estate forest_fight, 151 and 129 of 918 samples on players 1 and 2.)
+@@@ replace
+			self.favoriteenemy = level.player;
+@@@ with
+			self.favoriteenemy = maps\_mw2coop::seek_player( self.origin );
+@@@ end
+
+@@@ replace
+		self setgoalentity( level.player );
+		return;
+@@@ with
+		self setgoalentity( maps\_mw2coop::seek_player( self.origin ) );
+		return;
+@@@ end
+
+@@@ replace
+		self setgoalentity( level.player );
+		level thread delayed_player_seek_think( self );
+@@@ with
+		self setgoalentity( maps\_mw2coop::seek_player( self.origin ) );
+		level thread delayed_player_seek_think( self );
+@@@ end

@@ -211,3 +211,62 @@ death_vision()
 	}
 	set_vision_set( "airport_death", 10 );
 }
+
+// --------------------------------------------------------------------------------------------
+// The cover (owner's backlog 2026-10-21: "who blew the cover" in co-op). Firing, flashing or
+// throwing a grenade at Makarov's squad already counts for either player (the level checks
+// IsPlayer( attacker )); straying from the squad counted only for player 1, and only player 1
+// was shot when the cover was blown.
+
+// friendly_fire_distance_check(), self: player 1 (the watcher): how far from the squad the
+// player who strayed furthest is.
+farthest_from( origin, player )
+{
+	if ( !coop() )
+		return Distance( origin, player.origin );
+	far = 0;
+	foreach ( p in level.players )
+		if ( IsAlive( p ) && Distance( origin, p.origin ) > far )
+			far = Distance( origin, p.origin );
+	return far;
+}
+
+// friendly_fire(), once the cover is blown: in single player the player loses his death and
+// health shields so the squad can kill him. In co-op the revive system stays: the squad downs the
+// players, and Makarov ends it (makarov_kills_players()).
+cover_blown_shields()
+{
+	if ( coop() )
+		return;
+	level.player EnableDeathShield( false );
+	level.player EnableHealthShield( false );
+}
+
+// friendly_fire(), when the squad has had its time: Makarov shoots the player (each player in
+// co-op) and the mission fails with the level's "You blew your cover" text.
+makarov_kills_players( member )
+{
+	if ( !coop() )
+	{
+		for ( i = 0; i < 4; i++ )
+		{
+			if ( i )
+				wait .2;
+			MagicBullet( member.weapon, member GetTagOrigin( "tag_flash" ), level.player.origin + ( 0, 0, 64 ) );
+		}
+		level.player Kill();
+		return;
+	}
+	maps\_mw2coop::state( "airport: the cover is blown, Makarov shoots both players" );
+	for ( i = 0; i < 4; i++ )
+	{
+		if ( i )
+			wait .2;
+		foreach ( p in level.players )
+			if ( IsAlive( p ) )
+				MagicBullet( member.weapon, member GetTagOrigin( "tag_flash" ), p.origin + ( 0, 0, 64 ) );
+	}
+	if ( isdefined( level.fail_string ) )
+		SetDvar( "ui_deadquote", level.fail_string );
+	level thread maps\_mw2coop::mission_failed();
+}
