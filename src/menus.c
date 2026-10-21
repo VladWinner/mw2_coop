@@ -28,6 +28,7 @@
 #include "localize.h"
 #include "log.h"
 #include "settings.h"
+#include "upnp.h"
 #include "menus.h"
 #include "menus_ui.h"
 #include "net.h"
@@ -797,8 +798,11 @@ void menus_poll(void)
 {
 	if (!base)
 		return;
-	char v[8] = "";
+	char v[8] = "", coop[8] = "";
 	game_dvar_raw("sv_running", v, sizeof(v));
+	game_dvar_raw("coop", coop, sizeof(coop));
+	// hosting: the host's party is up (lobby), or a co-op level runs on the host
+	upnp_want(base[RVA_PARTY_IS_HOST] && (base[RVA_PARTY_ACTIVE] || (v[0] == '1' && coop[0] == '1')));
 	if (v[0] == '1')
 		return;
 	// the queue is cleared by a map load; a tick queued before it never runs

@@ -14,6 +14,7 @@
 #include "progress.h"
 #include "scrdebug.h"
 #include "settings.h"
+#include "upnp.h"
 #include "scripts.h"
 
 int proxy_init(void);
@@ -54,6 +55,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		progress_install();
 		menus_install();
 		access_install();
+		upnp_install();
 		control_start();
 	}
 	return 0;
