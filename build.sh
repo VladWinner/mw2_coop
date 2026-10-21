@@ -11,9 +11,9 @@ SRC="src/main.c src/log.c src/proxy.c src/hooks.c src/game.c src/control.c src/c
 	src/party.c src/progress.c src/scrdebug.c src/winmm_stubs.S src/winmm.def"
 mkdir -p build
 if [ "$1" = release ]; then
-	"$CC" -O2 -Wall -Wextra -shared -static -static-libgcc -s -o build/winmm.dll $SRC -lws2_32
+	"$CC" -O2 -Wall -Wextra -shared -static -static-libgcc -s -o build/winmm.dll $SRC -lws2_32 -liphlpapi
 else
-	"$CC" -O2 -g -Wall -Wextra -shared -static -static-libgcc -o build/winmm.dll $SRC -lws2_32 \
+	"$CC" -O2 -g -Wall -Wextra -shared -static -static-libgcc -o build/winmm.dll $SRC -lws2_32 -liphlpapi \
 		-Wl,--pdb=build/winmm.pdb
 fi
 echo "built build/winmm.dll${1:+ ($1)}"

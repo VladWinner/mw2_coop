@@ -20,6 +20,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "game.h"
@@ -115,6 +116,20 @@ static const char online_action[] =
 	"\"exec\" \"xrequirelivesignin\" ; "
 	"\"exec\" \"stopListening; mw2coop_online; listen\" ; ";
 
+static const char join_action[] =
+	"\"play\" \"mouse_click\" ; "
+	"\"exec\" \"xrequirelivesignin\" ; "
+	"\"exec\" \"mw2coop_find\" ; ";
+
+// Buttons added under Mission Select, in this order
+static const struct {
+	const char *name, *text, *action;
+} main_buttons[] = {
+	{"mw2coop_online", "@MENU_SP_TWO_PLAYER_ONLINE_CAPS", online_action},
+	{"mw2coop_find", "@MW2COOP_JOIN", join_action},
+};
+#define MAIN_BUTTONS (int)(sizeof(main_buttons) / sizeof(main_buttons[0]))
+
 static void patch_main_menu(void)
 {
 	uint8_t *menu = find_menu("main_text");
@@ -125,39 +140,218 @@ static void patch_main_menu(void)
 		return;
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	int at = item_index(menu, "levelselect");
-	if (at < 0 || item_index(menu, "mw2coop_online") >= 0) {
-		log_printf("menus: main_text has no levelselect button, no co-op button added");
+	if (at < 0 || item_index(menu, main_buttons[0].name) >= 0) {
+		log_printf("menus: main_text has no levelselect button, no co-op buttons added");
 		main_items = items;
 		return;
 	}
 	uint8_t *src = items[at];
-	float y = *(float *)(src + ITEM_RECT_Y) + BUTTON_HEIGHT;
+	float y0 = *(float *)(src + ITEM_RECT_Y) + BUTTON_HEIGHT;
 
-	uint8_t *item = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
-	memcpy(item, src, ITEM_SIZE);
-	*(const char **)item = "mw2coop_online";
-	*(const char **)(item + ITEM_TEXT) = "@MENU_SP_TWO_PLAYER_ONLINE_CAPS";
-	*(MenuEventHandlerSet **)(item + ITEM_ACTION) = script_set(online_action);
-	*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
-	*(float *)(item + ITEM_RECT_Y) = y;
-	*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
-
-	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(*list));
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + MAIN_BUTTONS) * sizeof(*list));
 	memcpy(list, items, (at + 1) * sizeof(*list));
-	list[at + 1] = item;
-	memcpy(list + at + 2, items + at + 1, (count - at - 1) * sizeof(*list));
-	// everything below the new button moves down one row
-	for (int i = at + 2; i <= count; i++) {
-		if (*(float *)(list[i] + ITEM_RECT_Y) >= y - 0.5f) {
-			*(float *)(list[i] + ITEM_RECT_Y) += BUTTON_HEIGHT;
-			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += BUTTON_HEIGHT;
+	for (int b = 0; b < MAIN_BUTTONS; b++) {
+		uint8_t *item = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
+		memcpy(item, src, ITEM_SIZE);
+		float y = y0 + b * BUTTON_HEIGHT;
+		*(const char **)item = main_buttons[b].name;
+		*(const char **)(item + ITEM_TEXT) = main_buttons[b].text;
+		*(MenuEventHandlerSet **)(item + ITEM_ACTION) = script_set(main_buttons[b].action);
+		*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
+		*(float *)(item + ITEM_RECT_Y) = y;
+		*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
+		list[at + 1 + b] = item;
+	}
+	memcpy(list + at + 1 + MAIN_BUTTONS, items + at + 1, (count - at - 1) * sizeof(*list));
+	// everything below the new buttons moves down
+	for (int i = at + 1 + MAIN_BUTTONS; i < count + MAIN_BUTTONS; i++) {
+		if (*(float *)(list[i] + ITEM_RECT_Y) >= y0 - 0.5f) {
+			*(float *)(list[i] + ITEM_RECT_Y) += MAIN_BUTTONS * BUTTON_HEIGHT;
+			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += MAIN_BUTTONS * BUTTON_HEIGHT;
 		}
 	}
 	// the old items stay valid, so the UI may read the new array before the new count
 	main_items = list;
 	*(uint8_t ***)(menu + MENU_ITEMS) = list;
-	*(int *)(menu + MENU_ITEM_COUNT) = count + 1;
-	log_printf("menus: main_text: co-op button added under Mission Select (%d items)", count + 1);
+	*(int *)(menu + MENU_ITEM_COUNT) = count + MAIN_BUTTONS;
+	log_printf("menus: main_text: co-op buttons added under Mission Select (%d items)", count + MAIN_BUTTONS);
+}
+
+// ---------------------------------------------------------------- joining a game on the network
+
+// mw2coop_find: the campaign menu's join button. Asks every network the PC is on (LAN, Radmin
+// VPN and the like: each adapter's broadcast address, net.c) for campaign lobbies for 2 s, then
+// lists the hosts that answered in a popup ("mw2coop_lobbies", built from the difficulty popup);
+// the player picks one (mw2coop_join_found <n>). A host answers while it holds a campaign lobby
+// with a free slot: "mw2coop_here <host xuid> <map> <host name>" (a host on several networks
+// answers on each; the XUID keeps it to one row).
+#define FIND_TAG "mw2coop_find"
+#define HERE_TAG "mw2coop_here "
+#define FIND_MS 2000
+#define MAX_LOBBIES 4
+
+typedef struct {
+	uint8_t ip[4];
+	uint16_t port;
+	uint64_t xuid;
+	char map[32];
+	char name[48];
+} Lobby;
+
+static CRITICAL_SECTION lobby_lock; // the packet thread adds, the main thread reads
+static Lobby lobbies[MAX_LOBBIES];
+static int lobby_count;
+static volatile LONG finding;
+static volatile DWORD find_started, find_sent, join_text_until;
+
+static void find_f(void)
+{
+	if (finding)
+		return;
+	EnterCriticalSection(&lobby_lock);
+	lobby_count = 0;
+	LeaveCriticalSection(&lobby_lock);
+	find_started = GetTickCount();
+	find_sent = 0;
+	InterlockedExchange(&finding, 1);
+	localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_SEARCHING");
+	log_printf("menus: looking for campaign lobbies on the network");
+}
+
+// "Name - Mission" in the game's language (Windows-1251)
+static void lobby_row(const Lobby *l, char *out, int size)
+{
+	char key[64] = "MENU_SP_SP_";
+	int n = (int)strlen(key);
+	for (const char *m = l->map; *m && n < (int)sizeof(key) - 1; m++)
+		key[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+	key[n] = 0;
+	const char *mission = localize_text(key);
+	snprintf(out, size, "%s - %s", l->name[0] ? l->name : "?", mission ? mission : l->map);
+}
+
+static void find_tick(void)
+{
+	DWORD now = GetTickCount();
+	if (finding) {
+		if (now - find_started < FIND_MS) {
+			if (!find_sent || now - find_sent >= 700) {
+				find_sent = now;
+				net_broadcast_mod(FIND_TAG, 28960);
+			}
+			return;
+		}
+		InterlockedExchange(&finding, 0);
+		EnterCriticalSection(&lobby_lock);
+		int count = lobby_count;
+		for (int i = 0; i < MAX_LOBBIES; i++) {
+			char alias[32], row[128] = "";
+			snprintf(alias, sizeof(alias), "MW2COOP_LOBBY_%d", i + 1);
+			if (i < count)
+				lobby_row(&lobbies[i], row, sizeof(row));
+			localize_set_text(alias, row);
+		}
+		LeaveCriticalSection(&lobby_lock);
+		log_printf("menus: %d campaign lobb%s answered", count, count == 1 ? "y" : "ies");
+		if (count) {
+			localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_IDLE");
+			game_cbuf_addtext("openmenu mw2coop_lobbies\n");
+		} else {
+			localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_NONE");
+			join_text_until = now + 4000;
+		}
+		return;
+	}
+	if (join_text_until && (int)(now - join_text_until) > 0) {
+		join_text_until = 0;
+		localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_IDLE");
+	}
+}
+
+// mw2coop_join_found <n>: a row of the list (1-based)
+static void join_found_f(void)
+{
+	int n = atoi(game_cmd_argv(1)) - 1;
+	char cmd[64] = "";
+	EnterCriticalSection(&lobby_lock);
+	if (n >= 0 && n < lobby_count)
+		snprintf(cmd, sizeof(cmd), "mw2coop_join %u.%u.%u.%u %u\n", lobbies[n].ip[0], lobbies[n].ip[1],
+			 lobbies[n].ip[2], lobbies[n].ip[3], lobbies[n].port);
+	LeaveCriticalSection(&lobby_lock);
+	if (!cmd[0])
+		return;
+	localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_CONNECTING");
+	join_text_until = GetTickCount() + 6000;
+	log_printf("menus: joining %s", cmd);
+	game_cbuf_addtext(cmd);
+}
+
+// The list popup: a copy of the difficulty popup (title, four buttons, the description lines)
+// with our texts and actions. It is added to the UI's menu list, which a UI zone reload rebuilds.
+#define MENU_SIZE 0x200 // menuDef_t is smaller; the copy only needs the fields up to items (+0x168)
+#define ITEM_PARENT 0x100
+#define ITEM_LEAVE_FOCUS 0x140
+#define ITEM_TEXT_EXP 0x1b0
+#define MENU_ON_OPEN 0xe0
+
+static void add_lobbies_menu(void)
+{
+	if (find_menu("mw2coop_lobbies"))
+		return;
+	uint8_t *src = find_menu("popmenu_difficulty");
+	uint8_t *ui = base + RVA_UI_CONTEXT;
+	int ui_count = *(int *)(ui + UI_MENU_COUNT);
+	if (!src || ui_count >= UI_MAX_MENUS)
+		return;
+	static const char *const buttons[MAX_LOBBIES] = {"newgame_easy", "newgame_regular", "newgame_hardened",
+							 "newgame_veteran"};
+	int first = item_index(src, buttons[0]);
+	if (first < 0)
+		return;
+	uint8_t *menu = HeapAlloc(GetProcessHeap(), 0, MENU_SIZE);
+	memcpy(menu, src, MENU_SIZE);
+	*(const char **)menu = "mw2coop_lobbies";
+	*(MenuEventHandlerSet **)(menu + MENU_ON_OPEN) = script_set("\"focusfirst\" ; ");
+	int count = *(int *)(src + MENU_ITEM_COUNT);
+	uint8_t **from = *(uint8_t ***)(src + MENU_ITEMS);
+	uint8_t **items = HeapAlloc(GetProcessHeap(), 0, count * sizeof(*items));
+	for (int i = 0; i < count; i++) {
+		uint8_t *it = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
+		memcpy(it, from[i], ITEM_SIZE);
+		*(uint8_t **)(it + ITEM_PARENT) = menu;
+		*(uint32_t *)(it + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
+		const char *text = *(const char **)(it + ITEM_TEXT);
+		if (text && strcmp(text, "@MENU_SELECT_DIFFICULTY") == 0)
+			*(const char **)(it + ITEM_TEXT) = "@MW2COOP_LOBBIES";
+		else if (i > first - 6 && i < first) {
+			// the difficulty descriptions and the checkpoint warning
+			*(const char **)(it + ITEM_TEXT) = "";
+			*(void **)(it + ITEM_TEXT_EXP) = NULL;
+		}
+		items[i] = it;
+	}
+	for (int b = 0; b < MAX_LOBBIES; b++) {
+		int i = item_index(src, buttons[b]);
+		if (i < 0)
+			continue;
+		uint8_t *it = items[i];
+		static char names[MAX_LOBBIES][24], texts[MAX_LOBBIES][24], actions[MAX_LOBBIES][128];
+		snprintf(names[b], sizeof(names[b]), "mw2coop_lobby_%d", b + 1);
+		snprintf(texts[b], sizeof(texts[b]), "@MW2COOP_LOBBY_%d", b + 1);
+		snprintf(actions[b], sizeof(actions[b]),
+			 "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found %d\" ; ", b + 1);
+		*(const char **)it = names[b];
+		*(const char **)(it + ITEM_TEXT) = texts[b];
+		*(MenuEventHandlerSet **)(it + ITEM_ACTION) = script_set(actions[b]);
+		*(MenuEventHandlerSet **)(it + ITEM_ON_FOCUS) =
+			script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ");
+		*(MenuEventHandlerSet **)(it + ITEM_LEAVE_FOCUS) =
+			script_set("\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; ");
+	}
+	*(uint8_t ***)(menu + MENU_ITEMS) = items;
+	((uint8_t **)(ui + UI_MENUS))[ui_count] = menu;
+	*(int *)(ui + UI_MENU_COUNT) = ui_count + 1;
+	log_printf("menus: list of games on the network added (%d items)", count);
 }
 
 // ---------------------------------------------------------------- the lobby with a campaign mission
@@ -276,6 +470,64 @@ static void send_ready(void)
 	ready_sent = GetTickCount();
 }
 
+// net.c: a lobby query from the network, or a host's answer to ours. Returns 1 if it was one.
+int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint16_t from_port, char *reply,
+			  int reply_size, int *reply_len)
+{
+	*reply_len = 0;
+	static const char find[] = "\xff\xff\xff\xff" FIND_TAG;
+	static const char here[] = "\xff\xff\xff\xff" HERE_TAG;
+	if (len == (int)sizeof(find) - 1 && memcmp(buf, find, len) == 0) {
+		// answer only while hosting a campaign lobby that still has room
+		if (base[RVA_PARTY_IS_HOST] && lobby_campaign_set && !party_full()) {
+			char map[64] = "", name[33] = "";
+			game_dvar_raw("coop_mapName", map, sizeof(map));
+			// the host's name as its party has it (slot 0, rva 0x5dd960, set by the party join 0xd7220)
+			lstrcpynA(name, (const char *)base + RVA_PARTY_MEMBER_NAMES, sizeof(name));
+			uint64_t xuid = *(uint64_t *)(base + RVA_XUID_TABLE);
+			*reply_len = snprintf(reply, reply_size, "%s%016llx %s %s", here, (unsigned long long)xuid, map, name);
+			log_printf("menus: answered a lobby query from %u.%u.%u.%u:%u", from_ip[0], from_ip[1], from_ip[2],
+				   from_ip[3], from_port);
+		}
+		return 1;
+	}
+	if (len >= (int)sizeof(here) - 1 && memcmp(buf, here, sizeof(here) - 1) == 0) {
+		if (!finding)
+			return 1;
+		// "<xuid> <map> <host name>"
+		char text[128];
+		int n = len - ((int)sizeof(here) - 1);
+		n = n < (int)sizeof(text) - 1 ? n : (int)sizeof(text) - 1;
+		memcpy(text, buf + sizeof(here) - 1, n);
+		text[n] = 0;
+		char *map = strchr(text, ' ');
+		if (!map)
+			return 1;
+		*map++ = 0;
+		char *name = strchr(map, ' ');
+		if (name)
+			*name++ = 0;
+		uint64_t xuid = strtoull(text, NULL, 16);
+		EnterCriticalSection(&lobby_lock);
+		int known = 0;
+		for (int i = 0; i < lobby_count; i++)
+			known |= lobbies[i].xuid == xuid;
+		if (!known && lobby_count < MAX_LOBBIES) {
+			Lobby *l = &lobbies[lobby_count++];
+			memcpy(l->ip, from_ip, 4);
+			l->port = from_port;
+			l->xuid = xuid;
+			lstrcpynA(l->map, map, sizeof(l->map));
+			lstrcpynA(l->name, name ? name : "", sizeof(l->name));
+			log_printf("menus: lobby at %u.%u.%u.%u:%u: %s, host '%s'", from_ip[0], from_ip[1], from_ip[2],
+				   from_ip[3], from_port, l->map, l->name);
+		}
+		LeaveCriticalSection(&lobby_lock);
+		return 1;
+	}
+	return 0;
+}
+
 int menus_on_packet(const char *buf, int len)
 {
 	static const char tag[] = "\xff\xff\xff\xff" READY_TAG;
@@ -377,6 +629,8 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_start", NULL, NULL, start_f},
 	{NULL, "mw2coop_ready", NULL, NULL, ready_f},
 	{NULL, "mw2coop_menus_tick", NULL, NULL, tick_f},
+	{NULL, "mw2coop_find", NULL, NULL, find_f},
+	{NULL, "mw2coop_join_found", NULL, NULL, join_found_f},
 };
 
 // The menu work runs on the game's main thread, between frames: the control thread only queues
@@ -407,6 +661,8 @@ static void tick_f(void)
 	if (!base)
 		return;
 	patch_main_menu();
+	add_lobbies_menu();
+	find_tick();
 	int campaign = campaign_lobby();
 	patch_lobby(campaign);
 	if (!campaign) {
@@ -422,6 +678,7 @@ static void tick_f(void)
 
 void menus_install(void)
 {
+	InitializeCriticalSection(&lobby_lock);
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
 	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {

@@ -20,6 +20,7 @@
 #define RVA_PARTY_IS_HOST        0x5dd950 // uint8
 #define RVA_PARTY_ACTIVE         0x5dd951 // uint8, gates the party frame (0xd74a0)
 #define RVA_PARTY_LAUNCH         0x5dd953 // uint8, set by coopLaunch (0xd7a50)
+#define RVA_PARTY_MEMBER_NAMES   0x5dd960 // char[32] per member, stride 0x38 (slot 0: the host)
 #define RVA_PARTY_START_TIME     0x5dd954 // int32
 #define RVA_LOBBY_SLOT_USED      0x236bc0 // char (lobby, slot): slot taken (party state @0xd7ee0)
 #define RVA_PARTY_RESET          0x0d7dd0 // void Party_Reset(void)

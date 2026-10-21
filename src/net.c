@@ -3,6 +3,8 @@
 // They also carry mw2coop's own packets: the lobby's ready state (menus.c), and the start point,
 // sent by the host just before each coopLaunch it sends (see progress.c).
 #include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +28,8 @@ static volatile LONG budget = 150; // max logged packets per run
 static SOCKET peer_socket = INVALID_SOCKET;
 static struct sockaddr_in peer;
 static CRITICAL_SECTION peer_lock;
+// the game's UDP socket (the one its out-of-band packets use), for broadcasts
+static volatile SOCKET game_socket = INVALID_SOCKET;
 
 static void log_packet(const char *dir, const struct sockaddr *sa, const char *buf, int len)
 {
@@ -97,8 +101,51 @@ int net_send_mod(const char *text)
 	return ok;
 }
 
+// Every IPv4 network the PC is on (LAN, Wi-Fi, Radmin VPN, Hamachi...) gets the packet at its
+// broadcast address, plus 255.255.255.255; port in host order.
+int net_broadcast_mod(const char *text, uint16_t port)
+{
+	SOCKET s = game_socket;
+	if (s == INVALID_SOCKET || !real_sendto)
+		return 0;
+	char pkt[128];
+	int n = snprintf(pkt, sizeof(pkt), "\xff\xff\xff\xff%s", text);
+	if (n <= 0 || n >= (int)sizeof(pkt))
+		return 0;
+	BOOL on = TRUE;
+	setsockopt(s, SOL_SOCKET, SO_BROADCAST, (const char *)&on, sizeof(on));
+	struct sockaddr_in to = {0};
+	to.sin_family = AF_INET;
+	to.sin_port = htons(port);
+	to.sin_addr.s_addr = INADDR_BROADCAST;
+	int sent = real_sendto(s, pkt, n, 0, (struct sockaddr *)&to, sizeof(to)) == n;
+
+	ULONG size = 16384;
+	IP_ADAPTER_ADDRESSES *list = HeapAlloc(GetProcessHeap(), 0, size);
+	if (list && GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+					 NULL, list, &size) == NO_ERROR) {
+		for (IP_ADAPTER_ADDRESSES *a = list; a; a = a->Next) {
+			if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+				continue;
+			for (IP_ADAPTER_UNICAST_ADDRESS *u = a->FirstUnicastAddress; u; u = u->Next) {
+				if (u->Address.lpSockaddr->sa_family != AF_INET || u->OnLinkPrefixLength >= 32)
+					continue;
+				ULONG ip = ntohl(((struct sockaddr_in *)u->Address.lpSockaddr)->sin_addr.s_addr);
+				ULONG mask = u->OnLinkPrefixLength ? 0xffffffffu << (32 - u->OnLinkPrefixLength) : 0;
+				to.sin_addr.s_addr = htonl(ip | ~mask);
+				sent += real_sendto(s, pkt, n, 0, (struct sockaddr *)&to, sizeof(to)) == n;
+			}
+		}
+	}
+	if (list)
+		HeapFree(GetProcessHeap(), 0, list);
+	return sent;
+}
+
 static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
 {
+	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu)
+		game_socket = s;
 	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu && !game_peek(RVA_PARTY_IS_HOST, 1) &&
 	    contains(buf, len, "coopConnect"))
 		remember_peer(s, to);
@@ -122,7 +169,17 @@ static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
 		if (r > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) &&
 		    contains(buf, r, "coopConnect"))
 			remember_peer(s, from);
-		if (progress_on_packet(buf, r) || menus_on_packet(buf, r)) {
+		char reply[128];
+		int reply_len = 0, lobby = 0;
+		if (r > 4 && *(const unsigned int *)buf == 0xffffffffu && from && from->sa_family == AF_INET) {
+			const struct sockaddr_in *in = (const struct sockaddr_in *)from;
+			game_socket = s;
+			lobby = menus_on_lobby_packet(buf, r, (const uint8_t *)&in->sin_addr, ntohs(in->sin_port), reply,
+						      sizeof(reply), &reply_len);
+			if (reply_len > 0 && reply_len < (int)sizeof(reply))
+				real_sendto(s, reply, reply_len, 0, from, sizeof(struct sockaddr_in));
+		}
+		if (lobby || progress_on_packet(buf, r) || menus_on_packet(buf, r)) {
 			WSASetLastError(WSAEWOULDBLOCK); // ours: the game sees "no packet this time"
 			return SOCKET_ERROR;
 		}

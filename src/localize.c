@@ -61,20 +61,43 @@ static const ModString strings[] = {
 	// Ждём старта от хоста
 	{"MW2COOP_START_HOST", "\xc6\xe4\xb8\xec \xf1\xf2\xe0\xf0\xf2\xe0 \xee\xf2 \xf5\xee\xf1\xf2\xe0",
 	 "Waiting for the host to start"},
+	// ПРИСОЕДИНИТЬСЯ К ИГРЕ
+	{"MW2COOP_JOIN_IDLE", "\xcf\xd0\xc8\xd1\xce\xc5\xc4\xc8\xcd\xc8\xd2\xdc\xd1\xdf \xca \xc8\xc3\xd0\xc5",
+	 "JOIN A GAME"},
+	// ПОИСК ИГР В СЕТИ...
+	{"MW2COOP_JOIN_SEARCHING", "\xcf\xce\xc8\xd1\xca \xc8\xc3\xd0 \xc2 \xd1\xc5\xd2\xc8...",
+	 "SEARCHING THE NETWORK..."},
+	// ИГР В СЕТИ НЕ НАЙДЕНО
+	{"MW2COOP_JOIN_NONE", "\xc8\xc3\xd0 \xc2 \xd1\xc5\xd2\xc8 \xcd\xc5 \xcd\xc0\xc9\xc4\xc5\xcd\xce",
+	 "NO GAMES FOUND"},
+	// ПОДКЛЮЧЕНИЕ...
+	{"MW2COOP_JOIN_CONNECTING", "\xcf\xce\xc4\xca\xcb\xde\xd7\xc5\xcd\xc8\xc5...",
+	 "CONNECTING..."},
+	// Игры в сети
+	{"MW2COOP_LOBBIES", "\xc8\xe3\xf0\xfb \xe2 \xf1\xe5\xf2\xe8",
+	 "Games on the network"},
 };
 #define STRING_COUNT (int)(sizeof(strings) / sizeof(strings[0]))
 
-// Names the menus show whose text the mod switches at run time (localize_select): the lobby's
-// ready and start buttons. The UI looks the entry up each frame, so a switch shows at once.
+// Names the menus show whose text the mod switches at run time: the lobby's ready and start
+// buttons and the campaign menu's join button (localize_select: one of strings[]), the rows of
+// the list of games on the network (localize_set_text: any text, Windows-1251). The UI looks the
+// entry up each frame, so a switch shows at once.
 typedef struct {
 	const char *name;
-	volatile LONG shown; // index into strings[]
+	volatile LONG shown; // index into strings[], or -1 for text
+	char text[128];
 	LocalizeEntry entry;
 } Alias;
 
 static Alias aliases[] = {
-	{"MW2COOP_READY", 1, {NULL, NULL}},
-	{"MW2COOP_START", 3, {NULL, NULL}},
+	{"MW2COOP_READY", 1, "", {NULL, NULL}},
+	{"MW2COOP_START", 3, "", {NULL, NULL}},
+	{"MW2COOP_JOIN", 9, "", {NULL, NULL}},
+	{"MW2COOP_LOBBY_1", -1, "", {NULL, NULL}},
+	{"MW2COOP_LOBBY_2", -1, "", {NULL, NULL}},
+	{"MW2COOP_LOBBY_3", -1, "", {NULL, NULL}},
+	{"MW2COOP_LOBBY_4", -1, "", {NULL, NULL}},
 };
 #define ALIAS_COUNT (int)(sizeof(aliases) / sizeof(aliases[0]))
 
@@ -102,7 +125,7 @@ static void *find_header(int type, const char *name)
 			if (strcmp(name, aliases[i].name) != 0)
 				continue;
 			aliases[i].entry.name = aliases[i].name;
-			aliases[i].entry.value = text_of(aliases[i].shown);
+			aliases[i].entry.value = aliases[i].shown < 0 ? aliases[i].text : text_of(aliases[i].shown);
 			return &aliases[i].entry;
 		}
 		for (int i = 0; i < STRING_COUNT; i++) {
@@ -125,6 +148,22 @@ void localize_select(const char *alias, const char *name)
 			if (strcmp(name, strings[i].name) == 0)
 				InterlockedExchange(&aliases[a].shown, i);
 	}
+}
+
+void localize_set_text(const char *alias, const char *text)
+{
+	for (int a = 0; a < ALIAS_COUNT; a++) {
+		if (strcmp(alias, aliases[a].name) != 0)
+			continue;
+		InterlockedExchange(&aliases[a].shown, -1);
+		lstrcpynA(aliases[a].text, text, sizeof(aliases[a].text));
+	}
+}
+
+const char *localize_text(const char *name)
+{
+	LocalizeEntry *e = original(ASSET_TYPE_LOCALIZE_ENTRY, name);
+	return e && e->value && e->name && strcmp(e->name, name) == 0 ? e->value : NULL;
 }
 
 static const uint8_t expected[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
