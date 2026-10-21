@@ -3,6 +3,7 @@
 //   port=28960    the game's network port: the host listens on it, and joining (an address typed
 //                 in without a port, the search on the network) uses it. Both players need the
 //                 same port; most never change it.
+//   steam_relay=0 1: a Steam invite's game traffic goes through Steam P2P (steamnet.c)
 // The port is the default of the dvar net_port, registered with an immediate 28960 (rva 0x293380
 // in NET_Init, 0x292f02 in a second registration); DllMain runs before the game's own start, so
 // the immediates are patched before the dvar exists.
@@ -17,6 +18,7 @@
 
 #define DEFAULT_PORT 28960
 static uint16_t port = DEFAULT_PORT;
+static int steam_relay;
 
 static const uint32_t net_port_immediates[] = {0x293381, 0x292f03}; // "mov edx, 28960": ba 20 71 00 00
 
@@ -54,8 +56,14 @@ void settings_load(void)
 		port = (uint16_t)p;
 	else
 		log_printf("settings: bad port %u in settings.ini", p);
+	steam_relay = GetPrivateProfileIntA("network", "steam_relay", 0, path) != 0;
 	if (port != DEFAULT_PORT)
 		patch_port(port);
+}
+
+int settings_steam_relay(void)
+{
+	return steam_relay;
 }
 
 uint16_t settings_port(void)

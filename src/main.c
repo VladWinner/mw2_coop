@@ -14,6 +14,7 @@
 #include "progress.h"
 #include "scrdebug.h"
 #include "settings.h"
+#include "steamnet.h"
 #include "upnp.h"
 #include "scripts.h"
 
@@ -56,6 +57,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		menus_install();
 		access_install();
 		upnp_install();
+		steamnet_install();
 		control_start();
 	}
 	return 0;

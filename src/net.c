@@ -16,6 +16,7 @@
 #include "net.h"
 #include "menus.h"
 #include "progress.h"
+#include "steamnet.h"
 
 typedef int(WINAPI *sendto_t)(SOCKET, const char *, int, int, const struct sockaddr *, int);
 typedef int(WINAPI *recvfrom_t)(SOCKET, char *, int, int, struct sockaddr *, int *);
@@ -69,6 +70,14 @@ static int contains(const char *buf, int len, const char *word)
 	return 0;
 }
 
+// every send of the game and of mw2coop: a Steam peer's virtual address goes through Steam
+static int send_to(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
+{
+	if (steamnet_send(buf, len, to))
+		return len;
+	return real_sendto(s, buf, len, flags, to, tolen);
+}
+
 static void remember_peer(SOCKET s, const struct sockaddr *sa)
 {
 	if (!sa || sa->sa_family != AF_INET)
@@ -100,7 +109,7 @@ int net_send_mod_to(const uint8_t ip[4], uint16_t port, const char *text)
 	to.sin_family = AF_INET;
 	to.sin_port = htons(port);
 	memcpy(&to.sin_addr, ip, 4);
-	return real_sendto(s, pkt, n, 0, (struct sockaddr *)&to, sizeof(to)) == n;
+	return send_to(s, pkt, n, 0, (struct sockaddr *)&to, sizeof(to)) == n;
 }
 
 int net_send_mod(const char *text)
@@ -111,7 +120,7 @@ int net_send_mod(const char *text)
 		return 0;
 	EnterCriticalSection(&peer_lock);
 	int ok = peer_socket != INVALID_SOCKET &&
-		 real_sendto(peer_socket, pkt, n, 0, (const struct sockaddr *)&peer, sizeof(peer)) == n;
+		 send_to(peer_socket, pkt, n, 0, (const struct sockaddr *)&peer, sizeof(peer)) == n;
 	LeaveCriticalSection(&peer_lock);
 	return ok;
 }
@@ -170,15 +179,17 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 		char pkt[96];
 		int n = progress_launch_packet(pkt, sizeof(pkt));
 		log_packet("send", to, pkt, n);
-		real_sendto(s, pkt, n, flags, to, tolen);
+		send_to(s, pkt, n, flags, to, tolen);
 	}
 	log_packet("send", to, buf, len);
-	return real_sendto(s, buf, len, flags, to, tolen);
+	return send_to(s, buf, len, flags, to, tolen);
 }
 
 static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
 {
-	int r = real_recvfrom(s, buf, len, flags, from, fromlen);
+	int r = steamnet_receive(buf, len, from, fromlen);
+	if (r <= 0)
+		r = real_recvfrom(s, buf, len, flags, from, fromlen);
 	if (r > 0) {
 		log_packet("recv", from, buf, r);
 		if (r > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) &&
@@ -194,7 +205,7 @@ static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
 				menus_on_lobby_packet(buf, r, (const uint8_t *)&in->sin_addr, ntohs(in->sin_port), reply,
 						      sizeof(reply), &reply_len);
 			if (reply_len > 0 && reply_len < (int)sizeof(reply))
-				real_sendto(s, reply, reply_len, 0, from, sizeof(struct sockaddr_in));
+				send_to(s, reply, reply_len, 0, from, sizeof(struct sockaddr_in));
 		}
 		if (lobby || progress_on_packet(buf, r) || menus_on_packet(buf, r)) {
 			WSASetLastError(WSAEWOULDBLOCK); // ours: the game sees "no packet this time"

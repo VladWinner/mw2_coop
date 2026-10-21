@@ -5,3 +5,5 @@
 void settings_load(void);
 // The game's network port (default 28960).
 uint16_t settings_port(void);
+// settings.ini [network] steam_relay (default 0).
+int settings_steam_relay(void);
