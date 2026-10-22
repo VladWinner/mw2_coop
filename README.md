@@ -30,7 +30,7 @@
 - 🎚 **One difficulty for both**: the one the host picks in the lobby.
 - 🧭 **Hosting and joining in the game's menus**: Campaign → co-op lobby, mission select, open / Steam friends only / password, a list of games on the network, join by address or Steam invite.
 - 🌐 **Online made easy**: an in-game Windows Firewall prompt and automatic UPnP port forwarding for the host.
-- 💾 **Progress kept by the host**: continue where you stopped; both move on to the next mission together.
+- 💾 **Progress kept by the host**: continue where you stopped; both move on to the next mission together, and each player's own campaign records (missions unlocked, difficulty, achievements) are written as in single player.
 - 🧩 **Nothing of the game replaced**: one `winmm.dll` and a `mw2coop` folder; scripts are patched in memory when they load.
 
 ## 🎮 Missions
@@ -81,7 +81,6 @@ Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 - Checkpoints exist only in S.S.D.D.: a death late in another mission restarts it from its start.
 - Team Player: nothing on screen tells you about the seat swap (hold Use for a second as the passenger).
 - No Russian's far ending (nobody at the van door) logs one script error (`_anim::anim_loop_packet`); the scene plays on.
-- The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
 - Joining through a Steam invite between two different Steam accounts has not been tested yet.
 - Nobody has played the whole campaign through together yet: tell us how far you got.
 

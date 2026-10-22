@@ -757,8 +757,53 @@ mission_complete()
 		player EnableInvulnerability();
 	next = next_level_name();
 	SetDvar( "start", "" );
+	write_records();
 	state( "mission complete " + level.script + ", next '" + next + "'" );
 	request( "nextmap " + next );	// the host saves it as progress and launches it
+}
+
+// The campaign records _nextmission() writes in single player, on each machine into its own
+// player's profile: the mission's best difficulty and the furthest mission (setLevelCompleted:
+// a mission after one never completed is not counted, as in single player), the campaign
+// percentage, the profile save, and the mission's achievements. Profile data is local and
+// changes no game state, so the two lockstep machines may differ here. Endgame (af_chase) is
+// recorded with the ending, as _nextmission( true ) does.
+//
+// The profile methods only answer for this machine's own player (on the client, level.player is
+// the host's player and reads an empty profile), and _endmission works on level.player: it is
+// that player for the few calls below, which never wait, so no other script sees the swap.
+write_records()
+{
+	settings = level.missionSettings;
+	script = level.script;
+	if ( script == "af_chase" )
+		return;
+	if ( script == "ending" )
+		script = "af_chase";
+	index = settings maps\_endmission::getLevelIndex( script );
+	if ( !isdefined( index ) )
+		return;
+	own = undefined;
+	foreach ( player in level.players )
+		if ( player GetLocalPlayerProfileData( "missionHighestDifficulty" ) != "" )
+			own = player;
+	if ( !isdefined( own ) )
+		return;
+	before = own GetLocalPlayerProfileData( "highestMission" ) + " " + own GetLocalPlayerProfileData( "missionHighestDifficulty" );
+	player1 = level.player;
+	level.player = own;
+	settings maps\_endmission::setLevelCompleted( index );
+	maps\_endmission::updateSpPercent();
+	UpdateGamerProfile();
+	if ( settings maps\_endmission::hasAchievement( index ) )
+		maps\_utility::giveachievement_wrapper( settings maps\_endmission::getAchievement( index ) );
+	level.player = player1;
+	after = own GetLocalPlayerProfileData( "highestMission" ) + " " + own GetLocalPlayerProfileData( "missionHighestDifficulty" );
+	who = "player 1";
+	if ( own != level.player )
+		who = "player 2";
+	state( "records " + script + " (index " + index + "), " + who + ": highest mission and difficulties " + before + " -> " + after );
+	wait 0.3;	// the DLL reads mw2coop_state every 250 ms
 }
 
 // --------------------------------------------------------------------------------------------
