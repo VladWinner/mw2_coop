@@ -85,6 +85,9 @@ main()
 		case "god":
 			god();
 			break;
+		case "downs":
+			downs();
+			break;
 		case "ride":
 			ride();
 			break;
@@ -311,6 +314,28 @@ god()
 	check( IsAlive( level.player ) && IsAlive( level.player2 ), "both players alive after heavy damage" );
 	check( !level.player ent_flag( "coop_downed" ) && !level.player2 ent_flag( "coop_downed" ), "neither player downed" );
 	check( level.player.health > 0 && level.player2.health > 0, "health " + level.player.health + " / " + level.player2.health );
+	report( "done" );
+}
+
+// Downs on Recruit (run with MW2COOP_GOD=0): the difficulty comes from the players' profiles,
+// so the scenario forces Recruit as the game's own level.forcedgameskill does. Player 2 is
+// downed, then player 1 after the grace time: both down fails the mission.
+downs()
+{
+	common_checks();
+	level.forcedgameskill = 0;
+	maps\_gameskill::setSkill( true );
+	wait 0.5;
+	check( level.gameskill == 0, "difficulty Recruit (" + level.gameskill + ")" );
+	check( isdefined( level.player_downed_death_buffer_time ), "time between downs defined on Recruit" );
+	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	wait 1;
+	check( level.player2 ent_flag( "coop_downed" ) && !level.player ent_flag( "coop_downed" ), "player 2 downed, player 1 up" );
+	wait 3;
+	level.player DoDamage( level.player.health + 500, level.player.origin );
+	wait 1;
+	check( level.player ent_flag( "coop_downed" ), "player 1 downed after the grace time" );
+	check( flag( "coop_alldowned" ) || level.mw2coop.failing, "both down: the mission fails" );
 	report( "done" );
 }
 

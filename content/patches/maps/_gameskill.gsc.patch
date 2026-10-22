@@ -1,0 +1,12 @@
+mw2coop patch for maps/_gameskill.gsc (Modern Warfare 2, 64-bit Steam build)
+
+1. The time after one player is downed before the other can be downed has no Recruit ("easy")
+   value. In co-op, setskill() reads it for the current difficulty, and maps\_coop's
+   downed_player_manager() multiplies it on the first down: on Recruit that is a script error
+   that ends the thread, so later downs were not handled. Recruit gets Regular's 2 seconds.
+@@@ replace
+	level.difficultySettings[ "player_downed_buffer_time" ][ "normal" ] 		 = 2;
+@@@ with
+	level.difficultySettings[ "player_downed_buffer_time" ][ "easy" ] 		 = 2;
+	level.difficultySettings[ "player_downed_buffer_time" ][ "normal" ] 		 = 2;
+@@@ end
