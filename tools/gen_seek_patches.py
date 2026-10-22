@@ -1,7 +1,7 @@
 """Write the patches of level scripts whose only co-op changes are about enemies: those sent at
 "the player" go for the closest player still up, and scenes that hide "the player" from enemies
 hide both (tools/seek_patch.py). Scripts that have a generator of their
-own (airport, cliffhanger, estate, roadkill) call seek_patch from it instead.
+own (airport, arcadia, cliffhanger, dcburning, estate, roadkill) call seek_patch from it instead.
 Usage: python -I gen_seek_patches.py <extracted gsc root> <mod content/patches/maps dir>"""
 import os
 import sys
@@ -17,14 +17,10 @@ SCRIPTS = [
     ('af_caves/maps/af_caves.gsc', 'Just Like Old Times', []),
     ('af_caves/maps/af_caves_backhalf.gsc', 'Just Like Old Times', ['AAA_sequence_airstrip']),
     ('af_caves/maps/af_caves_code.gsc', 'Just Like Old Times', []),
-    ('arcadia/maps/arcadia_code.gsc', 'Exodus', []),
     ('boneyard/maps/boneyard.gsc', 'The Enemy of My Enemy', ['intro_player']),
     ('cliffhanger/maps/cliffhanger_code.gsc', 'Cliffhanger', []),
     ('cliffhanger/maps/cliffhanger_stealth.gsc', 'Cliffhanger', []),
     ('contingency/maps/contingency.gsc', 'Contingency', []),
-    ('dcburning/maps/dcburning.gsc', 'Of Their Own Accord',
-     ['AAA_sequence_bunker_to_commerce', 'AAA_sequence_heli_ride', 'ignoreme_on_squad_and_player',
-      'ignoreme_off_squad_and_player']),
     ('dcemp/maps/dcemp_endpart.gsc', 'Second Sun', ['whitehouse_main']),
     ('dc_whitehouse/maps/dc_whitehouse.gsc', 'Whiskey Hotel', ['whitehouse_main']),
     ('ending/maps/char_museum_code.gsc', 'Museum', ['panic_button']),

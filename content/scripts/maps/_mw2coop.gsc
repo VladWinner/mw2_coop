@@ -94,13 +94,13 @@ main()
 
 set_bodies()
 {
-	models = maps\_mw2coop_bodies::bodies( level.script );
-	if ( !isdefined( models ) )
-		return;
-	PrecacheModel( models[ 0 ] );
-	PrecacheModel( models[ 1 ] );
-	foreach ( player in level.players )
+	foreach ( n, player in level.players )
 	{
+		models = maps\_mw2coop_bodies::player_bodies( level.script, n );
+		if ( !isdefined( models ) )
+			return;
+		PrecacheModel( models[ 0 ] );
+		PrecacheModel( models[ 1 ] );
 		player.mw2coop_body = models[ 0 ];
 		player.mw2coop_head = models[ 1 ];
 		player maps\_mw2coop_bodies::give_body( ::body_model );
@@ -317,6 +317,10 @@ teleport_to_partner( partner )
 		ground = PlayerPhysicsTrace( spot + ( 0, 0, 48 ), spot - ( 0, 0, 96 ) );
 		if ( abs( ground[ 2 ] - partner.origin[ 2 ] ) > 40 )
 			continue;
+		// ... where he fits: a step is free at his feet (Wolverines! start burgertown put him in
+		// a spot open at knee height but stuck, QA tour 2026-10-22) ...
+		if ( spot_stuck( ground ) )
+			continue;
 		// ... with room around it: the S.S.D.D. range start had a free spot 48 units left of
 		// player 1 wedged between sandbags and the rifle table, open on 3 sides of 8 (owner's
 		// screenshot and QA pickups, 2026-10-21). The first open spot wins, else the most open.
@@ -423,6 +427,19 @@ players_enable_weapons()
 }
 
 // In how many of 8 directions a player standing at spot could walk 40 units (at knee height).
+// True when a player standing at spot could not take an 8-unit step in any of four directions:
+// he would be inside something solid.
+spot_stuck( spot )
+{
+	foreach ( yaw in strtok( "0 90 180 270", " " ) )
+	{
+		to = spot + AnglesToForward( ( 0, int( yaw ), 0 ) ) * 8 + ( 0, 0, 2 );
+		if ( Distance( PlayerPhysicsTrace( spot + ( 0, 0, 2 ), to ), to ) < 0.5 )
+			return false;
+	}
+	return true;
+}
+
 open_sides( spot )
 {
 	open = 0;
@@ -620,10 +637,26 @@ checkpoint_hud()
 watch_failure()
 {
 	level endon( "mw2coop_level_end" );
+	foreach ( player in level.players )
+		player thread fail_on_death();
 	while ( !isdefined( level.flag[ "coop_alldowned" ] ) )
 		wait 0.05;
 	flag_wait( "coop_alldowned" );
 	// own thread: mission_failed() sends mw2coop_level_end, which would end this thread
+	level thread mission_failed();
+}
+
+// A player killed outright (a scripted Kill(), as when he steps off Cliffhanger's cave ledge,
+// owner 2026-10-22) is not downed and cannot be revived: the mission fails, as his death does in
+// single player. Without this the other player played on beside a dead partner.
+fail_on_death()
+{
+	level endon( "mw2coop_level_end" );
+	self waittill( "death" );
+	if ( isdefined( level.player2 ) && self == level.player2 )
+		state( "player 2 died" );
+	else
+		state( "player 1 died" );
 	level thread mission_failed();
 }
 

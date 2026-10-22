@@ -2,7 +2,13 @@ mw2coop patch for maps/gulag_code.gsc (The Gulag, Modern Warfare 2, 64-bit Steam
 Co-op logic lives in mw2coop/scripts/maps/_mw2coop_gulag.gsc.
 
 1. Fly-in: player 2 rides the same helicopter on his own view controller (he would otherwise
-   fall from the map's player start).
+   fall from the map's player start), at the same door as player 1, side by side as COD-MOD
+   seats them: player 1's controller 20 units along tag_guy2, player 2's 10 units the other way.
+@@@ subst spawn_player_heli
+player_view_controller = get_player_view_controller( level.player_heli, "tag_guy2", ( 0, 0, -8 ) );
+@@@ to
+player_view_controller = get_player_view_controller( level.player_heli, "tag_guy2", maps\_mw2coop_gulag::door_offset( 1 ) );
+@@@ end
 @@@ replace
 	level.player PlayerLinkToDelta( player_view_controller, "TAG_aim", viewPercentFrac, -35, 40, -35, 40, true );
 @@@ with

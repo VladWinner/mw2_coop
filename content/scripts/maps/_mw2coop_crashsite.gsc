@@ -79,6 +79,19 @@ partner_rig_play()
 	level.mw2coop_crash_node thread anim_single_solo( level.mw2coop_crash_rig, "dcburning_BHrescue" );
 }
 
+// dcemp start "emp": player 1's wake-up is already over (his rig at the animation's end); player
+// 2's rig too, and the crash site's invulnerability is not his any more (the scene that lifts it
+// does not run from this start).
+partner_rig_woken()
+{
+	if ( !coop() || !isdefined( level.mw2coop_crash_rig ) )
+		return;
+	rig = level.mw2coop_crash_rig;
+	level.mw2coop_crash_node thread anim_single_solo( rig, "dcburning_BHrescue" );
+	rig SetAnimTime( rig getanim( "dcburning_BHrescue" ), 1 );
+	level.player2 DisableInvulnerability();
+}
+
 // Every player (player 1 outside co-op).
 crash_players()
 {

@@ -216,6 +216,30 @@ ocean_can_kill( player )
 	return isdefined( player.mw2coop_out_of_water );
 }
 
+// start_surface() (a restart at the "surface" checkpoint): player 1 is put in the water by the
+// grate; player 2 goes beside him, on a free side, unarmed as he is (QA tour 2026-10-22: he
+// stayed at the map's player start, 15000 units away, and bobbed there).
+partner_beside_at_surface( node )
+{
+	if ( !coop() )
+		return;
+	right = AnglesToRight( ( 0, node.angles[ 1 ], 0 ) );
+	spot = level.player.origin + right * 56;
+	foreach ( side in strtok( "56 -56 96 -96", " " ) )
+	{
+		try = level.player.origin + right * int( side );
+		if ( Distance( PlayerPhysicsTrace( level.player.origin + ( 0, 0, 8 ), try + ( 0, 0, 8 ) ), try + ( 0, 0, 8 ) ) < 1 )
+		{
+			spot = try;
+			break;
+		}
+	}
+	level.player2 SetOrigin( spot );
+	level.player2 SetPlayerAngles( node.angles );
+	level.player2 DisableWeapons();
+	maps\_mw2coop::state( "oilrig: player 2 surfaces beside player 1 (" + int( Distance( spot, level.player.origin ) ) + " units)" );
+}
+
 // self: player surfacing (water_bob). Player 2's swim ends higher than player 1's, over the
 // walkway; he bobs at player 1's height, in the water.
 bob_base()

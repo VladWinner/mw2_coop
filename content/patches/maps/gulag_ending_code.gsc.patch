@@ -1,0 +1,51 @@
+mw2coop patch for maps/gulag_ending_code.gsc (The Gulag, Modern Warfare 2, 64-bit Steam build)
+Co-op logic lives in mw2coop/scripts/maps/_mw2coop_gulag.gsc.
+
+1. The cave-in chase out of the tunnels is for both players: each one's screen darkens by his own
+   distance to the collapse, and it buries whichever player it catches or who runs the wrong way
+   (before, only player 1 was followed: a lagging player 2 was never caught; QA tour 2026-10-22).
+   Being buried fails the mission for both, as dying there does alone.
+@@@ subst chase_train_kills_player_if_it_gets_close
+level.black_overlay fadeOverTime( 0.2 );
+@@@ to
+level.black_overlay fadeOverTime( 0.2 );
+		maps\_mw2coop_gulag::partner_chase_fade( self.origin, max_black, black_range );
+@@@ end
+@@@ subst chase_train_kills_player_if_it_gets_close
+if ( chase_dist < 260 )
+@@@ to
+if ( maps\_mw2coop_gulag::cavein_catches( self.origin, chase_dist, 260 ) )
+@@@ end
+@@@ subst chase_player_dies_if_goes_wrong_way
+if ( level.player istouching( volume ) )
+@@@ to
+if ( maps\_mw2coop_gulag::anyone_touching( volume ) )
+@@@ end
+@@@ subst black_screen
+level.black_overlay destroy();
+@@@ to
+level.black_overlay destroy();
+		maps\_mw2coop_gulag::partner_black_screen( false );
+@@@ end
+@@@ subst black_screen
+level.black_overlay = hud;
+@@@ to
+level.black_overlay = hud;
+	maps\_mw2coop_gulag::partner_black_screen( true );
+@@@ end
+@@@ subst player_dies_to_cavein
+if ( flag( "player_died_to_cave_in" ) )
+@@@ to
+maps\_mw2coop_gulag::cavein_default();
+	if ( flag( "player_died_to_cave_in" ) )
+@@@ end
+@@@ subst player_dies_to_cavein
+level.player
+@@@ to
+level.mw2coop_cavein_player
+@@@ end
+@@@ subst black_death
+level.player
+@@@ to
+level.mw2coop_cavein_player
+@@@ end

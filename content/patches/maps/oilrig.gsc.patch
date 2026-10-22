@@ -174,3 +174,12 @@ level.player.threatbias = level.player.threatbias + playerThreatAdditional;
 @@@ to
 maps\_mw2coop::players_threatbias( level.player.threatbias + playerThreatAdditional );
 @@@ end
+
+7. A restart at the "surface" checkpoint puts player 2 in the water beside player 1, as the
+   swim would have (he stayed at the map's player start, 15000 units away).
+@@@ subst start_surface
+level.player disableweapons();
+@@@ to
+level.player disableweapons();
+	maps\_mw2coop_oilrig::partner_beside_at_surface( eNode );
+@@@ end

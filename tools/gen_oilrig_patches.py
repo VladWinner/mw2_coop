@@ -68,6 +68,10 @@ both_ignoreme(p, ['rappel_ignoreme', 'ignoreme_on_squad_and_player', 'ignoreme_o
 p.note('''6. How much enemies want "the player" (threatbias) is set on both players
    (maps\_mw2coop::players_threatbias): the partner is in the same scene.''')
 assert both_fields(p)
+p.note('''7. A restart at the "surface" checkpoint puts player 2 in the water beside player 1, as the
+   swim would have (he stayed at the map's player start, 15000 units away).''')
+p.subst('start_surface', 'level.player disableweapons();',
+        'level.player disableweapons();\n\t' + M + 'partner_beside_at_surface( eNode );')
 
 p.write('oilrig.gsc.patch', '''
 mw2coop patch for maps/oilrig.gsc (The Only Easy Day... Modern Warfare 2, 64-bit Steam build)

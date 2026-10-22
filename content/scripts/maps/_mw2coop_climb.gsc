@@ -38,9 +38,12 @@ climb_setup()
 	c = level.mw2coop_climb;
 
 	// flags fed by trigger volumes in the map: a player "has" the flag while he touches one
-	// (flag_set_touching triggers), or from his first touch until the climb clears it again
+	// (flag_set_touching triggers), or from his first touch until the climb clears it again.
+	// fade_to_death: the map's volume under the cave ledge (owner, 2026-10-22: in single player a
+	// step off the ledge fades to black and fails the mission; in co-op it was fed by nothing, so
+	// a player who stepped off fell forever).
 	c.trigger_flags = [];
-	foreach ( name in strtok( "player_in_position_to_climb climb_start climb_pullup climb_drop_down player_climbs_past_safe_point climb_jump_prep climb_big_jump climb_icepick_slide", " " ) )
+	foreach ( name in strtok( "player_in_position_to_climb climb_start climb_pullup climb_drop_down player_climbs_past_safe_point climb_jump_prep climb_big_jump climb_icepick_slide fade_to_death", " " ) )
 	{
 		triggers = flag_triggers( name );
 		if ( !triggers.size )

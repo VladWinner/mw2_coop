@@ -46,9 +46,15 @@ co-op campaign session every change does what the original did (the player is le
 
 # ---------------------------------------------------------------- dcemp.gsc
 d = Patch(gsc_root, 'dcemp/maps/dcemp.gsc', out_dir)
-d.note('''1. Start points that set up the crash site run its movement on player 1.''')
-for fn in ('start_iss', 'start_emp'):
+d.note('''1. Start points that set up the crash site run its movement on player 1, and give player 2 his
+   own rig beside him as the crash site does (a restart at "emp" left him without one: four
+   script errors in the EMP's aftermath, QA tour 2026-10-22); at "emp" both rigs are at the end
+   of the wake-up animation.''')
+for fn, after in (('start_iss', ''), ('start_emp', '\n\t\t' + C + 'partner_rig_woken();')):
     d.subst(fn, 'thread maps\\dc_crashsite::player_crash_movement(', 'level.player thread maps\\dc_crashsite::player_crash_movement(')
+    d.subst(fn, 'level.player PlayerLinkToDelta( ePlayer_rig, "tag_player", 1, 0, 0, 0, 0, true );',
+            'level.player PlayerLinkToDelta( ePlayer_rig, "tag_player", 1, 0, 0, 0, 0, true );\n\t\t'
+            + C + 'partner_rig_setup( crash_node, ePlayer_rig );' + after)
 d.note('''2. ISS: player 2's view is kept for after the EMP; both players' view limits follow the scene.''')
 d.subst('iss_main', 'level.emp_player_stance = level.player getstance();',
         'level.emp_player_stance = level.player getstance();\n\t' + D + 'save_partner_view();')
