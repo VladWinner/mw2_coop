@@ -113,7 +113,7 @@ static void script_request(const char *cmd)
 // 0x100 (external). These are the ones mw2coop needs scripts to read: give them 0x80 as soon
 // as they exist (they keep 0x100, so script setdvar still works). The harness creates them
 // before the level starts, so both machines flag them before any script reads them.
-static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_qa", "mw2coop_qa_phase"};
+static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_qa", "mw2coop_qa_phase"};
 
 static void sync_dvar_flags(void)
 {
@@ -302,6 +302,10 @@ static void run_line(char *line)
 		for (int i = 0; v && v[i] && i < 80; i++)
 			snprintf(hex + strlen(hex), sizeof(hex) - strlen(hex), "%02x ", (unsigned char)v[i]);
 		log_printf("loc: %s = '%s' [%s]", line + 5, v ? v : "(none)", hex);
+		return;
+	}
+	if (strncmp(line, "!menuitems ", 11) == 0) {
+		menus_log_items(line + 11);
 		return;
 	}
 	if (strncmp(line, "!menuaction ", 12) == 0) {

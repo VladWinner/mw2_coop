@@ -105,6 +105,25 @@ void menus_log_action(const char *menu_name, const char *item_name)
 	}
 }
 
+// QA: logs a menu's items ("!menuitems <menu>"): name, text, rect and its alignment.
+void menus_log_items(const char *menu_name)
+{
+	uint8_t *menu = ui_find_menu(menu_name);
+	if (!menu) {
+		log_printf("menus: no menu '%s'", menu_name);
+		return;
+	}
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	for (int i = 0; i < count; i++) {
+		uint8_t *it = items[i];
+		const char *name = *(const char **)it, *text = *(const char **)(it + ITEM_TEXT);
+		float *r = (float *)(it + 0x08);
+		log_printf("menus: %s[%d] %s '%s' x %g y %g w %g h %g align %d/%d", menu_name, i, name ? name : "-",
+			   text ? text : "", r[0], r[1], r[2], r[3], it[ITEM_RECT_ALIGN_H], it[ITEM_RECT_ALIGN_V]);
+	}
+}
+
 // A handler set running one menu script, e.g. "\"open\" \"levels\" ;" (the parsed form the
 // zone stores: quoted tokens, commands ended by ';').
 void *ui_script_set(const char *script)

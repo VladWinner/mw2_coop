@@ -10,6 +10,11 @@
 // - Steam friends only: the lobby does not answer network queries and others are refused.
 // A refused coopConnect never reaches the game; the host answers "coopReject <reason>".
 //
+// Host: the "Friendly fire" row under it (owner, 2026-10-22) toggles whether the players can hurt
+//   each other; on by default (the game's own co-op lets them). The setting is the dvar
+//   mw2coop_ff ("1"/"0"), sent to the client with coopLaunch (src/progress.c) and applied by
+//   maps\_mw2coop::friendly_fire_setting() on both machines.
+//
 // Client: a locked lobby from the list, or an address typed in, opens a text popup
 // ("mw2coop_edit", a copy of the create-profile popup with its edit field bound to the dvar
 // mw2coop_edit). The same popup sets the host's password.
@@ -35,6 +40,7 @@ static uint8_t *base;
 static volatile LONG access_mode = ACCESS_OPEN;
 static char password[33];
 static volatile LONG hosting; // this PC holds a campaign lobby (set by the menu tick)
+static volatile LONG friendly_fire = 1;
 
 static int edit_mode;
 static uint8_t edit_ip[4];
@@ -217,7 +223,32 @@ static void access_f(void)
 	}
 }
 
-// The Access row: inserted into coop_lobby's items while it holds a campaign mission.
+// mw2coop_ff: the lobby's Friendly fire row
+static void ff_f(void)
+{
+	if (!base[RVA_PARTY_IS_HOST])
+		return;
+	InterlockedExchange(&friendly_fire, !friendly_fire);
+	game_cbuf_addtext(friendly_fire ? "set mw2coop_ff 1\n" : "set mw2coop_ff 0\n");
+	log_printf("access: friendly fire between players %s", friendly_fire ? "on" : "off");
+}
+
+static uint8_t *lobby_row(uint8_t *from, uint8_t *menu, const char *name, const char *text, const char *action, float y)
+{
+	uint8_t *row = ui_clone_item(from, menu);
+	*(const char **)row = name;
+	*(const char **)(row + ITEM_TEXT) = text;
+	*(void **)(row + ITEM_ACTION) = ui_script_set(action);
+	*(void **)(row + ITEM_ON_FOCUS) =
+		ui_script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ");
+	*(void **)(row + ITEM_LEAVE_FOCUS) = ui_script_set("\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; ");
+	*(float *)(row + ITEM_RECT_Y) = y;
+	*(float *)(row + ITEM_RECT_CLIENT_Y) = y;
+	return row;
+}
+
+// The Access and Friendly fire rows: inserted into coop_lobby's items while it holds a campaign
+// mission.
 static uint8_t *lobby_menu, **native_items, **campaign_items;
 static int native_count;
 
@@ -235,20 +266,33 @@ static void patch_lobby_row(int campaign)
 		lobby_menu = menu;
 		native_items = items;
 		native_count = *(int *)(menu + MENU_ITEM_COUNT);
-		uint8_t *row = ui_clone_item(items[at], menu);
-		float y = *(float *)(row + ITEM_RECT_Y) + BUTTON_HEIGHT;
-		*(const char **)row = "mw2coop_access";
-		*(const char **)(row + ITEM_TEXT) = "@MW2COOP_ACCESS";
-		*(void **)(row + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_access\" ; ");
-		*(void **)(row + ITEM_ON_FOCUS) =
-			ui_script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ");
-		*(void **)(row + ITEM_LEAVE_FOCUS) = ui_script_set("\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; ");
-		*(float *)(row + ITEM_RECT_Y) = y;
-		*(float *)(row + ITEM_RECT_CLIENT_Y) = y;
-		campaign_items = HeapAlloc(GetProcessHeap(), 0, (native_count + 1) * sizeof(*campaign_items));
+		float y = *(float *)(items[at] + ITEM_RECT_Y) + BUTTON_HEIGHT;
+		uint8_t *access = lobby_row(items[at], menu, "mw2coop_access", "@MW2COOP_ACCESS",
+					    "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_access\" ; ", y);
+		uint8_t *ff = lobby_row(items[at], menu, "mw2coop_ff", "@MW2COOP_FF",
+					"\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_ff\" ; ", y + BUTTON_HEIGHT);
+		campaign_items = HeapAlloc(GetProcessHeap(), 0, (native_count + 2) * sizeof(*campaign_items));
 		memcpy(campaign_items, native_items, (at + 1) * sizeof(*campaign_items));
-		campaign_items[at + 1] = row;
-		memcpy(campaign_items + at + 2, native_items + at + 1, (native_count - at - 1) * sizeof(*campaign_items));
+		campaign_items[at + 1] = access;
+		campaign_items[at + 2] = ff;
+		memcpy(campaign_items + at + 3, native_items + at + 1, (native_count - at - 1) * sizeof(*campaign_items));
+		// the Friendly fire row takes the line of the lobby's NAT type text ("nattype", y 126):
+		// the left column's items from that line down (aligned top-left like the buttons) move
+		// one line lower, and so do the focused button's hint lines under them ("description",
+		// aligned to the bottom, y -262 and -242; the operation panel starts at -202); copies, so
+		// the Spec Ops lobby keeps its layout
+		for (int i = at + 3; i < native_count + 2; i++) {
+			uint8_t *it = campaign_items[i];
+			float iy = *(float *)(it + ITEM_RECT_Y);
+			int below = it[ITEM_RECT_ALIGN_V] == 1 && iy >= y + BUTTON_HEIGHT / 2 && iy <= 400;
+			int hint = it[ITEM_RECT_ALIGN_V] == 3 && iy < -230;
+			if (it[ITEM_RECT_ALIGN_H] != 1 || !(below || hint))
+				continue;
+			uint8_t *moved = ui_clone_item(campaign_items[i], menu);
+			*(float *)(moved + ITEM_RECT_Y) += BUTTON_HEIGHT;
+			*(float *)(moved + ITEM_RECT_CLIENT_Y) += BUTTON_HEIGHT;
+			campaign_items[i] = moved;
+		}
 	}
 	uint8_t **want = campaign ? campaign_items : native_items;
 	if (items != want) {
@@ -257,7 +301,7 @@ static void patch_lobby_row(int campaign)
 			*(int *)(menu + MENU_ITEM_COUNT) = native_count;
 		*(uint8_t ***)(menu + MENU_ITEMS) = want;
 		if (campaign)
-			*(int *)(menu + MENU_ITEM_COUNT) = native_count + 1;
+			*(int *)(menu + MENU_ITEM_COUNT) = native_count + 2;
 	}
 }
 
@@ -277,9 +321,14 @@ void access_tick(int campaign_lobby, int host)
 		return;
 	}
 	if (!host) {
-		localize_set_text("MW2COOP_ACCESS", ""); // the host's setting is not ours to show
+		localize_set_text("MW2COOP_ACCESS", ""); // the host's settings are not ours to show
+		localize_set_text("MW2COOP_FF", "");
 		return;
 	}
+	localize_select("MW2COOP_FF", friendly_fire ? "MW2COOP_FF_ON" : "MW2COOP_FF_OFF");
+	char cur[8] = "";
+	if (!game_dvar_raw("mw2coop_ff", cur, sizeof(cur)) || cur[0] != (friendly_fire ? '1' : '0'))
+		game_cbuf_addtext(friendly_fire ? "set mw2coop_ff 1\n" : "set mw2coop_ff 0\n");
 	static const char *const texts[] = {"MW2COOP_ACCESS_OPEN", "MW2COOP_ACCESS_PASSWORD", "MW2COOP_ACCESS_STEAM"};
 	localize_select("MW2COOP_ACCESS", texts[access_mode]);
 }
@@ -369,6 +418,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_edit_ok", NULL, NULL, edit_ok_f},
 	{NULL, "mw2coop_join_address", NULL, NULL, join_address_f},
 	{NULL, "mw2coop_access", NULL, NULL, access_f},
+	{NULL, "mw2coop_ff", NULL, NULL, ff_f},
 };
 
 void access_install(void)

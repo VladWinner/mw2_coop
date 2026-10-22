@@ -71,6 +71,7 @@ main()
 
 	thread no_saves();
 	fov_pilot( undefined );	// a level that ended in a pilot's view must not leave it on
+	friendly_fire_setting();
 	flag_init( "mw2coop_regrouped" );
 	thread regroup_after_start();
 	thread follow_leader_teleports();
@@ -702,6 +703,34 @@ player_gameskill()
 	if ( is_campaign_coop() && ( skill == "0" || skill == "1" || skill == "2" || skill == "3" ) )
 		return int( skill );
 	return self maps\_utility::get_player_gameskill();
+}
+
+// Friendly fire between the players: the host's lobby setting (mw2coop_ff, "0" off; sent to the
+// client with coopLaunch). On, the game's own co-op lets them hurt each other (QA pvp: a burst of
+// M4 fire took the partner from 100 to 2). Off, g_friendlyfireDamageScale 0 leaves 1 damage a
+// hit (QA pvp0: 100 to 92), which is given back.
+friendly_fire_setting()
+{
+	if ( GetDvar( "mw2coop_ff" ) != "0" )
+		return;
+	SetSavedDvar( "g_friendlyfireDamageScale", 0 );
+	foreach ( player in level.players )
+		player thread give_back_partner_damage();
+	state( "friendly fire between players off" );
+}
+
+// self: a player. Damage the other player did to him comes back.
+give_back_partner_damage()
+{
+	self endon( "death" );
+	level endon( "mw2coop_level_end" );
+	for ( ;; )
+	{
+		self waittill( "damage", amount, attacker );
+		if ( !isdefined( attacker ) || !IsPlayer( attacker ) || attacker == self )
+			continue;
+		self.health = int( min( self.maxhealth, self.health + amount ) );
+	}
 }
 
 // A field of view only one player should get (the Predator's UAV view sets cg_fov for both

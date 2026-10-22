@@ -103,6 +103,9 @@ main()
 		case "pilotfov":
 			pilotfov();
 			break;
+		case "pvp":
+			pvp();
+			break;
 		case "cpcheck":
 			cpcheck();
 			break;
@@ -426,6 +429,32 @@ cprestart()
 	level thread maps\_mw2coop::mission_failed();
 	wait 30;
 	report( "FAIL no restart 30 s after the failure" );
+}
+
+// Friendly fire between players (run with MW2COOP_GOD=0; the lobby setting through
+// MW2COOP_HOST_CMDS="set mw2coop_ff 0"): player 2 stands 80 units in front of player 1, who aims
+// at his chest and fires for real; player 2's health before and after.
+pvp()
+{
+	common_checks();
+	wait 14;	// after the mission title
+	foreach ( player in level.players )
+	{
+		player EnableWeapons();
+		player FreezeControls( false );
+	}
+	fwd = AnglesToForward( ( 0, level.player GetPlayerAngles()[ 1 ], 0 ) );
+	level.player2 SetOrigin( level.player.origin + fwd * 80 );
+	wait 0.5;
+	aim = VectorToAngles( ( level.player2.origin + ( 0, 0, 48 ) ) - level.player GetEye() );
+	level.player SetPlayerAngles( aim );
+	wait 0.5;
+	before = level.player2.health;
+	report( "player 1 weapon " + level.player GetCurrentWeapon() + ", g_friendlyfireDamageScale " + GetDvar( "g_friendlyfireDamageScale" ) + ", player 2 health " + before );
+	press( level.player, "attack", 600 );
+	wait 1.5;
+	report( "player 2 health after player 1 fired: " + level.player2.health + " (was " + before + "), downed " + level.player2 ent_flag( "coop_downed" ) );
+	report( "done" );
 }
 
 // The checkpoint table of the level (maps\_mw2coop_checkpoints): every flag in it exists.

@@ -40,6 +40,11 @@ static const ModString strings[] = {
 	// Удерживайте [{+activate}], чтобы сесть за пулемёт (Team Player: the passenger takes the turret)
 	{"MW2COOP_SWAP_SEATS", "\xd3\xe4\xe5\xf0\xe6\xe8\xe2\xe0\xe9\xf2\xe5 [{+activate}], \xf7\xf2\xee\xe1\xfb \xf1\xe5\xf1\xf2\xfc \xe7\xe0 \xef\xf3\xeb\xe5\xec\xb8\xf2",
 	 "Hold [{+activate}] to take the turret"},
+	// Огонь по своим: вкл / выкл (the lobby row: can the players hurt each other)
+	{"MW2COOP_FF_ON", "\xce\xe3\xee\xed\xfc \xef\xee \xf1\xe2\xee\xe8\xec: \xe2\xea\xeb",
+	 "Friendly fire: on"},
+	{"MW2COOP_FF_OFF", "\xce\xe3\xee\xed\xfc \xef\xee \xf1\xe2\xee\xe8\xec: \xe2\xfb\xea\xeb",
+	 "Friendly fire: off"},
 	// Готов
 	{"MW2COOP_READY_SET", "\xc3\xee\xf2\xee\xe2",
 	 "Ready"},
@@ -147,6 +152,7 @@ static Alias aliases[] = {
 	{"MW2COOP_START", "MW2COOP_START_GO", -2, "", {NULL, NULL}},
 	{"MW2COOP_JOIN", "MW2COOP_JOIN_IDLE", -2, "", {NULL, NULL}},
 	{"MW2COOP_ACCESS", "MW2COOP_ACCESS_OPEN", -2, "", {NULL, NULL}},
+	{"MW2COOP_FF", "MW2COOP_FF_ON", -2, "", {NULL, NULL}},
 	{"MW2COOP_EDIT_TITLE", "MW2COOP_EDIT_PASSWORD", -2, "", {NULL, NULL}},
 	{"MW2COOP_EDIT_LABEL", "MW2COOP_LABEL_PASSWORD", -2, "", {NULL, NULL}},
 	{"MW2COOP_CONTINUE", NULL, -1, "", {NULL, NULL}},

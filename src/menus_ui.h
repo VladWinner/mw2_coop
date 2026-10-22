@@ -9,6 +9,8 @@
 #define MENU_ON_CLOSE 0xf0
 #define MENU_ITEMS 0x168
 #define ITEM_RECT_Y 0x0c
+#define ITEM_RECT_ALIGN_H 0x18 // char: 1 left (the lobby's buttons), 3 right
+#define ITEM_RECT_ALIGN_V 0x19 // char: 1 top, 3 bottom
 #define ITEM_RECT_CLIENT_Y 0x20
 #define ITEM_DYNAMIC_FLAGS 0x50
 #define ITEM_TYPE 0xc4 // int: 1 button, 4 edit field, 16 file-name field
