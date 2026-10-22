@@ -55,3 +55,16 @@ set_vision_set( "airport_death", 10 );
 @@@ to
 maps\_mw2coop_airport::death_vision();
 @@@ end
+
+3. The squad's line of fire in the lobby: the player who walks into it dies, not always player 1
+   (maps\_mw2coop_airport::line_of_fire_kill).
+@@@ subst intro_civilians
+	add_wait( ::trigger_wait_targetname, "intro_line_of_fire_trig_final" );
+	add_abort( ::flag_wait, "lobby_to_stairs_go" );
+	level.player add_call( ::Kill );
+	thread do_wait();
+
+@@@ to
+	thread maps\_mw2coop_airport::line_of_fire_kill( "intro_line_of_fire_trig_final", "lobby_to_stairs_go" );
+
+@@@ end

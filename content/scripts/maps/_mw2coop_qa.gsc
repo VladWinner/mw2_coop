@@ -33,6 +33,8 @@
 //   loadout  - (any map) after the level's loadout both players hold the same weapon
 //   cover    - (airport, start "stairs") player 2 fires at Makarov's squad: the cover is blown,
 //              Makarov shoots both players and the mission fails for both
+//   lineoffire - (airport, start "intro", MW2COOP_GOD=0) player 2 walks into the squad's line of
+//              fire in the lobby: he dies, not player 1, and the mission fails for both
 //   bodyview - (any map) both players 220 units apart, frames of each other standing, player 2
 //              stepping sideways and backing off (the body's whole figure in motion)
 //   boat     - (af_chase, default start) the Endgame boat chase: player 1 boards and drives,
@@ -145,6 +147,9 @@ main()
 		case "boat":
 		case "boat2":
 			boat();
+			break;
+		case "lineoffire":
+			lineoffire();
 			break;
 		case "bodyview":
 			bodyview();
@@ -2085,5 +2090,29 @@ bodyview()
 		}
 		wait 0.1;
 	}
+	report( "done" );
+}
+
+// No Russian's lobby (airport, start "intro"; run with MW2COOP_GOD=0): the squad kills whoever
+// walks into its line of fire before it moves on (maps\_mw2coop_airport::line_of_fire_kill); the
+// level used to kill player 1 whoever stepped in. Names no airport script.
+lineoffire()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	for ( t = 0; t < 60 && !flag( "lobby_open_fire" ); t += 0.5 )
+		wait 0.5;
+	check( flag( "lobby_open_fire" ), "the squad opens fire in the lobby (" + t + " s)" );
+	trig = GetEnt( "intro_line_of_fire_trig_final", "targetname" );
+	check( isdefined( trig ) && !flag( "lobby_to_stairs_go" ), "the line of fire is live" );
+	SetDvar( "mw2coop_qa_phase", "done" );	// the death restarts the level
+	level.player2 SetOrigin( trig.origin );
+	for ( t = 0; t < 5 && IsAlive( level.player2 ) && !level.mw2coop.failing; t += 0.1 )
+		wait 0.1;
+	check( !IsAlive( level.player2 ) || level.mw2coop.failing, "player 2 died in the line of fire (" + t + " s)" );
+	check( IsAlive( level.player ), "player 1 still alive" );
+	check( isdefined( level.mw2coop_lof_victim ) && level.mw2coop_lof_victim == level.player2, "the squad's line of fire killed player 2, the one who walked in" );
+	for ( t = 0; t < 10 && !level.mw2coop.failing; t += 0.5 )
+		wait 0.5;
+	check( level.mw2coop.failing, "the mission failed for both" );
 	report( "done" );
 }

@@ -126,3 +126,28 @@ maps\_mw2coop_airport::cover_blown_shields();
 	maps\_mw2coop_airport::makarov_kills_players( member );
 
 @@@ end
+
+5. The squad's line of fire (lobby, massacre): warning shots at the feet of whichever player
+   stands in it, and the one who walks on into it dies, not always player 1
+   (maps\_mw2coop_airport::in_line_of_fire, line_of_fire_kill).
+@@@ subst player_line_of_fire
+		if ( Distance( self.origin, level.player.origin ) < self.radius )
+@@@ to
+		mw2coop_target = maps\_mw2coop_airport::in_line_of_fire( self );
+		if ( isdefined( mw2coop_target ) )
+@@@ end
+@@@ subst player_line_of_fire
+level.player
+@@@ to
+mw2coop_target
+@@@ end
+@@@ subst massacre_killers_shotgun
+	add_wait( ::trigger_wait_targetname, "massacre_line_of_fire_trig_final" );
+	add_abort( ::flag_wait, "massacre_line_of_fire_done" );
+	level.player add_call( ::Kill );
+	thread do_wait();
+
+@@@ to
+	thread maps\_mw2coop_airport::line_of_fire_kill( "massacre_line_of_fire_trig_final", "massacre_line_of_fire_done" );
+
+@@@ end

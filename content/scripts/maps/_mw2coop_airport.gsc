@@ -270,3 +270,42 @@ makarov_kills_players( member )
 		SetDvar( "ui_deadquote", level.fail_string );
 	level thread maps\_mw2coop::mission_failed();
 }
+
+// --------------------------------------------------------------------------------------------
+// The squad's line of fire (lobby, massacre): a player who walks in front of their guns gets
+// warning shots at his feet, and if he goes on into it, they kill him. The level watched player 1
+// only: player 2 got no warning, and his stepping in killed player 1.
+
+// player_line_of_fire(), self: the line's trigger: the player standing in it (player 1 first),
+// or undefined.
+in_line_of_fire( trig )
+{
+	if ( !coop() )
+	{
+		if ( Distance( trig.origin, level.player.origin ) < trig.radius )
+			return level.player;
+		return undefined;
+	}
+	foreach ( p in level.players )
+		if ( IsAlive( p ) && Distance( trig.origin, p.origin ) < trig.radius )
+			return p;
+	return undefined;
+}
+
+// In place of the level's add_wait( trigger_wait_targetname ) / add_abort( flag_wait ) /
+// level.player add_call( Kill ) chain: whoever walks into the final trigger dies (player 1
+// outside co-op, as before), unless the squad moved on (abort flag).
+line_of_fire_kill( trigger_name, abort_flag )
+{
+	if ( flag( abort_flag ) )
+		return;
+	level endon( abort_flag );
+	trig = GetEnt( trigger_name, "targetname" );
+	trig waittill( "trigger", who );
+	victim = level.player;
+	if ( coop() && isdefined( who ) && IsPlayer( who ) )
+		victim = who;
+	level.mw2coop_lof_victim = victim;	// QA lineoffire
+	maps\_mw2coop::state( "airport: " + player_name( victim ) + " walked into the squad's line of fire" );
+	victim Kill();
+}
