@@ -129,6 +129,7 @@ swap_seats()
 {
 	level endon( "mw2coop_ride_ends" );
 	level endon( "ride_ends" );
+	hinted = undefined;
 	for ( ;; )
 	{
 		wait 0.05;
@@ -136,6 +137,12 @@ swap_seats()
 		if ( !isdefined( seat ) || !isdefined( level.player_turret ) )
 			return;
 		passenger = seat.mw2coop_player;
+		// whoever becomes the passenger (boarding, or after a swap) is told how to swap
+		if ( isdefined( passenger ) && ( !isdefined( hinted ) || hinted != passenger ) )
+		{
+			hinted = passenger;
+			passenger thread swap_hint();
+		}
 		if ( !isdefined( passenger ) || !passenger UseButtonPressed() )
 			continue;
 		held = 0;
@@ -150,6 +157,28 @@ swap_seats()
 		while ( passenger UseButtonPressed() )
 			wait 0.05;	// let go first
 	}
+}
+
+// self: the passenger. "Hold [Use] to take the turret" on his screen for a few seconds (a
+// localized string answered by the mod's DLL, src/localize.c; the game puts in his Use key).
+swap_hint()
+{
+	self notify( "mw2coop_swap_hint" );
+	self endon( "mw2coop_swap_hint" );
+	if ( isdefined( self.mw2coop_swap_hint_elem ) )
+		self.mw2coop_swap_hint_elem Destroy();
+	elem = maps\_hud_util::createClientFontString( "default", 1.5 );
+	elem maps\_hud_util::setPoint( "CENTER", undefined, 0, 100 );
+	elem.foreground = true;
+	elem.hidewheninmenu = true;
+	elem SetText( &"MW2COOP_SWAP_SEATS" );
+	self.mw2coop_swap_hint_elem = elem;
+	level waittill_any_timeout( 6, "mw2coop_ride_ends", "ride_ends" );
+	elem FadeOverTime( 0.5 );
+	elem.alpha = 0;
+	wait 0.5;
+	elem Destroy();
+	self.mw2coop_swap_hint_elem = undefined;
 }
 
 // self: the player's Humvee.

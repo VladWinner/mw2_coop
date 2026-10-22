@@ -97,6 +97,9 @@ main()
 		case "flares":
 			flares();
 			break;
+		case "swaphint":
+			swaphint();
+			break;
 		case "ride":
 			ride();
 			break;
@@ -386,6 +389,39 @@ skill()
 		foreach ( n, player in level.players )
 			check( player.gameskill == int( want ), "player " + ( n + 1 ) + " plays difficulty " + want + " (" + player.gameskill + ")" );
 	}
+	report( "done" );
+}
+
+// Team Player's ride (start point "ride", maps\_mw2coop_roadkill): the passenger sees "Hold [Use]
+// to take the turret"; he holds Use for real, the two swap, and the new passenger sees it.
+swaphint()
+{
+	common_checks();
+	for ( t = 0; t < 30 && !( isdefined( level.mw2coop_roadkill_seat ) && isdefined( level.mw2coop_roadkill_seat.mw2coop_player ) ); t += 0.5 )
+		wait 0.5;
+	seat = level.mw2coop_roadkill_seat;
+	check( isdefined( seat ) && isdefined( seat.mw2coop_player ), "a passenger is seated" );
+	if ( !isdefined( seat ) || !isdefined( seat.mw2coop_player ) )
+	{
+		report( "done" );
+		return;
+	}
+	wait 1;
+	passenger = seat.mw2coop_player;
+	gunner = maps\_mw2coop::vehicle_gunner();
+	check( isdefined( passenger.mw2coop_swap_hint_elem ), player_name( passenger ) + " (passenger) sees the swap hint" );
+	check( !isdefined( gunner ) || !isdefined( gunner.mw2coop_swap_hint_elem ), "the gunner does not" );
+	qa_shot( "a-hint" );
+	press( passenger, "activate", 1500 );
+	wait 3;
+	check( isdefined( level.player_turret ) && level.player_turret GetTurretOwner() == passenger, player_name( passenger ) + " took the turret" );
+	now = seat.mw2coop_player;
+	check( isdefined( now ) && now != passenger, "the other player is the passenger now" );
+	if ( isdefined( now ) )
+		check( isdefined( now.mw2coop_swap_hint_elem ), player_name( now ) + " (new passenger) sees the swap hint" );
+	qa_shot( "b-swapped" );
+	wait 7;
+	check( !isdefined( passenger.mw2coop_swap_hint_elem ) && ( !isdefined( now ) || !isdefined( now.mw2coop_swap_hint_elem ) ), "the hint is gone after a few seconds" );
 	report( "done" );
 }
 

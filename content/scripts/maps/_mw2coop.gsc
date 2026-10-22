@@ -58,6 +58,7 @@ main()
 
 	PrecacheString( &"SCRIPT_CHECKPOINT" );
 	PrecacheString( &"MW2COOP_STUNNED" );	// the mod's own, from its DLL (src/localize.c)
+	PrecacheString( &"MW2COOP_SWAP_SEATS" );
 
 	// maps\_coop (revive) and kill_wrapper() read this Spec Ops flag in any co-op session;
 	// maps\_specialops creates it, the campaign does not. Set when the level ends, as in Spec Ops,

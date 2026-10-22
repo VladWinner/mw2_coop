@@ -37,6 +37,9 @@ static const ModString strings[] = {
 	// Вы оглушены. Ожидайте второго игрока
 	{"MW2COOP_STUNNED", "\xc2\xfb \xee\xe3\xeb\xf3\xf8\xe5\xed\xfb. \xce\xe6\xe8\xe4\xe0\xe9\xf2\xe5 \xe2\xf2\xee\xf0\xee\xe3\xee \xe8\xe3\xf0\xee\xea\xe0",
 	 "You are stunned. Wait for the other player"},
+	// Удерживайте [{+activate}], чтобы сесть за пулемёт (Team Player: the passenger takes the turret)
+	{"MW2COOP_SWAP_SEATS", "\xd3\xe4\xe5\xf0\xe6\xe8\xe2\xe0\xe9\xf2\xe5 [{+activate}], \xf7\xf2\xee\xe1\xfb \xf1\xe5\xf1\xf2\xfc \xe7\xe0 \xef\xf3\xeb\xe5\xec\xb8\xf2",
+	 "Hold [{+activate}] to take the turret"},
 	// Готов
 	{"MW2COOP_READY_SET", "\xc3\xee\xf2\xee\xe2",
 	 "Ready"},
