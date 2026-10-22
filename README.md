@@ -3,21 +3,21 @@
 Two-player co-op for the **Call of Duty: Modern Warfare 2 (2009) campaign**, on the current
 **64-bit Steam build**, using the co-op netcode the game already ships for Spec Ops.
 
-> **Beta.** Most missions start together and S.S.D.D., Team Player,
+> **Beta.** Every set piece of the campaign is reworked for two players, among them S.S.D.D., Team Player,
 > Wolverines!, Takedown's car ride, The Only Easy Day's swim, Cliffhanger's climb and
 > snowmobiles, No Russian's elevator, cover and ending, the crash site and ISS of Second Sun,
-> Endgame's boat chase and the final knife fight are reworked for two players; enemies fight
-> both players. Other set pieces are still written for one player. See [Status](#status).
+> Endgame's boat chase and the final knife fight; enemies fight both players. Nobody has played
+> the whole campaign through together yet. See [Status](#status).
 > Download: [Releases](https://github.com/stxlvn/mw2_coop/releases) (`mw2coop-<version>.zip`,
 > see [Install](#install)).
 
 *Кратко по-русски:* мод для прохождения кампании MW2 (2009) вдвоём на актуальной 64-битной
-Steam-версии. Бета: вдвоём переделаны S.S.D.D. (каждый берёт своё оружие), Team Player,
+Steam-версии. Бета: на двоих переделаны все сцены кампании, в том числе S.S.D.D. (каждый берёт своё оружие), Team Player,
 Wolverines!, поездка в машине в Takedown, заплыв и бесшумное убийство в The Only Easy Day,
 подъём по льду и снегоходы в Cliffhanger, лифт, прикрытие и концовка No Russian, крушение и МКС
 в Second Sun, лодка в Endgame (второй игрок лежит на носу напротив Прайса и стреляет) и
-финальный бой на ножах. Враги воюют с обоими игроками. Остальные сцены ещё рассчитаны на
-одного. Установка: распакуйте архив из
+финальный бой на ножах. Враги воюют с обоими игроками. Полного прохождения вдвоём пока не
+было. Установка: распакуйте архив из
 [Releases](https://github.com/stxlvn/mw2_coop/releases) в папку игры; хост: Кампания ->
 СЕТЕВАЯ ИГРА ВДВОЕМ, второй игрок: ПРИСОЕДИНИТЬСЯ К ИГРЕ или приглашение Steam (подробно в
 `INSTALL.txt` внутри архива).
@@ -116,10 +116,8 @@ Not working or not done:
 - Player 2 is only brought along when player 1 jumps far in one step; a slow scripted move can
   still leave him behind.
 - The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
-- Level fixes so far: S.S.D.D., Team Player, Wolverines!, Takedown (opening), The Only Easy
-  Day... (opening), Cliffhanger, No Russian (elevator, ending), Of Their Own Accord (crash),
-  Second Sun (opening, street), The Gulag and Takedown seats. Other missions start with
-  player 2 next to player 1 but their scripted scenes are written for one player.
+- Every mission's set pieces are reworked for two (the bot tour of all start points, 2026-10-22,
+  found the last ones); the whole campaign has not been played through together yet.
 - Joining a friend through a Steam invite (two Steam accounts) is untested.
 
 ## Requirements
