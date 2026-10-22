@@ -40,6 +40,10 @@
 //              he walks forward and the server sees his Use button, not the other player's
 //   pickups  - (trainer; start "", "frag" or "pit") each player takes his own weapons off the
 //              tables (looks at them, presses Use) and walks up to the frag box (Forward)
+//   bay      - (trainer; a range start: "", timed_ads, bullet_penetration, frag) both players
+//              stand inside the sandbag bay and can move
+//   introfreeze - (a map's default start with an intro title) under the title neither player
+//              moves on a real Forward press; afterwards both walk
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -144,6 +148,12 @@ main()
 			break;
 		case "buttons":
 			buttons();
+			break;
+		case "bay":
+			bay();
+			break;
+		case "introfreeze":
+			introfreeze();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -1282,16 +1292,19 @@ pickups()
 	flag_wait( "firing_range_initialized" );
 	wait 1;
 	check( !level.player HasWeapon( "m4_grunt" ) && !level.player2 HasWeapon( "m4_grunt" ), "no rifles at the range yet" );
-	// both inside the sandbag bay, player 1 on the left and a little forward
+	// both inside the sandbag bay where COD-MOD puts its players, player 1 on the left
 	// (maps\_mw2coop_trainer::range_place_1)
 	start_ent = GetEnt( "player_start_range", "targetname" );
 	right = AnglesToRight( ( 0, start_ent.angles[ 1 ], 0 ) );
 	side1 = int( VectorDot( level.player.origin - start_ent.origin, right ) );
 	side2 = int( VectorDot( level.player2.origin - start_ent.origin, right ) );
 	check( side1 < side2 - 30, "player 1 left of player 2 at the range (" + side1 + ", " + side2 + " from the start, to the right)" );
-	check( Distance2D( level.player2.origin, start_ent.origin ) < 8 && Distance2D( level.player.origin, start_ent.origin - right * 48 + AnglesToForward( ( 0, start_ent.angles[ 1 ], 0 ) ) * 16 ) < 8, "both on their places in the sandbag bay" );
+	check( Distance2D( level.player2.origin, start_ent.origin ) < 8 && Distance2D( level.player.origin, ( -2515.2, 5190.2, 0 ) ) < 8, "both on their places in the sandbag bay" );
 	foreach ( player in level.players )
+	{
 		check( !qa_stuck( player ), player_name( player ) + " is not stuck in anything solid at his place" );
+		check( qa_in_bay( player, start_ent ), player_name( player ) + " is inside the sandbags (" + bay_text( player, start_ent ) + ")" );
+	}
 	check( abs( level.player.origin[ 2 ] - level.player2.origin[ 2 ] ) < 4, "both on the floor (" + int( level.player.origin[ 2 ] ) + ", " + int( level.player2.origin[ 2 ] ) + ")" );
 	// player 2 was brought along to the range: he must stand where he can walk away
 	report( "at the range: player 1 " + vec_int( level.player.origin ) + ", player 2 " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
@@ -1337,6 +1350,117 @@ pickup_ready( name )
 	return isdefined( level.mw2coop_pickups ) && isdefined( level.mw2coop_pickups[ name ] );
 }
 
+// The level intro holds both players (maps\_introscreen patch; before, player 2 walked and took
+// a pistol under S.S.D.D.'s title): both press Forward under the title and stay, then both walk.
+introfreeze()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	level.mw2coop_qa_intro_over = flag_exist( "introscreen_complete" ) && flag( "introscreen_complete" );
+	level thread qa_note_intro_over();
+	from = [];
+	foreach ( n, player in level.players )
+	{
+		from[ n ] = player.origin;
+		press( player, "forward", 1000 );
+	}
+	wait 1;
+	over = level.mw2coop_qa_intro_over;
+	foreach ( n, player in level.players )
+	{
+		// a player riding something (Takedown's car) is carried along and cannot walk anyway
+		if ( player IsLinked() )
+			report( player_name( player ) + " rides (linked) under the title: not checked" );
+		else
+			check( !over && Distance2D( player.origin, from[ n ] ) < 2, player_name( player ) + " stays still on a Forward press under the intro title (" + int( Distance2D( player.origin, from[ n ] ) ) + " units; intro over: " + over + ")" );
+	}
+	wait_intro();
+	wait 1;
+	foreach ( player in level.players )
+	{
+		if ( player IsLinked() )
+		{
+			report( player_name( player ) + " rides (linked) after the intro: not checked" );
+			continue;
+		}
+		walked = qa_walk( player );	// before the text: GSC evaluates arguments last to first
+		check( walked, player_name( player ) + " walks after the intro (" + level.mw2coop_qa_walk + ")" );
+	}
+	report( "done" );
+}
+
+qa_note_intro_over()
+{
+	level waittill( "introscreen_complete" );
+	level.mw2coop_qa_intro_over = true;
+}
+
+// Turns him the way with the most free floor (up to 100 units) and presses Forward for 1 s; true
+// when he walked at least half of that room (40 units at most). level.mw2coop_qa_walk says how far.
+qa_walk( player )
+{
+	yaw = player GetPlayerAngles()[ 1 ];
+	room = 0;
+	best = yaw;
+	for ( turn = 0; turn < 360; turn += 45 )
+	{
+		from = player.origin + ( 0, 0, 8 );
+		free = Distance( from, PlayerPhysicsTrace( from, from + AnglesToForward( ( 0, yaw + turn, 0 ) ) * 100 ) );
+		if ( free > room + 1 )
+		{
+			room = free;
+			best = yaw + turn;
+		}
+	}
+	player SetPlayerAngles( ( 0, best, 0 ) );
+	wait 0.2;
+	start = player.origin;
+	press( player, "forward", 1000 );
+	wait 1.5;
+	moved = Distance2D( player.origin, start );
+	level.mw2coop_qa_walk = int( moved ) + " of " + int( room ) + " free units";
+	return moved > min( 40, room * 0.5 );
+}
+
+// Range starts (trainer.gsc firing_range_init() -> maps\_mw2coop_trainer::range_places): both
+// players inside the sandbag bay, not stuck.
+bay()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	start = GetEnt( "player_start_range", "targetname" );
+	foreach ( player in level.players )
+	{
+		check( qa_in_bay( player, start ), player_name( player ) + " is inside the sandbags (" + bay_text( player, start ) + ")" );
+		check( !qa_stuck( player ), player_name( player ) + " is not stuck in anything solid" );
+	}
+	report( "done" );
+}
+
+// Inside the range's sandbag bay: between its ends (101 units left to 28 right of
+// player_start_range), the bags close in front and the back wall close behind. Measured with
+// player traces, 2026-10-22: from player 1's place the bags are 37 units ahead and the wall 7
+// behind; outside, one of the two is open for 120 units.
+qa_in_bay( player, start )
+{
+	right = AnglesToRight( ( 0, start.angles[ 1 ], 0 ) );
+	fwd = AnglesToForward( ( 0, start.angles[ 1 ], 0 ) );
+	side = VectorDot( player.origin - start.origin, right );
+	at = player.origin + ( 0, 0, 2 );
+	front = Distance( at, PlayerPhysicsTrace( at, at + fwd * 120 ) );
+	back = Distance( at, PlayerPhysicsTrace( at, at - fwd * 120 ) );
+	return side > -101 && side < 28 && front < 60 && back < 40;
+}
+
+bay_text( player, start )
+{
+	right = AnglesToRight( ( 0, start.angles[ 1 ], 0 ) );
+	fwd = AnglesToForward( ( 0, start.angles[ 1 ], 0 ) );
+	at = player.origin + ( 0, 0, 2 );
+	return int( VectorDot( player.origin - start.origin, right ) ) + " right of the start, bags " + int( Distance( at, PlayerPhysicsTrace( at, at + fwd * 120 ) ) ) + " ahead, wall " + int( Distance( at, PlayerPhysicsTrace( at, at - fwd * 120 ) ) ) + " behind";
+}
+
 // The box (trainer.gsc spawn_frags()): its trigger is a touch trigger and the level checks that
 // he looks at the box, so each player walks up to it (real Forward presses) and looks at it.
 pickup_frags()
@@ -1360,6 +1484,10 @@ pickup_frags()
 			wait 0.5;
 		}
 		check( player HasWeapon( "fraggrenade" ) && player GetWeaponAmmoStock( "fraggrenade" ) >= 3, "player " + ( n + 1 ) + " takes frags from the box (" + player GetWeaponAmmoStock( "fraggrenade" ) + ")" );
+		// and steps back out of the other player's way
+		player SetPlayerAngles( ( 0, VectorToAngles( box.origin - player.origin )[ 1 ], 0 ) );
+		for ( i = 0; i < 4; i++ )
+			press( player, "back", 250 );
 	}
 	report( "done" );
 }
@@ -1382,7 +1510,7 @@ qa_stand_by( player, at, dist )
 qa_use_take( player, item, weapon )
 {
 	back = player.origin;
-	qa_stand_by( player, item.origin );
+	qa_stand_at_table( player, item.origin );
 	for ( i = 0; i < 4 && !player HasWeapon( weapon ); i++ )
 	{
 		if ( isdefined( item ) )
@@ -1399,9 +1527,43 @@ qa_use_take( player, item, weapon )
 	wait 0.5;
 }
 
-// The level's intro (maps\_introscreen) freezes player 1 until its title has gone (player 2 is
-// not frozen: found by the buttons scenario, 2026-10-21). Most intros set the flag
-// introscreen_complete at the end, some only notify it (dc_whitehouse); none takes 15 s.
+// Where a player would stand to take something off a table: 40 units from it on the floor (not on
+// the sandbags beside it), free all round, clear of the other player, with a clear view of it.
+// Tried from his own side first.
+qa_stand_at_table( player, at )
+{
+	other = level.player;
+	if ( player == level.player )
+		other = level.player2;
+	yaw = VectorToAngles( ( player.origin[ 0 ] - at[ 0 ], player.origin[ 1 ] - at[ 1 ], 0 ) )[ 1 ];
+	turns = strtok( "0 45 -45 90 -90 135 -135 180", " " );
+	grounds = [];
+	floor_z = undefined;
+	foreach ( turn in turns )
+	{
+		spot = at + AnglesToForward( ( 0, yaw + int( turn ), 0 ) ) * 40;
+		grounds[ turn ] = PlayerPhysicsTrace( spot + ( 0, 0, 16 ), spot - ( 0, 0, 200 ) );
+		if ( !isdefined( floor_z ) || grounds[ turn ][ 2 ] < floor_z )
+			floor_z = grounds[ turn ][ 2 ];
+	}
+	foreach ( turn in turns )
+	{
+		ground = grounds[ turn ];
+		if ( ground[ 2 ] > floor_z + 8 || qa_spot_stuck( ground ) || Distance2D( ground, other.origin ) < 48 )
+			continue;
+		if ( !BulletTracePassed( ground + ( 0, 0, 60 ), at, false, undefined ) )
+			continue;
+		player SetOrigin( ground );
+		wait 0.1;
+		return;
+	}
+	report( player_name( player ) + ": no free floor by the table, standing by it anyway" );
+	qa_stand_by( player, at );
+}
+
+// The level's intro (maps\_introscreen) holds the players until its title has gone. Most intros
+// set the flag introscreen_complete at the end, some only notify it (dc_whitehouse); none takes
+// 15 s.
 wait_intro()
 {
 	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
@@ -1412,10 +1574,15 @@ wait_intro()
 // True when no 8-unit step is free in any direction: he stands inside something solid.
 qa_stuck( player )
 {
+	return qa_spot_stuck( player.origin );
+}
+
+qa_spot_stuck( at )
+{
 	foreach ( yaw in strtok( "0 90 180 270", " " ) )
 	{
-		end = player.origin + AnglesToForward( ( 0, int( yaw ), 0 ) ) * 8 + ( 0, 0, 2 );
-		if ( Distance( PlayerPhysicsTrace( player.origin + ( 0, 0, 2 ), end ), end ) < 0.5 )
+		end = at + AnglesToForward( ( 0, int( yaw ), 0 ) ) * 8 + ( 0, 0, 2 );
+		if ( Distance( PlayerPhysicsTrace( at + ( 0, 0, 2 ), end ), end ) < 0.5 )
 			return false;
 	}
 	return true;

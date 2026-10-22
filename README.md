@@ -223,7 +223,9 @@ Easy Day `oilrig`, `oilrig2`; Cliffhanger `climb`, `snow`, `snowpick`; No Russia
 `dcemp`, `street` (start `street`); No Russian `cover` (start `stairs`); S.S.D.D. `pickups`
 (start "", `frag`, `pit`); Endgame `boat`, `boat2` (af_chase), `knife`, `knife2` (ending, start
 `wakeup`); any map `spawn`, `leash`, `look` (players face each other for screenshots),
-`targets` (whom the enemies fight), `buttons` (real Forward and Use on each player's machine).
+`targets` (whom the enemies fight), `buttons` (real Forward and Use on each player's machine),
+`introfreeze` (the intro title holds both players); S.S.D.D. `bay` (range starts: both inside
+the sandbags).
 A scenario can press a player's buttons for real: `press( player, "activate", ms )` makes that
 player's own machine run the key binding (`mw2coop_bind +activate`, see `src/control.c`), so
 the button reaches the server in his input like a key press (`pickups` takes the weapons this

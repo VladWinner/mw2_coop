@@ -386,6 +386,27 @@ players_threatbias( value )
 		player.threatbias = value;
 }
 
+// A level's intro (maps\_introscreen: the mission title on black, the slam zoom) holds player 1
+// still and without weapons; it holds every player (QA buttons, 2026-10-21: player 2 walked and
+// took a pistol while player 1 was held). Player 1 alone outside co-op.
+players_freeze_controls( on )
+{
+	foreach ( player in level.players )
+		player FreezeControls( on );
+}
+
+players_disable_weapons()
+{
+	foreach ( player in level.players )
+		player DisableWeapons();
+}
+
+players_enable_weapons()
+{
+	foreach ( player in level.players )
+		player EnableWeapons();
+}
+
 // In how many of 8 directions a player standing at spot could walk 40 units (at knee height).
 open_sides( spot )
 {

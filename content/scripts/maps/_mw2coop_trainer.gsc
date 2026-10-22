@@ -85,17 +85,16 @@ everyone_has_frags( count )
 }
 
 // The firing range's start (player_start_range) is one man's place in the sandbag bay. In co-op
-// player 1 stands 48 units left of it and player 2 on it, both facing downrange, both inside the
-// sandbags (owner, 2026-10-21: player 2 was put behind the bags). Measured from the start in QA
-// pickups: the bags in front are 40 to 55 units ahead from 90 units left up to the start, the
-// rifle table 10 to 18 units ahead on its right, a post just behind it. The bay's back wall is
-// not square to the start: 48 units left it is 10 units further back, and a player put there
-// stood inside it and could not walk (QA buttons, real Forward presses), so player 1 stands 16
-// units further forward, free on all sides. After the level start's regroup
+// both stand where COD-MOD put its two players (owner, 2026-10-22: "in COD-MOD both stand
+// right"): one on the start, the other 67 units left of it and 36 forward, by the bags
+// (COD-MOD trainer.gsc firing_range_init(): -2515.2 5190.2). Player 1 takes the left place and
+// player 2 the start (owner, 2026-10-21: host left, player 2 right). The bay's back wall is not
+// square to the start, and a place 48 units left on the start's line was inside it: the player
+// could not walk (QA buttons, real Forward presses). After the level start's regroup
 // (maps\_mw2coop::regroup_after_start), which would otherwise move player 2 again.
 range_place_1( start )
 {
-	return start.origin - AnglesToRight( ( 0, start.angles[ 1 ], 0 ) ) * 48 + AnglesToForward( ( 0, start.angles[ 1 ], 0 ) ) * 16;
+	return ( -2515.2, 5190.2, start.origin[ 2 ] );
 }
 
 range_places( start )
