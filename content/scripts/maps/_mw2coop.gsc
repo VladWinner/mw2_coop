@@ -142,7 +142,10 @@ god_mode()
 
 // --------------------------------------------------------------------------------------------
 // Messages to the outside: the DLL logs mw2coop_state on both machines and acts on
-// mw2coop_cmd on the host only. GetTime() makes every request a new value.
+// mw2coop_cmd on the host only, when its value changes. Every request carries a number that
+// keeps counting through restarts and levels (dvar mw2coop_cmd_n): GetTime() alone starts again
+// with each restart, and a request sent at the same level time as the last one (a restart from a
+// checkpoint, after the same 30 s twice; QA tour 2026-10-22) was the same value and was dropped.
 
 state( text )
 {
@@ -169,7 +172,9 @@ send_requests()
 			level waittill( "mw2coop_request" );
 		what = level.mw2coop_requests[ 0 ];
 		level.mw2coop_requests = array_remove_index( level.mw2coop_requests, 0 );
-		SetDvar( "mw2coop_cmd", what + " @" + GetTime() );
+		n = GetDvarInt( "mw2coop_cmd_n" ) + 1;
+		SetDvar( "mw2coop_cmd_n", n );
+		SetDvar( "mw2coop_cmd", what + " @" + GetTime() + "#" + n );
 		wait 0.3;
 	}
 }
