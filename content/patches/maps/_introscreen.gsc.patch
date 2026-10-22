@@ -89,3 +89,23 @@ level.player EnableWeapons()
 @@@ to
 maps\_mw2coop::players_enable_weapons()
 @@@ end
+
+2. In co-op the intro plays on the mission's first start only, not again after a restart at a
+   checkpoint or a campaign continued from one (both start the level at a start point): the
+   game's own skip for other starts, dev-only code (/# #/), runs (maps\_mw2coop::intro_skipped).
+@@@ replace
+	/#
+	skipIntro = !is_default_start();
+	if ( GetDebugDvar( "introscreen" ) == "0" )
+		skipIntro = true;
+@@@ with
+	skipIntro = maps\_mw2coop::intro_skipped();
+@@@ end
+@@@ replace
+		return;
+	}
+	#/
+@@@ with
+		return;
+	}
+@@@ end

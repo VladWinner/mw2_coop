@@ -391,6 +391,16 @@ players_threatbias( value )
 		player.threatbias = value;
 }
 
+// A level's intro (the mission title on black) belongs to the mission's first start. A co-op
+// restart at a checkpoint, or a campaign continued from one, starts the level at that start point,
+// and the intro's own skip for other starts is dev-only code (/# #/ in introscreen_delay): in the
+// retail game both players saw the title and stood frozen again after every death (QA tour,
+// 2026-10-22). In single player a checkpoint is a saved game, without an intro either.
+intro_skipped()
+{
+	return is_campaign_coop() && !is_default_start();
+}
+
 // A level's intro (maps\_introscreen: the mission title on black, the slam zoom) holds player 1
 // still and without weapons; it holds every player (QA buttons, 2026-10-21: player 2 walked and
 // took a pistol while player 1 was held). Player 1 alone outside co-op.
