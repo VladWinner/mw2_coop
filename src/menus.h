@@ -13,3 +13,5 @@ int menus_on_packet(const char *buf, int len);
 // one (the game must not see it). An answer to send back to the sender is put into reply.
 int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint16_t from_port, char *reply,
 			  int reply_size, int *reply_len);
+// QA: logs a menu item's action scripts
+void menus_log_action(const char *menu_name, const char *item_name);

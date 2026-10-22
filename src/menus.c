@@ -83,6 +83,28 @@ int ui_item_index(uint8_t *menu, const char *name)
 	return -1;
 }
 
+// QA: logs what a menu item runs ("!menuaction <menu> <item>" in commands.txt): its action
+// handlers, a script for type 0, else the handler type.
+void menus_log_action(const char *menu_name, const char *item_name)
+{
+	uint8_t *menu = ui_find_menu(menu_name);
+	int at = menu ? ui_item_index(menu, item_name) : -1;
+	if (at < 0) {
+		log_printf("menus: no item '%s' in menu '%s'", item_name, menu_name);
+		return;
+	}
+	uint8_t *item = (*(uint8_t ***)(menu + MENU_ITEMS))[at];
+	MenuEventHandlerSet *set = *(MenuEventHandlerSet **)(item + ITEM_ACTION);
+	log_printf("menus: %s/%s action: %d handler(s)", menu_name, item_name, set ? set->count : 0);
+	for (int i = 0; set && i < set->count && i < 16; i++) {
+		MenuEventHandler *h = set->handlers[i];
+		if (h && h->type == 0 && h->data)
+			log_printf("menus:   script: %.400s", (const char *)h->data);
+		else if (h)
+			log_printf("menus:   handler type %d", h->type);
+	}
+}
+
 // A handler set running one menu script, e.g. "\"open\" \"levels\" ;" (the parsed form the
 // zone stores: quoted tokens, commands ended by ';').
 void *ui_script_set(const char *script)

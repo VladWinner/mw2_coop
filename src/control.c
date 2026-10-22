@@ -11,6 +11,7 @@
 //   !netlog <n>       -> QA: log the next n co-op packets
 //   !trace <rva>      -> QA: log calls of the builtin method whose table entry is at rva, with GSC stacks
 //   mw2coop_bind +activate (a plain line) -> QA: press a button as its key would (see bind_f)
+//   !menuaction <menu> <item> -> QA: log what a menu item runs
 //   !shot <name>      -> QA: save this machine's next frame as mw2coop\shots\<name>.bmp (shot.c)
 //   # comment
 #include <windows.h>
@@ -301,6 +302,12 @@ static void run_line(char *line)
 		for (int i = 0; v && v[i] && i < 80; i++)
 			snprintf(hex + strlen(hex), sizeof(hex) - strlen(hex), "%02x ", (unsigned char)v[i]);
 		log_printf("loc: %s = '%s' [%s]", line + 5, v ? v : "(none)", hex);
+		return;
+	}
+	if (strncmp(line, "!menuaction ", 12) == 0) {
+		char menu[64] = "", item[64] = "";
+		if (sscanf(line + 12, "%63s %63s", menu, item) == 2)
+			menus_log_action(menu, item);
 		return;
 	}
 	if (strncmp(line, "!shot ", 6) == 0) {
