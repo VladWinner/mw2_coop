@@ -79,6 +79,8 @@ Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 
 - Screen effects (slow motion, field of view, vision changes) show on both screens, whoever triggers them.
 - Checkpoints exist only in S.S.D.D.: a death late in another mission restarts it from its start.
+- Team Player: nothing on screen tells you about the seat swap (hold Use for a second as the passenger).
+- No Russian's far ending (nobody at the van door) logs one script error (`_anim::anim_loop_packet`); the scene plays on.
 - The game's own campaign records (missions unlocked in the menu) are not updated in co-op.
 - Joining through a Steam invite between two different Steam accounts has not been tested yet.
 - Nobody has played the whole campaign through together yet: tell us how far you got.
