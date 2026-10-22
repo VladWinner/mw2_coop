@@ -90,3 +90,26 @@ def both_fields(p):
             p.subst(fn, old, 'maps\\_mw2coop::players_' + hit.group('field').lower() + '( ' + hit.group('value') + ' );')
             changed += 1
     return changed
+
+
+def enemies_for_both(p, scenes):
+    """A level script's enemy changes, as numbered notes and hunks: seek_everywhere, both_ignoreme
+    in the scene functions listed, both_fields. Returns how many notes were added."""
+    n = 0
+    if any(f.search(p.src) for f in FORMS):
+        p.note('''{0}. Enemies sent at "the player" go for the closest player still up
+   (maps\\_mw2coop::seek_player; player 1 outside co-op).'''.format(n + 1))
+        assert seek_everywhere(p)
+        n += 1
+    if scenes:
+        p.note('''{0}. Scenes that hide "the player" from enemies hide both players
+   (maps\\_mw2coop::players_ignoreme): the partner is in the same scene.'''.format(n + 1))
+        both_ignoreme(p, scenes)
+        n += 1
+    if FIELDS.search(p.src):
+        p.note('''{0}. How well enemies hit "the player" and how much they want him (attackeraccuracy,
+   threatbias) is set on both players (maps\\_mw2coop::players_attackeraccuracy,
+   players_threatbias): the partner is in the same scene.'''.format(n + 1))
+        assert both_fields(p)
+        n += 1
+    return n

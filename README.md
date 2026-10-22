@@ -89,7 +89,11 @@ Works:
   cover both. No Russian: straying from the squad and grenades count for either player; when
   the cover is blown Makarov shoots both and the mission fails.
 - Loose Ends: both players wear the TF141 forest uniform (the level's leftover co-op loadout
-  asked for ghillie suits no zone has: red placeholder bodies). Just Like Old Times loads (it
+  asked for ghillie suits no zone has: red placeholder bodies). Shepherd's betrayal: both
+  players go through the ending as Roach, from his place and without bodies of their own
+  (Ghost's drag, the LZ, the body toss, the fire); Shepherd's shot hits both, and player 2's
+  screen goes black until the bodies are thrown.
+- Every level intro (the mission title on black) holds both players, not just player 1. Just Like Old Times loads (it
   overflowed the 1350 `loaded_sound` limit with the co-op body zone; the pool is raised to 2000).
 - In-game co-op: Campaign -> co-op host lobby (mission select, access: open / Steam friends /
   password), join from the list of games on the network, by address or by Steam invite; the
@@ -225,7 +229,7 @@ Easy Day `oilrig`, `oilrig2`; Cliffhanger `climb`, `snow`, `snowpick`; No Russia
 `wakeup`); any map `spawn`, `leash`, `look` (players face each other for screenshots),
 `targets` (whom the enemies fight), `buttons` (real Forward and Use on each player's machine),
 `introfreeze` (the intro title holds both players); S.S.D.D. `bay` (range starts: both inside
-the sandbags).
+the sandbags); Loose Ends `betrayal` (start `ending`, with `MW2COOP_GOD=0`).
 A scenario can press a player's buttons for real: `press( player, "activate", ms )` makes that
 player's own machine run the key binding (`mw2coop_bind +activate`, see `src/control.c`), so
 the button reaches the server in his input like a key press (`pickups` takes the weapons this

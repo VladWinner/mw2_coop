@@ -44,6 +44,9 @@
 //              stand inside the sandbag bay and can move
 //   introfreeze - (a map's default start with an intro title) under the title neither player
 //              moves on a real Forward press; afterwards both walk
+//   betrayal - (estate, start "ending"; MW2COOP_GOD=0, god mode swallows Shepherd's shot) Loose
+//              Ends' ending: both players go through Ghost's drag, the LZ, Shepherd's shot (it hits
+//              both), the body toss and the fire as Roach, at his place
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -154,6 +157,9 @@ main()
 			break;
 		case "introfreeze":
 			introfreeze();
+			break;
+		case "betrayal":
+			betrayal();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -1420,6 +1426,78 @@ qa_walk( player )
 	moved = Distance2D( player.origin, start );
 	level.mw2coop_qa_walk = int( moved ) + " of " + int( room ) + " free units";
 	return moved > min( 40, room * 0.5 );
+}
+
+// Loose Ends' ending (estate.gsc ending_moments(), maps\_mw2coop_estate): both players go through it
+// as Roach, at the same place, held there (Ghost's drag, the LZ, the body toss); Shepherd's shot
+// hits both; nobody goes down; the mission ends. Logs both every 5 s.
+betrayal()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	foreach ( player in level.players )
+		player thread betrayal_hits();
+	phases = strtok( "play_ending_sequence begin_ending_music enter_the_littlebirds made_it_to_lz begin_overlapped_gasoline_sequence end_the_mission", " " );
+	last = "";
+	apart = 0;
+	free = 0;
+	down = 0;
+	for ( t = 0; t < 150 && !flag( "end_the_mission" ); t++ )
+	{
+		phase = "";
+		foreach ( f in phases )
+			if ( flag_exist( f ) && flag( f ) )
+				phase = f;
+		if ( phase != last )
+			report( "phase " + phase + " at " + t + " s" );
+		last = phase;
+		// from 2 s into the ending (the cut to black) both are held on Roach's view
+		if ( t >= 4 )
+		{
+			apart = max( apart, Distance( level.player.origin, level.player2.origin ) );
+			foreach ( player in level.players )
+			{
+				if ( !player IsLinked() )
+					free++;
+				if ( maps\_mw2coop::is_downed( player ) )
+					down++;
+			}
+		}
+		if ( t % 5 == 0 )
+		{
+			text = "t" + t;
+			foreach ( player in level.players )
+			{
+				text += " | " + player_name( player ) + " " + vec_int( player.origin ) + " hp " + player.health;
+				if ( player IsLinked() )
+					text += " linked";
+				text += " " + player GetCurrentWeapon();
+			}
+			maps\_mw2coop::state( text );
+		}
+		wait 1;
+	}
+	check( flag( "end_the_mission" ), "the ending ran to the mission's end (" + t + " s)" );
+	check( apart < 2, "both players at Roach's place all through (at most " + int( apart ) + " units apart)" );
+	check( free == 0, "both held on the view all through (" + free + " samples free)" );
+	check( down == 0, "nobody went down (" + down + " samples)" );
+	foreach ( player in level.players )
+		check( isdefined( player.mw2coop_qa_low ) && player.mw2coop_qa_low <= 50, "Shepherd's shot hits " + player_name( player ) + " (health down to " + player.mw2coop_qa_low + ")" );
+	SetDvar( "mw2coop_qa_phase", "done" );	// the next mission does not rerun it
+	report( "done" );
+}
+
+// his lowest health after the LZ (Shepherd's pistol; the ending's death shield sends no damage
+// notify, and his health is full again 0.3 s later)
+betrayal_hits()
+{
+	self endon( "death" );
+	flag_wait( "made_it_to_lz" );
+	self.mw2coop_qa_low = self.health;
+	while ( !flag( "end_the_mission" ) )
+	{
+		self.mw2coop_qa_low = min( self.mw2coop_qa_low, self.health );
+		wait 0.05;
+	}
 }
 
 // Range starts (trainer.gsc firing_range_init() -> maps\_mw2coop_trainer::range_places): both
