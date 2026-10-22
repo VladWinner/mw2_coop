@@ -16,6 +16,7 @@
 #define RVA_XUID_TABLE     0x1bbaad8 // uint64 xuid of local client i at +i*0x68 (Live_GetXuid, rva 0x28f8b0)
 
 // Co-op party (lobby) state
+#define RVA_PARTY_SKILL          0x5dd988 // int: party member n's difficulty at +n*0x38 (rva 0xd7710 reads it)
 #define RVA_PARTY_LOBBY          0x5dd958 // lobby object *: +0x10 active, +0x70/+0xa8 member slots
 #define RVA_PARTY_IS_HOST        0x5dd950 // uint8
 #define RVA_PARTY_ACTIVE         0x5dd951 // uint8, gates the party frame (0xd74a0)

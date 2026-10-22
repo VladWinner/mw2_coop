@@ -112,7 +112,7 @@ static void script_request(const char *cmd)
 // 0x100 (external). These are the ones mw2coop needs scripts to read: give them 0x80 as soon
 // as they exist (they keep 0x100, so script setdvar still works). The harness creates them
 // before the level starts, so both machines flag them before any script reads them.
-static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_qa", "mw2coop_qa_phase"};
+static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_qa", "mw2coop_qa_phase"};
 
 static void sync_dvar_flags(void)
 {
@@ -221,6 +221,7 @@ static void script_channel_poll(void)
 	sync_dvar_flags();
 	partner_name_poll();
 	transplant_poll();
+	progress_poll();
 	press_poll();
 	// a scenario asks both machines for a frame (mw2coop_qa_shot "<name>"): each saves its own
 	if (game_dvar_raw("mw2coop_qa_shot", v, sizeof(v)) && v[0] && strcmp(v, last_shot) != 0) {

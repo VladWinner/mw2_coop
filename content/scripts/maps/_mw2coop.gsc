@@ -649,6 +649,18 @@ watch_failure()
 	level thread mission_failed();
 }
 
+// A player's difficulty for maps\_gameskill::updateGameSkill(): in a co-op campaign the one the
+// host picked (mw2coop_skill, sent to the client with coopLaunch, src/progress.c), for both
+// players on both machines; the game took each player's from his own profile, so the two could
+// play different ones and the level the higher. Elsewhere, or without a pick, the profile's.
+player_gameskill()
+{
+	skill = GetDvar( "mw2coop_skill" );
+	if ( is_campaign_coop() && ( skill == "0" || skill == "1" || skill == "2" || skill == "3" ) )
+		return int( skill );
+	return self maps\_utility::get_player_gameskill();
+}
+
 // maps\_coop calls resetSkill() on every down and revive (so the player still up gets Spec Ops'
 // small buff). It also puts both players' threatbias and attackeraccuracy back to the
 // difficulty's values, which in the campaign undid a scene's own (Loose Ends' accuracy ramp,

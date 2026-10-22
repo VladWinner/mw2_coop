@@ -91,6 +91,9 @@ main()
 		case "sceneskill":
 			sceneskill();
 			break;
+		case "skill":
+			skill();
+			break;
 		case "ride":
 			ride();
 			break;
@@ -364,6 +367,22 @@ sceneskill()
 	foreach ( n, player in level.players )
 		check( player.threatbias == 777, "player " + ( n + 1 ) + " keeps the scene's threatbias after the revive (" + player.threatbias + ")" );
 	check( level.player.attackeraccuracy == 0.123, "player 1 keeps the scene's attackeraccuracy after the revive (" + level.player.attackeraccuracy + ")" );
+	report( "done" );
+}
+
+// The difficulty both machines play: each player's (player.gameskill, the host's pick in co-op)
+// and the level's. mw2coop_qa_skill "<n>": the host's pick they must equal.
+skill()
+{
+	common_checks();
+	want = GetDvar( "mw2coop_qa_skill" );
+	report( "skill: level " + level.gameskill + ", players " + level.player.gameskill + " " + level.player2.gameskill + ", profiles " + level.player GetPlayerSetting( "gameskill" ) + " " + level.player2 GetPlayerSetting( "gameskill" ) + ", mw2coop_skill '" + GetDvar( "mw2coop_skill" ) + "'" );
+	if ( want != "" )
+	{
+		check( level.gameskill == int( want ), "level difficulty is the host's pick " + want + " (" + level.gameskill + ")" );
+		foreach ( n, player in level.players )
+			check( player.gameskill == int( want ), "player " + ( n + 1 ) + " plays difficulty " + want + " (" + player.gameskill + ")" );
+	}
 	report( "done" );
 }
 

@@ -10,3 +10,12 @@ mw2coop patch for maps/_gameskill.gsc (Modern Warfare 2, 64-bit Steam build)
 	level.difficultySettings[ "player_downed_buffer_time" ][ "easy" ] 		 = 2;
 	level.difficultySettings[ "player_downed_buffer_time" ][ "normal" ] 		 = 2;
 @@@ end
+
+2. Each player's difficulty came from his own profile, so in co-op the two could play
+   different ones (and the level the higher). In a co-op campaign both take the host's pick
+   (maps\_mw2coop::player_gameskill; the profile's elsewhere).
+@@@ subst updateGameSkill
+player get_player_gameskill()
+@@@ to
+player maps\_mw2coop::player_gameskill()
+@@@ end

@@ -9,6 +9,9 @@ void progress_save(const char *map, const char *start);
 // Host: the out-of-band packet that tells the client the start point; returns its length.
 int progress_launch_packet(char *buf, int size);
 
+// Hooks the difficulty popup's profile_difficultySave once it exists (control thread, polled).
+void progress_poll(void);
+
 // Client: handles a received packet if it is ours (returns 1: drop it, the game must not see it).
 int progress_on_packet(const char *buf, int len);
 
