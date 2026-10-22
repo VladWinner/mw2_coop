@@ -4,7 +4,8 @@
 // leased for an hour and renewed, so a crashed game leaves nothing behind for long.
 //
 // Plain UPnP over winsock on its own thread (it may take a few seconds):
-//   1. SSDP M-SEARCH to 239.255.255.250:1900 for an InternetGatewayDevice -> LOCATION url
+//   1. SSDP M-SEARCH to 239.255.255.250:1900 (from the address of the internet route) and to
+//      the router on that route, for an InternetGatewayDevice -> LOCATION url
 //   2. GET the device description -> controlURL of WANIPConnection or WANPPPConnection
 //   3. SOAP AddPortMapping (UDP <port> -> this PC's address on the router's network)
 //   4. SOAP GetExternalIPAddress: a private address there means the provider's own NAT (CGNAT),
@@ -12,6 +13,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +27,7 @@
 
 static volatile LONG wanted;  // the menu tick: 1 while hosting
 static volatile LONG mapped;  // the worker: 1 while a mapping is in place
+static volatile DWORD unwanted_at; // the menu tick: when hosting last stopped
 static HANDLE wake;
 static char control_host[64], control_path[256], service_type[96];
 static uint16_t control_port;
@@ -103,11 +106,45 @@ static const char *find_tag(const char *xml, const char *tag, char *out, int siz
 
 // ---------------------------------------------------------------- discovery
 
+// The address this PC reaches the internet from (a UDP connect sends nothing) and the router on
+// that route. With more than one network adapter Windows may send multicast out of another one,
+// and the router never hears the search (owner's PC, 2026-10-22: no answer until the search left
+// from the LAN address).
+static int internet_route(struct in_addr *self, struct in_addr *gateway)
+{
+	SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	struct sockaddr_in to = {0}, me = {0};
+	to.sin_family = AF_INET;
+	to.sin_port = htons(53);
+	inet_pton(AF_INET, "8.8.8.8", &to.sin_addr);
+	int len = sizeof(me);
+	int ok = connect(s, (struct sockaddr *)&to, sizeof(to)) == 0 && getsockname(s, (struct sockaddr *)&me, &len) == 0;
+	closesocket(s);
+	if (!ok)
+		return 0;
+	*self = me.sin_addr;
+	MIB_IPFORWARDROW row;
+	gateway->s_addr = GetBestRoute(to.sin_addr.s_addr, me.sin_addr.s_addr, &row) == NO_ERROR ? row.dwForwardNextHop : 0;
+	return 1;
+}
+
 static int discover(void)
 {
 	SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	DWORD timeout = 2500;
 	setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+	struct in_addr self = {0}, gateway = {0};
+	char self_text[16] = "?", gateway_text[16] = "?";
+	if (internet_route(&self, &gateway)) {
+		struct sockaddr_in from = {0};
+		from.sin_family = AF_INET;
+		from.sin_addr = self;
+		bind(s, (struct sockaddr *)&from, sizeof(from));
+		setsockopt(s, IPPROTO_IP, IP_MULTICAST_IF, (const char *)&self, sizeof(self));
+		inet_ntop(AF_INET, &self, self_text, sizeof(self_text));
+		inet_ntop(AF_INET, &gateway, gateway_text, sizeof(gateway_text));
+	}
+	log_printf("upnp: searching from %s (router %s)", self_text, gateway_text);
 	struct sockaddr_in to = {0};
 	to.sin_family = AF_INET;
 	to.sin_port = htons(1900);
@@ -115,6 +152,11 @@ static int discover(void)
 	static const char search[] = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\n"
 				     "MX: 2\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n";
 	sendto(s, search, sizeof(search) - 1, 0, (struct sockaddr *)&to, sizeof(to));
+	// and to the router itself: routers answer a search sent straight to them as well
+	if (gateway.s_addr) {
+		to.sin_addr = gateway;
+		sendto(s, search, sizeof(search) - 1, 0, (struct sockaddr *)&to, sizeof(to));
+	}
 	char location[256] = "", buf[1536];
 	int n;
 	while (!location[0] && (n = recv(s, buf, sizeof(buf) - 1, 0)) > 0) {
@@ -259,7 +301,10 @@ static DWORD WINAPI worker(LPVOID unused)
 			if (!mapped)
 				InterlockedExchange(&wanted, 0); // do not retry every few seconds
 		} else if (!wanted && mapped) {
-			delete_mapping();
+			// starting a level drops "hosting" for a moment (the lobby's party goes before the
+			// level is up: removed and added again, QA 2026-10-22); only a lasting stop counts
+			if (GetTickCount() - unwanted_at >= 10000)
+				delete_mapping();
 		} else if (wanted && mapped && GetTickCount() - mapped_at > (LEASE_S / 2) * 1000u) {
 			mapped_at = GetTickCount();
 			add_mapping(); // renew the lease
@@ -276,6 +321,8 @@ void upnp_want(int hosting)
 	if (hosting == last)
 		return;
 	last = hosting;
+	if (!hosting)
+		unwanted_at = GetTickCount();
 	InterlockedExchange(&wanted, hosting);
 	SetEvent(wake);
 }
