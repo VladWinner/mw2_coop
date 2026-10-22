@@ -16,6 +16,7 @@
 #include "progress.h"
 #include "scrdebug.h"
 #include "settings.h"
+#include "shot.h"
 #include "steamnet.h"
 #include "upnp.h"
 #include "zones.h"
@@ -64,6 +65,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		upnp_install();
 		steamnet_install();
 		firewall_install();
+		shot_install();
 		control_start();
 	}
 	return 0;

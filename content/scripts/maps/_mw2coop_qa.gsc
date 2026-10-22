@@ -44,6 +44,10 @@
 //              stand inside the sandbag bay and can move
 //   introfreeze - (a map's default start with an intro title) under the title neither player
 //              moves on a real Forward press; afterwards both walk
+//   tour     - (any map, default start) every playable section of the level (its start points), one
+//              after another through restarts: both up, not stuck, both can walk, player 1 runs to
+//              the two nearest story triggers and player 2 follows; both frames saved quietly at
+//              each stop (mw2coop\shots, src/shot.c)
 //   betrayal - (estate, start "ending"; MW2COOP_GOD=0, god mode swallows Shepherd's shot) Loose
 //              Ends' ending: both players go through Ghost's drag, the LZ, Shepherd's shot (it hits
 //              both), the body toss and the fire as Roach, at his place
@@ -160,6 +164,9 @@ main()
 			break;
 		case "betrayal":
 			betrayal();
+			break;
+		case "tour":
+			tour();
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -1426,6 +1433,153 @@ qa_walk( player )
 	moved = Distance2D( player.origin, start );
 	level.mw2coop_qa_walk = int( moved ) + " of " + int( room ) + " free units";
 	return moved > min( 40, room * 0.5 );
+}
+
+// --------------------------------------------------------------------------------------------
+// A level's sections, one after another (owner, 2026-10-22: on the levels without big scenes run
+// the players through the trigger points and look at what they see). Each start point is a
+// section; the next one is reached by a restart at it (as a checkpoint restart is).
+tour()
+{
+	starts = tour_starts();
+	at = -1;	// the default start comes before the first named one
+	foreach ( n, name in starts )
+		if ( name == level.start_point )
+			at = n;
+	report( "tour " + level.script + ": section " + level.start_point + " (" + ( at + 2 ) + " of " + ( starts.size + 1 ) + ")" );
+	tour_section();
+	if ( at + 1 < starts.size )
+	{
+		SetDvar( "mw2coop_qa_phase", "tour" );
+		SetDvar( "start", starts[ at + 1 ] );
+		report( "next section " + starts[ at + 1 ] );
+		maps\_mw2coop::request( "restart" );
+		return;
+	}
+	SetDvar( "mw2coop_qa_phase", "done" );
+	report( "done" );
+}
+
+// the level's playable start points in order (debug and tweak starts left out, each name once)
+tour_starts()
+{
+	skip = strtok( "debug test tweak nofail no_game alt_ending ending_ diskdrive fakerpg so_ free black body_throw noslowmo", " " );
+	names = [];
+	seen = [];
+	foreach ( start in level.start_functions )
+	{
+		name = start[ "name" ];
+		keep = !isdefined( seen[ name ] );
+		foreach ( word in skip )
+			if ( IsSubStr( name, word ) )
+				keep = false;
+		seen[ name ] = true;
+		if ( keep )
+			names[ names.size ] = name;
+	}
+	return names;
+}
+
+tour_section()
+{
+	if ( flag_exist( "mw2coop_regrouped" ) )
+		for ( t = 0; t < 10 && !flag( "mw2coop_regrouped" ); t += 0.5 )
+			wait 0.5;
+	if ( level.start_point == "default" )
+		wait_intro();
+	wait 2;
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	tour_state( "spawn" );
+	qa_shot( "a-spawn" );
+	foreach ( player in level.players )
+	{
+		if ( player IsLinked() || !IsAlive( player ) )
+			continue;
+		check( !qa_stuck( player ), player_name( player ) + " is not stuck at the section's start (" + vec_int( player.origin ) + ")" );
+		walked = qa_walk( player );	// before the text: GSC evaluates arguments last to first
+		check( walked, player_name( player ) + " can walk (" + level.mw2coop_qa_walk + ")" );
+	}
+	wait 8;	// the section's own opening (allies move, enemies come)
+	tour_state( "after 10 s" );
+	qa_shot( "b-10s" );
+	foreach ( n, trigger in tour_triggers( 2 ) )
+	{
+		label = "trigger " + ( n + 1 ) + " (" + trigger_text( trigger ) + ")";
+		if ( level.player IsLinked() )
+			break;
+		spot = PlayerPhysicsTrace( trigger.origin + ( 0, 0, 48 ), trigger.origin - ( 0, 0, 256 ) );
+		level.player SetOrigin( spot );
+		wait 4;	// player 2 follows a jump of player 1 (maps\_mw2coop::follow_leader_teleports)
+		tour_state( label );
+		qa_shot( "c-trigger" + ( n + 1 ) );
+	}
+}
+
+// both players' state at a stop: up, apart, held by something
+tour_state( where )
+{
+	text = where + ":";
+	foreach ( player in level.players )
+	{
+		text += " " + player_name( player ) + " " + vec_int( player.origin );
+		if ( !IsAlive( player ) )
+			text += " DEAD";
+		else if ( maps\_mw2coop::is_downed( player ) )
+			text += " DOWN";
+		if ( player IsLinked() )
+			text += " linked";
+	}
+	apart = int( Distance( level.player.origin, level.player2.origin ) );
+	report( text + "; " + apart + " apart" );
+	check( IsAlive( level.player ) && IsAlive( level.player2 ) && !maps\_mw2coop::is_downed( level.player ) && !maps\_mw2coop::is_downed( level.player2 ), "both up " + where );
+	check( apart < 1500 || level.player IsLinked() || level.player2 IsLinked(), "together " + where + " (" + apart + " units)" );
+}
+
+// the level's triggers 300 to 2500 units from player 1, nearest first: story triggers (they set a
+// flag, script_flag) not yet passed, enemy spawn triggers and plain ones (dc_whitehouse has 27, 21
+// and 32 of them, their origins at their centres)
+tour_triggers( count )
+{
+	found = [];
+	foreach ( class in strtok( "trigger_multiple_flag_set trigger_multiple_spawn trigger_multiple", " " ) )
+		foreach ( trigger in GetEntArray( class, "classname" ) )
+		{
+			if ( trigger.origin == ( 0, 0, 0 ) )
+				continue;
+			if ( isdefined( trigger.script_flag ) && flag_exist( trigger.script_flag ) && flag( trigger.script_flag ) )
+				continue;
+			d = Distance( trigger.origin, level.player.origin );
+			if ( d > 300 && d < 2500 )
+				found[ found.size ] = trigger;
+		}
+	picked = [];
+	while ( picked.size < count && found.size )
+	{
+		best = 0;
+		foreach ( n, trigger in found )
+			if ( Distance( trigger.origin, level.player.origin ) < Distance( found[ best ].origin, level.player.origin ) )
+				best = n;
+		picked[ picked.size ] = found[ best ];
+		found = array_remove_index( found, best );
+	}
+	return picked;
+}
+
+trigger_text( trigger )
+{
+	text = trigger.classname;
+	if ( isdefined( trigger.script_flag ) )
+		text += " " + trigger.script_flag;
+	else if ( isdefined( trigger.targetname ) )
+		text += " " + trigger.targetname;
+	return text;
+}
+
+// both machines save their own frame (src/shot.c): <map>-<section>-<label>
+qa_shot( label )
+{
+	SetDvar( "mw2coop_qa_shot", level.script + "-" + level.start_point + "-" + label );
+	wait 0.6;
 }
 
 // Loose Ends' ending (estate.gsc ending_moments(), maps\_mw2coop_estate): both players go through it

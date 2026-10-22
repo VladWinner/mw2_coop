@@ -11,6 +11,7 @@
 //   !netlog <n>       -> QA: log the next n co-op packets
 //   !trace <rva>      -> QA: log calls of the builtin method whose table entry is at rva, with GSC stacks
 //   mw2coop_bind +activate (a plain line) -> QA: press a button as its key would (see bind_f)
+//   !shot <name>      -> QA: save this machine's next frame as mw2coop\shots\<name>.bmp (shot.c)
 //   # comment
 #include <windows.h>
 #include <stdint.h>
@@ -27,6 +28,7 @@
 #include "party.h"
 #include "progress.h"
 #include "scrdebug.h"
+#include "shot.h"
 
 #define MAX_WATCH 24
 
@@ -69,7 +71,7 @@ static const char *watch_value(const char *name, char *buf, int size)
 // Script channel (content/scripts/maps/_mw2coop.gsc): the level scripts run on both machines
 // and set these dvars identically. mw2coop_state and mw2coop_qa_log are logged on both;
 // requests in mw2coop_cmd ("<what> @<time>") are carried out by the host only.
-static char last_state[256], last_qa[256], last_cmd[256];
+static char last_state[256], last_qa[256], last_cmd[256], last_shot[96];
 
 static void script_request(const char *cmd)
 {
@@ -218,6 +220,11 @@ static void script_channel_poll(void)
 	sync_dvar_flags();
 	partner_name_poll();
 	press_poll();
+	// a scenario asks both machines for a frame (mw2coop_qa_shot "<name>"): each saves its own
+	if (game_dvar_raw("mw2coop_qa_shot", v, sizeof(v)) && v[0] && strcmp(v, last_shot) != 0) {
+		lstrcpynA(last_shot, v, sizeof(last_shot));
+		shot_request(v);
+	}
 	if (game_dvar_raw("mw2coop_state", v, sizeof(v)) && strcmp(v, last_state) != 0) {
 		log_printf("script: %s", v);
 		lstrcpynA(last_state, v, sizeof(last_state));
@@ -291,6 +298,10 @@ static void run_line(char *line)
 		for (int i = 0; v && v[i] && i < 80; i++)
 			snprintf(hex + strlen(hex), sizeof(hex) - strlen(hex), "%02x ", (unsigned char)v[i]);
 		log_printf("loc: %s = '%s' [%s]", line + 5, v ? v : "(none)", hex);
+		return;
+	}
+	if (strncmp(line, "!shot ", 6) == 0) {
+		shot_request(line + 6);
 		return;
 	}
 	if (strcmp(line, "!party") == 0) {
