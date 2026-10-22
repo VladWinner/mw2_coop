@@ -148,8 +148,39 @@ static void print_statement(const char *what, uint8_t *st)
 	log_printf("mem: %s when %s", what, out);
 }
 
+// "!bones <xmodel>": a model's skeleton, to compare two models' bones (XModel, asset type 4:
+// numBones +8, numRootBones +9, numsurfs +0xa, boneNames +0x28 as script string indices, which are
+// interned, so equal names are equal numbers; parentList +0x30 and trans +0x40 for the non-root
+// bones). Check the layout with "!asset 4 <name>" first.
+static void dump_bones(const char *name)
+{
+	typedef void *(*find_t)(int, const char *);
+	uint8_t *m = ((find_t)((uint8_t *)GetModuleHandleA(NULL) + RVA_DB_FIND_HEADER))(4, name);
+	if (!m || !readable((uintptr_t)m, 0x60))
+		return;
+	int bones = m[8], roots = m[9];
+	uint16_t *names = *(uint16_t **)(m + 0x28);
+	uint8_t *parents = *(uint8_t **)(m + 0x30);
+	float *trans = *(float **)(m + 0x40);
+	log_printf("bones: %s (%s): %d bones, %d root, %d surfs", name, *(const char **)m, bones, roots, m[10]);
+	if (!readable((uintptr_t)names, bones * 2u) || !readable((uintptr_t)parents, (size_t)bones) ||
+	    !readable((uintptr_t)trans, bones * 12u))
+		return;
+	for (int i = 0; i < bones; i++) {
+		if (i < roots)
+			log_printf("bones:   %3d name %5u root", i, names[i]);
+		else
+			log_printf("bones:   %3d name %5u parent %3d trans %8.3f %8.3f %8.3f", i, names[i],
+				   parents[i - roots], trans[(i - roots) * 3], trans[(i - roots) * 3 + 1], trans[(i - roots) * 3 + 2]);
+	}
+}
+
 int memdump_command(char *line)
 {
+	if (strncmp(line, "!bones ", 7) == 0) {
+		dump_bones(line + 7);
+		return 1;
+	}
 	if (strncmp(line, "!asset ", 7) == 0) {
 		char *end;
 		int type = (int)strtol(line + 7, &end, 0);

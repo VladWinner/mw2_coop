@@ -1418,7 +1418,19 @@ qa_walk( player )
 	for ( turn = 0; turn < 360; turn += 45 )
 	{
 		from = player.origin + ( 0, 0, 8 );
-		free = Distance( from, PlayerPhysicsTrace( from, from + AnglesToForward( ( 0, yaw + turn, 0 ) ) * 100 ) );
+		dir = AnglesToForward( ( 0, yaw + turn, 0 ) );
+		free = Distance( from, PlayerPhysicsTrace( from, from + dir * 100 ) );
+		// only as far as there is floor: Cliffhanger's cave ledge is open towards the drop, and the
+		// bot walked off it where a player walks sideways along the ice (owner, 2026-10-22)
+		for ( d = 25; d <= free; d += 25 )
+		{
+			at = from + dir * d;
+			if ( at[ 2 ] - PlayerPhysicsTrace( at, at - ( 0, 0, 64 ) )[ 2 ] > 48 )
+			{
+				free = d - 25;
+				break;
+			}
+		}
 		if ( free > room + 1 )
 		{
 			room = free;
@@ -1432,7 +1444,8 @@ qa_walk( player )
 	wait 1.5;
 	moved = Distance2D( player.origin, start );
 	level.mw2coop_qa_walk = int( moved ) + " of " + int( room ) + " free units";
-	return moved > min( 40, room * 0.5 );
+	// 15: Cliffhanger's ledge holds the player to a 0.35 walk (maps\_climb::climb_wall), 17-39 units
+	return moved > min( 15, room * 0.5 );
 }
 
 // --------------------------------------------------------------------------------------------
@@ -1447,10 +1460,17 @@ tour()
 		if ( name == level.start_point )
 			at = n;
 	report( "tour " + level.script + ": section " + level.start_point + " (" + ( at + 2 ) + " of " + ( starts.size + 1 ) + ")" );
-	tour_section();
+	// back at the same section: the level failed the mission in it (a stealth section that sees
+	// the bot, Just Like Old Times barracks) and restarted it; go on with the next one
+	if ( GetDvar( "mw2coop_qa_phase" ) == "tour:" + level.start_point )
+		report( "the mission failed in section " + level.start_point + " (the level's own fail, e.g. spotted): skipped" );
+	else
+	{
+		SetDvar( "mw2coop_qa_phase", "tour:" + level.start_point );
+		tour_section();
+	}
 	if ( at + 1 < starts.size )
 	{
-		SetDvar( "mw2coop_qa_phase", "tour" );
 		SetDvar( "start", starts[ at + 1 ] );
 		report( "next section " + starts[ at + 1 ] );
 		maps\_mw2coop::request( "restart" );
@@ -1464,8 +1484,14 @@ tour()
 tour_starts()
 {
 	skip = strtok( "debug test tweak nofail no_game alt_ending ending_ diskdrive fakerpg so_ free black body_throw noslowmo", " " );
+	// the knife fight's later steps only start from the step before them (wakefast: an endless
+	// anim_loop_packet error in fight_turnbuckle, millions a minute, a frozen screen); its
+	// beginning, wakeup, is a real start and has its own scenario (knife)
+	skip_names = strtok( "wakefast turnbuckle gloat gun_drop crawl gun_kick wounded pullout kill price_wakeup walkoff", " " );
 	names = [];
 	seen = [];
+	foreach ( word in skip_names )
+		seen[ word ] = true;
 	foreach ( start in level.start_functions )
 	{
 		name = start[ "name" ];
@@ -1507,8 +1533,7 @@ tour_section()
 		label = "trigger " + ( n + 1 ) + " (" + trigger_text( trigger ) + ")";
 		if ( level.player IsLinked() )
 			break;
-		spot = PlayerPhysicsTrace( trigger.origin + ( 0, 0, 48 ), trigger.origin - ( 0, 0, 256 ) );
-		level.player SetOrigin( spot );
+		level.player SetOrigin( trigger.mw2coop_floor );
 		wait 4;	// player 2 follows a jump of player 1 (maps\_mw2coop::follow_leader_teleports)
 		tour_state( label );
 		qa_shot( "c-trigger" + ( n + 1 ) );
@@ -1532,7 +1557,9 @@ tour_state( where )
 	apart = int( Distance( level.player.origin, level.player2.origin ) );
 	report( text + "; " + apart + " apart" );
 	check( IsAlive( level.player ) && IsAlive( level.player2 ) && !maps\_mw2coop::is_downed( level.player ) && !maps\_mw2coop::is_downed( level.player2 ), "both up " + where );
-	check( apart < 1500 || level.player IsLinked() || level.player2 IsLinked(), "together " + where + " (" + apart + " units)" );
+	// both riding something (separate vehicles, separate rigs) may be far apart; one riding and
+	// the other left behind may not (dcburning heliride2: player 2 stayed at the level start)
+	check( apart < 1500 || ( level.player IsLinked() && level.player2 IsLinked() ), "together " + where + " (" + apart + " units)" );
 }
 
 // the level's triggers 300 to 2500 units from player 1, nearest first: story triggers (they set a
@@ -1549,8 +1576,15 @@ tour_triggers( count )
 			if ( isdefined( trigger.script_flag ) && flag_exist( trigger.script_flag ) && flag( trigger.script_flag ) )
 				continue;
 			d = Distance( trigger.origin, level.player.origin );
-			if ( d > 300 && d < 2500 )
-				found[ found.size ] = trigger;
+			if ( d < 300 || d > 2500 )
+				continue;
+			// floor under its centre, free to stand on (a centre inside a wall or over a drop sent
+			// player 1 6500 units down in the Gulag tour)
+			floor = PlayerPhysicsTrace( trigger.origin + ( 0, 0, 48 ), trigger.origin - ( 0, 0, 256 ) );
+			if ( floor[ 2 ] < trigger.origin[ 2 ] - 255 || qa_spot_stuck( floor ) )
+				continue;
+			trigger.mw2coop_floor = floor;
+			found[ found.size ] = trigger;
 		}
 	picked = [];
 	while ( picked.size < count && found.size )
@@ -1975,12 +2009,20 @@ look()
 	fwd = AnglesToForward( ( 0, level.player GetPlayerAngles()[ 1 ], 0 ) );
 	spot = PlayerPhysicsTrace( level.player.origin + fwd * 120 + ( 0, 0, 48 ), level.player.origin + fwd * 120 - ( 0, 0, 96 ) );
 	level.player2 SetOrigin( spot );
-	for ( t = 0; t < 20; t += 0.1 )
+	// each machine saves its frame of the other player (src/shot.c): standing, then player 2
+	// walking towards player 1 on a real Forward press (his body's walk animation)
+	for ( i = 0; i < 200; i++ )
 	{
 		level.player SetPlayerAngles( VectorToAngles( level.player2 GetEye() - ( 0, 0, 20 ) - level.player GetEye() ) );
 		level.player2 SetPlayerAngles( VectorToAngles( level.player GetEye() - ( 0, 0, 20 ) - level.player2 GetEye() ) );
-		if ( t == 2 )
+		if ( i == 20 )
 			report( "facing each other: player 2 model " + level.player2.model + ", player 1 model " + level.player.model );
+		if ( i == 30 )
+			thread qa_shot( "look-standing" );
+		if ( i == 60 )
+			thread press( level.player2, "forward", 1000 );
+		if ( i == 68 )
+			thread qa_shot( "look-walking" );
 		wait 0.1;
 	}
 	report( "done" );
