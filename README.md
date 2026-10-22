@@ -83,6 +83,7 @@ Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 - Slow motion plays on both screens, whoever triggers it: both PCs run one game clock.
 - Checkpoints: restarting from one was tested in Team Player and S.S.D.D.; in the other missions bots only checked that each checkpoint exists, so one may come a little early or late.
 - No Russian's far ending (nobody at the van door) logs one script error (`_anim::anim_loop_packet`); the scene plays on.
+- Museum (the epilogue after the credits): in the bot tour player 2 could not walk or ended up far from player 1 at the exhibit start points; not fixed yet. Its civilians also spam script errors and some stand in a T-pose, in single player too.
 - Joining through a Steam invite between two different Steam accounts has not been tested yet.
 - Nobody has played the whole campaign through together yet: tell us how far you got.
 
