@@ -298,7 +298,8 @@ resume()
 	report( "done" );
 }
 
-// God mode (on by default, see maps\_mw2coop::god_mode()): heavy damage downs nobody.
+// God mode (on in QA: tools/qa_pair.sh sets mw2coop_god 1; see maps\_mw2coop::god_mode()):
+// heavy damage downs nobody.
 god()
 {
 	common_checks();

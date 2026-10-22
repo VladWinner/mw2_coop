@@ -115,18 +115,20 @@ body_model()
 }
 
 // --------------------------------------------------------------------------------------------
-// God mode for testing: on unless the host sets "mw2coop_god 0" before coopLaunch (the DLL
-// sends the value to the client, so both lockstep machines agree). Players take no damage,
-// so they are never downed; scripted deaths and mission failures still happen.
+// God mode for testing: on only when the host sets "mw2coop_god 1" before coopLaunch (the DLL
+// sends the value to the client, so both lockstep machines agree; tools/qa_pair.sh sets it).
+// Players take no damage, so they are never downed; scripted deaths and mission failures still
+// happen. It used to be on unless the dvar was "0", and since the release's .bat launchers were
+// replaced by the in-game lobby nothing set "0": every lobby session ran invulnerable.
 
 god_mode_on()
 {
-	return GetDvar( "mw2coop_god" ) != "0";
+	return GetDvar( "mw2coop_god" ) == "1";
 }
 
 god_mode()
 {
-	state( "god mode on (mw2coop_god 0 before coopLaunch turns it off)" );
+	state( "god mode on (test: mw2coop_god 1)" );
 	for ( ;; )
 	{
 		foreach ( player in level.players )

@@ -41,8 +41,8 @@ Works:
   level restarts at the last checkpoint on both machines.
 - Mission end: both machines move on to the next mission together (S.S.D.D. → Team
   Player/`roadkill` checked).
-- Test god mode: players take no damage, so nobody is downed. On by default from the
-  console (QA); the release `.bat` files set `mw2coop_god 0` (edit `GOD=1` to turn it on).
+- Test god mode: players take no damage, so nobody is downed. Off unless the host sets
+  `mw2coop_god 1` before `coopLaunch` (QA does); the client follows the host.
 - Saved progress: the host keeps the last mission and checkpoint in
   `mw2coop\progress.txt`; `mw2coop_continue` starts there next time, and the client is sent
   the same start point automatically.
@@ -169,7 +169,7 @@ coopLaunch
 To carry on where you stopped, the host replaces `set coop_mapName ...` with
 `mw2coop_continue`. The client does nothing extra: the host sends it the start point with
 `coopLaunch`. To pick a checkpoint by hand, the host can `set start <start point>` before
-`coopLaunch`; `set mw2coop_god 0` turns the test god mode off (the client follows the host).
+`coopLaunch`; `set mw2coop_god 1` turns the test god mode on (the client follows the host).
 
 Client (`8305` is port 28960 byte-swapped; the game's `connect` expects it that way):
 ```

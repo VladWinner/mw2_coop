@@ -9,10 +9,10 @@
 #   MW2COOP_QA_WATCH   extra dvars or memory (@rva:size, *rva+off:size) to log on change
 #   MW2COOP_QA_CMDS    extra commands.txt lines for both copies, separated by ";" (e.g. "!trace 342c88")
 #   MW2COOP_QA_LATE    extra host lines run right after coopLaunch, ";"-separated (start with a !sleep)
-#   MW2COOP_GOD        host's mw2coop_god (default: unset = god mode on; "restart" forces 0).
+#   MW2COOP_GOD        host's mw2coop_god (default: unset = 1, god mode on; "restart" forces 0).
 #                      Set on the host only: the client gets it from the host's launch packet.
 SCEN=${1:?scenario}; START=${2:-}; LEVEL_S=${3:-60}; MAP=${4:-trainer}
-GOD=${MW2COOP_GOD:-}
+GOD=${MW2COOP_GOD:-1}
 [ "$SCEN" = "restart" ] && GOD=0
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
 A=$ROOT/mw2-64; B=$ROOT/mw2-64-b
