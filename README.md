@@ -3,7 +3,7 @@
 Two-player co-op for the **Call of Duty: Modern Warfare 2 (2009) campaign**, on the current
 **64-bit Steam build**, using the co-op netcode the game already ships for Spec Ops.
 
-> **Alpha, work in progress.** Most missions start together and S.S.D.D., Team Player,
+> **Beta.** Most missions start together and S.S.D.D., Team Player,
 > Wolverines!, Takedown's car ride, The Only Easy Day's swim, Cliffhanger's climb and
 > snowmobiles, No Russian's elevator, cover and ending, the crash site and ISS of Second Sun,
 > Endgame's boat chase and the final knife fight are reworked for two players; enemies fight
@@ -12,7 +12,7 @@ Two-player co-op for the **Call of Duty: Modern Warfare 2 (2009) campaign**, on 
 > see [Install](#install)).
 
 *Кратко по-русски:* мод для прохождения кампании MW2 (2009) вдвоём на актуальной 64-битной
-Steam-версии. Альфа: вдвоём переделаны S.S.D.D. (каждый берёт своё оружие), Team Player,
+Steam-версии. Бета: вдвоём переделаны S.S.D.D. (каждый берёт своё оружие), Team Player,
 Wolverines!, поездка в машине в Takedown, заплыв и бесшумное убийство в The Only Easy Day,
 подъём по льду и снегоходы в Cliffhanger, лифт, прикрытие и концовка No Russian, крушение и МКС
 в Second Sun, лодка в Endgame (второй игрок лежит на носу напротив Прайса и стреляет) и
@@ -43,6 +43,10 @@ Works:
   Player/`roadkill` checked).
 - Test god mode: players take no damage, so nobody is downed. Off unless the host sets
   `mw2coop_god 1` before `coopLaunch` (QA does); the client follows the host.
+- Difficulty: both players play the one the host picks in the lobby's difficulty popup (with
+  no pick, the one the host plays), whatever the partner's profile says.
+- Downs: the game's revive system; on Recruit too (its time between downs was missing), and a
+  down or revive keeps a scene's enemy accuracy and threat on the players.
 - Saved progress: the host keeps the last mission and checkpoint in
   `mw2coop\progress.txt`; `mw2coop_continue` starts there next time, and the client is sent
   the same start point automatically.
