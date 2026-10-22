@@ -246,7 +246,9 @@ static void log_stack(void)
 }
 
 // Per calling site (return address = the builtin or VM code that raised the error), log the
-// first few hits and then every 100th, so a noisy site does not drown the rest.
+// first few hits and then the 10th, 100th, 1000th... ones. The Museum's civilians raise the same
+// error about 6700 times a second (a game bug, also in single player): every 100th still wrote
+// 67 entries with stacks a second, 175 MB in a quarter of an hour, and the game crawled.
 #define MAX_SITES 64
 static uintptr_t site_rva[MAX_SITES];
 static volatile LONG site_hits[MAX_SITES];
@@ -264,8 +266,13 @@ static void log_error(uintptr_t rva)
 		InterlockedIncrement(&site_count);
 	}
 	LONG n = InterlockedIncrement(&site_hits[i]);
-	if (n > 3 && n % 100 != 0)
-		return;
+	if (n > 3) {
+		LONG p = 10;
+		while (p < n && p < 1000000000)
+			p *= 10;
+		if (p != n)
+			return;
+	}
 	const char *block = ((const char *(*)(int))(base + RVA_TLS_BLOCK))(1);
 	int slot = *(const int32_t *)(block + 0x800);
 	char last[160], prev[160];

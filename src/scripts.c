@@ -28,6 +28,10 @@
 //   len = DB_GetRawFileLen(raw); buf = Hunk_AllocateTempMemoryHigh(len);
 //   DB_GetRawBuffer(raw, buf, len); return buf;
 // The replacement does the same through the game's own functions, so no trampoline is needed.
+//
+// Another mod may replace the function the same way (a 14-byte "jmp [rip+0]; dq target" at its
+// start), e.g. a fix mod loaded under another DLL name. Whichever installs second calls the
+// first one for the script text and patches what it returns, so both work in either order.
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +47,8 @@
 
 static uint8_t *base;
 static char mod_dir[MAX_PATH];
+typedef char *(*add_source_buffer_t)(const char *filename, const char *ext, const char *code_pos, int archive);
+static add_source_buffer_t chained;	// another mod's replacement installed before ours
 
 #define FN(rva, type) ((type)(base + (rva)))
 typedef void *(*db_find_header_t)(int type, const char *name);
@@ -307,9 +313,6 @@ static char *to_hunk(const char *text, int len)
 
 static char *add_source_buffer(const char *filename, const char *ext, const char *code_pos, int archive)
 {
-	(void)filename;
-	(void)code_pos;
-	(void)archive;
 	int size;
 	char *own = read_mod_file("scripts", ext, "", &size);
 	if (own) {
@@ -319,12 +322,21 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 		free(own);
 		return buf;
 	}
-	void *raw = FN(RVA_DB_FIND_HEADER, db_find_header_t)(ASSET_TYPE_RAWFILE, ext);
-	if (FN(RVA_DB_IS_DEFAULT, db_is_default_t)(ASSET_TYPE_RAWFILE, ext))
-		return NULL;
-	int len = FN(RVA_DB_RAWFILE_LEN, db_rawfile_len_t)(raw);
-	char *buf = FN(RVA_HUNK_TEMP_HIGH, hunk_temp_high_t)(len);
-	FN(RVA_DB_RAW_BUFFER, db_raw_buffer_t)(raw, buf, len);
+	char *buf;
+	int len;
+	if (chained) {
+		buf = chained(filename, ext, code_pos, archive);
+		if (!buf)
+			return NULL;
+		len = (int)strlen(buf);
+	} else {
+		void *raw = FN(RVA_DB_FIND_HEADER, db_find_header_t)(ASSET_TYPE_RAWFILE, ext);
+		if (FN(RVA_DB_IS_DEFAULT, db_is_default_t)(ASSET_TYPE_RAWFILE, ext))
+			return NULL;
+		len = FN(RVA_DB_RAWFILE_LEN, db_rawfile_len_t)(raw);
+		buf = FN(RVA_HUNK_TEMP_HIGH, hunk_temp_high_t)(len);
+		FN(RVA_DB_RAW_BUFFER, db_raw_buffer_t)(raw, buf, len);
+	}
 
 	// Patch a working copy; the zone text keeps its '\r', which the compiler ignores.
 	int plen;
@@ -363,7 +375,11 @@ void scripts_install(void)
 	lstrcatA(mod_dir, "mw2coop");
 
 	uint8_t *target = base + RVA_SCR_ADD_SOURCE_BUFFER;
-	if (memcmp(target, expected, sizeof(expected)) != 0) {
+	static const uint8_t jmp_rip[6] = {0xff, 0x25, 0, 0, 0, 0};
+	if (memcmp(target, jmp_rip, sizeof(jmp_rip)) == 0) {
+		memcpy(&chained, target + 6, sizeof(chained));
+		log_printf("scripts: Scr_AddSourceBuffer already replaced by another mod (%p): chained", (void *)chained);
+	} else if (memcmp(target, expected, sizeof(expected)) != 0) {
 		log_printf("scripts: unexpected bytes at Scr_AddSourceBuffer, not patching");
 		return;
 	}
