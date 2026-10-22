@@ -77,6 +77,7 @@ main()
 	set_bodies();
 	thread sync_weapons();
 	thread track_checkpoints();
+	thread maps\_mw2coop_checkpoints::watch_flags();
 	thread watch_failure();
 	if ( god_mode_on() )
 		thread god_mode();

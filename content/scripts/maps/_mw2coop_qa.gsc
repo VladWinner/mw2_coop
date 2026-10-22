@@ -103,6 +103,9 @@ main()
 		case "pilotfov":
 			pilotfov();
 			break;
+		case "cpcheck":
+			cpcheck();
+			break;
 		case "cprestart":
 			cprestart();
 			break;
@@ -423,6 +426,18 @@ cprestart()
 	level thread maps\_mw2coop::mission_failed();
 	wait 30;
 	report( "FAIL no restart 30 s after the failure" );
+}
+
+// The checkpoint table of the level (maps\_mw2coop_checkpoints): every flag in it exists.
+cpcheck()
+{
+	common_checks();
+	wait 5;
+	pairs = maps\_mw2coop_checkpoints::table( level.script );
+	report( level.script + ": " + pairs.size + " checkpoint flags" );
+	foreach ( p in pairs )
+		check( isdefined( level.flag[ p[ 0 ] ] ), "flag " + p[ 0 ] + " (" + p[ 1 ] + ") exists" );
+	report( "done" );
 }
 
 // The Predator's UAV view for one player (maps\_remotemissile as patched: SetSavedDvar cg_fov 26

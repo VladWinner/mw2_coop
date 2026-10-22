@@ -234,12 +234,13 @@ static char *subst_in_function(char *src, int *len, const char *name, const char
 	return out;
 }
 
-// Applies <ext>.patch to src (malloc'd). Returns the new malloc'd text, or src unchanged.
-static char *apply_patches(const char *ext, char *src, int *len, int *applied, int *total)
+// Applies <ext><suffix> (".patch", then ".cp.patch": the checkpoint hooks, written by their own
+// generator) to src (malloc'd). Returns the new malloc'd text, or src unchanged; adds to *applied
+// and *total.
+static char *apply_patches(const char *ext, const char *suffix, char *src, int *len, int *applied, int *total)
 {
 	int psize;
-	char *patch = read_mod_file("patches", ext, ".patch", &psize);
-	*applied = *total = 0;
+	char *patch = read_mod_file("patches", ext, suffix, &psize);
 	if (!patch)
 		return src;
 	char *cursor = patch, kind[128];
@@ -341,6 +342,8 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 	// Patch a working copy; the zone text keeps its '\r', which the compiler ignores.
 	int plen;
 	char *probe = read_mod_file("patches", ext, ".patch", &plen);
+	if (!probe)
+		probe = read_mod_file("patches", ext, ".cp.patch", &plen);
 	if (!probe) {
 		scrdebug_note_source(ext, buf, len);
 		return buf;
@@ -352,8 +355,9 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 		if (buf[i] != '\r')
 			work[n++] = buf[i];
 	work[n] = 0;
-	int applied, total;
-	work = apply_patches(ext, work, &n, &applied, &total);
+	int applied = 0, total = 0;
+	work = apply_patches(ext, ".patch", work, &n, &applied, &total);
+	work = apply_patches(ext, ".cp.patch", work, &n, &applied, &total);
 	char *out = to_hunk(work, n);
 	scrdebug_note_source(ext, work, n);
 	log_printf("scripts: %s <- zone + %d/%d patches (%d bytes, hash %08x)%s", ext, applied, total, n,

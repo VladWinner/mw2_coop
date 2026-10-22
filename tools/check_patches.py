@@ -122,15 +122,24 @@ def main(content, gsc_root):
         for f in files:
             if not f.endswith('.patch'):
                 continue
+            if f.endswith('.cp.patch'):
+                if os.path.exists(os.path.join(dirpath, f[:-9] + '.patch')):
+                    continue	# applied after the script's own patch, below
+                f = f[:-9] + '.patch'	# a script with only checkpoint hooks
             rel = os.path.relpath(os.path.join(dirpath, f[:-6]), pdir).replace('\\', '/')
-            patch = open(os.path.join(dirpath, f), encoding='latin-1').read().replace('\r', '')
+            main_patch = os.path.join(dirpath, f)
+            patch = open(main_patch, encoding='latin-1').read().replace('\r', '') if os.path.exists(main_patch) else ''
             found = [z for z in sorted(os.listdir(gsc_root)) if os.path.isfile(os.path.join(gsc_root, z, rel))]
             if not found:
                 print(f'{rel}: no extracted copy found')
                 bad += 1
                 continue
             src = open(os.path.join(gsc_root, found[0], rel), encoding='latin-1').read().replace('\r', '')
-            _, results = apply(src, patch)
+            src, results = apply(src, patch)
+            cp = os.path.join(dirpath, f[:-6] + '.cp.patch')
+            if os.path.exists(cp):	# the checkpoint hooks go on after the script's own patch
+                _, more = apply(src, open(cp, encoding='latin-1').read().replace('\r', ''))
+                results += [(status, 'cp: ' + line) for status, line in more]
             print(f'{rel} (from {found[0]}):')
             for status, line in results:
                 print(f'  {status:10} {line}')
