@@ -100,6 +100,9 @@ main()
 		case "swaphint":
 			swaphint();
 			break;
+		case "pilotfov":
+			pilotfov();
+			break;
 		case "ride":
 			ride();
 			break;
@@ -389,6 +392,29 @@ skill()
 		foreach ( n, player in level.players )
 			check( player.gameskill == int( want ), "player " + ( n + 1 ) + " plays difficulty " + want + " (" + player.gameskill + ")" );
 	}
+	report( "done" );
+}
+
+// The Predator's UAV view for one player (maps\_remotemissile as patched: SetSavedDvar cg_fov 26
+// plus maps\_mw2coop::fov_pilot): the pilot's screen zooms, the partner's keeps its field of
+// view (src/fov.c). Player 1 is the pilot, then player 2. Frames on both machines; the DLL logs
+// cg_fov (MW2COOP_QA_WATCH=cg_fov) and "fov: ... keeps".
+pilotfov()
+{
+	common_checks();
+	wait 14;	// after the mission title
+	foreach ( n, pilot in level.players )
+	{
+		SetSavedDvar( "cg_fov", 26 );
+		maps\_mw2coop::fov_pilot( pilot );
+		report( "player " + ( n + 1 ) + " is the pilot (cg_fov 26)" );
+		wait 1.5;
+		qa_shot( "pilot" + ( n + 1 ) );
+		SetSavedDvar( "cg_fov", 65 );
+		maps\_mw2coop::fov_pilot( undefined );
+		wait 1.5;
+	}
+	qa_shot( "after" );
 	report( "done" );
 }
 

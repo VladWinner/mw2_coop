@@ -69,6 +69,7 @@ main()
 	state( "level " + level.script + ", start dvar '" + GetDvar( "start" ) + "', qa '" + GetDvar( "mw2coop_qa" ) + "'" );
 
 	thread no_saves();
+	fov_pilot( undefined );	// a level that ended in a pilot's view must not leave it on
 	flag_init( "mw2coop_regrouped" );
 	thread regroup_after_start();
 	thread follow_leader_teleports();
@@ -660,6 +661,21 @@ player_gameskill()
 	if ( is_campaign_coop() && ( skill == "0" || skill == "1" || skill == "2" || skill == "3" ) )
 		return int( skill );
 	return self maps\_utility::get_player_gameskill();
+}
+
+// A field of view only one player should get (the Predator's UAV view sets cg_fov for both
+// screens): mw2coop_fov_pilot names that player ("1" or "2", "" when it ends), and the DLL keeps
+// the other player's own field of view on his machine (src/fov.c).
+fov_pilot( player )
+{
+	if ( !is_campaign_coop() )
+		return;
+	if ( !isdefined( player ) )
+		SetDvar( "mw2coop_fov_pilot", "" );
+	else if ( isdefined( level.player2 ) && player == level.player2 )
+		SetDvar( "mw2coop_fov_pilot", "2" );
+	else
+		SetDvar( "mw2coop_fov_pilot", "1" );
 }
 
 // maps\_coop calls resetSkill() on every down and revive (so the player still up gets Spec Ops'

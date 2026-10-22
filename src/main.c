@@ -17,6 +17,7 @@
 #include "scrdebug.h"
 #include "settings.h"
 #include "shot.h"
+#include "fov.h"
 #include "steamnet.h"
 #include "transplant.h"
 #include "upnp.h"
@@ -68,6 +69,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		steamnet_install();
 		firewall_install();
 		shot_install();
+		fov_install();
 		control_start();
 	}
 	return 0;

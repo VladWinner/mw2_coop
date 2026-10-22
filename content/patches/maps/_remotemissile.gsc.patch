@@ -1,0 +1,18 @@
+mw2coop patch for maps/_remotemissile.gsc (the Predator missile in Wolverines! and Contingency;
+both levels carry the same script), Modern Warfare 2, 64-bit Steam build.
+
+1. The UAV view after the missile sets the field of view with SetSavedDvar( "cg_fov", 26 ), which
+   reaches both players' screens: the partner, running about with his rifle, zoomed in too. The
+   pilot is noted in the dvar mw2coop_fov_pilot (maps\_mw2coop::fov_pilot), and the DLL keeps the
+   other player's own field of view on his machine (src/fov.c). setClientDvar cannot do it: the
+   engine refuses cg_fov there and drops the co-op session.
+@@@ subst UAVRemoteLauncherSequence
+SetSavedDvar( "cg_fov", 26 );
+@@@ to
+SetSavedDvar( "cg_fov", 26 ); maps\_mw2coop::fov_pilot( player );
+@@@ end
+@@@ subst ExitFromCamera_UAV
+SetSavedDvar( "cg_fov", 65 );
+@@@ to
+SetSavedDvar( "cg_fov", 65 ); maps\_mw2coop::fov_pilot( undefined );
+@@@ end
