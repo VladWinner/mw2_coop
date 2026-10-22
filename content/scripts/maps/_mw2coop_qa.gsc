@@ -88,6 +88,9 @@ main()
 		case "downs":
 			downs();
 			break;
+		case "sceneskill":
+			sceneskill();
+			break;
 		case "ride":
 			ride();
 			break;
@@ -336,6 +339,31 @@ downs()
 	wait 1;
 	check( level.player ent_flag( "coop_downed" ), "player 1 downed after the grace time" );
 	check( flag( "coop_alldowned" ) || level.mw2coop.failing, "both down: the mission fails" );
+	report( "done" );
+}
+
+// A scene's values on the players survive a down and a revive (run with MW2COOP_GOD=0): levels
+// set threatbias and attackeraccuracy for a scene (Loose Ends' accuracy ramp, Team Player's and
+// The Only Easy Day's threatbias), and maps\_coop's resetSkill() on every down and revive put the
+// difficulty's values back.
+sceneskill()
+{
+	common_checks();
+	foreach ( player in level.players )
+	{
+		player.threatbias = 777;
+		player.attackeraccuracy = 0.123;
+	}
+	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	wait 1.5;
+	check( level.player2 ent_flag( "coop_downed" ), "player 2 downed" );
+	check( level.player.threatbias == 777 && level.player.attackeraccuracy == 0.123, "player 1 keeps the scene's values after the down (" + level.player.threatbias + ", " + level.player.attackeraccuracy + ")" );
+	level.player2 maps\_coop::player_coop_revive_self();
+	wait 1.5;
+	check( !level.player2 ent_flag( "coop_downed" ), "player 2 revived" );
+	foreach ( n, player in level.players )
+		check( player.threatbias == 777, "player " + ( n + 1 ) + " keeps the scene's threatbias after the revive (" + player.threatbias + ")" );
+	check( level.player.attackeraccuracy == 0.123, "player 1 keeps the scene's attackeraccuracy after the revive (" + level.player.attackeraccuracy + ")" );
 	report( "done" );
 }
 

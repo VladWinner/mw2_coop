@@ -649,6 +649,33 @@ watch_failure()
 	level thread mission_failed();
 }
 
+// maps\_coop calls resetSkill() on every down and revive (so the player still up gets Spec Ops'
+// small buff). It also puts both players' threatbias and attackeraccuracy back to the
+// difficulty's values, which in the campaign undid a scene's own (Loose Ends' accuracy ramp,
+// Team Player's and The Only Easy Day's threatbias; QA sceneskill, 2026-10-22). They are kept.
+reset_skill_keep_scene()
+{
+	if ( !is_campaign_coop() )
+	{
+		maps\_gameskill::resetSkill();
+		return;
+	}
+	threatbias = [];
+	accuracy = [];
+	foreach ( n, player in level.players )
+	{
+		threatbias[ n ] = player.threatbias;
+		accuracy[ n ] = player.attackeraccuracy;
+	}
+	maps\_gameskill::resetSkill();
+	foreach ( n, player in level.players )
+	{
+		player.threatbias = threatbias[ n ];
+		if ( !player ent_flag( "player_zero_attacker_accuracy" ) )
+			player.attackeraccuracy = accuracy[ n ];
+	}
+}
+
 // A player killed outright (a scripted Kill(), as when he steps off Cliffhanger's cave ledge,
 // owner 2026-10-22) is not downed and cannot be revived: the mission fails, as his death does in
 // single player. Without this the other player played on beside a dead partner.

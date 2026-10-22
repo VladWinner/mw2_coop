@@ -59,3 +59,17 @@ mw2coop patch for maps/_coop.gsc (Modern Warfare 2, 64-bit Steam build)
 
 	self player_coop_set_original_attributes();
 @@@ end
+
+4. Every down and revive calls resetSkill(), which also put both players' threatbias and
+   attackeraccuracy back to the difficulty's values and undid a scene's own: kept
+   (maps\_mw2coop::reset_skill_keep_scene; resetSkill() alone outside a co-op campaign).
+@@@ subst downed_player_manager
+thread maps\_gameskill::resetSkill();
+@@@ to
+thread maps\_mw2coop::reset_skill_keep_scene();
+@@@ end
+@@@ subst player_coop_revive_self
+thread maps\_gameskill::resetSkill();
+@@@ to
+thread maps\_mw2coop::reset_skill_keep_scene();
+@@@ end
