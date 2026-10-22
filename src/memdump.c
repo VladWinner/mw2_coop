@@ -6,6 +6,7 @@
 //   !menus                -> the names of the menus the UI has loaded
 //   !rva <rva> <size>     -> the same at an address relative to the exe
 //   !mem <address> <size> -> dump <size> bytes at an absolute address (hex)
+//   !bones <xmodel> / !surfs <xmodel> -> a model's skeleton / LOD 0 surfaces
 // Each qword is printed with what it points to: a string, or "ptr" to readable memory.
 #include <windows.h>
 #include <stdint.h>
@@ -175,10 +176,64 @@ static void dump_bones(const char *name)
 	}
 }
 
+// "!surfs <xmodel>": the model's LOD 0 surfaces, to map XSurface on this 64-bit build (No Russian
+// body transplant). Guessed from the 32-bit IW4 layout with 8-byte pointers:
+//   lodInfo +0x60, stride 0x38: dist +0, numsurfs +4, surfIndex +6, modelSurfs +8, partBits[6]
+//     +0x10, surfs +0x28
+//   XSurface (0x58?): tileMode +0, deformed +1, vertCount +2, triCount +4, zoneHandle +6,
+//     baseTriIndex +8, baseVertIndex +0xa, triIndices +0x10, vertInfo.vertCount[4] +0x18,
+//     vertInfo.vertsBlend +0x20, verts0 +0x28, vertListCount +0x30, vertList +0x38, partBits +0x40
+//   XRigidVertList (0x10): boneOffset, vertCount, triOffset, triCount (ushorts), collisionTree +8
+// A surface checks out when its vertex groups add up to vertCount.
+static void dump_surfs(const char *name)
+{
+	typedef void *(*find_t)(int, const char *);
+	uint8_t *m = ((find_t)((uint8_t *)GetModuleHandleA(NULL) + RVA_DB_FIND_HEADER))(4, name);
+	if (!m || !readable((uintptr_t)m, 0x100))
+		return;
+	uint8_t *lod = m + 0x60;
+	int n = *(uint16_t *)(lod + 4);
+	uint8_t *surfs = *(uint8_t **)(lod + 0x28);
+	uint8_t *ms = *(uint8_t **)(lod + 8);
+	log_printf("surfs: %s: lod0 dist %g numsurfs %d surfIndex %d modelSurfs %p surfs %p, model numsurfs %d bones %d",
+		   name, *(float *)lod, n, *(uint16_t *)(lod + 6), (void *)ms, (void *)surfs, m[0xa], m[8]);
+	if (ms && readable((uintptr_t)ms, 0x30))
+		log_printf("surfs:   modelSurfs name '%s' surfs %p numsurfs %u", readable(*(uintptr_t *)ms, 4) ? *(const char **)ms : "?",
+			   *(void **)(ms + 8), *(uint16_t *)(ms + 0x10));
+	if (!surfs || !readable((uintptr_t)surfs, 0x58u * (n ? n : 1)))
+		return;
+	memdump((uintptr_t)surfs, 0x60);
+	for (int i = 0; i < n && i < 40; i++) {
+		uint8_t *s = surfs + 0x58 * i;
+		int16_t *vc = (int16_t *)(s + 0x18);
+		uint16_t *blend = *(uint16_t **)(s + 0x20);
+		uint32_t lists = *(uint32_t *)(s + 0x30);
+		uint8_t *vl = *(uint8_t **)(s + 0x38);
+		int sum = vc[0] + vc[1] + vc[2] + vc[3], rigid = 0;
+		for (uint32_t k = 0; vl && k < lists && readable((uintptr_t)(vl + 0x10 * k), 0x10); k++)
+			rigid += *(uint16_t *)(vl + 0x10 * k + 2);
+		char b[160] = "";
+		for (int k = 0; blend && k < 12 && readable((uintptr_t)(blend + k), 2); k++)
+			snprintf(b + strlen(b), sizeof(b) - strlen(b), "%u ", blend[k]);
+		char r[160] = "";
+		for (uint32_t k = 0; vl && k < lists && k < 6 && readable((uintptr_t)(vl + 0x10 * k), 0x10); k++)
+			snprintf(r + strlen(r), sizeof(r) - strlen(r), "[bone %u verts %u] ", *(uint16_t *)(vl + 0x10 * k),
+				 *(uint16_t *)(vl + 0x10 * k + 2));
+		log_printf("surfs:   %2d tile %u deformed %u verts %u tris %u blend groups %d %d %d %d (sum %d) lists %u (verts %d) "
+			   "verts0 %p | blend %s| rigid %s",
+			   i, s[0], s[1], *(uint16_t *)(s + 2), *(uint16_t *)(s + 4), vc[0], vc[1], vc[2], vc[3], sum, lists, rigid,
+			   *(void **)(s + 0x28), b, r);
+	}
+}
+
 int memdump_command(char *line)
 {
 	if (strncmp(line, "!bones ", 7) == 0) {
 		dump_bones(line + 7);
+		return 1;
+	}
+	if (strncmp(line, "!surfs ", 7) == 0) {
+		dump_surfs(line + 7);
 		return 1;
 	}
 	if (strncmp(line, "!asset ", 7) == 0) {

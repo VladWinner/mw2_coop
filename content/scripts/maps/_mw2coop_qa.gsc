@@ -33,6 +33,8 @@
 //   loadout  - (any map) after the level's loadout both players hold the same weapon
 //   cover    - (airport, start "stairs") player 2 fires at Makarov's squad: the cover is blown,
 //              Makarov shoots both players and the mission fails for both
+//   bodyview - (any map) both players 220 units apart, frames of each other standing, player 2
+//              stepping sideways and backing off (the body's whole figure in motion)
 //   boat     - (af_chase, default start) the Endgame boat chase: player 1 boards and drives,
 //              player 2 rides as the gunner beside Price; the bot drives after the enemy boat.
 //              boat2: player 2 boards first and drives
@@ -143,6 +145,9 @@ main()
 		case "boat":
 		case "boat2":
 			boat();
+			break;
+		case "bodyview":
+			bodyview();
 			break;
 		case "look":
 			look();
@@ -2048,5 +2053,37 @@ cover()
 	for ( t = 0; t < 40 && !level.mw2coop.failing; t += 0.5 )
 		wait 0.5;
 	check( level.mw2coop.failing, "Makarov's squad turned on them and the mission failed for both (" + t + " s)" );
+	report( "done" );
+}
+
+// Each machine saves frames of the other player's whole figure: standing, player 2 stepping to
+// his right on a real press, backing off (src/shot.c). For body models (No Russian's transplant).
+bodyview()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait 3;
+	fwd = AnglesToForward( ( 0, level.player GetPlayerAngles()[ 1 ], 0 ) );
+	spot = PlayerPhysicsTrace( level.player.origin + fwd * 220 + ( 0, 0, 48 ), level.player.origin + fwd * 220 - ( 0, 0, 96 ) );
+	level.player2 SetOrigin( spot );
+	steps = [];
+	steps[ 15 ] = "stand";
+	steps[ 25 ] = "+moveright";
+	steps[ 33 ] = "right";
+	steps[ 45 ] = "+back";
+	steps[ 53 ] = "back";
+	for ( i = 0; i < 80; i++ )
+	{
+		level.player SetPlayerAngles( VectorToAngles( level.player2.origin + ( 0, 0, 36 ) - level.player GetEye() ) );
+		level.player2 SetPlayerAngles( VectorToAngles( level.player.origin + ( 0, 0, 36 ) - level.player2 GetEye() ) );
+		if ( isdefined( steps[ i ] ) )
+		{
+			if ( GetSubStr( steps[ i ], 0, 1 ) == "+" )
+				thread press( level.player2, GetSubStr( steps[ i ], 1 ), 1500 );
+			else
+				thread qa_shot( "body-" + steps[ i ] );
+		}
+		wait 0.1;
+	}
 	report( "done" );
 }

@@ -18,6 +18,7 @@
 #include "settings.h"
 #include "shot.h"
 #include "steamnet.h"
+#include "transplant.h"
 #include "upnp.h"
 #include "zones.h"
 #include "scripts.h"
@@ -54,6 +55,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		crash_install();
 		scripts_install();
 		mirror_install();
+		transplant_install();
 		zones_install();
 		localize_install();
 		scrdebug_install();

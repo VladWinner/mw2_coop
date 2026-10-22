@@ -22,6 +22,7 @@
 #include "control.h"
 #include "game.h"
 #include "log.h"
+#include "transplant.h"
 #include "memdump.h"
 #include "menus.h"
 #include "net.h"
@@ -219,6 +220,7 @@ static void script_channel_poll(void)
 	char v[256];
 	sync_dvar_flags();
 	partner_name_poll();
+	transplant_poll();
 	press_poll();
 	// a scenario asks both machines for a frame (mw2coop_qa_shot "<name>"): each saves its own
 	if (game_dvar_raw("mw2coop_qa_shot", v, sizeof(v)) && v[0] && strcmp(v, last_shot) != 0) {

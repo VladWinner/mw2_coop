@@ -94,6 +94,7 @@ main()
 
 set_bodies()
 {
+	SetDvar( "mw2coop_transplant", maps\_mw2coop_bodies::transplant_request( level.script ) );
 	foreach ( n, player in level.players )
 	{
 		models = maps\_mw2coop_bodies::player_bodies( level.script, n );

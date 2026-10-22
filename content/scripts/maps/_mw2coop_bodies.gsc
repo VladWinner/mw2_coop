@@ -35,6 +35,32 @@ bodies( level_name )
 	}
 }
 
+// Player n's (0, 1) body and head. No Russian dresses both as Makarov's men, as player 1 is in the
+// story (owner, 2026-10-22: the US Army uniform of Spec Ops looked wrong among them). The crew's
+// own body (body_airport_com_*) is an AI model and breaks the player pose, so the players keep the
+// Spec Ops body and the DLL puts the crew's mesh on it (transplant_request(), src/transplant.c);
+// the heads are the crew's own, in pairs none of the crew wears (character_airport_*: com_c/a,
+// com_b/d, com_d/b, com_b/b; com_a is Makarov's).
+player_bodies( level_name, n )
+{
+	if ( level_name == "airport" )
+	{
+		if ( n == 0 )
+			return models( "coop_body_us_army", "head_airport_d" );
+		return models( "coop_body_us_army", "head_airport_a" );
+	}
+	return bodies( level_name );
+}
+
+// The dvar mw2coop_transplant for the level: "<map> <target body> <donor body>", or "" (the DLL
+// does nothing). Set at every level start, so a level without one clears the last.
+transplant_request( level_name )
+{
+	if ( level_name == "airport" )
+		return "airport coop_body_us_army body_airport_com_c";
+	return "";
+}
+
 models( body, head )
 {
 	m = [];
