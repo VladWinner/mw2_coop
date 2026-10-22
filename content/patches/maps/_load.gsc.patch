@@ -18,3 +18,15 @@ mw2coop patch for maps/_load.gsc (Modern Warfare 2, 64-bit Steam build)
 @@@ with
 			ai[ i ] SetGoalEntity( maps\_mw2coop::seek_player( ai[ i ].origin ) );
 @@@ end
+
+2. Checkpoints: handle_starts() runs each start point's section function (add_start's fourth
+   argument) in order, each until its section is done; entering one means the players reached
+   that start point. maps\_mw2coop::section_reached makes it the co-op checkpoint (the level
+   restarts there when the mission fails). Levels that run their sections themselves call it
+   from their own patches.
+@@@ subst handle_starts
+		[[ start_array[ "logic_func" ] ]]();
+@@@ to
+		maps\_mw2coop::section_reached( start_array[ "name" ] );
+		[[ start_array[ "logic_func" ] ]]();
+@@@ end

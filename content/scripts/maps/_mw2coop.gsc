@@ -53,6 +53,7 @@ main()
 	level.mw2coop.failing = false;
 	level.mw2coop.completing = false;
 	level.mw2coop.checkpoint = -1;
+	level.mw2coop.section = -1;	// index in level.start_functions of the furthest section reached
 	if ( !isdefined( level.mw2coop_weapon_sync ) )
 		level.mw2coop_weapon_sync = "leader";	// "leader": player 1's changes go to player 2; "both": gains go both ways; "own": each player takes his own (only the start's weapons are copied)
 
@@ -612,6 +613,45 @@ checkpoint_wait( index, cp )
 	request( "checkpoint " + level.script + " " + cp.start );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
+}
+
+// Checkpoints for every level: a section of the level begins (the start point "name": its section
+// function in maps\_load::handle_starts, or the level's own section handler, patched): it becomes
+// the co-op checkpoint, so a failed mission restarts there instead of at the level's beginning, as
+// a single player autosave would let him go on. Only forward, only real start points (not the
+// developers' test starts, start_is_dev), and not the start point the level began at.
+section_reached( name )
+{
+	if ( !is_campaign_coop() || !isdefined( level.mw2coop ) || level.mw2coop.failing || level.mw2coop.completing )
+		return;
+	index = undefined;
+	foreach ( i, start in level.start_functions )
+		if ( start[ "name" ] == name )
+			index = i;
+	if ( !isdefined( index ) || index <= level.mw2coop.section )
+		return;
+	level.mw2coop.section = index;
+	if ( start_is_dev( name ) || ( isdefined( level.start_point ) && level.start_point == name ) )
+		return;
+	SetDvar( "start", name );
+	state( "checkpoint " + name + " (section " + index + ")" );
+	request( "checkpoint " + level.script + " " + name );	// the host saves it for mw2coop_continue
+	foreach ( player in level.players )
+		player thread checkpoint_hud();
+}
+
+// The developers' test starts: they skip ahead or leave the level half set up (the knife fight's
+// later steps only start from the step before them: wakefast froze the game with an endless
+// anim_loop_packet error). Not used as checkpoints; the level tour skips them too.
+start_is_dev( name )
+{
+	foreach ( word in strtok( "debug test tweak nofail no_game alt_ending ending_ diskdrive fakerpg so_ free black body_throw noslowmo", " " ) )
+		if ( IsSubStr( name, word ) )
+			return true;
+	foreach ( word in strtok( "wakefast turnbuckle gloat gun_drop crawl gun_kick wounded pullout kill price_wakeup walkoff jump e3", " " ) )
+		if ( name == word )
+			return true;
+	return false;
 }
 
 checkpoint_hud()

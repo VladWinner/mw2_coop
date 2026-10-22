@@ -103,6 +103,9 @@ main()
 		case "pilotfov":
 			pilotfov();
 			break;
+		case "cprestart":
+			cprestart();
+			break;
 		case "ride":
 			ride();
 			break;
@@ -393,6 +396,33 @@ skill()
 			check( player.gameskill == int( want ), "player " + ( n + 1 ) + " plays difficulty " + want + " (" + player.gameskill + ")" );
 	}
 	report( "done" );
+}
+
+// Checkpoints from the level's sections (maps\_mw2coop::section_reached): the level passes into a
+// new section, the mission fails, and both machines start again at that section. Run from a
+// start point whose section ends by itself (Team Player "ride_later": the ride ends, "dismount"
+// begins).
+cprestart()
+{
+	want = "dismount";
+	if ( GetDvar( "mw2coop_qa_phase" ) == "cp_failed" )
+	{
+		SetDvar( "mw2coop_qa_phase", "" );
+		check( level.start_point == want, "after the failed mission the level starts at the checkpoint " + want + " (" + level.start_point + ")" );
+		common_checks();
+		report( "done" );
+		return;
+	}
+	common_checks();
+	for ( t = 0; t < 90 && GetDvar( "start" ) != want; t += 0.5 )
+		wait 0.5;
+	check( GetDvar( "start" ) == want, "checkpoint " + want + " reached (start '" + GetDvar( "start" ) + "')" );
+	wait 2;
+	SetDvar( "mw2coop_qa_phase", "cp_failed" );
+	report( "failing the mission" );
+	level thread maps\_mw2coop::mission_failed();
+	wait 30;
+	report( "FAIL no restart 30 s after the failure" );
 }
 
 // The Predator's UAV view for one player (maps\_remotemissile as patched: SetSavedDvar cg_fov 26
@@ -1680,25 +1710,14 @@ tour()
 // the level's playable start points in order (debug and tweak starts left out, each name once)
 tour_starts()
 {
-	skip = strtok( "debug test tweak nofail no_game alt_ending ending_ diskdrive fakerpg so_ free black body_throw noslowmo", " " );
-	// the knife fight's later steps only start from the step before them (wakefast: an endless
-	// anim_loop_packet error in fight_turnbuckle, millions a minute, a frozen screen); its
-	// beginning, wakeup, is a real start and has its own scenario (knife)
-	skip_names = strtok( "wakefast turnbuckle gloat gun_drop crawl gun_kick wounded pullout kill price_wakeup walkoff", " " );
 	names = [];
 	seen = [];
-	foreach ( word in skip_names )
-		seen[ word ] = true;
 	foreach ( start in level.start_functions )
 	{
 		name = start[ "name" ];
-		keep = !isdefined( seen[ name ] );
-		foreach ( word in skip )
-			if ( IsSubStr( name, word ) )
-				keep = false;
-		seen[ name ] = true;
-		if ( keep )
+		if ( !isdefined( seen[ name ] ) && !maps\_mw2coop::start_is_dev( name ) )
 			names[ names.size ] = name;
+		seen[ name ] = true;
 	}
 	return names;
 }
