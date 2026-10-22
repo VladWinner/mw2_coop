@@ -1,7 +1,7 @@
 """Write the patches of level scripts whose only co-op changes are about enemies: those sent at
 "the player" go for the closest player still up, and scenes that hide "the player" from enemies
 hide both (tools/seek_patch.py). Scripts that have a generator of their
-own (airport, arcadia, cliffhanger, dcburning, estate, roadkill) call seek_patch from it instead.
+own (airport, arcadia, cliffhanger, dcburning, dc_whitehouse, estate, roadkill) call seek_patch from it instead.
 Usage: python -I gen_seek_patches.py <extracted gsc root> <mod content/patches/maps dir>"""
 import os
 import sys
@@ -22,7 +22,6 @@ SCRIPTS = [
     ('cliffhanger/maps/cliffhanger_stealth.gsc', 'Cliffhanger', []),
     ('contingency/maps/contingency.gsc', 'Contingency', []),
     ('dcemp/maps/dcemp_endpart.gsc', 'Second Sun', ['whitehouse_main']),
-    ('dc_whitehouse/maps/dc_whitehouse.gsc', 'Whiskey Hotel', ['whitehouse_main']),
     ('ending/maps/char_museum_code.gsc', 'Museum', ['panic_button']),
     ('favela/maps/favela_code.gsc', 'Takedown', []),
     ('favela_escape/maps/favela_escape_code.gsc', "The Hornet's Nest", []),

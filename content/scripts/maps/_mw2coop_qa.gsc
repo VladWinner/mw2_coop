@@ -94,6 +94,9 @@ main()
 		case "skill":
 			skill();
 			break;
+		case "flares":
+			flares();
+			break;
 		case "ride":
 			ride();
 			break;
@@ -383,6 +386,55 @@ skill()
 		foreach ( n, player in level.players )
 			check( player.gameskill == int( want ), "player " + ( n + 1 ) + " plays difficulty " + want + " (" + player.gameskill + ")" );
 	}
+	report( "done" );
+}
+
+// Whiskey Hotel's roof (start point "flare", maps\_mw2coop_whitehouse): on "Use your flares!"
+// each player holds a flare of his own; player 2 pops his with a real Attack press and player 1
+// keeps his; then player 1 pops his.
+flares()
+{
+	common_checks();
+	// the way the level goes: the breach, then the roof (the bots do not walk there)
+	foreach ( name in strtok( "whitehouse_flare_breach whitehouse_flare_run whitehouse_path_roof", " " ) )
+	{
+		trigger = getEntWithFlag( name );
+		if ( !isdefined( trigger ) || flag( name ) )
+			continue;
+		level.player SetOrigin( trigger.origin );
+		level.player2 SetOrigin( trigger.origin + ( 40, 0, 0 ) );
+		report( "both moved to the trigger of " + name );
+		for ( t = 0; !flag( name ) && t < 6; t += 0.5 )
+			wait 0.5;
+	}
+	for ( t = 0; !flag( "player_flare" ) && t < 40; t += 0.5 )
+		wait 0.5;
+	if ( !flag( "player_flare" ) )
+	{
+		// Foley's flare scene did not reach the roof with the bots: start the jets as it would
+		report( "test shortcut: the jets flag set by the test (Foley's scene did not get there)" );
+		flag_set( "whitehouse_flare_run" );
+		flag_set( "whitehouse_hammerdown_jets_fly" );
+		for ( t = 0; !flag( "player_flare" ) && t < 10; t += 0.5 )
+			wait 0.5;
+	}
+	check( flag( "player_flare" ), "Foley calls for the flares" );
+	wait 1.5;
+	foreach ( n, player in level.players )
+		check( player HasWeapon( "flare" ) && player GetCurrentWeapon() == "flare", "player " + ( n + 1 ) + " holds a flare (" + player GetCurrentWeapon() + ")" );
+	qa_shot( "a-flares" );
+	press( level.player2, "attack", 300 );
+	wait 12;	// lighting and waving the flare, then it is taken
+	qa_shot( "b-player2-popped" );
+	check( !level.player2 HasWeapon( "flare" ), "player 2's flare is used up" );
+	check( level.player HasWeapon( "flare" ), "player 1 still has his flare" );
+	check( flag( "player_flare_popped" ), "the flare hint is done" );
+	press( level.player, "attack", 300 );
+	wait 12;
+	qa_shot( "c-player1-popped" );
+	check( !level.player HasWeapon( "flare" ), "player 1's flare is used up" );
+	foreach ( n, player in level.players )
+		check( player GetCurrentWeapon() != "flare" && player GetCurrentWeapon() != "none", "player " + ( n + 1 ) + " back on a weapon (" + player GetCurrentWeapon() + ")" );
 	report( "done" );
 }
 
