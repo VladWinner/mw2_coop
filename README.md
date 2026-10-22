@@ -28,6 +28,8 @@
 - 🎯 **Enemies fight both of you**, and scenes that protect the player protect both.
 - 🩹 **Downs and revives** with the game's own revive system; both down means a restart together.
 - 🎚 **One difficulty for both**: the one the host picks in the lobby.
+- 🔫 **Friendly fire switch**: the host turns damage between the players on or off in the lobby (on by default).
+- 🚩 **Checkpoints in every mission**: a failed mission starts again from the last section you both reached.
 - 🧭 **Hosting and joining in the game's menus**: Campaign → co-op lobby, mission select, open / Steam friends only / password, a list of games on the network, join by address or Steam invite.
 - 🌐 **Online made easy**: an in-game Windows Firewall prompt and automatic UPnP port forwarding for the host.
 - 💾 **Progress kept by the host**: continue where you stopped; both move on to the next mission together, and each player's own campaign records (missions unlocked, difficulty, achievements) are written as in single player.
@@ -78,8 +80,7 @@ Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 ## ⚠️ Known issues
 
 - Slow motion plays on both screens, whoever triggers it: both PCs run one game clock.
-- Checkpoints exist only in S.S.D.D.: a death late in another mission restarts it from its start.
-- Team Player: nothing on screen tells you about the seat swap (hold Use for a second as the passenger).
+- Checkpoints: restarting from one was tested in Team Player and S.S.D.D.; in the other missions bots only checked that each checkpoint exists, so one may come a little early or late.
 - No Russian's far ending (nobody at the van door) logs one script error (`_anim::anim_loop_packet`); the scene plays on.
 - Joining through a Steam invite between two different Steam accounts has not been tested yet.
 - Nobody has played the whole campaign through together yet: tell us how far you got.
@@ -156,6 +157,16 @@ Scenarios:
 A scenario can press a player's buttons for real: `press( player, "activate", ms )` makes that player's own machine run the key binding (`mw2coop_bind +activate`, see `src/control.c`). Real key input runs in `buttons`, `pickups`, `introfreeze`, `bay`, `look`, `flares` and the tour's walk; the older set-piece scenarios still move players by script (button holds, velocity pushes) and have not been checked with real input. `tools/check_patches.py` checks the patches against extracted game scripts without starting the game; `tools/gen_*_patches.py` generate the larger patches from the extracted scripts.
 
 </details>
+
+## 🙏 Credits
+
+mw2coop is our own code, but it stands on other people's work:
+
+- **COD-MOD** and its campaign co-op pack (`x_coop`, author unknown): the first MW2 campaign co-op, for the old 32-bit build. We checked how it handled each mission (where the players stand, the Whiskey Hotel flare) before building ours. The COD-MOD client is by momo5502 and contributors ([FreeTheTech101/cod-mod](https://github.com/FreeTheTech101/cod-mod)).
+- **[iw4x-sp](https://git.alterware.dev/alterware/iw4x-sp)** by AlterWare: read for how the engine handles player input and asset pools (reference only; no code taken).
+- **Infinity Ward**: the game's own Spec Ops co-op, which mw2coop turns into a campaign mode.
+- **[Co-op Anything](https://github.com/cranebeaker/coop-anything)**: the playbook and test tools this mod was built with.
+- Tools: [Ghidra](https://github.com/NationalSecurityAgency/ghidra) (NSA), [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (Martin Storsjö), [Capstone](https://www.capstone-engine.org/), the [Steamworks documentation](https://partner.steamgames.com/doc/home), [shields.io](https://shields.io) badges.
 
 ## ⚖️ Legal
 
