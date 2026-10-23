@@ -35,6 +35,7 @@ partner_snowmobile( spawner, mount_now )
 	}
 	level.mw2coop_partner_snowmobile = partner;
 	level thread tougher_players();
+	level thread snowmobile_looks();
 	partner thread maps\_snowmobile_drive::drive_vehicle();
 	maps\_mw2coop::state( "cliffhanger: snowmobile for player 2 spawned" );
 	if ( isdefined( mount_now ) && mount_now && isdefined( level.player2 ) && IsAlive( level.player2 ) )
@@ -102,4 +103,49 @@ tougher_players()
 			}
 		wait 1;
 	}
+}
+
+// Each rider's snowmobile is the first-person model (cockpit, hands, no body), which is all the
+// other player saw (owner's playtest, 2026-10-23: "the texture of the snowmobile disappears, a
+// simplified one appears, and I see only his hands"). The other player gets the level's own
+// full third-person snowmobile in its place, linked to the vehicle; the first-person one is hidden
+// from him.
+snowmobile_looks()
+{
+	if ( isdefined( level.mw2coop_snow_looks ) )
+		return;
+	level.mw2coop_snow_looks = true;
+	for ( ;; )
+	{
+		wait 0.25;
+		foreach ( player in level.players )
+		{
+			vehicle = player.vehicle;
+			if ( !isdefined( vehicle ) || isdefined( vehicle.mw2coop_copy ) || !isdefined( vehicle.snowmobile_3rdPersonModel ) )
+				continue;
+			other = maps\_mw2coop::other_player( player );
+			if ( !isdefined( other ) )
+				continue;
+			vehicle thread snowmobile_copy( player, other );
+		}
+	}
+}
+
+// self: a snowmobile a player rides. The third-person look for the other player.
+snowmobile_copy( rider, other )
+{
+	copy = Spawn( "script_model", self.origin );
+	copy SetModel( self.snowmobile_3rdPersonModel );
+	copy.angles = self.angles;
+	copy LinkTo( self, "tag_origin", ( 0, 0, 0 ), ( 0, 0, 0 ) );
+	copy DontCastShadows();
+	copy hideOnClient( rider );
+	self hideOnClient( other );
+	self.mw2coop_copy = copy;
+	maps\_mw2coop::state( "cliffhanger: " + self.snowmobile_3rdPersonModel + " for the other player's view of " + rider.name );
+	self waittill_either( "vehicle_dismount", "death" );
+	self.mw2coop_copy = undefined;
+	copy Delete();
+	if ( isdefined( self ) )
+		self showOnClient( other );
 }

@@ -136,6 +136,9 @@ main()
 		case "snow":
 			snow();
 			break;
+		case "snowview":
+			snowview();
+			break;
 		case "snowpick":
 			snowpick();
 			break;
@@ -857,6 +860,54 @@ qa_flag_set( name )
 	if ( !isdefined( level.flag[ name ] ) )
 		flag_init( name );
 	flag_set( name );
+}
+
+// Cliffhanger, start "snowmobile": how each player's snowmobile looks to the other (frames of both
+// machines; the host's is player 1's, looking at player 2's snowmobile beside him).
+snowview()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	if ( level.start_point == "icepick" )
+	{
+		// player 2 rides, player 1 walks up and looks at his snowmobile
+		t = 0;
+		while ( !flag( "player_snowmobile_available" ) && t < 90 )
+		{
+			wait 0.5;
+			t += 0.5;
+		}
+		wait 1;
+		level.player2 player_mount_vehicle( level.player_snowmobile );
+		wait 5;
+		v = level.player2.vehicle;
+		report( "player 2 rides model " + v.model + ", first person " + isdefined( v.firstPerson ) + ", copy " + isdefined( v.mw2coop_copy ) );
+		for ( n = 0; n < 3; n++ )
+		{
+			d = v.origin + ( 0, 0, 20 ) - level.player GetEye();
+			level.player SetOrigin( v.origin - VectorNormalize( ( d[ 0 ], d[ 1 ], 0 ) ) * ( 160 - n * 40 ) );
+			level.player SetPlayerAngles( VectorToAngles( v.origin + ( 0, 0, 20 ) - level.player GetEye() ) );
+			wait 0.7;
+			qa_shot( "snow-p1-sees-p2-" + n );
+		}
+		report( "done" );
+		return;
+	}
+	wait 6;
+	foreach ( player in level.players )
+	{
+		v = player.vehicle;
+		if ( isdefined( v ) )
+			report( player_name( player ) + " rides model " + v.model + ", first person " + isdefined( v.firstPerson ) + ", hidden player body " + isdefined( player.mw2coop_x ) );
+	}
+	d = level.player2.vehicle.origin - level.player.vehicle.origin;
+	level.player SetPlayerAngles( VectorToAngles( d ) + ( 10, 0, 0 ) );
+	wait 0.5;
+	qa_shot( "snow-p1-sees-p2" );
+	d = level.player.vehicle.origin - level.player2.vehicle.origin;
+	level.player2 SetPlayerAngles( VectorToAngles( d ) + ( 10, 0, 0 ) );
+	wait 0.5;
+	qa_shot( "snow-p2-sees-p1" );
+	report( "done" );
 }
 
 // Cliffhanger, start point "icepick": after Soap MacTavish's icepick fight (level.price in the scripts) two snowmobiles wait; player 2
