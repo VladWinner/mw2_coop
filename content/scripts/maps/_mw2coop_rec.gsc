@@ -20,12 +20,35 @@ start()
 		player thread watch( "p" + ( n + 1 ) );
 		player thread damage( "p" + ( n + 1 ) );
 	}
+	thread allies();
 	for ( ;; )
 	{
 		foreach ( n, player in level.players )
 			if ( isdefined( player ) && IsAlive( player ) )
 				rec( "p" + ( n + 1 ) + " " + snapshot( player ) );
 		wait 1;
+	}
+}
+
+// Every 5 seconds the friendly AI: name, class and position (a duplicated squad mate shows here).
+allies()
+{
+	level endon( "mw2coop_level_end" );
+	for ( ;; )
+	{
+		ai = GetAIArray( "allies" );
+		text = "allies " + ai.size;
+		foreach ( guy in ai )
+		{
+			name = guy.classname;
+			if ( isdefined( guy.script_friendname ) )
+				name = guy.script_friendname;
+			else if ( isdefined( guy.animname ) )
+				name = guy.animname;
+			text = text + " | " + name + " at " + vec( guy.origin );
+		}
+		rec( text );
+		wait 5;
 	}
 }
 
