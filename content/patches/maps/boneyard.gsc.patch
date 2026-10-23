@@ -13,3 +13,12 @@ level.player.ignoreme = false;
 @@@ to
 maps\_mw2coop::players_ignoreme( false );
 @@@ end
+
+2. The level ends and the next mission starts after a restart at a co-op checkpoint too: the
+   level only went on from its default start ("DEVELOPER: END OF SCRIPTED LEVEL" otherwise),
+   and a checkpoint is a start point (maps\_mw2coop::ending_goes_on).
+@@@ subst objectives
+is_default_start()
+@@@ to
+maps\_mw2coop::ending_goes_on()
+@@@ end

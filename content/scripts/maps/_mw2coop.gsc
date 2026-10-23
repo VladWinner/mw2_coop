@@ -725,6 +725,15 @@ restore_checkpoint_spot()
 	state( "start point " + level.start_point + " left player 1 at the level's spawn: moved to the checkpoint's spot " + spot );
 }
 
+// A level's end goes on to the next mission only from its default start (No Russian, The Enemy of
+// My Enemy, Second Sun, Whiskey Hotel: "DEVELOPER: END OF SCRIPTED LEVEL" otherwise); a co-op
+// checkpoint is a start point, so in co-op the end always goes on (playtest 2026-10-23: No Russian
+// restarted at "tarmac" never ended).
+ending_goes_on()
+{
+	return is_default_start() || is_campaign_coop();
+}
+
 // --------------------------------------------------------------------------------------------
 // Owner, 2026-10-23: whoever reaches a checkpoint first, the other player is brought to him.
 // Only a free player is moved: one linked to something (a vehicle, a scene, the Cliffhanger

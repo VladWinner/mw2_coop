@@ -68,3 +68,12 @@ maps\_mw2coop_airport::death_vision();
 	thread maps\_mw2coop_airport::line_of_fire_kill( "intro_line_of_fire_trig_final", "lobby_to_stairs_go" );
 
 @@@ end
+
+4. The level ends and the next mission starts after a restart at a co-op checkpoint too: the
+   level only went on from its default start ("DEVELOPER: END OF SCRIPTED LEVEL" otherwise),
+   and a checkpoint is a start point (maps\_mw2coop::ending_goes_on).
+@@@ subst escape_main
+is_default_start()
+@@@ to
+maps\_mw2coop::ending_goes_on()
+@@@ end

@@ -25,3 +25,12 @@ maps\_mw2coop::players_ignoreme( false );
 	level.player thread whitehouse_player_flare();
 	level thread maps\_mw2coop_whitehouse::partner_flare( ::whitehouse_player_flare );
 @@@ end
+
+3. The level ends and the next mission starts after a restart at a co-op checkpoint too: the
+   level only went on from its default start ("DEVELOPER: END OF SCRIPTED LEVEL" otherwise),
+   and a checkpoint is a start point (maps\_mw2coop::ending_goes_on).
+@@@ subst objectives
+is_default_start()
+@@@ to
+maps\_mw2coop::ending_goes_on()
+@@@ end
