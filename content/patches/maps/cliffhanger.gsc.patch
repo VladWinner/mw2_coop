@@ -26,3 +26,15 @@ mf setgoalentity( level.player )
 @@@ to
 mf setgoalentity( maps\_mw2coop::seek_player( mf.origin ) )
 @@@ end
+
+3. The assault on the base ends the stealth for both players, not only player 1.
+@@@ subst cliffhanger_tarmac_main
+level.player ent_flag_clear( "_stealth_enabled" );
+	level.player.maxVisibleDist = 8000;
+@@@ to
+foreach ( mw2coop_player in level.players )
+	{
+		mw2coop_player ent_flag_clear( "_stealth_enabled" );
+		mw2coop_player.maxVisibleDist = 8000;
+	}
+@@@ end

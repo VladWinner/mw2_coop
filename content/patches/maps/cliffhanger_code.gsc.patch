@@ -13,3 +13,12 @@ self setgoalentity( level.player )
 @@@ to
 self setgoalentity( maps\_mw2coop::seek_player( self.origin ) )
 @@@ end
+
+2. Stealth: both players get the level's stealth visibility (stance, movement, snow);
+   only player 1 had it, so the enemies saw player 2 at any distance.
+@@@ subst player_init
+level.player stealth_cliffhanger();
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player stealth_cliffhanger();
+@@@ end

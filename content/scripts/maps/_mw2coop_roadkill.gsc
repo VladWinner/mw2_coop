@@ -4,8 +4,8 @@
 //
 // The player's Humvee: whoever reaches the glowing seat first is the gunner (the game's get-in
 // animation and the 50 cal turret); the other boards the same door onto a rear seat; the convoy
-// (flag "player_gets_in") leaves once both are in. The passenger holds Use for a second to swap
-// places with the gunner. At the end of the ride both get out where they are.
+// (flag "player_gets_in") leaves once both are in. Either of them holds Use for a second to swap
+// places. At the end of the ride both get out where they are.
 #include common_scripts\utility;
 #include maps\_utility;
 
@@ -143,10 +143,18 @@ swap_seats()
 			hinted = passenger;
 			passenger thread swap_hint();
 		}
-		if ( !isdefined( passenger ) || !passenger UseButtonPressed() )
+		// either of them may ask: the passenger for the turret, the gunner to give it up (owner's
+		// playtest, 2026-10-23: only one of the two could swap)
+		gunner = maps\_mw2coop::vehicle_gunner();
+		asker = undefined;
+		if ( isdefined( passenger ) && passenger UseButtonPressed() )
+			asker = passenger;
+		else if ( isdefined( passenger ) && isdefined( gunner ) && gunner != passenger && gunner UseButtonPressed() )
+			asker = gunner;
+		if ( !isdefined( asker ) )
 			continue;
 		held = 0;
-		while ( passenger UseButtonPressed() && held < swap_hold_time() )
+		while ( asker UseButtonPressed() && held < swap_hold_time() )
 		{
 			wait 0.05;
 			held += 0.05;
@@ -154,7 +162,7 @@ swap_seats()
 		if ( held < swap_hold_time() )
 			continue;
 		self swap( seat );
-		while ( passenger UseButtonPressed() )
+		while ( asker UseButtonPressed() )
 			wait 0.05;	// let go first
 	}
 }
