@@ -12,6 +12,8 @@
 //   !trace <rva>      -> QA: log calls of the builtin method whose table entry is at rva, with GSC stacks
 //   mw2coop_bind +activate (a plain line) -> QA: press a button as its key would (see bind_f)
 //   !menuaction <menu> <item> -> QA: log what a menu item runs
+//   !menus            -> QA: log the names of the menus the UI has loaded
+//   !menuitems <menu> -> QA: log a menu's open/close scripts and its items
 //   !shot <name>      -> QA: save this machine's next frame as mw2coop\shots\<name>.bmp (shot.c)
 //   # comment
 #include <windows.h>
@@ -304,6 +306,10 @@ static void run_line(char *line)
 		log_printf("loc: %s = '%s' [%s]", line + 5, v ? v : "(none)", hex);
 		return;
 	}
+	if (strcmp(line, "!menus") == 0) {
+		menus_log_names();
+		return;
+	}
 	if (strncmp(line, "!menuitems ", 11) == 0) {
 		menus_log_items(line + 11);
 		return;
@@ -394,6 +400,12 @@ static void setdvar_wrap(void)
 	const char *s = ((const char *(*)(unsigned int))(base + RVA_SCR_GET_STRING))(0);
 	if (s)
 		lstrcpynA(name, s, sizeof(name));
+	// the session recorder (maps\_mw2coop_rec.gsc): each line straight into the log, no dvar
+	if (strcmp(name, "mw2coop_rec") == 0) {
+		const char *line = ((const char *(*)(unsigned int))(base + RVA_SCR_GET_STRING))(1);
+		log_printf("rec: %s", line ? line : "");
+		return;
+	}
 	setdvar_orig();
 	dvar_t *d = game_find_dvar(name);
 	if (d && !(d->flags & 0x20c4))

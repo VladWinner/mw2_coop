@@ -1,6 +1,9 @@
 // mw2coop: campaign co-op for Modern Warfare 2 (2009), 64-bit Steam build.
 // Milestone 2: run console commands from a file and watch dvars (QA remote control).
 #include <windows.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "access.h"
 #include "control.h"
@@ -77,7 +80,27 @@ static DWORD WINAPI watcher(LPVOID unused)
 
 BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 {
-	(void)reserved;
+	if (reason == DLL_PROCESS_DETACH && reserved) {
+		// the process is ending: log where in the game it was asked to (an exit before the game
+		// window shows leaves no other trace; the game's own console log is not open yet)
+		void *frames[48];
+		USHORT n = RtlCaptureStackBackTrace(0, 48, frames, NULL);
+		uint8_t *exe = (uint8_t *)GetModuleHandleA(NULL);
+		char line[512] = "";
+		for (USHORT i = 0; i < n; i++) {
+			HMODULE mod = NULL;
+			char name[MAX_PATH] = "?";
+			if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+					       (LPCSTR)frames[i], &mod)) {
+				GetModuleFileNameA(mod, name, MAX_PATH);
+			}
+			const char *file = strrchr(name, '\\') ? strrchr(name, '\\') + 1 : name;
+			snprintf(line + strlen(line), sizeof(line) - strlen(line), " %s+0x%llx", (uint8_t *)mod == exe ? "exe" : file,
+				 (unsigned long long)((uint8_t *)frames[i] - (uint8_t *)mod));
+		}
+		log_printf("main: process exit, stack:%s", line);
+		return TRUE;
+	}
 	if (reason != DLL_PROCESS_ATTACH)
 		return TRUE;
 	DisableThreadLibraryCalls(self);
@@ -87,7 +110,10 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 	char exe[MAX_PATH];
 	GetModuleFileNameA(NULL, exe, MAX_PATH);
 	HMODULE base = GetModuleHandleA(NULL);
-	log_printf("main: attached to %s, image base %p, pid %lu", exe, (void *)base, GetCurrentProcessId());
+	SYSTEMTIME day;
+	GetLocalTime(&day);
+	log_printf("main: %04d-%02d-%02d, attached to %s, image base %p, pid %lu", day.wYear, day.wMonth, day.wDay, exe,
+		   (void *)base, GetCurrentProcessId());
 
 	if (!proxy_init()) {
 		log_printf("main: could not load the real winmm.dll");

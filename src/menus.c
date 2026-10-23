@@ -105,6 +105,23 @@ void menus_log_action(const char *menu_name, const char *item_name)
 	}
 }
 
+// QA: logs the names of the menus the UI has loaded ("!menus").
+void menus_log_names(void)
+{
+	uint8_t *ui = base + RVA_UI_CONTEXT;
+	int count = *(int *)(ui + UI_MENU_COUNT);
+	uint8_t **menus = (uint8_t **)(ui + UI_MENUS);
+	char line[600] = "";
+	for (int i = 0; i < count && i < UI_MAX_MENUS; i++) {
+		const char *n = menus[i] ? *(const char **)menus[i] : NULL;
+		snprintf(line + strlen(line), sizeof(line) - strlen(line), "%s ", n ? n : "-");
+		if (strlen(line) > 480 || i == count - 1) {
+			log_printf("menus: loaded: %s", line);
+			line[0] = 0;
+		}
+	}
+}
+
 // QA: logs a menu's items ("!menuitems <menu>"): name, text, rect and its alignment.
 void menus_log_items(const char *menu_name)
 {

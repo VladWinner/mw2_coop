@@ -79,6 +79,7 @@ main()
 	thread sync_weapons();
 	thread track_checkpoints();
 	thread maps\_mw2coop_checkpoints::watch_flags();
+	thread maps\_mw2coop_rec::start();	// what both players do and where they are, into mw2coop.log
 	thread watch_failure();
 	if ( god_mode_on() )
 		thread god_mode();

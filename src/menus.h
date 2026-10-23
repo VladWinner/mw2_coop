@@ -17,3 +17,4 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 void menus_log_action(const char *menu_name, const char *item_name);
 // QA: logs a menu's items with their rects
 void menus_log_items(const char *menu_name);
+void menus_log_names(void);
