@@ -272,6 +272,21 @@ brought_to_top( leader )
 	self pflag_set( "reached_top" );
 }
 
+// player_falls_to_death(), self: a player who let go of both picks on the first wall. Past the
+// safe point the climb kills him; in co-op he drops back to the bottom from any height and climbs
+// again (owner, 2026-10-23: "при срыве отбрасывать на старт"). The far wall after the jump stays
+// deadly: below it is the drop.
+deadly_height()
+{
+	if ( climb_coop() )
+	{
+		if ( self pflag( "player_climbs_past_safe_point" ) )
+			maps\_mw2coop::state( "climb: " + player_name( self ) + " fell past the safe point, back to the bottom" );
+		return false;
+	}
+	return flag( "player_climbs_past_safe_point" );
+}
+
 // A player who let go of both picks before the safe point drops back to the bottom (the climb's
 // player_recover). Player 2's copy of that spot, moved by the lane offset, was inside the slope
 // (playtest 2026-10-23: stuck there, off the ground, until the mission failed): he goes back to

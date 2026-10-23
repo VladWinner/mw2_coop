@@ -308,7 +308,7 @@ ent.player maps\_mw2coop_climb::pflag( "final_climb" )
 @@@ subst player_falls_to_death
 flag( "player_climbs_past_safe_point" )
 @@@ to
-ent.player maps\_mw2coop_climb::pflag( "player_climbs_past_safe_point" )
+ent.player maps\_mw2coop_climb::deadly_height()
 @@@ end
 @@@ subst player_falls_to_death
 flag_set( "fade_to_death" )
