@@ -30,6 +30,7 @@
 #include "log.h"
 #include "settings.h"
 #include "party.h"
+#include "upnp.h"
 
 static uint8_t *base;
 #define FN(rva, type) ((type)(base + (rva)))
@@ -101,6 +102,16 @@ static void join_f(void)
 	if (!parse_address(game_cmd_argv(1), game_cmd_argv(2), addr, &port)) {
 		log_printf("party: usage: mw2coop_join <ip> [port]");
 		return;
+	}
+	// A loopback address makes both parties' member addresses loopback (netadr type 2): the
+	// game then hands the lobby heartbeat ("hb", rva 0xd7ee0) to itself instead of the socket,
+	// the client never answers and is dropped after coop_lobbyTimeout (12 s). Two copies on one PC
+	// (QA) join this PC's own address instead.
+	uint8_t own[4];
+	if (addr[0] == 127 && upnp_own_address(own)) {
+		log_printf("party: %u.%u.%u.%u is loopback, joining this PC's %u.%u.%u.%u", addr[0], addr[1], addr[2], addr[3],
+			   own[0], own[1], own[2], own[3]);
+		memcpy(addr, own, 4);
 	}
 	if (!party_join(addr, port))
 		return;

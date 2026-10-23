@@ -128,6 +128,15 @@ static int internet_route(struct in_addr *self, struct in_addr *gateway)
 	return 1;
 }
 
+int upnp_own_address(uint8_t out[4])
+{
+	struct in_addr self = {0}, gateway = {0};
+	if (!internet_route(&self, &gateway) || !self.s_addr)
+		return 0;
+	memcpy(out, &self, 4);
+	return 1;
+}
+
 static int discover(void)
 {
 	SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
