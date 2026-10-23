@@ -7,3 +7,5 @@ void settings_load(void);
 uint16_t settings_port(void);
 // settings.ini [network] steam_relay (default 0).
 int settings_steam_relay(void);
+// mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).
+const char *settings_player_id(void);

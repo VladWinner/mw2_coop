@@ -28,7 +28,9 @@ https://github.com/stxlvn/mw2_coop
    - по сети (одна локальная сеть или Radmin VPN): Кампания -> ПРИСОЕДИНИТЬСЯ К ИГРЕ,
      выбрать игру в списке (или "Ввести адрес вручную..." и ввести IP хоста).
 3. Оба жмут "Готов", хост жмёт "Старт".
-Прогресс хранится у хоста (mw2coop\progress.txt): в следующий раз лобби откроется там же.
+Прогресс хранится у хоста (mw2coop\progress): у каждого прохождения своё сохранение со списком
+игроков; "Продолжить" открывает прохождение вашего напарника, "Выбрать сохранение" - любое.
+Не удаляйте mw2coop\player.ini: по нему вас узнают в сохранениях.
 
 Если брандмауэр Windows не пускает второго игрока, игра сама предложит это исправить, когда
 хост откроет лобби (Windows один раз спросит права администратора). Через интернет без общей
@@ -57,7 +59,8 @@ on the mission where you stopped (Change Op picks another; Access sets who may j
 Steam friends only, or a password; Friendly fire: on or off). The partner joins through a Steam invite (Invite Friend),
 or on a shared network (LAN, Radmin VPN) through Campaign -> JOIN A GAME (pick the game from
 the list, or enter the host's address). Both press Ready, the host presses Start. Progress is
-kept by the host (mw2coop\progress.txt).
+kept by the host (mw2coop\progress), one save per playthrough with its players: Continue opens
+your partner's, Pick a save any of them. Keep mw2coop\player.ini: saves know you by it.
 
 If Windows Firewall would keep the partner out, the game offers to fix it when the host opens
 the lobby (Windows asks for administrator rights once). Over the internet without a shared

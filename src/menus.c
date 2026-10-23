@@ -113,6 +113,17 @@ void menus_log_items(const char *menu_name)
 		log_printf("menus: no menu '%s'", menu_name);
 		return;
 	}
+	static const int events[] = {MENU_ON_OPEN, MENU_ON_CLOSE};
+	for (int e = 0; e < 2; e++) {
+		MenuEventHandlerSet *set = *(MenuEventHandlerSet **)(menu + events[e]);
+		for (int i = 0; set && i < set->count && i < 16; i++) {
+			MenuEventHandler *h = set->handlers[i];
+			if (h && h->type == 0 && h->data)
+				log_printf("menus: %s %s script: %.400s", menu_name, e ? "onClose" : "onOpen", (const char *)h->data);
+			else if (h)
+				log_printf("menus: %s %s handler type %d", menu_name, e ? "onClose" : "onOpen", h->type);
+		}
+	}
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	for (int i = 0; i < count; i++) {
@@ -472,12 +483,12 @@ static void add_host_menu(void)
 	if (ui_find_menu("mw2coop_host"))
 		return;
 	static const char *const names[LIST_ROWS] = {"mw2coop_continue", "mw2coop_new", "mw2coop_pick", "mw2coop_host_4"};
-	static const char *const texts[LIST_ROWS] = {"@MW2COOP_CONTINUE", "@MW2COOP_NEW_CAMPAIGN", "@MENU_MISSION_SELECT_CAPS", ""};
+	static const char *const texts[LIST_ROWS] = {"@MW2COOP_CONTINUE", "@MW2COOP_NEW_CAMPAIGN", "@MENU_MISSION_SELECT_CAPS", "@MW2COOP_PICK_SAVE"};
 	static const char *const actions[LIST_ROWS] = {
 		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_go\" ; ",
 		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_new\" ; ",
 		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_pick\" ; ",
-		"\"play\" \"mouse_click\" ; "};
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_saves_menu\" ; "};
 	uint8_t *menu = rows_popup("mw2coop_host", "@MENU_SP_TWO_PLAYER_ONLINE", names, texts, actions);
 	if (menu) {
 		show_row(menu, "mw2coop_host_4", 0);
@@ -502,8 +513,62 @@ static void host_menu_f(void)
 		localize_set_text("MW2COOP_CONTINUE", text);
 	}
 	show_row(menu, "mw2coop_continue", have);
-	show_row(menu, "mw2coop_host_4", 0);
+	show_row(menu, "mw2coop_host_4", have);
 	game_cbuf_addtext("openmenu mw2coop_host\n");
+}
+
+static int save_picked; // the host picked a save in the menu (the lobby stays on it)
+static void host_lobby(const char *map);
+
+// The host's saves (progress.c): the newest four, "Mission - members".
+static void add_saves_menu(void)
+{
+	if (ui_find_menu("mw2coop_saves"))
+		return;
+	static const char *const names[LIST_ROWS] = {"mw2coop_save_1", "mw2coop_save_2", "mw2coop_save_3", "mw2coop_save_4"};
+	static const char *const texts[LIST_ROWS] = {"@MW2COOP_SAVE_1", "@MW2COOP_SAVE_2", "@MW2COOP_SAVE_3", "@MW2COOP_SAVE_4"};
+	static const char *const actions[LIST_ROWS] = {
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_save_pick 1\" ; ",
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_save_pick 2\" ; ",
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_save_pick 3\" ; ",
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_save_pick 4\" ; "};
+	if (rows_popup("mw2coop_saves", "@MW2COOP_SAVES", names, texts, actions))
+		log_printf("menus: saves popup added");
+}
+
+// mw2coop_saves_menu: the host popup's "pick a save"
+static void saves_menu_f(void)
+{
+	static const char *const rows[LIST_ROWS] = {"mw2coop_save_1", "mw2coop_save_2", "mw2coop_save_3", "mw2coop_save_4"};
+	static const char *const keys[LIST_ROWS] = {"MW2COOP_SAVE_1", "MW2COOP_SAVE_2", "MW2COOP_SAVE_3", "MW2COOP_SAVE_4"};
+	uint8_t *menu = ui_find_menu("mw2coop_saves");
+	for (int r = 0; r < LIST_ROWS; r++) {
+		char map[64], name[96], key[80] = "MENU_SP_SP_", text[192];
+		int have = progress_save_info(r, map, sizeof(map), name, sizeof(name));
+		if (have) {
+			int n = (int)strlen(key);
+			for (const char *m = map; *m && n < (int)sizeof(key) - 1; m++)
+				key[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+			key[n] = 0;
+			const char *mission = localize_text(key);
+			const char *nobody = localize_text("MW2COOP_SAVE_NO_PARTNER");
+			snprintf(text, sizeof(text), "%s - %s", mission ? mission : map, name[0] ? name : (nobody ? nobody : "?"));
+			localize_set_text(keys[r], text);
+		}
+		show_row(menu, rows[r], have);
+	}
+	game_cbuf_addtext("openmenu mw2coop_saves\n");
+}
+
+// mw2coop_save_pick <1..4>: host a lobby on that save
+static void save_pick_f(void)
+{
+	const char *arg = game_cmd_argv(1);
+	if (arg[0] < '1' || arg[0] > '0' + LIST_ROWS || arg[1])
+		return;
+	progress_choose(arg[0] - '1');
+	save_picked = 1;
+	host_lobby(NULL);
 }
 
 // Host a lobby: what the Spec Ops "two players online" button runs, then mw2coop_online [map].
@@ -521,6 +586,8 @@ static void host_lobby(const char *map)
 
 static void host_go_f(void)
 {
+	progress_choose(-1);
+	save_picked = 0;
 	host_lobby(NULL);
 }
 
@@ -747,10 +814,18 @@ static void patch_lobby_mission(uint8_t *menu, int campaign)
 }
 
 // Ready state: each PC sends its own to the partner every second while the lobby is open
-// ("\xff\xff\xff\xffmw2coop_ready 0|1", net.c); a partner not heard from for 3 s is not there.
+// ("\xff\xff\xff\xffmw2coop_ready 0|1 <player id> <Steam ID>", net.c); a partner not heard from
+// for 3 s is not there. The player id (settings.ini) and the Steam ID tell the host who the
+// partner is: continuing saved progress with someone else asks first (mw2coop_partner popup).
 #define READY_TAG "mw2coop_ready "
 static volatile LONG my_ready, partner_ready;
 static volatile DWORD partner_heard, ready_sent;
+static char partner_id[33];
+static uint64_t partner_xuid;
+static int continuing;		// the host's lobby opened on its saved progress
+static volatile LONG partner_new;	// a partner id arrived: look up the pair's save (tick)
+static volatile LONG partner_confirmed;	// the host answered both partner popups
+static int add_member;		// ...and said yes to adding the partner to the save's members
 
 static int partner_present(void)
 {
@@ -770,8 +845,9 @@ static int party_full(void)
 
 static void send_ready(void)
 {
-	char text[32];
-	snprintf(text, sizeof(text), READY_TAG "%ld", my_ready);
+	char text[96];
+	snprintf(text, sizeof(text), READY_TAG "%ld %s %016llx", my_ready, settings_player_id(),
+		 (unsigned long long)*(uint64_t *)(base + RVA_XUID_TABLE));
 	net_send_mod(text);
 	ready_sent = GetTickCount();
 }
@@ -844,6 +920,17 @@ int menus_on_packet(const char *buf, int len)
 	if (len < tl + 1 || memcmp(buf, tag, tl) != 0)
 		return 0;
 	LONG ready = buf[tl] == '1';
+	char rest[96] = "", id[33] = "";
+	int n = len - tl - 1 < (int)sizeof(rest) - 1 ? len - tl - 1 : (int)sizeof(rest) - 1;
+	if (n > 0)
+		memcpy(rest, buf + tl + 1, n);
+	unsigned long long xuid = 0;
+	if (sscanf(rest, " %32s %llx", id, &xuid) >= 1 && strcmp(id, partner_id) != 0) {
+		lstrcpynA(partner_id, id, sizeof(partner_id));
+		partner_xuid = xuid;
+		log_printf("menus: partner id %s, Steam ID %016llx", partner_id, xuid);
+		InterlockedExchange(&partner_new, 1);
+	}
 	if (InterlockedExchange(&partner_ready, ready) != ready || !partner_present())
 		log_printf("menus: partner %s", ready ? "ready" : "not ready");
 	partner_heard = GetTickCount();
@@ -877,6 +964,8 @@ static void ready_f(void)
 	update_texts();
 }
 
+static void partner_questions(void);
+
 // mw2coop_start: the lobby's Start in campaign mode. The party frame launches once both slots
 // are taken and the bandwidth test is done.
 static void start_f(void)
@@ -893,8 +982,133 @@ static void start_f(void)
 		log_printf("menus: Start: not everyone is ready (host %ld, partner %ld)", my_ready, partner_ready);
 		return;
 	}
+	if (continuing && !partner_confirmed && progress_partner_is_new(partner_id, partner_xuid)) {
+		log_printf("menus: Start: the partner is not a member of this save, asking");
+		partner_questions();
+		game_cbuf_addtext("openmenu mw2coop_partner\n");
+		return;
+	}
+	progress_begin(continuing, partner_id, partner_xuid, (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38, // slot 1
+		       add_member);
 	log_printf("menus: Start: coopLaunch");
 	game_cbuf_addtext("coopLaunch\n");
+}
+
+// The popups' questions with the names in them, in the game's language.
+static void partner_questions(void)
+{
+	char map[64] = "", members[96] = "", key[80] = "MENU_SP_SP_", text[256];
+	const char *partner = (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38; // slot 1
+	progress_chosen_info(map, sizeof(map), members, sizeof(members));
+	int n = (int)strlen(key);
+	for (const char *m = map; *m && n < (int)sizeof(key) - 1; m++)
+		key[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+	key[n] = 0;
+	const char *mission = localize_text(key), *fmt;
+	if ((fmt = localize_text("MW2COOP_PARTNER_FMT"))) {
+		snprintf(text, sizeof(text), fmt, mission ? mission : map, members, partner);
+		localize_set_text("MW2COOP_PARTNER_Q", text);
+	}
+	if ((fmt = localize_text("MW2COOP_MEMBER_FMT"))) {
+		snprintf(text, sizeof(text), fmt, partner);
+		localize_set_text("MW2COOP_MEMBER_Q", text);
+	}
+	if ((fmt = localize_text("MW2COOP_NEWGAME_FMT"))) {
+		snprintf(text, sizeof(text), fmt, partner);
+		localize_set_text("MW2COOP_NEWGAME_Q", text);
+	}
+}
+
+// mw2coop_partner_yes: the first popup's Yes (continue with this partner): ask about the members
+static void partner_yes_f(void)
+{
+	game_cbuf_addtext("openmenu mw2coop_member\n");
+}
+
+// mw2coop_member_yes: the second popup's Yes, the partner joins this save's members
+static void member_yes_f(void)
+{
+	add_member = 1;
+	log_printf("menus: the partner joins this save's members");
+	InterlockedExchange(&partner_confirmed, 1);
+	start_f();
+}
+
+// mw2coop_member_no: the second popup's No, ask about a new game
+static void member_no_f(void)
+{
+	game_cbuf_addtext("openmenu mw2coop_newgame\n");
+}
+
+// mw2coop_new_game: the third popup's Yes, a new game from the start (The Pit, a new save); the
+// old save stays as it was
+static void new_game_f(void)
+{
+	add_member = 0;
+	continuing = 0;
+	game_cbuf_addtext("set coop_mapName trainer\nset start \"\"\n"); // before start_f's coopLaunch
+	log_printf("menus: a new game from the start");
+	InterlockedExchange(&partner_confirmed, 1);
+	start_f();
+}
+
+// A yes/no question (a copy of the quit popup, as firewall.c does).
+static void yes_no_popup(const char *name, const char *title, const char *question, const char *yes_action,
+			 const char *no_action)
+{
+	if (ui_find_menu(name))
+		return;
+	// From the difficulty popup (rows_popup), not the quit popup: the difficulty popup is opened
+	// from the lobby in Spec Ops. Its own text items stay hidden whatever they are given, so the
+	// question (up to three lines) is a copy of the title item one line under it; rows: Yes, No,
+	// lowered under the question.
+	static const char *const names[LIST_ROWS] = {"yes", "no", "mw2coop_row_3", "mw2coop_row_4"};
+	static const char *const texts[LIST_ROWS] = {"@MENU_YES", "@MENU_NO", "", ""};
+	const char *const actions[LIST_ROWS] = {yes_action, no_action, "", ""};
+	uint8_t *menu = rows_popup(name, title, names, texts, actions);
+	if (!menu)
+		return;
+	show_row(menu, "mw2coop_row_3", 0);
+	show_row(menu, "mw2coop_row_4", 0);
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	int at = -1;
+	for (int i = 0; i < count; i++)
+		if (*(const char **)(items[i] + ITEM_TEXT) == title)
+			at = i;
+	if (at < 0)
+		return;
+	uint8_t *text = ui_clone_item(items[at], menu); // by a difference: the two rects hold different origins
+	*(const char **)(text + ITEM_TEXT) = question;
+	*(float *)(text + ITEM_RECT_Y) += 26;
+	*(float *)(text + ITEM_RECT_CLIENT_Y) += 26;
+	uint8_t **more = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(*more));
+	memcpy(more, items, count * sizeof(*more));
+	more[count] = text;
+	*(uint8_t ***)(menu + MENU_ITEMS) = more;
+	*(int *)(menu + MENU_ITEM_COUNT) = count + 1;
+	int rows[2] = {ui_item_index(menu, "yes"), ui_item_index(menu, "no")};
+	for (int i = 0; i < 2; i++) {
+		*(float *)(more[rows[i]] + ITEM_RECT_Y) += 72;
+		*(float *)(more[rows[i]] + ITEM_RECT_CLIENT_Y) += 72;
+	}
+	log_printf("menus: popup %s added", name);
+}
+
+// Start with a partner who is not a member of the save: continue with him? Then: add him to this
+// playthrough's members? No to that: start a new game from the very beginning? No anywhere closes
+// the popup and nothing starts.
+static void add_partner_popups(void)
+{
+	yes_no_popup("mw2coop_partner", "@MW2COOP_PARTNER_TITLE", "@MW2COOP_PARTNER_Q",
+		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_partner_yes\" ; ",
+		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+	yes_no_popup("mw2coop_member", "@MW2COOP_MEMBER_TITLE", "@MW2COOP_MEMBER_Q",
+		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_member_yes\" ; ",
+		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_member_no\" ; ");
+	yes_no_popup("mw2coop_newgame", "@MW2COOP_NEWGAME_TITLE", "@MW2COOP_NEWGAME_Q",
+		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_new_game\" ; ",
+		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
 }
 
 // mw2coop_online: run by the campaign menu's co-op button before "listen" opens the lobby
@@ -902,11 +1116,16 @@ static void online_f(void)
 {
 	char map[64] = "trainer", start[64] = "";
 	const char *chosen = game_cmd_argv(1);
+	continuing = 0;
+	add_member = 0;
+	InterlockedExchange(&partner_confirmed, 0);
 	if (chosen[0] && !strpbrk(chosen, " \t;\"\n")) {
 		lstrcpynA(map, chosen, sizeof(map));
 		log_printf("menus: campaign lobby with '%s' from the start", map);
-	} else if (progress_last(map, sizeof(map), start, sizeof(start)))
+	} else if (progress_chosen(map, sizeof(map), start, sizeof(start))) {
 		log_printf("menus: campaign lobby, continuing at '%s' start '%s'", map, start);
+		continuing = 1;
+	}
 	else
 		log_printf("menus: campaign lobby, no progress yet: '%s'", map);
 	char cmd[192];
@@ -952,6 +1171,12 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f},
 	{NULL, "mw2coop_start", NULL, NULL, start_f},
 	{NULL, "mw2coop_ready", NULL, NULL, ready_f},
+	{NULL, "mw2coop_partner_yes", NULL, NULL, partner_yes_f},
+	{NULL, "mw2coop_member_yes", NULL, NULL, member_yes_f},
+	{NULL, "mw2coop_member_no", NULL, NULL, member_no_f},
+	{NULL, "mw2coop_new_game", NULL, NULL, new_game_f},
+	{NULL, "mw2coop_saves_menu", NULL, NULL, saves_menu_f},
+	{NULL, "mw2coop_save_pick", NULL, NULL, save_pick_f},
 	{NULL, "mw2coop_menus_tick", NULL, NULL, tick_f},
 	{NULL, "mw2coop_find", NULL, NULL, find_f},
 	{NULL, "mw2coop_join_found", NULL, NULL, join_found_f},
@@ -990,6 +1215,8 @@ static void tick_f(void)
 	patch_main_menu();
 	add_lobbies_menu();
 	add_host_menu();
+	add_saves_menu();
+	add_partner_popups();
 	picking_tick();
 	find_tick();
 	int campaign = campaign_lobby();
@@ -1000,10 +1227,23 @@ static void tick_f(void)
 		InterlockedExchange(&my_ready, 0);
 		InterlockedExchange(&partner_ready, 0);
 		partner_heard = 0;
+		partner_id[0] = 0;
+		partner_xuid = 0;
 		return;
 	}
 	if (GetTickCount() - ready_sent >= 1000)
 		send_ready();
+	// the host continuing ("Continue"): once the partner is known, the lobby moves to his newest save
+	if (InterlockedExchange(&partner_new, 0) && base[RVA_PARTY_IS_HOST] && continuing && !save_picked) {
+		char map[64], start[64];
+		if (progress_find_with(partner_id, partner_xuid, map, sizeof(map), start, sizeof(start))) {
+			char cmd[192];
+			snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\n", map, start);
+			game_cbuf_addtext(cmd);
+			log_printf("menus: continuing this partner's save: '%s' start '%s'", map, start);
+		} else
+			log_printf("menus: no save with this partner yet");
+	}
 	update_texts();
 }
 

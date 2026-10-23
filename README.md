@@ -33,7 +33,7 @@
 - 🚩 **Checkpoints in every mission**: a failed mission starts again from the last section you both reached.
 - 🧭 **Hosting and joining in the game's menus**: Campaign → co-op lobby, mission select, open / Steam friends only / password, a list of games on the network, join by address or Steam invite.
 - 🌐 **Online made easy**: an in-game Windows Firewall prompt and automatic UPnP port forwarding for the host.
-- 💾 **Progress kept by the host**: continue where you stopped; both move on to the next mission together, and each player's own campaign records (missions unlocked, difficulty, achievements) are written as in single player.
+- 💾 **Saves for each playthrough, kept by the host**: each save remembers who played it. "Continue" picks up your partner's playthrough, "Pick a save" lists them (mission and players); playing on with someone new asks first: add them to the playthrough, or start a new game from the beginning. Both move on to the next mission together, and each player's own campaign records (missions unlocked, difficulty, achievements) are written as in single player.
 - 🧩 **Nothing of the game replaced**: one `winmm.dll` and a `mw2coop` folder; scripts are patched in memory when they load.
 
 ## 🎮 Missions
@@ -100,7 +100,7 @@ Two copies of the game on one PC (host + client), driven by in-game bots: each c
 - Addresses come from reverse engineering the 64-bit build (Ghidra) and are listed with what they are in `src/game.h`, `src/scripts.c`, `src/scrdebug.c`.
 - `Scr_AddSourceBuffer` is replaced: `mw2coop\scripts\<file>` adds or replaces a script, `mw2coop\patches\<file>.patch` edits the game's own script text when it loads. The mod never ships whole game scripts. Patch format: see `src/scripts.c`. If another mod already replaced the function, mw2coop chains it.
 - `content/scripts/maps/_mw2coop.gsc` is the co-op campaign framework: campaign mode in a co-op session, keeping player 2 with player 1, weapon sync, checkpoints as level start points, restart when both players are down, the end of a mission. Scripts ask the host's DLL for actions (restart, save progress) through the dvar `mw2coop_cmd`.
-- Saves: each PC would write and load its own save and break lockstep, so autosaves are off; progress is a level start point (`start` dvar) plus the host's `mw2coop\progress.txt`.
+- Saves: each PC would write and load its own save and break lockstep, so autosaves are off; progress is a level start point (`start` dvar) plus the host's save, `mw2coop\progress\save_<n>.txt` (mission, start point, members: each partner's id from his `mw2coop\player.ini`, Steam ID and name; see `src/progress.c`).
 - In a co-op session GSC `getdvar` only returns dvars with certain flags; the DLL flags `start` and the QA dvars, and every dvar a level script sets itself, so levels that read back their own dvars behave as in single player.
 - Difficulty: the lobby's popup only latches `g_gameskill`; the DLL hooks `profile_difficultySave` for the host's pick and sends it to the client with `coopLaunch`.
 - Diagnostics in `mw2coop\mw2coop.log`: GSC errors with the script call stack (repeats logged at 1, 2, 3, 10, 100, 1000... hits), crashes with the faulting RVA and stack, `!trace <rva>` logs every call of a builtin method.

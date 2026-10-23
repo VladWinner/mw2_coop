@@ -1,7 +1,17 @@
-// Campaign progress that outlives the game: the host keeps the mission and the checkpoint
-// (level start point) reached last in <game dir>\mw2coop\progress.txt:
+// Campaign progress that outlives the game: the host keeps each playthrough's mission and
+// checkpoint (level start point) in a save of its own with an index,
+// <game dir>\mw2coop\progress\save_<n>.txt:
 //   map trainer
 //   start timed_ads
+//   member 0123456789abcdef0123456789abcdef 0110000100000001 Name
+// A member is a partner who played it with the host: his settings.ini id, his Steam ID (0 without
+// one; a partner who reinstalled and got a new id is still found by it) and his name. The host
+// picks a save in the menu ("Continue" is the newest, "Pick a save" lists them with their
+// members). With "Continue" the lobby moves to the newest save of the partner who joins. A partner
+// who is not a member of the picked save makes Start ask twice (menus.c): continue with him at all,
+// then add him to this playthrough's members (yes: the same save), else a new game from the very
+// beginning (a new save; the old one stays). A save from before members (mw2coop\progress.txt) continues into a
+// new indexed save and is then kept as progress.txt.old.
 // Level scripts report progress through the request channel (control.c), which the host acts
 // on. The game itself saves nothing in a co-op session, and mw2coop turns its autosaves off
 // (each PC would load its own save and break lockstep).
@@ -33,43 +43,35 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "game.h"
 #include "log.h"
 #include "progress.h"
+#include "settings.h"
 
-static char path[MAX_PATH];
+static char dir[MAX_PATH]; // the mod folder with its trailing slash
 
-void progress_save(const char *map, const char *start)
-{
-	FILE *f = fopen(path, "w");
-	if (!f) {
-		log_printf("progress: cannot write %s", path);
-		return;
-	}
-	fprintf(f, "map %s\nstart %s\n", map, start);
-	fclose(f);
-	log_printf("progress: saved map '%s' start '%s'", map, start);
-}
+#define MAX_MEMBERS 8
+#define MAX_FILES 64
 
-static int progress_load(char *map, int map_size, char *start, int start_size)
-{
-	FILE *f = fopen(path, "r");
-	if (!f)
-		return 0;
-	char line[128];
-	map[0] = start[0] = 0;
-	while (fgets(line, sizeof(line), f)) {
-		line[strcspn(line, "\r\n")] = 0;
-		if (strncmp(line, "map ", 4) == 0)
-			lstrcpynA(map, line + 4, map_size);
-		else if (strncmp(line, "start ", 6) == 0)
-			lstrcpynA(start, line + 6, start_size);
-	}
-	fclose(f);
-	return map[0] != 0;
-}
+typedef struct {
+	char id[33];
+	uint64_t xuid;
+	char name[33];
+} member_t;
+
+typedef struct {
+	char map[64], start[64];
+	int members;
+	member_t member[MAX_MEMBERS];
+} save_t;
+
+static char chosen_file[MAX_PATH]; // the save the host picked in the menu; "" for the newest
+static char target_file[MAX_PATH]; // where this session saves (progress_begin)
+static save_t target;		   // its members
+static int from_legacy;		   // continuing mw2coop\progress.txt: set aside after the first save
 
 // Map and start point names are plain identifiers; anything else in the file is ignored.
 static int is_name(const char *s)
@@ -80,21 +82,296 @@ static int is_name(const char *s)
 	return 1;
 }
 
+static int read_save(const char *file, save_t *v)
+{
+	memset(v, 0, sizeof(*v));
+	FILE *f = fopen(file, "r");
+	if (!f)
+		return 0;
+	char line[160];
+	while (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, "\r\n")] = 0;
+		if (strncmp(line, "map ", 4) == 0)
+			lstrcpynA(v->map, line + 4, sizeof(v->map));
+		else if (strncmp(line, "start ", 6) == 0)
+			lstrcpynA(v->start, line + 6, sizeof(v->start));
+		else if (strncmp(line, "member ", 7) == 0 && v->members < MAX_MEMBERS) {
+			// member <id> <Steam ID, 16 hex> <name>
+			member_t *m = &v->member[v->members];
+			unsigned long long xuid = 0;
+			int name_at = 0;
+			if (sscanf(line + 7, "%32s %llx %n", m->id, &xuid, &name_at) >= 2) {
+				m->xuid = xuid;
+				if (name_at)
+					lstrcpynA(m->name, line + 7 + name_at, sizeof(m->name));
+				v->members++;
+			}
+		}
+	}
+	fclose(f);
+	return v->map[0] && is_name(v->map) && is_name(v->start);
+}
+
+static int write_save(const char *file, const save_t *v)
+{
+	char sub[MAX_PATH];
+	snprintf(sub, sizeof(sub), "%sprogress", dir);
+	CreateDirectoryA(sub, NULL);
+	FILE *f = fopen(file, "w");
+	if (!f) {
+		log_printf("progress: cannot write %s", file);
+		return 0;
+	}
+	fprintf(f, "map %s\nstart %s\n", v->map, v->start);
+	for (int i = 0; i < v->members; i++)
+		fprintf(f, "member %s %016llx %s\n", v->member[i].id[0] ? v->member[i].id : "-",
+			(unsigned long long)v->member[i].xuid, v->member[i].name);
+	fclose(f);
+	return 1;
+}
+
+// the member index of this partner (his id, else his Steam ID); -1 if he is none
+static int member_index(const save_t *v, const char *id, uint64_t xuid)
+{
+	for (int i = 0; i < v->members; i++)
+		if (id && id[0] && strcmp(v->member[i].id, id) == 0)
+			return i;
+	for (int i = 0; i < v->members; i++)
+		if (xuid && v->member[i].xuid == xuid)
+			return i;
+	return -1;
+}
+
+static int is_member(const save_t *v, const char *id, uint64_t xuid)
+{
+	return member_index(v, id, xuid) >= 0;
+}
+
+static void legacy_file(char *out)
+{
+	snprintf(out, MAX_PATH, "%sprogress.txt", dir);
+}
+
+static int is_legacy(const char *file)
+{
+	char legacy[MAX_PATH];
+	legacy_file(legacy);
+	return lstrcmpiA(file, legacy) == 0;
+}
+
+// Every save (the indexed ones and the one from before saves had members), the newest first.
+typedef struct {
+	char file[MAX_PATH];
+	FILETIME time;
+} save_file_t;
+
+static int list_saves(save_file_t *out)
+{
+	int n = 0;
+	WIN32_FILE_ATTRIBUTE_DATA a;
+	legacy_file(out[0].file);
+	if (GetFileAttributesExA(out[0].file, GetFileExInfoStandard, &a))
+		out[n++].time = a.ftLastWriteTime;
+	char pattern[MAX_PATH];
+	snprintf(pattern, sizeof(pattern), "%sprogress\\save_*.txt", dir);
+	WIN32_FIND_DATAA fd;
+	HANDLE h = FindFirstFileA(pattern, &fd);
+	if (h != INVALID_HANDLE_VALUE) {
+		do {
+			snprintf(out[n].file, MAX_PATH, "%sprogress\\%s", dir, fd.cFileName);
+			out[n++].time = fd.ftLastWriteTime;
+		} while (n < MAX_FILES && FindNextFileA(h, &fd));
+		FindClose(h);
+	}
+	for (int i = 1; i < n; i++) // newest first
+		for (int j = i; j > 0 && CompareFileTime(&out[j].time, &out[j - 1].time) > 0; j--) {
+			save_file_t t = out[j];
+			out[j] = out[j - 1];
+			out[j - 1] = t;
+		}
+	return n;
+}
+
+// The i-th readable save, the newest first (i = 0: the newest); its file in file_out.
+static int nth_save(int i, save_t *v, char *file_out)
+{
+	save_file_t files[MAX_FILES];
+	int n = list_saves(files), k = 0;
+	for (int f = 0; f < n; f++)
+		if (read_save(files[f].file, v) && k++ == i) {
+			if (file_out)
+				lstrcpynA(file_out, files[f].file, MAX_PATH);
+			return 1;
+		}
+	return 0;
+}
+
+// a free index: save_<1 + the highest in use>.txt
+static void new_save_file(char *out)
+{
+	int top = 0;
+	char pattern[MAX_PATH];
+	snprintf(pattern, sizeof(pattern), "%sprogress\\save_*.txt", dir);
+	WIN32_FIND_DATAA fd;
+	HANDLE h = FindFirstFileA(pattern, &fd);
+	if (h != INVALID_HANDLE_VALUE) {
+		do {
+			int k = atoi(fd.cFileName + 5);
+			if (k > top)
+				top = k;
+		} while (FindNextFileA(h, &fd));
+		FindClose(h);
+	}
+	snprintf(out, MAX_PATH, "%sprogress\\save_%d.txt", dir, top + 1);
+}
+
+static int chosen_save(save_t *v, char *file_out)
+{
+	if (chosen_file[0]) {
+		if (file_out)
+			lstrcpynA(file_out, chosen_file, MAX_PATH);
+		return read_save(chosen_file, v);
+	}
+	return nth_save(0, v, file_out);
+}
+
 int progress_last(char *map, int map_size, char *start, int start_size)
 {
-	char m[64], st[64];
-	if (!progress_load(m, sizeof(m), st, sizeof(st)) || !is_name(m) || !is_name(st))
+	save_t v;
+	if (!nth_save(0, &v, NULL))
 		return 0;
-	lstrcpynA(map, m, map_size);
-	lstrcpynA(start, st, start_size);
+	lstrcpynA(map, v.map, map_size);
+	lstrcpynA(start, v.start, start_size);
 	return 1;
+}
+
+int progress_save_info(int i, char *map, int map_size, char *names, int names_size)
+{
+	save_t v;
+	if (!nth_save(i, &v, NULL))
+		return 0;
+	lstrcpynA(map, v.map, map_size);
+	names[0] = 0;
+	for (int m = 0; m < v.members; m++) {
+		int n = (int)strlen(names);
+		snprintf(names + n, names_size - n, "%s%s", m ? ", " : "", v.member[m].name[0] ? v.member[m].name : "?");
+	}
+	return 1;
+}
+
+void progress_choose(int i)
+{
+	save_t v;
+	chosen_file[0] = 0;
+	if (i >= 0 && nth_save(i, &v, chosen_file))
+		log_printf("progress: the host picked the save %s (map '%s')", chosen_file + strlen(dir), v.map);
+}
+
+int progress_chosen(char *map, int map_size, char *start, int start_size)
+{
+	save_t v;
+	if (!chosen_save(&v, NULL))
+		return 0;
+	lstrcpynA(map, v.map, map_size);
+	lstrcpynA(start, v.start, start_size);
+	return 1;
+}
+
+int progress_find_with(const char *id, uint64_t xuid, char *map, int map_size, char *start, int start_size)
+{
+	save_t v;
+	char file[MAX_PATH];
+	for (int i = 0; nth_save(i, &v, file); i++)
+		if (is_member(&v, id, xuid)) {
+			lstrcpynA(chosen_file, file, MAX_PATH);
+			lstrcpynA(map, v.map, map_size);
+			lstrcpynA(start, v.start, start_size);
+			log_printf("progress: the newest save with this partner is %s", file + strlen(dir));
+			return 1;
+		}
+	return 0;
+}
+
+int progress_chosen_info(char *map, int map_size, char *names, int names_size)
+{
+	save_t v;
+	if (!chosen_save(&v, NULL))
+		return 0;
+	lstrcpynA(map, v.map, map_size);
+	names[0] = 0;
+	for (int m = 0; m < v.members; m++) {
+		int n = (int)strlen(names);
+		snprintf(names + n, names_size - n, "%s%s", m ? ", " : "", v.member[m].name[0] ? v.member[m].name : "?");
+	}
+	return 1;
+}
+
+int progress_partner_is_new(const char *id, uint64_t xuid)
+{
+	save_t v;
+	if (!chosen_save(&v, NULL) || !v.members)
+		return 0; // no save, or one from before saves had members: nobody to compare with
+	return !is_member(&v, id, xuid);
+}
+
+void progress_begin(int continuing, const char *id, uint64_t xuid, const char *name, int add_member)
+{
+	save_t v;
+	char file[MAX_PATH] = "";
+	int have = continuing && chosen_save(&v, file);
+	if (!have)
+		memset(&v, 0, sizeof(v));
+	int member = is_member(&v, id, xuid);
+	if (have && !is_legacy(file) && (member || add_member || !v.members)) {
+		lstrcpynA(target_file, file, MAX_PATH); // the same playthrough
+	} else {
+		new_save_file(target_file); // a playthrough of its own (a new campaign, or "no" to adding)
+		if (!add_member)
+			v.members = 0;
+	}
+	target = v;
+	from_legacy = have && is_legacy(file);
+	// a member who got a new id (player.ini lost) but is known by his Steam ID keeps his place
+	int at = member_index(&target, id, xuid);
+	if (at >= 0 && id && id[0] && strcmp(target.member[at].id, id) != 0) {
+		log_printf("progress: member %s has a new id %s (same Steam ID)", target.member[at].id, id);
+		lstrcpynA(target.member[at].id, id, sizeof(target.member[at].id));
+	}
+	if (!member && (id && id[0]) && target.members < MAX_MEMBERS) {
+		member_t *m = &target.member[target.members++];
+		lstrcpynA(m->id, id, sizeof(m->id));
+		m->xuid = xuid;
+		lstrcpynA(m->name, name ? name : "", sizeof(m->name));
+		m->name[strcspn(m->name, "\r\n")] = 0;
+	}
+	log_printf("progress: this session saves to %s (%d member%s)", target_file + strlen(dir), target.members,
+		   target.members == 1 ? "" : "s");
+}
+
+void progress_save(const char *map, const char *start)
+{
+	if (!target_file[0]) // no lobby this run (mw2coop_continue from the console): a save of its own
+		new_save_file(target_file);
+	lstrcpynA(target.map, map, sizeof(target.map));
+	lstrcpynA(target.start, start, sizeof(target.start));
+	if (!write_save(target_file, &target))
+		return;
+	log_printf("progress: saved map '%s' start '%s' to %s", map, start, target_file + strlen(dir));
+	if (from_legacy) {
+		char legacy[MAX_PATH], old[MAX_PATH];
+		legacy_file(legacy);
+		snprintf(old, sizeof(old), "%s.old", legacy);
+		if (MoveFileExA(legacy, old, MOVEFILE_REPLACE_EXISTING))
+			log_printf("progress: the save from before members is now %s", old + strlen(dir));
+		from_legacy = 0;
+	}
 }
 
 static void continue_f(void)
 {
 	char map[64], start[64], cmd[192];
-	if (!progress_load(map, sizeof(map), start, sizeof(start)) || !is_name(map) || !is_name(start)) {
-		log_printf("progress: nothing to continue (%s)", path);
+	if (!progress_last(map, sizeof(map), start, sizeof(start))) {
+		log_printf("progress: nothing to continue (%s)", dir);
 		return;
 	}
 	snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\n", map, start);
@@ -242,11 +519,11 @@ static cmd_function_t commands[] = {
 
 void progress_install(void)
 {
-	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
-	while (n > 0 && path[n - 1] != '\\')
+	DWORD n = GetModuleFileNameA(NULL, dir, MAX_PATH);
+	while (n > 0 && dir[n - 1] != '\\')
 		n--;
-	path[n] = 0;
-	lstrcatA(path, "mw2coop\\progress.txt");
+	dir[n] = 0;
+	lstrcatA(dir, "mw2coop\\");
 
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);

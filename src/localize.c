@@ -126,6 +126,33 @@ static const ModString strings[] = {
 	// Второй игрок не сможет войти. / Разрешить доступ?
 	{"MW2COOP_FIREWALL_TEXT", "\xc2\xf2\xee\xf0\xee\xe9 \xe8\xe3\xf0\xee\xea \xed\xe5 \xf1\xec\xee\xe6\xe5\xf2 \xe2\xee\xe9\xf2\xe8.\n\xd0\xe0\xe7\xf0\xe5\xf8\xe8\xf2\xfc \xe4\xee\xf1\xf2\xf3\xef?",
 	 "The other player cannot get in.\nAllow access?"},
+	// Другой напарник
+	{"MW2COOP_PARTNER_TITLE", "\xc4\xf0\xf3\xe3\xee\xe9 \xed\xe0\xef\xe0\xf0\xed\xe8\xea",
+	 "Different partner"},
+	// Кампания «%s» сохранена с: %s. / Продолжить с %s?
+	{"MW2COOP_PARTNER_FMT", "\xca\xe0\xec\xef\xe0\xed\xe8\xff \xab%s\xbb \xf1\xee\xf5\xf0\xe0\xed\xe5\xed\xe0 \xf1: %s.\n\xcf\xf0\xee\xe4\xee\xeb\xe6\xe8\xf2\xfc \xf1 %s?",
+	 "The campaign \"%s\" was saved with: %s.\nContinue with %s?"},
+	// Участники прохождения
+	{"MW2COOP_MEMBER_TITLE", "\xd3\xf7\xe0\xf1\xf2\xed\xe8\xea\xe8 \xef\xf0\xee\xf5\xee\xe6\xe4\xe5\xed\xe8\xff",
+	 "Playthrough members"},
+	// Добавить %s в участники / этого прохождения?
+	{"MW2COOP_MEMBER_FMT", "\xc4\xee\xe1\xe0\xe2\xe8\xf2\xfc %s \xe2 \xf3\xf7\xe0\xf1\xf2\xed\xe8\xea\xe8\n\xfd\xf2\xee\xe3\xee \xef\xf0\xee\xf5\xee\xe6\xe4\xe5\xed\xe8\xff?",
+	 "Add %s to the members\nof this playthrough?"},
+	// Новая игра
+	{"MW2COOP_NEWGAME_TITLE", "\xcd\xee\xe2\xe0\xff \xe8\xe3\xf0\xe0",
+	 "New game"},
+	// Начать новую игру с %s / с самого начала?
+	{"MW2COOP_NEWGAME_FMT", "\xcd\xe0\xf7\xe0\xf2\xfc \xed\xee\xe2\xf3\xfe \xe8\xe3\xf0\xf3 \xf1 %s\n\xf1 \xf1\xe0\xec\xee\xe3\xee \xed\xe0\xf7\xe0\xeb\xe0?",
+	 "Start a new game with %s\nfrom the very beginning?"},
+	// ВЫБРАТЬ СОХРАНЕНИЕ
+	{"MW2COOP_PICK_SAVE", "\xc2\xdb\xc1\xd0\xc0\xd2\xdc \xd1\xce\xd5\xd0\xc0\xcd\xc5\xcd\xc8\xc5",
+	 "PICK A SAVE"},
+	// Сохранения
+	{"MW2COOP_SAVES", "\xd1\xee\xf5\xf0\xe0\xed\xe5\xed\xe8\xff",
+	 "Saves"},
+	// без напарника
+	{"MW2COOP_SAVE_NO_PARTNER", "\xe1\xe5\xe7 \xed\xe0\xef\xe0\xf0\xed\xe8\xea\xe0",
+	 "no partner"},
 	// ПРОДОЛЖИТЬ: 
 	{"MW2COOP_CONTINUE_PREFIX", "\xcf\xd0\xce\xc4\xce\xcb\xc6\xc8\xd2\xdc: ",
 	 "CONTINUE: "},
@@ -157,6 +184,13 @@ static Alias aliases[] = {
 	{"MW2COOP_EDIT_LABEL", "MW2COOP_LABEL_PASSWORD", -2, "", {NULL, NULL}},
 	{"MW2COOP_CONTINUE", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_LOBBY_1", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_SAVE_1", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_PARTNER_Q", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_MEMBER_Q", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_NEWGAME_Q", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_SAVE_2", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_SAVE_3", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_SAVE_4", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_LOBBY_2", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_LOBBY_3", NULL, -1, "", {NULL, NULL}},
 };
