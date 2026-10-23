@@ -931,7 +931,7 @@ mission_failed()
 	level.mw2coop.failing = true;
 	level notify( "mw2coop_level_end" );
 	flag_set( "special_op_terminated" );
-	state( "mission failed, restart at '" + GetDvar( "start" ) + "'" );
+	state( "mission failed (deadquote '" + GetDvar( "ui_deadquote" ) + "'), restart at '" + GetDvar( "start" ) + "'" );
 	foreach ( player in level.players )
 	{
 		player EnableInvulnerability();
