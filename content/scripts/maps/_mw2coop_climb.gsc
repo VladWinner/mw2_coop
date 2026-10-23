@@ -287,21 +287,14 @@ deadly_height()
 	return flag( "player_climbs_past_safe_point" );
 }
 
-// A player who let go of both picks before the safe point drops back to the bottom (the climb's
-// player_recover). Player 2's copy of that spot, moved by the lane offset, was inside the slope
-// (playtest 2026-10-23: stuck there, off the ground, until the mission failed): he goes back to
-// where he got on the wall, his lane's start, which is ground.
+// A player who let go of both picks drops back to the bottom: the climb's player_recover, for
+// both players. Player 2's own spots there were inside the ground at the foot of his lane
+// (playtests 2026-10-23: the lane-shifted spot left him stuck in the slope, his lane's start put
+// him 40 units under the floor); player 1's spot is ground (he landed and climbed again). Two
+// players falling at once land on the same spot and push apart.
 recover_ent( player )
 {
-	ent = GetEnt( "player_recover", "targetname" );
-	if ( !climb_coop() || !isdefined( player ) || player == level.player || !isdefined( level.mw2coop_second_lane ) )
-		return ent;
-	if ( !isdefined( level.mw2coop_recover2 ) )
-	{
-		level.mw2coop_recover2 = Spawn( "script_origin", level.mw2coop_second_lane.origin + ( 0, 0, 8 ) );
-		level.mw2coop_recover2.angles = ent.angles;
-	}
-	return level.mw2coop_recover2;
+	return GetEnt( "player_recover", "targetname" );
 }
 
 // --------------------------------------------------------------------------------------------
