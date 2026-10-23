@@ -600,3 +600,30 @@ flag_set( "price_caught_player" )
 @@@ to
 caught maps\_mw2coop_climb::pflag_set( "price_caught_player" )
 @@@ end
+
+10. Co-op climbs on the easy rules (maps\_mw2coop_climb::climb_skill).
+@@@ subst player_finishes_climbing
+if ( level.gameskill <= 1 )
+@@@ to
+if ( maps\_mw2coop_climb::climb_skill() <= 1 )
+@@@ end
+@@@ subst player_finishes_climbing
+if ( level.gameSkill < 2 )
+@@@ to
+if ( maps\_mw2coop_climb::climb_skill() < 2 )
+@@@ end
+@@@ subst player_big_jump
+if ( level.gameskill <= 1 )
+@@@ to
+if ( maps\_mw2coop_climb::climb_skill() <= 1 )
+@@@ end
+@@@ subst player_big_jump
+if ( level.gameSkill > 1 )
+@@@ to
+if ( maps\_mw2coop_climb::climb_skill() > 1 )
+@@@ end
+@@@ subst start_climb_hint
+if ( level.gameSkill > 1 )
+@@@ to
+if ( maps\_mw2coop_climb::climb_skill() > 1 )
+@@@ end

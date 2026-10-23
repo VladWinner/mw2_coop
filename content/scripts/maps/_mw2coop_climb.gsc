@@ -561,6 +561,19 @@ jump_fell()
 	self pflag_set( "fade_to_death" );
 }
 
+// The difficulty the climb plays: in co-op always the easy one (owner, 2026-10-23, after a
+// playtest: "как на лёгкой сложности"), whatever the host picked. On easy and normal the climb
+// gives ten seconds before the first stab must hold, does not ask for the right pick separately,
+// lowers the big jump's trigger (no jump needed), does not let the player fall after the jump,
+// and shows the climbing hint sooner. Letting go of both picks on the wall still drops a player,
+// as on easy: back to the bottom before the safe point, to his death past it.
+climb_skill()
+{
+	if ( climb_coop() )
+		return 0;
+	return level.gameSkill;
+}
+
 // From gaz_catches_player() once Soap's catch animation is over.
 catch_done()
 {
