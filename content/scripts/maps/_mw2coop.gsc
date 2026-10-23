@@ -214,6 +214,7 @@ regroup_after_start()
 	if ( !isdefined( level.player2 ) )
 		return;
 	wait 0.1;
+	restore_checkpoint_spot();
 	for ( waited = 0; waited < 120; waited += 0.25 )
 	{
 		if ( level.player2 IsLinked() )
@@ -652,12 +653,76 @@ section_reached( name, leader )
 		return;
 	SetDvar( "start", name );
 	state( "checkpoint " + name + " (section " + index + ")" );
-	request( "checkpoint " + level.script + " " + name );	// the host saves it for mw2coop_continue
-	foreach ( player in level.players )
-		player thread checkpoint_hud();
 	if ( !isdefined( leader ) )
 		leader = standing_leader();
+	spot = checkpoint_spot( leader );
+	SetDvar( "mw2coop_cp_start", name );
+	SetDvar( "mw2coop_cp_pos", spot );
+	request( "checkpoint " + level.script + " " + name + " " + spot );	// the host saves it for mw2coop_continue
+	foreach ( player in level.players )
+		player thread checkpoint_hud();
 	bring_partner_to( leader );
+}
+
+// --------------------------------------------------------------------------------------------
+// Where a checkpoint was reached. Some start points do not place the player (Cliffhanger "c4": its
+// start function's teleport is commented out), so a restart there left both players at the level's
+// first spawn (playtest 2026-10-23: restart at c4 put them back at the cave). The spot of the player
+// who got there is kept with the checkpoint (dvars mw2coop_cp_start, mw2coop_cp_pos, and the host's
+// save) and used when the start point leaves the player where the level spawns him.
+// Encoded as a plain name for the start packet: x_y_z_yaw, "m" for minus ("m4131_m25410_998_61").
+
+checkpoint_spot( leader )
+{
+	player = leader;
+	if ( !isdefined( player ) || !is_standing( player ) )
+	{
+		player = undefined;
+		foreach ( p in level.players )
+			if ( !isdefined( player ) && is_standing( p ) )
+				player = p;
+	}
+	if ( !isdefined( player ) )
+		return "";
+	angles = player GetPlayerAngles();
+	return spot_int( player.origin[ 0 ] ) + "_" + spot_int( player.origin[ 1 ] ) + "_" + spot_int( player.origin[ 2 ] ) + "_" + spot_int( angles[ 1 ] );
+}
+
+spot_int( value )
+{
+	value = int( value );
+	if ( value < 0 )
+		return "m" + ( 0 - value );
+	return "" + value;
+}
+
+spot_value( text )
+{
+	if ( GetSubStr( text, 0, 1 ) == "m" )
+		return 0 - int( GetSubStr( text, 1 ) );
+	return int( text );
+}
+
+// At the start: player 1 to the checkpoint's spot when the start point left him at the level's
+// spawn. Both machines read the same dvars (set by the scripts, or by the host's start packet).
+restore_checkpoint_spot()
+{
+	if ( !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_start" ) != level.start_point )
+		return;
+	parts = StrTok( GetDvar( "mw2coop_cp_pos" ), "_" );
+	if ( parts.size != 4 )
+		return;
+	spot = ( spot_value( parts[ 0 ] ), spot_value( parts[ 1 ] ), spot_value( parts[ 2 ] ) );
+	spawns = GetEntArray( "info_player_start", "classname" );
+	if ( !spawns.size || level.player IsLinked() )
+		return;
+	if ( DistanceSquared( level.player.origin, spawns[ 0 ].origin ) > 128 * 128 )
+		return;	// the start point placed him itself
+	if ( DistanceSquared( level.player.origin, spot ) < 512 * 512 )
+		return;
+	level.player SetOrigin( spot );
+	level.player SetPlayerAngles( ( 0, spot_value( parts[ 3 ] ), 0 ) );
+	state( "start point " + level.start_point + " left player 1 at the level's spawn: moved to the checkpoint's spot " + spot );
 }
 
 // --------------------------------------------------------------------------------------------

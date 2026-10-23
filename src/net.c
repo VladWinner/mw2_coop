@@ -176,7 +176,7 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 	// The party resends coopLaunch until the client acks it; the start packet goes along each time.
 	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) &&
 	    contains(buf, len, "coopLaunch")) {
-		char pkt[96];
+		char pkt[256];
 		int n = progress_launch_packet(pkt, sizeof(pkt));
 		log_packet("send", to, pkt, n);
 		send_to(s, pkt, n, flags, to, tolen);

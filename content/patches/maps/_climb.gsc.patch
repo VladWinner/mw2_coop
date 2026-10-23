@@ -627,3 +627,17 @@ if ( level.gameSkill > 1 )
 @@@ to
 if ( maps\_mw2coop_climb::climb_skill() > 1 )
 @@@ end
+
+11. One Soap for both catches (maps\_mw2coop_climb::soap_for_catch); the second catch's Soap has
+    no fake gun to delete.
+@@@ subst gaz_catches_player
+[[ level.friendly_init_cliffhanger ]]();
+@@@ to
+maps\_mw2coop_climb::soap_for_catch();
+@@@ end
+@@@ subst gaz_catches_player
+gaz.fakegun Delete();
+@@@ to
+if ( isdefined( gaz.fakegun ) )
+		gaz.fakegun Delete();
+@@@ end

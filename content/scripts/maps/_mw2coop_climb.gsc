@@ -632,6 +632,17 @@ climb_skill()
 	return level.gameSkill;
 }
 
+// gaz_catches_player(): the level makes a new Soap (friendly_init_cliffhanger: a fresh spawn) for
+// the catch. Once in single player; in co-op Soap catches twice, and the second catch made a
+// second Soap (playtest 2026-10-23: two MacTavishes at the top). The second catch reuses him.
+soap_for_catch()
+{
+	if ( climb_coop() && isdefined( level.mw2coop_soap_made ) && isdefined( level.price ) && IsAlive( level.price ) )
+		return;
+	[[ level.friendly_init_cliffhanger ]]();
+	level.mw2coop_soap_made = true;
+}
+
 // From gaz_catches_player() once Soap's catch animation is over.
 catch_done()
 {

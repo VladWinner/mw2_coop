@@ -3,6 +3,7 @@
 // <game dir>\mw2coop\progress\save_<n>.txt:
 //   map trainer
 //   start timed_ads
+//   spot 371_m29140_186_90   (where the checkpoint was reached: x_y_z_yaw, m = minus; may be absent)
 //   member 0123456789abcdef0123456789abcdef 0110000100000001 Name
 // A member is a partner who played it with the host: his settings.ini id, his Steam ID (0 without
 // one; a partner who reinstalled and got a new id is still found by it) and his name. The host
@@ -63,7 +64,7 @@ typedef struct {
 } member_t;
 
 typedef struct {
-	char map[64], start[64];
+	char map[64], start[64], spot[64];
 	int members;
 	member_t member[MAX_MEMBERS];
 } save_t;
@@ -95,6 +96,8 @@ static int read_save(const char *file, save_t *v)
 			lstrcpynA(v->map, line + 4, sizeof(v->map));
 		else if (strncmp(line, "start ", 6) == 0)
 			lstrcpynA(v->start, line + 6, sizeof(v->start));
+		else if (strncmp(line, "spot ", 5) == 0)
+			lstrcpynA(v->spot, line + 5, sizeof(v->spot));
 		else if (strncmp(line, "member ", 7) == 0 && v->members < MAX_MEMBERS) {
 			// member <id> <Steam ID, 16 hex> <name>
 			member_t *m = &v->member[v->members];
@@ -123,6 +126,8 @@ static int write_save(const char *file, const save_t *v)
 		return 0;
 	}
 	fprintf(f, "map %s\nstart %s\n", v->map, v->start);
+	if (v->spot[0] && is_name(v->spot))
+		fprintf(f, "spot %s\n", v->spot);
 	for (int i = 0; i < v->members; i++)
 		fprintf(f, "member %s %016llx %s\n", v->member[i].id[0] ? v->member[i].id : "-",
 			(unsigned long long)v->member[i].xuid, v->member[i].name);
@@ -267,6 +272,15 @@ void progress_choose(int i)
 		log_printf("progress: the host picked the save %s (map '%s')", chosen_file + strlen(dir), v.map);
 }
 
+int progress_chosen_spot(char *spot, int size)
+{
+	save_t v;
+	if (!chosen_save(&v, NULL) || !is_name(v.spot))
+		return 0;
+	lstrcpynA(spot, v.spot, size);
+	return spot[0] != 0;
+}
+
 int progress_chosen(char *map, int map_size, char *start, int start_size)
 {
 	save_t v;
@@ -348,12 +362,13 @@ void progress_begin(int continuing, const char *id, uint64_t xuid, const char *n
 		   target.members == 1 ? "" : "s");
 }
 
-void progress_save(const char *map, const char *start)
+void progress_save(const char *map, const char *start, const char *spot)
 {
 	if (!target_file[0]) // no lobby this run (mw2coop_continue from the console): a save of its own
 		new_save_file(target_file);
 	lstrcpynA(target.map, map, sizeof(target.map));
 	lstrcpynA(target.start, start, sizeof(target.start));
+	lstrcpynA(target.spot, spot ? spot : "", sizeof(target.spot));
 	if (!write_save(target_file, &target))
 		return;
 	log_printf("progress: saved map '%s' start '%s' to %s", map, start, target_file + strlen(dir));
@@ -380,7 +395,7 @@ static void continue_f(void)
 }
 
 // Host dvars the client must match before the level loads (level scripts read them).
-static const char *const session_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff"};
+static const char *const session_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos"};
 #define SESSION_DVARS (int)(sizeof(session_dvars) / sizeof(session_dvars[0]))
 
 static const char *const skill_dvars[] = {"g_gameskill", "g_gameskill_player_1", "g_gameskill_player_2"};

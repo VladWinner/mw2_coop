@@ -1145,8 +1145,11 @@ static void online_f(void)
 	}
 	else
 		log_printf("menus: campaign lobby, no progress yet: '%s'", map);
-	char cmd[192];
-	snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\n", map, start);
+	char cmd[320], spot[64] = "";
+	if (continuing)
+		progress_chosen_spot(spot, sizeof(spot));
+	snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\nset mw2coop_cp_start \"%s\"\nset mw2coop_cp_pos \"%s\"\n", map,
+		 start, spot[0] ? start : "", spot);
 	game_cbuf_addtext(cmd);
 }
 
@@ -1254,8 +1257,10 @@ static void tick_f(void)
 	if (InterlockedExchange(&partner_new, 0) && base[RVA_PARTY_IS_HOST] && continuing && !save_picked) {
 		char map[64], start[64];
 		if (progress_find_with(partner_id, partner_xuid, map, sizeof(map), start, sizeof(start))) {
-			char cmd[192];
-			snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\n", map, start);
+			char cmd[320], spot[64] = "";
+			progress_chosen_spot(spot, sizeof(spot));
+			snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\nset mw2coop_cp_start \"%s\"\nset mw2coop_cp_pos \"%s\"\n",
+				 map, start, spot[0] ? start : "", spot);
 			game_cbuf_addtext(cmd);
 			log_printf("menus: continuing this partner's save: '%s' start '%s'", map, start);
 		} else

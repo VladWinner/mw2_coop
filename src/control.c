@@ -87,7 +87,7 @@ static void script_request(const char *cmd)
 		if (map[0] == '@') // last mission: no next one
 			map[0] = 0;
 		if (host)
-			progress_save(map, "");
+			progress_save(map, "", "");
 		// Both machines start the next mission themselves (see mw2coop_launch_map in party.c).
 		// ChangeLevel() cannot: its exit handler (rva 0x170e60) skips gameMode "so", which a
 		// co-op session uses.
@@ -103,9 +103,10 @@ static void script_request(const char *cmd)
 	if (strncmp(cmd, "restart", 7) == 0) {
 		game_cbuf_addtext("fast_restart\n"); // SV_MapRestart sends coopRestart to the client
 	} else if (strncmp(cmd, "checkpoint ", 11) == 0) {
-		char map[64] = "", start[64] = "";
-		if (sscanf(cmd + 11, "%63s %63s", map, start) == 2 && start[0] != '@')
-			progress_save(map, start);
+		char map[64] = "", start[64] = "", spot[64] = "";
+		int n = sscanf(cmd + 11, "%63s %63s %63s", map, start, spot);
+		if (n >= 2 && start[0] != '@')
+			progress_save(map, start, n == 3 && spot[0] != '@' ? spot : "");
 	}
 }
 
@@ -115,7 +116,8 @@ static void script_request(const char *cmd)
 // 0x100 (external). These are the ones mw2coop needs scripts to read: give them 0x80 as soon
 // as they exist (they keep 0x100, so script setdvar still works). The harness creates them
 // before the level starts, so both machines flag them before any script reads them.
-static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_qa", "mw2coop_qa_phase"};
+static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
+					   "mw2coop_qa", "mw2coop_qa_phase"};
 
 static void sync_dvar_flags(void)
 {
