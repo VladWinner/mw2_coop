@@ -1,7 +1,10 @@
 // Who may join a campaign lobby, and how a player gets into a locked one.
 //
 // Host: the lobby's "Access" row (a copy of Invite Friend on the free line under it) cycles
-//   open -> Steam friends only -> password (asked for in the text popup) -> open.
+//   open -> Steam friends only -> password -> open. In password mode a "Password" row under
+//   Friendly fire opens the text popup that sets it (owner, 2026-10-23: switching to password
+//   mode must not ask for it at once; a separate button, and no start until it is set). Until a
+//   password is set the lobby is locked for everyone but Steam friends and Start asks for it.
 // - A Steam friend of the host always gets in: friends join through Steam invites. The XUID in a
 //   coopConnect is the SteamID; ISteamFriends013::GetFriendRelationship (vtable slot 5) == 3.
 // - open: anyone who finds the lobby on the network or knows the address.
@@ -163,10 +166,9 @@ static void edit_ok_f(void)
 	game_cbuf_addtext("set mw2coop_edit \"\"\n"); // a password does not stay in a dvar
 	if (mode == EDIT_HOST_PASSWORD) {
 		if (!text[0])
-			return; // no password given: the access stays as it was
+			return; // no password given: the last one stays
 		lstrcpynA(password, text, sizeof(password));
-		InterlockedExchange(&access_mode, ACCESS_PASSWORD);
-		log_printf("access: lobby locked with a password");
+		log_printf("access: lobby password set");
 	} else if (mode == EDIT_JOIN_PASSWORD) {
 		char auth[64];
 		snprintf(auth, sizeof(auth), "mw2coop_auth %s", text);
@@ -213,7 +215,8 @@ static void access_f(void)
 		log_printf("access: lobby for Steam friends only");
 		break;
 	case ACCESS_STEAM:
-		open_edit(EDIT_HOST_PASSWORD, "MW2COOP_EDIT_PASSWORD", "MW2COOP_LABEL_PASSWORD");
+		InterlockedExchange(&access_mode, ACCESS_PASSWORD);
+		log_printf("access: lobby by password (%s)", password[0] ? "set" : "not set yet");
 		break;
 	default:
 		InterlockedExchange(&access_mode, ACCESS_OPEN);
@@ -221,6 +224,24 @@ static void access_f(void)
 		log_printf("access: lobby open");
 		break;
 	}
+}
+
+// mw2coop_password: the lobby's Password row (shown in password mode only)
+static void password_f(void)
+{
+	if (!base[RVA_PARTY_IS_HOST] || access_mode != ACCESS_PASSWORD)
+		return;
+	open_edit(EDIT_HOST_PASSWORD, "MW2COOP_EDIT_PASSWORD", "MW2COOP_LABEL_PASSWORD");
+}
+
+// Start in the host's lobby: not in password mode without a password (the popup opens instead).
+int access_can_start(void)
+{
+	if (access_mode != ACCESS_PASSWORD || password[0])
+		return 1;
+	log_printf("access: Start: set the password first");
+	password_f();
+	return 0;
 }
 
 // mw2coop_ff: the lobby's Friendly fire row
@@ -249,7 +270,8 @@ static uint8_t *lobby_row(uint8_t *from, uint8_t *menu, const char *name, const 
 
 // The Access and Friendly fire rows: inserted into coop_lobby's items while it holds a campaign
 // mission.
-static uint8_t *lobby_menu, **native_items, **campaign_items;
+#define LOBBY_ROWS 3
+static uint8_t *lobby_menu, **native_items, **campaign_items, *password_row;
 static int native_count;
 
 static void patch_lobby_row(int campaign)
@@ -271,17 +293,20 @@ static void patch_lobby_row(int campaign)
 					    "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_access\" ; ", y);
 		uint8_t *ff = lobby_row(items[at], menu, "mw2coop_ff", "@MW2COOP_FF",
 					"\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_ff\" ; ", y + BUTTON_HEIGHT);
-		campaign_items = HeapAlloc(GetProcessHeap(), 0, (native_count + 2) * sizeof(*campaign_items));
+		password_row = lobby_row(items[at], menu, "mw2coop_password", "@MW2COOP_PW",
+					 "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_password\" ; ", y + 2 * BUTTON_HEIGHT);
+		campaign_items = HeapAlloc(GetProcessHeap(), 0, (native_count + LOBBY_ROWS) * sizeof(*campaign_items));
 		memcpy(campaign_items, native_items, (at + 1) * sizeof(*campaign_items));
 		campaign_items[at + 1] = access;
 		campaign_items[at + 2] = ff;
-		memcpy(campaign_items + at + 3, native_items + at + 1, (native_count - at - 1) * sizeof(*campaign_items));
-		// the Friendly fire row takes the line of the lobby's NAT type text ("nattype", y 126):
-		// the left column's items from that line down (aligned top-left like the buttons) move
-		// one line lower, and so do the focused button's hint lines under them ("description",
-		// aligned to the bottom, y -262 and -242; the operation panel starts at -202); copies, so
-		// the Spec Ops lobby keeps its layout
-		for (int i = at + 3; i < native_count + 2; i++) {
+		campaign_items[at + 3] = password_row;
+		memcpy(campaign_items + at + 4, native_items + at + 1, (native_count - at - 1) * sizeof(*campaign_items));
+		// the Friendly fire and Password rows take the line of the lobby's NAT type text
+		// ("nattype", y 126) and the next: the left column's items from that line down (aligned
+		// top-left like the buttons) move two lines lower, and so do the focused button's hint
+		// lines under them ("description", aligned to the bottom, y -262 and -242; the operation
+		// panel starts at -202); copies, so the Spec Ops lobby keeps its layout
+		for (int i = at + LOBBY_ROWS + 1; i < native_count + LOBBY_ROWS; i++) {
 			uint8_t *it = campaign_items[i];
 			float iy = *(float *)(it + ITEM_RECT_Y);
 			int below = it[ITEM_RECT_ALIGN_V] == 1 && iy >= y + BUTTON_HEIGHT / 2 && iy <= 400;
@@ -289,8 +314,8 @@ static void patch_lobby_row(int campaign)
 			if (it[ITEM_RECT_ALIGN_H] != 1 || !(below || hint))
 				continue;
 			uint8_t *moved = ui_clone_item(campaign_items[i], menu);
-			*(float *)(moved + ITEM_RECT_Y) += BUTTON_HEIGHT;
-			*(float *)(moved + ITEM_RECT_CLIENT_Y) += BUTTON_HEIGHT;
+			*(float *)(moved + ITEM_RECT_Y) += (LOBBY_ROWS - 1) * BUTTON_HEIGHT;
+			*(float *)(moved + ITEM_RECT_CLIENT_Y) += (LOBBY_ROWS - 1) * BUTTON_HEIGHT;
 			campaign_items[i] = moved;
 		}
 	}
@@ -301,7 +326,7 @@ static void patch_lobby_row(int campaign)
 			*(int *)(menu + MENU_ITEM_COUNT) = native_count;
 		*(uint8_t ***)(menu + MENU_ITEMS) = want;
 		if (campaign)
-			*(int *)(menu + MENU_ITEM_COUNT) = native_count + 2;
+			*(int *)(menu + MENU_ITEM_COUNT) = native_count + LOBBY_ROWS;
 	}
 }
 
@@ -320,11 +345,19 @@ void access_tick(int campaign_lobby, int host)
 		}
 		return;
 	}
+	// the Password row: shown to the host in password mode (dynamicFlags 4 = visible, 2 = focus)
+	int show_password = host && access_mode == ACCESS_PASSWORD;
+	if (password_row) {
+		uint32_t *flags = (uint32_t *)(password_row + ITEM_DYNAMIC_FLAGS);
+		*flags = show_password ? (*flags | 4) : (*flags & ~6u);
+	}
 	if (!host) {
 		localize_set_text("MW2COOP_ACCESS", ""); // the host's settings are not ours to show
 		localize_set_text("MW2COOP_FF", "");
+		localize_set_text("MW2COOP_PW", "");
 		return;
 	}
+	localize_select("MW2COOP_PW", password[0] ? "MW2COOP_PW_SET" : "MW2COOP_PW_UNSET");
 	localize_select("MW2COOP_FF", friendly_fire ? "MW2COOP_FF_ON" : "MW2COOP_FF_OFF");
 	char cur[8] = "";
 	if (!game_dvar_raw("mw2coop_ff", cur, sizeof(cur)) || cur[0] != (friendly_fire ? '1' : '0'))
@@ -381,7 +414,7 @@ int access_on_packet(const char *buf, int len, const uint8_t ip[4], uint16_t por
 	if (len >= al && memcmp(buf, auth, al) == 0) {
 		if (hosting && access_mode == ACCESS_PASSWORD) {
 			int n = len - al;
-			int ok = n == (int)strlen(password) && memcmp(buf + al, password, n) == 0;
+			int ok = password[0] && n == (int)strlen(password) && memcmp(buf + al, password, n) == 0;
 			if (ok)
 				authorize(ip, port);
 			log_printf("access: %s password from %u.%u.%u.%u:%u", ok ? "right" : "wrong", ip[0], ip[1], ip[2],
@@ -416,6 +449,7 @@ int access_on_packet(const char *buf, int len, const uint8_t ip[4], uint16_t por
 
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_edit_ok", NULL, NULL, edit_ok_f},
+	{NULL, "mw2coop_password", NULL, NULL, password_f},
 	{NULL, "mw2coop_join_address", NULL, NULL, join_address_f},
 	{NULL, "mw2coop_access", NULL, NULL, access_f},
 	{NULL, "mw2coop_ff", NULL, NULL, ff_f},

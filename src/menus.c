@@ -991,6 +991,8 @@ static void start_f(void)
 		log_printf("menus: Start: only the host starts");
 		return;
 	}
+	if (!access_can_start())
+		return; // password mode without a password: the popup asks for it
 	if (!party_full() || !partner_present()) {
 		log_printf("menus: Start: waiting for the second player");
 		return;

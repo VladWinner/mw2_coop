@@ -93,6 +93,11 @@ static const ModString strings[] = {
 	// Доступ: только друзья Steam
 	{"MW2COOP_ACCESS_STEAM", "\xc4\xee\xf1\xf2\xf3\xef: \xf2\xee\xeb\xfc\xea\xee \xe4\xf0\xf3\xe7\xfc\xff Steam",
 	 "Access: Steam friends only"},
+	// Пароль: не задан / задан (the lobby row under Friendly fire, in password mode)
+	{"MW2COOP_PW_UNSET", "\xcf\xe0\xf0\xee\xeb\xfc: \xed\xe5 \xe7\xe0\xe4\xe0\xed",
+	 "Password: not set"},
+	{"MW2COOP_PW_SET", "\xcf\xe0\xf0\xee\xeb\xfc: \xe7\xe0\xe4\xe0\xed",
+	 "Password: set"},
 	// Пароль сессии
 	{"MW2COOP_EDIT_PASSWORD", "\xcf\xe0\xf0\xee\xeb\xfc \xf1\xe5\xf1\xf1\xe8\xe8",
 	 "Session password"},
@@ -180,6 +185,7 @@ static Alias aliases[] = {
 	{"MW2COOP_JOIN", "MW2COOP_JOIN_IDLE", -2, "", {NULL, NULL}},
 	{"MW2COOP_ACCESS", "MW2COOP_ACCESS_OPEN", -2, "", {NULL, NULL}},
 	{"MW2COOP_FF", "MW2COOP_FF_ON", -2, "", {NULL, NULL}},
+	{"MW2COOP_PW", "MW2COOP_PW_UNSET", -2, "", {NULL, NULL}},
 	{"MW2COOP_EDIT_TITLE", "MW2COOP_EDIT_PASSWORD", -2, "", {NULL, NULL}},
 	{"MW2COOP_EDIT_LABEL", "MW2COOP_LABEL_PASSWORD", -2, "", {NULL, NULL}},
 	{"MW2COOP_CONTINUE", NULL, -1, "", {NULL, NULL}},
