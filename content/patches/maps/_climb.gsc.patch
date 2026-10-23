@@ -497,7 +497,7 @@ maps\_mw2coop_climb::lane_ent( "climb_get_on", ent.player, "near" )
 @@@ subst player_falls_to_death
 GetEnt( "player_recover", "targetname" )
 @@@ to
-maps\_mw2coop_climb::lane_ent( "player_recover", ent.player, "near" )
+maps\_mw2coop_climb::recover_ent( ent.player )
 @@@ end
 
 8. Big jump per player: Soap jumps once, the jump trigger is lowered once, the jumpdown block

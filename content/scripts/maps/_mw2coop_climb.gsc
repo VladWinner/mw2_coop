@@ -178,6 +178,9 @@ pflag_set( name )
 			if ( !player ent_flag( name ) )
 			{
 				maps\_mw2coop::state( "climb: " + player_name( self ) + " at the top, waiting for the other player" );
+				// one not on the wall (fallen, stuck) is brought up and counts as at the top
+				if ( !player IsLinked() )
+					player thread brought_to_top( self );
 				return;
 			}
 	}
@@ -250,6 +253,40 @@ key_pressed( ent )
 	if ( climb_coop() )
 		return false;
 	return ent.player ButtonPressed( ent.key );
+}
+
+// self: a player off the wall (fallen, stuck) while the other reached the top
+brought_to_top( leader )
+{
+	level endon( "mw2coop_level_end" );
+	self endon( "death" );
+	wait 0.5;	// the leader gets to his feet first
+	if ( self IsLinked() || self ent_flag( "reached_top" ) )
+		return;
+	if ( !self maps\_mw2coop::teleport_to_partner_when_safe( leader, 10 ) )
+	{
+		maps\_mw2coop::state( "climb: no safe spot at the top for " + player_name( self ) );
+		return;
+	}
+	maps\_mw2coop::state( "climb: " + player_name( self ) + " brought to the top" );
+	self pflag_set( "reached_top" );
+}
+
+// A player who let go of both picks before the safe point drops back to the bottom (the climb's
+// player_recover). Player 2's copy of that spot, moved by the lane offset, was inside the slope
+// (playtest 2026-10-23: stuck there, off the ground, until the mission failed): he goes back to
+// where he got on the wall, his lane's start, which is ground.
+recover_ent( player )
+{
+	ent = GetEnt( "player_recover", "targetname" );
+	if ( !climb_coop() || !isdefined( player ) || player == level.player || !isdefined( level.mw2coop_second_lane ) )
+		return ent;
+	if ( !isdefined( level.mw2coop_recover2 ) )
+	{
+		level.mw2coop_recover2 = Spawn( "script_origin", level.mw2coop_second_lane.origin + ( 0, 0, 8 ) );
+		level.mw2coop_recover2.angles = ent.angles;
+	}
+	return level.mw2coop_recover2;
 }
 
 // --------------------------------------------------------------------------------------------

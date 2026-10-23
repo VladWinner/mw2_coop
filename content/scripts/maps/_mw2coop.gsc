@@ -635,7 +635,9 @@ checkpoint_wait( index, cp )
 // the co-op checkpoint, so a failed mission restarts there instead of at the level's beginning, as
 // a single player autosave would let him go on. Only forward, only real start points (not the
 // developers' test starts, start_is_dev), and not the start point the level began at.
-section_reached( name )
+// leader: the player who got there (a checkpoint flag's trigger he touched); undefined when not
+// known.
+section_reached( name, leader )
 {
 	if ( !is_campaign_coop() || !isdefined( level.mw2coop ) || level.mw2coop.failing || level.mw2coop.completing )
 		return;
@@ -653,6 +655,60 @@ section_reached( name )
 	request( "checkpoint " + level.script + " " + name );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
+	if ( !isdefined( leader ) )
+		leader = standing_leader();
+	bring_partner_to( leader );
+}
+
+// --------------------------------------------------------------------------------------------
+// Owner, 2026-10-23: whoever reaches a checkpoint first, the other player is brought to him.
+// Only a free player is moved: one linked to something (a vehicle, a scene, the Cliffhanger
+// climb) stays where the level put him, and a downed one is left to the revive system.
+
+player_label( player )
+{
+	if ( player == level.player )
+		return "player 1";
+	return "player 2";
+}
+
+// A player stuck off the ground (not linked, not standing: fallen into the rock, left on a
+// ledge) while the other stands: the standing one leads. Else unknown.
+standing_leader()
+{
+	if ( !isdefined( level.player2 ) )
+		return undefined;
+	foreach ( player in level.players )
+	{
+		other = other_player( player );
+		if ( is_standing( player ) && !other IsLinked() && !is_standing( other ) )
+			return player;
+	}
+	return undefined;
+}
+
+bring_partner_to( leader )
+{
+	if ( !isdefined( leader ) || !isdefined( level.player2 ) )
+		return;
+	other = other_player( leader );
+	if ( !IsAlive( other ) || other IsLinked() || is_downed( other ) || is_downed( leader ) )
+		return;
+	if ( DistanceSquared( other.origin, leader.origin ) < 400 * 400 && is_standing( other ) )
+		return;
+	other thread brought_to( leader );
+}
+
+// self: the player to move
+brought_to( leader )
+{
+	level endon( "mw2coop_level_end" );
+	self endon( "death" );
+	if ( self teleport_to_partner_when_safe( leader, 10 ) )
+		state( player_label( self ) + " brought to " + player_label( leader ) + " at the checkpoint" );
+	else
+		state( "no safe spot next to " + player_label( leader ) + " for " + player_label( self ) );
+	self notify( "mw2coop_brought" );
 }
 
 // The developers' test starts: they skip ahead or leave the level half set up (the knife fight's

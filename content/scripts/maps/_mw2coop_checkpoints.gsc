@@ -116,5 +116,11 @@ watch_flag( flag_name, start_name )
 		wait 0.5;
 	}
 	flag_wait( flag_name );
-	maps\_mw2coop::section_reached( start_name );
+	// the player in the flag's trigger got there first (the other may be brought to him)
+	leader = undefined;
+	foreach ( trigger in GetEntArray( flag_name, "script_flag" ) )
+		foreach ( player in level.players )
+			if ( player IsTouching( trigger ) )
+				leader = player;
+	maps\_mw2coop::section_reached( start_name, leader );
 }
