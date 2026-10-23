@@ -8,6 +8,7 @@
 // alongside). Both players are tougher for the ride.
 #include common_scripts\utility;
 #include maps\_utility;
+#using_animtree( "generic_human" );
 
 // self: player 1's snowmobile, just spawned from spawner. mount_now: start points that put
 // the players on their snowmobiles right away.
@@ -142,10 +143,34 @@ snowmobile_copy( rider, other )
 	copy hideOnClient( rider );
 	self hideOnClient( other );
 	self.mw2coop_copy = copy;
-	maps\_mw2coop::state( "cliffhanger: " + self.snowmobile_3rdPersonModel + " for the other player's view of " + rider.name );
+	self thread snowmobile_rider( rider, other );
+	maps\_mw2coop::state( "cliffhanger: " + self.snowmobile_3rdPersonModel + " for the other player's view" );
 	self waittill_either( "vehicle_dismount", "death" );
 	self.mw2coop_copy = undefined;
 	copy Delete();
 	if ( isdefined( self ) )
 		self showOnClient( other );
+}
+
+// The rider's own body stays where he got on (the level hides it from the other player and
+// leaves the snowmobile empty: owner, 2026-10-23, "where is the player itself?"). A body in the
+// level's own driving animation sits on the seat instead, as maps\_mw2coop_boat does; the rider
+// never sees it, and his own model is taken off for the ride.
+// self: the snowmobile.
+snowmobile_rider( rider, other )
+{
+	body = Spawn( "script_model", self GetTagOrigin( "tag_driver" ) );
+	// the rider's own co-op body and head, so it is him and not somebody else
+	body SetModel( rider.mw2coop_body );
+	body Attach( rider.mw2coop_head, "", true );
+	body UseAnimTree( #animtree );
+	body.angles = self GetTagAngles( "tag_driver" );
+	body LinkTo( self, "tag_driver", ( 0, 0, 0 ), ( 0, 0, 0 ) );
+	body SetAnimKnob( %snowmobile_driver_driving_idle, 1, 0.2 );
+	body hideOnClient( rider );
+	rider maps\_utility::SetModelFunc( undefined );
+	self waittill_either( "vehicle_dismount", "death" );
+	body Delete();
+	if ( isdefined( rider ) && IsAlive( rider ) )
+		rider maps\_mw2coop_bodies::give_body( maps\_mw2coop::body_model );
 }
