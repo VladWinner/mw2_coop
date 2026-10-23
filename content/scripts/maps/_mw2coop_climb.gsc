@@ -290,11 +290,31 @@ deadly_height()
 // A player who let go of both picks drops back to the bottom: the climb's player_recover, for
 // both players. Player 2's own spots there were inside the ground at the foot of his lane
 // (playtests 2026-10-23: the lane-shifted spot left him stuck in the slope, his lane's start put
-// him 40 units under the floor); player 1's spot is ground (he landed and climbed again). Two
-// players falling at once land on the same spot and push apart.
+// him 40 units under the floor); player 1's spot is ground (he landed and climbed again). Players
+// do not push each other apart: one put inside the other is moved beside him.
 recover_ent( player )
 {
+	if ( climb_coop() && isdefined( player ) )
+		player thread recover_apart();
 	return GetEnt( "player_recover", "targetname" );
+}
+
+// self: a player dropping back to the bottom. Once he stands there, if the other player stands on
+// the same spot, he is moved beside him (teleport_to_partner: a free spot with floor at his
+// height and a clear line from him, never over a drop).
+recover_apart()
+{
+	level endon( "mw2coop_level_end" );
+	self endon( "death" );
+	self notify( "mw2coop_recover_apart" );
+	self endon( "mw2coop_recover_apart" );
+	for ( t = 0; t < 5 && ( self IsLinked() || !maps\_mw2coop::is_standing( self ) ); t += 0.05 )
+		wait 0.05;
+	other = maps\_mw2coop::other_player( self );
+	if ( !isdefined( other ) || other IsLinked() || DistanceSquared( self.origin, other.origin ) > 32 * 32 )
+		return;
+	if ( self maps\_mw2coop::teleport_to_partner_when_safe( other, 2 ) )
+		maps\_mw2coop::state( "climb: " + player_name( self ) + " recovered on the other player, moved beside him" );
 }
 
 // --------------------------------------------------------------------------------------------
