@@ -115,6 +115,9 @@ main()
 		case "ride":
 			ride();
 			break;
+		case "seatview":
+			seatview();
+			break;
 		case "turret":
 			turret();
 			break;
@@ -609,6 +612,35 @@ ride()
 
 // Turret hand-over experiment (roadkill, start point "ride": player 1 starts on the Humvee
 // turret). Takes player 1 off with a second UseBy and puts player 2 on.
+// Team Player's passenger seat: what player 2 sees from the rear seat while player 1 is the gunner
+// (frames of both machines in mw2coop\shots; the client's is player 2's).
+seatview()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	t = 0;
+	while ( !( isdefined( level.player_turret ) && isdefined( level.player_turret GetTurretOwner() ) ) && t < 30 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	wait 6;
+	report( "gunner " + ( level.player_turret GetTurretOwner() == level.player ) + ", player 2 linked " + level.player2 IsLinked() + " at " + level.player2.origin + " angles " + level.player2 GetPlayerAngles() + ", humvee " + level.player_humvee.origin );
+	yaw = AngleClamp180( level.player2 GetPlayerAngles()[ 1 ] - level.player_humvee.angles[ 1 ] );
+	check( Abs( yaw ) < 40, "player 2 starts looking ahead (" + int( yaw ) + " degrees off the Humvee's heading)" );
+	hp = level.player.health;
+	level.player DoDamage( 30, level.player.origin, level.player2, level.player2, "MOD_RIFLE_BULLET" );
+	wait 0.5;
+	check( level.player.health >= hp, "player 2's bullets do not hurt the gunner (" + hp + " -> " + level.player.health + ")" );
+	qa_shot( "seat-front" );
+	level.player2 SetPlayerAngles( level.player2 GetPlayerAngles() + ( 0, 90, 0 ) );
+	wait 0.5;
+	qa_shot( "seat-side" );
+	level.player2 SetPlayerAngles( level.player2 GetPlayerAngles() + ( 0, 90, 0 ) );
+	wait 0.5;
+	qa_shot( "seat-back" );
+	report( "done" );
+}
+
 turret()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );

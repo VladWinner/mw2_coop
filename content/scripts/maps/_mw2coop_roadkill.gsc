@@ -91,6 +91,43 @@ seat_partner( partner )
 {
 	arcs = seat_arcs();
 	level.mw2coop_roadkill_seat = self maps\_mw2coop::seat_partner_in_vehicle( partner, arcs[ 0 ], arcs[ 1 ], arcs[ 2 ], arcs[ 3 ], "", true );
+	self thread ride_peace();
+	// he boards looking at the gunner, whose legs fill the screen (owner's playtest, 2026-10-23):
+	// start him looking ahead
+	wait 0.05;
+	if ( isdefined( partner ) && IsAlive( partner ) )
+		partner SetPlayerAngles( ( 0, self.angles[ 1 ], 0 ) );
+}
+
+// The passenger's bullets pass through the gunner's legs in the cab roof (owner's playtest,
+// 2026-10-23: the second player hurt the first all the time); on the ride nobody hurts the other.
+// self: the player's Humvee.
+ride_peace()
+{
+	if ( isdefined( level.mw2coop_ride_peace ) )
+		return;
+	level.mw2coop_ride_peace = true;
+	old = GetDvar( "g_friendlyfireDamageScale" );
+	SetSavedDvar( "g_friendlyfireDamageScale", 0 );
+	foreach ( player in level.players )
+		player thread ride_give_back();
+	level waittill( "mw2coop_ride_ends" );
+	SetSavedDvar( "g_friendlyfireDamageScale", old );
+	level.mw2coop_ride_peace = undefined;
+}
+
+// self: a player. The 1 damage a hit that is left at scale 0 comes back.
+ride_give_back()
+{
+	self endon( "death" );
+	level endon( "mw2coop_ride_ends" );
+	for ( ;; )
+	{
+		self waittill( "damage", amount, attacker );
+		if ( !isdefined( attacker ) || !IsPlayer( attacker ) || attacker == self )
+			continue;
+		self.health = int( min( self.maxhealth, self.health + amount ) );
+	}
 }
 
 // Start points that begin on the turret (player_turret_humvee). self: the player's Humvee.
@@ -214,6 +251,8 @@ swap( seat )
 
 	// the old gunner takes the seat
 	seat maps\_mw2coop::link_to_seat( prev_gunner );
+	wait 0.05;
+	prev_gunner SetPlayerAngles( ( 0, self.angles[ 1 ], 0 ) );
 	maps\_mw2coop::state( "roadkill: seats swapped, gunner is " + player_text( next_gunner ) );
 }
 
