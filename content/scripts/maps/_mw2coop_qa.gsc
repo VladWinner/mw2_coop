@@ -880,6 +880,10 @@ snowview()
 		level.player2 player_mount_vehicle( level.player_snowmobile );
 		wait 5;
 		v = level.player2.vehicle;
+		sp = GetEnt( "playermobile_spawner", "targetname" );
+		if ( isdefined( sp ) )
+			report( "spawner " + sp.classname + " vehicletype " + sp.vehicletype );
+		report( "vehicle type " + v.vehicletype + ", riders " + isdefined( v.riders ) + ", seats " + v maps\_mw2coop::seats_text() );
 		report( "player 2 rides model " + v.model + ", first person " + isdefined( v.firstPerson ) + ", copy " + isdefined( v.mw2coop_copy ) );
 		for ( n = 0; n < 3; n++ )
 		{
