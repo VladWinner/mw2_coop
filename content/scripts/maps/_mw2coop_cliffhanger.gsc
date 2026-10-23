@@ -160,13 +160,19 @@ snowmobile_copy( rider, other )
 snowmobile_rider( rider, other )
 {
 	body = Spawn( "script_model", self GetTagOrigin( "tag_driver" ) );
-	// the rider's own co-op body and head, so it is him and not somebody else
-	body SetModel( rider.mw2coop_body );
+	// the level's arctic soldier body (the driving animations are made for that skeleton; on the co-op body
+	// they twisted it across the seat) with the rider's own head
+	body SetModel( "body_arctic_nml" );
 	body Attach( rider.mw2coop_head, "", true );
 	body UseAnimTree( #animtree );
 	body.angles = self GetTagAngles( "tag_driver" );
 	body LinkTo( self, "tag_driver", ( 0, 0, 0 ), ( 0, 0, 0 ) );
-	body SetAnimKnob( %snowmobile_driver_driving_idle, 1, 0.2 );
+	// as the level's AI driver (animscripts\snowmobile::snowmobile_loop_driver): the driving pose, leaning
+	// from the middle of the left-right blend
+	body SetAnimKnobAll( %sm_turn, %body, 1, 0 );
+	body SetAnim( %snowmobile_driver_driving_idle, 1, 0 );
+	body SetAnimKnob( %snowmobile_driver_lean_L2R, 1, 0 );
+	body SetAnimTime( %snowmobile_driver_lean_L2R, 0.5 );
 	body hideOnClient( rider );
 	rider maps\_utility::SetModelFunc( undefined );
 	self waittill_either( "vehicle_dismount", "death" );
