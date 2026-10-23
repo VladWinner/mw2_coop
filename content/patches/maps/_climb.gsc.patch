@@ -515,6 +515,12 @@ if ( isdefined( player_jumpdown_block ) )
 		player_jumpdown_block Delete();
 @@@ end
 @@@ subst player_big_jump
+playeR_arms Hide();
+@@@ to
+playeR_arms Hide();
+				self maps\_mw2coop_climb::jump_fell();
+@@@ end
+@@@ subst player_big_jump
 thread price_makes_the_jump( climb_jump_org );
 @@@ to
 maps\_mw2coop_climb::price_jump_once();

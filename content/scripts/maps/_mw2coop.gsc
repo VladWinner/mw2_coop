@@ -56,6 +56,8 @@ main()
 	level.mw2coop.section = -1;	// index in level.start_functions of the furthest section reached
 	if ( !isdefined( level.mw2coop_weapon_sync ) )
 		level.mw2coop_weapon_sync = "leader";	// "leader": player 1's changes go to player 2; "both": gains go both ways; "own": each player takes his own (only the start's weapons are copied)
+	if ( !isdefined( level.mw2coop_own_weapons ) )
+		level.mw2coop_own_weapons = [];	// see own_weapon_busy()
 
 	PrecacheString( &"SCRIPT_CHECKPOINT" );
 	PrecacheString( &"MW2COOP_STUNNED" );	// the mod's own, from its DLL (src/localize.c)
@@ -548,6 +550,16 @@ sync_viewmodel()
 		level.player2 SetViewModel( hands );
 }
 
+// Weapons each player's own scene takes and gives back (the Cliffhanger ice picks: the climb
+// takes them from the climbing player and returns them at the top): never taken from player 2
+// because player 1 lost them, and not handed to player 2 while he is in such a scene himself
+// (linked). Playtest 2026-10-23: player 1 started climbing and player 2 lost his picks; player 1
+// reached the top and player 2, still on the wall, got the picks back and fell.
+own_weapon_busy( weapon )
+{
+	return is_in_array( level.mw2coop_own_weapons, weapon ) && level.player2 IsLinked();
+}
+
 sync_weapons()
 {
 	level endon( "mw2coop_level_end" );
@@ -571,14 +583,14 @@ sync_weapons()
 		if ( level.mw2coop_weapon_sync != "own" && !is_downed( level.player ) && !is_downed( level.player2 ) )
 		{
 			foreach ( weapon in now1 )
-				if ( !is_in_array( prev1, weapon ) && !level.player2 HasWeapon( weapon ) )
+				if ( !is_in_array( prev1, weapon ) && !level.player2 HasWeapon( weapon ) && !own_weapon_busy( weapon ) )
 					give_weapon( level.player2, weapon );
 			if ( level.mw2coop_weapon_sync == "both" )
 				foreach ( weapon in now2 )
 					if ( !is_in_array( prev2, weapon ) && !level.player HasWeapon( weapon ) )
 						give_weapon( level.player, weapon );
 			foreach ( weapon in prev1 )
-				if ( !is_in_array( now1, weapon ) && level.player2 HasWeapon( weapon ) )
+				if ( !is_in_array( now1, weapon ) && level.player2 HasWeapon( weapon ) && !is_in_array( level.mw2coop_own_weapons, weapon ) )
 					level.player2 TakeWeapon( weapon );
 		}
 		prev1 = level.player GetWeaponsListAll();

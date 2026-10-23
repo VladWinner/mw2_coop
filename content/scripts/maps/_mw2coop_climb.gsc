@@ -36,6 +36,8 @@ climb_setup()
 	}
 	level.mw2coop_climb = SpawnStruct();
 	c = level.mw2coop_climb;
+	level.mw2coop_own_weapons = [];	// each climber's own (maps\_mw2coop::own_weapon_busy)
+	level.mw2coop_own_weapons[ 0 ] = "ice_picker";
 
 	// flags fed by trigger volumes in the map: a player "has" the flag while he touches one
 	// (flag_set_touching triggers), or from his first touch until the climb clears it again.
@@ -523,6 +525,13 @@ catch_queued( rig )
 		return;
 	}
 	player = rig rig_player();
+	// a player who let go after the jump fell (player_big_jump cleared his player_hangs_on); his
+	// hidden rig still reaches this notetrack: no catch, or Soap would hold up the other player
+	if ( !player pflag( "player_hangs_on" ) )
+	{
+		maps\_mw2coop::state( "climb: " + player_name( player ) + " fell after the jump, no catch" );
+		return;
+	}
 	if ( isdefined( level.mw2coop_catching ) )
 	{
 		maps\_mw2coop::state( "climb: " + player_name( player ) + " hangs on, Soap is catching the other player" );
@@ -537,6 +546,19 @@ catch_queued( rig )
 	level.mw2coop_catching = player;
 	maps\_mw2coop::state( "climb: Soap catches " + player_name( player ) );
 	self maps\_climb::gaz_catches_player( rig );
+}
+
+// player_big_jump(), self: a player who did not hold on after the jump (on Hardened and Veteran
+// he must keep a pick button pressed until Soap catches him) and was let go. In single player he
+// falls into the map's death volume; in co-op his lane is beside the jump, where he came to rest
+// inside the rock (playtest 2026-10-23: stuck there for a minute). He falls to his death at once,
+// as in single player: his own fade_to_death (death_trigger: the scream, black, mission failed).
+jump_fell()
+{
+	if ( !climb_coop() )
+		return;
+	maps\_mw2coop::state( "climb: " + player_name( self ) + " let go after the jump" );
+	self pflag_set( "fade_to_death" );
 }
 
 // From gaz_catches_player() once Soap's catch animation is over.
