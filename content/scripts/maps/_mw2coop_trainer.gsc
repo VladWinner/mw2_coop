@@ -116,3 +116,60 @@ on_floor( at )
 {
 	return PlayerPhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) );
 }
+
+// --------------------------------------------------------------------------------------------
+// The obstacle course (owner's playtest, 2026-10-23: the gate closed with player 2 still on the
+// course and he was locked in). Its gates and the blocker at the end go by flag triggers, which
+// either player sets: the first one past them closed them on the other.
+
+course_coop()
+{
+	return maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 );
+}
+
+// course_loop_think(), right after the flag of a trigger (script_flag flag_name) is set: waits
+// until every player still up has gone through that trigger (the first did, setting it).
+both_past( flag_name )
+{
+	if ( !course_coop() )
+		return;
+	trigs = GetEntArray( flag_name, "script_flag" );
+	if ( !trigs.size )
+	{
+		maps\_mw2coop::state( "trainer: no trigger for " + flag_name + ", not waiting for both" );
+		return;
+	}
+	foreach ( player in level.players )
+		player.mw2coop_past = false;
+	for ( ;; )
+	{
+		waiting = false;
+		foreach ( player in level.players )
+		{
+			if ( !IsAlive( player ) || maps\_mw2coop::is_downed( player ) || player.mw2coop_past )
+				continue;
+			foreach ( trig in trigs )
+				if ( player IsTouching( trig ) )
+					player.mw2coop_past = true;
+			if ( !player.mw2coop_past )
+				waiting = true;
+		}
+		if ( !waiting )
+			return;
+		wait 0.05;
+	}
+}
+
+// player_sprint_monitor(): a sprint to the exit counts for whichever player runs it.
+someone_sprinting( sprint_volume )
+{
+	foreach ( player in level.players )
+	{
+		if ( !course_coop() && player != level.player )
+			continue;
+		vel = player GetVelocity();
+		if ( Distance( ( vel[ 0 ], vel[ 1 ], 0 ), ( 0, 0, 0 ) ) > 250 && player IsTouching( sprint_volume ) )
+			return true;
+	}
+	return false;
+}

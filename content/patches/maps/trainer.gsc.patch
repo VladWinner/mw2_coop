@@ -192,3 +192,25 @@ who
 	level.player SetPlayerAngles( player_start_range.angles );
 	level thread maps\_mw2coop_trainer::range_places( player_start_range );
 @@@ end
+
+6. The obstacle course: its gates and the blocker at the end close once BOTH players are through
+   (the entrance gate after both went upstairs, the exit gate and the blocker after both reached
+   the end); either player set the trigger flags, and the first one locked the other in. A sprint
+   to the exit counts for whichever player runs it.
+@@@ subst course_loop_think
+flag_wait( "player_course_upstairs" );
+@@@ to
+flag_wait( "player_course_upstairs" );
+		maps\_mw2coop_trainer::both_past( "player_course_upstairs" );
+@@@ end
+@@@ subst course_loop_think
+flag_wait( "player_course_end" );
+@@@ to
+flag_wait( "player_course_end" );
+		maps\_mw2coop_trainer::both_past( "player_course_end" );
+@@@ end
+@@@ subst player_sprint_monitor
+( isdefined( velocity ) ) && ( velocity > 250 ) && ( level.player istouching( sprint_volume ) )
+@@@ to
+maps\_mw2coop_trainer::someone_sprinting( sprint_volume )
+@@@ end
