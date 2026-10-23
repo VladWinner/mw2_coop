@@ -127,13 +127,26 @@ course_coop()
 	return maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 );
 }
 
+// The triggers that set a flag (script_flag). GetEntArray( flag, "script_flag" ) finds none in this
+// engine, so they are picked from the flag-setting trigger classes by their field.
+course_triggers( flag_name )
+{
+	trigs = [];
+	found = GetEntArray( "trigger_multiple_flag_set_touching", "classname" );
+	found = array_combine( found, GetEntArray( "trigger_multiple_flag_set", "classname" ) );
+	foreach ( trig in found )
+		if ( isdefined( trig.script_flag ) && trig.script_flag == flag_name )
+			trigs[ trigs.size ] = trig;
+	return trigs;
+}
+
 // course_loop_think(), right after the flag of a trigger (script_flag flag_name) is set: waits
 // until every player still up has gone through that trigger (the first did, setting it).
 both_past( flag_name )
 {
 	if ( !course_coop() )
 		return;
-	trigs = GetEntArray( flag_name, "script_flag" );
+	trigs = course_triggers( flag_name );
 	if ( !trigs.size )
 	{
 		maps\_mw2coop::state( "trainer: no trigger for " + flag_name + ", not waiting for both" );

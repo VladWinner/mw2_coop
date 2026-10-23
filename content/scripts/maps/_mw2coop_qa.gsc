@@ -199,6 +199,9 @@ main()
 		case "introfreeze":
 			introfreeze();
 			break;
+		case "course":
+			course();
+			break;
 		case "betrayal":
 			betrayal();
 			break;
@@ -1961,6 +1964,48 @@ bay()
 		check( qa_in_bay( player, start ), player_name( player ) + " is inside the sandbags (" + bay_text( player, start ) + ")" );
 		check( !qa_stuck( player ), player_name( player ) + " is not stuck in anything solid" );
 	}
+	report( "done" );
+}
+
+// The obstacle course: the entrance gate closes once both players are upstairs, not when the
+// first one gets there (the other was locked out or in).
+course()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	names = [];
+	names[ 0 ] = "player_course_upstairs";
+	names[ 1 ] = "player_course_end";
+	foreach ( name in names )
+		check( maps\_mw2coop_trainer::course_triggers( name ).size > 0, "a trigger sets " + name + " (" + maps\_mw2coop_trainer::course_triggers( name ).size + ")" );
+	up = maps\_mw2coop_trainer::course_triggers( "player_course_upstairs" )[ 0 ];
+	if ( !isdefined( up ) )
+	{
+		report( "done" );
+		return;
+	}
+	// the course loop: start, then the stretch before the stairs
+	flags = [];
+	flags[ 0 ] = "player_has_started_course";
+	flags[ 1 ] = "player_course_03a";
+	flags[ 2 ] = "player_course_stairs2";
+	foreach ( name in flags )
+	{
+		flag_set( name );
+		wait 0.5;
+	}
+	gate = level.gate_cqb_enter;
+	yaw = gate.angles[ 1 ];
+	level.player SetOrigin( up.origin );
+	wait 3;
+	report( "player 1 upstairs: flag " + flag( "player_course_upstairs" ) + ", gate turned " + int( gate.angles[ 1 ] - yaw ) );
+	check( flag( "player_course_upstairs" ), "player 1 set the upstairs flag" );
+	check( Abs( gate.angles[ 1 ] - yaw ) < 1, "the entrance gate stays open while player 2 is behind" );
+	level.player2 SetOrigin( up.origin + ( 30, 0, 0 ) );
+	wait 3;
+	report( "player 2 upstairs: gate turned " + int( gate.angles[ 1 ] - yaw ) );
+	check( Abs( gate.angles[ 1 ] - yaw ) > 45, "the entrance gate closes once both are upstairs" );
 	report( "done" );
 }
 

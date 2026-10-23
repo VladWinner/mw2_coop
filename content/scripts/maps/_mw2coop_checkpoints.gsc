@@ -118,9 +118,11 @@ watch_flag( flag_name, start_name )
 	flag_wait( flag_name );
 	// the player in the flag's trigger got there first (the other may be brought to him)
 	leader = undefined;
-	foreach ( trigger in GetEntArray( flag_name, "script_flag" ) )
-		foreach ( player in level.players )
-			if ( player IsTouching( trigger ) )
-				leader = player;
+	// GetEntArray( flag, "script_flag" ) finds nothing in this engine: pick by the field
+	foreach ( trigger in array_combine( GetEntArray( "trigger_multiple_flag_set_touching", "classname" ), GetEntArray( "trigger_multiple_flag_set", "classname" ) ) )
+		if ( isdefined( trigger.script_flag ) && trigger.script_flag == flag_name )
+			foreach ( player in level.players )
+				if ( player IsTouching( trigger ) )
+					leader = player;
 	maps\_mw2coop::section_reached( start_name, leader );
 }

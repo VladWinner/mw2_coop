@@ -22,6 +22,27 @@ param(
 $Dirs = @($Dirs | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $env:SteamAppId = '10180'
 $env:SteamGameId = '10180'
+# The game's old steam_api64.dll finds Steam only through HKCU\Software\Valve\Steam\ActiveProcess
+# (pid of a running steam.exe). The Steam client of 2026-10-21 leaves pid and ActiveUser at 0 there,
+# so a copy started outside Steam quits at SteamAPI_Init (no window, exit 0). Put back what Steam
+# itself used to write: its pid and the signed-in account (volatile key, gone after a reboot).
+$ap = 'HKCU:\Software\Valve\Steam\ActiveProcess'
+$steam = Get-Process steam -ErrorAction SilentlyContinue | Select-Object -First 1
+$cur = (Get-ItemProperty $ap -ErrorAction SilentlyContinue).pid
+if ($steam -and $cur -ne $steam.Id) {
+    Set-ItemProperty $ap -Name pid -Value $steam.Id -Type DWord
+    "[$Tag] Steam ActiveProcess pid $cur -> $($steam.Id)"
+}
+if (-not (Get-ItemProperty $ap -ErrorAction SilentlyContinue).ActiveUser) {
+    $vdf = Join-Path (Get-ItemProperty 'HKCU:\Software\Valve\Steam').SteamPath 'config\loginusers.vdf'
+    # the account marked MostRecent: "7656...." { ... "MostRecent" "1" ... }
+    $m = [regex]::Matches((Get-Content -Raw $vdf), '"(\d{17})"\s*\{([^}]*)\}') | Where-Object { $_.Groups[2].Value -match '"MostRecent"\s*"1"' } | Select-Object -First 1
+    if ($m) {
+        $acc = [uint64]$m.Groups[1].Value - 76561197960265728
+        Set-ItemProperty $ap -Name ActiveUser -Value ([int]$acc) -Type DWord
+        "[$Tag] Steam ActiveProcess ActiveUser set"
+    }
+}
 $root = $TestRoot.TrimEnd('\') + '\'
 $start = Get-Date
 $launched = @()
