@@ -401,29 +401,22 @@ lane_offset( player )
 	return offset;
 }
 
-// Across the gap (big jump, Soap's catch, the second wall, getting up at the top) the lanes are
-// side by side along that wall: player 2 is moved along climb_catch's right, to the side where
-// that wall takes the icepicks.
+// Across the gap (big jump, Soap's catch, the second wall, getting up at the top): player 2's
+// offset from player 1's spots.
 far_offset( player )
 {
 	if ( !climb_coop() || !isdefined( player ) || player == level.player )
 		return ( 0, 0, 0 );
-	if ( isdefined( level.mw2coop_far_offset ) )
-		return level.mw2coop_far_offset;
-	far_wall = GetEnt( "climb_catch", "targetname" );
-	forward = AnglesToForward( ( 0, far_wall.angles[ 1 ], 0 ) );
-	right = AnglesToRight( ( 0, far_wall.angles[ 1 ], 0 ) );
-	dist = Length( lane_offset( player ) );
-	if ( dist < 56 )
-		dist = 72;
-	left_score = wall_score( far_wall.origin - right * dist, forward );
-	right_score = wall_score( far_wall.origin + right * dist, forward );
-	offset = right * dist;
-	if ( left_score > right_score )
-		offset = right * ( 0 - dist );
-	level.mw2coop_far_offset = offset;
-	maps\_mw2coop::state( "climb: player 2 across the gap at " + offset + " (wall score left " + left_score + ", right " + right_score + ")" );
-	return offset;
+	// Player 2 uses player 1's own spots across the gap (the jump, the hang, Soap's catch, the far
+	// wall): the second lane there scored 6 of 12 and its hang spot under the edge was inside the
+	// rock (playtest 2026-10-23: player 2 thrown behind the wall's texture). Soap catches the
+	// players in turn, so the second one hangs where the first did; two hanging at once overlap.
+	if ( !isdefined( level.mw2coop_far_offset ) )
+	{
+		level.mw2coop_far_offset = ( 0, 0, 0 );
+		maps\_mw2coop::state( "climb: player 2 uses player 1's spots across the gap" );
+	}
+	return level.mw2coop_far_offset;
 }
 
 // An entity standing for the named entity on the player's lane (player 1: the entity itself).
