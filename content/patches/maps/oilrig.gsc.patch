@@ -183,3 +183,62 @@ level.player disableweapons();
 level.player disableweapons();
 	maps\_mw2coop_oilrig::partner_beside_at_surface( eNode );
 @@@ end
+
+8. The escape on the little bird: both players board it (maps\_mw2coop_oilrig::board_all). Player 2 sits
+   53 units behind player 1 on the bench, in the place of the hidden SEAL with starting position 3; the bird
+   takes off when both are on board (a slow player is seated a minute after the other).
+@@@ replace
+	trigger waittill( "trigger" );
+	
+	/*-----------------------
+	PLAYER LERPED ONTO BIRD
+	-------------------------*/
+	
+	level.player freezeControls( true );
+	setsaveddvar( "ui_hidemap", 1 );
+	SetSavedDvar( "hud_showStance", "0" );
+	SetSavedDvar( "compass", "0" );
+	SetSavedDvar( "ammoCounterHide", "1" );
+   	level.player allowprone( false );
+   	level.player allowcrouch( false );
+   	level.player allowsprint( false );
+   	level.player allowjump( false );
+    level.player disableWeapons();
+    
+   	viewPercentFrac = 1.0;
+	arcRight = 40;
+	arcLeft = 40;
+	arcTop = 10;
+	arcBottom = 45;
+	
+	level.player PlayerLinkToBlend( player_seat, "tag_origin", 1, .2, .2 );
+	wait 1;
+	level.player PlayerLinkToDelta( player_seat, "tag_origin", viewPercentFrac, arcRight, arcLeft, arcTop, arcBottom );
+	level.player freezeControls( false );
+	//tag_origin.origin = level.player.origin;
+	//tag_origin.angles = level.player.angles;
+	//level.player PlayerSetGroundReferenceEnt( tag_origin );
+	//tag_origin LinkToBlendToTag( self, "tag_origin", false );
+	
+	level.player takeallweapons();
+	level.player GiveWeapon( "m14_scoped_arctic" );
+	level.player SwitchToWeapon( "m14_scoped_arctic" );
+    level.player enableWeapons();
+	//level.player LerpViewAngleClamp( 1, 0.25, 0.25, arcRight, arcLeft, arcTop, arcBottom );
+	flag_set( "player_on_board_littlebird" );
+	
+
+@@@ with
+	maps\_mw2coop_oilrig::board_all( self, trigger, player_seat, sPlayerRideTag );
+@@@ end
+@@@ replace
+	foreach( guy in aRiders )
+	{
+		guy disable_ai_color();
+@@@ with
+	maps\_mw2coop_oilrig::hide_partner_rider( aRiders );
+
+	foreach( guy in aRiders )
+	{
+		guy disable_ai_color();
+@@@ end

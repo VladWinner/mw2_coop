@@ -248,3 +248,102 @@ bob_base()
 		return self.origin;
 	return ( self.origin[ 0 ], self.origin[ 1 ], level.player.origin[ 2 ] );
 }
+
+// --------------------------------------------------------------------------------------------
+// The escape on the little bird (oilrig.gsc, the end of the mission). The level seated player 1
+// alone, on the bench seat of the rider it hides (script_startingposition 2, tag_guy3), and the bird
+// took off as soon as he sat; player 2 stayed on the roof. Now player 2 sits 53 units behind him on the
+// same bench, in the place of the SEAL with script_startingposition 3 (hidden like the first one's;
+// the seat between them stays Soap's). The bird takes off when both are on board, a minute after the first
+// is for the other to come: a player who is slow is seated anyway.
+
+// player_gets_on_littlebird(), after the rider of player 1's seat is hidden.
+hide_partner_rider( riders )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
+		return;
+	foreach ( guy in riders )
+	{
+		if ( guy.script_startingposition == 3 )
+		{
+			guy hide();
+			guy setcontents( 0 );
+			break;
+		}
+	}
+}
+
+// self: the bird. Player 2's seat: the bench seat 53 units behind player 1's, along the bird's own
+// length, in the link's local coordinates of the same tag.
+partner_seat( tag )
+{
+	tag_angles = self GetTagAngles( tag );
+	delta = -53 * AnglesToForward( ( 0, self.angles[ 1 ], 0 ) );
+	lx = VectorDot( delta, AnglesToForward( tag_angles ) );
+	ly = 0 - VectorDot( delta, AnglesToRight( tag_angles ) );
+	lz = VectorDot( delta, AnglesToUp( tag_angles ) );
+	seat = spawn_tag_origin();
+	seat.origin = self GetTagOrigin( tag ) + delta;
+	seat.angles = tag_angles;
+	seat linkto( self, tag, ( lx, ly, lz ), ( 0, -90, 0 ) );
+	return seat;
+}
+
+// player_gets_on_littlebird(), from the wait for the trigger to the flag: the level's own steps for
+// player 1 (seat1), and in co-op for player 2 (his own seat) when he gets to the trigger too.
+board_all( bird, trigger, seat1, tag )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
+	{
+		trigger waittill( "trigger" );
+		seat_player( level.player, seat1 );
+		flag_set( "player_on_board_littlebird" );
+		return;
+	}
+	seat2 = bird partner_seat( tag );
+	level thread board_when_near( level.player, level.player2, trigger, seat1 );
+	level thread board_when_near( level.player2, level.player, trigger, seat2 );
+	while ( !isdefined( level.player.mw2coop_seated ) || !isdefined( level.player2.mw2coop_seated ) )
+		wait 0.1;
+	maps\_mw2coop::state( "oilrig: both players are on the little bird" );
+	flag_set( "player_on_board_littlebird" );
+}
+
+// A player boards when he reaches the trigger; a minute after the other one did, he is seated anyway.
+board_when_near( player, other, trigger, seat )
+{
+	level endon( "mw2coop_level_end" );
+	for ( ;; )
+	{
+		if ( player IsTouching( trigger ) )
+			break;
+		if ( isdefined( other.mw2coop_seated ) && GetTime() - other.mw2coop_seated > 60000 )
+			break;
+		wait 0.1;
+	}
+	seat_player( player, seat );
+}
+
+// player_gets_on_littlebird(), the steps for one player.
+seat_player( player, seat )
+{
+	player freezeControls( true );
+	setsaveddvar( "ui_hidemap", 1 );
+	SetSavedDvar( "hud_showStance", "0" );
+	SetSavedDvar( "compass", "0" );
+	SetSavedDvar( "ammoCounterHide", "1" );
+	player allowprone( false );
+	player allowcrouch( false );
+	player allowsprint( false );
+	player allowjump( false );
+	player disableWeapons();
+	player PlayerLinkToBlend( seat, "tag_origin", 1, .2, .2 );
+	wait 1;
+	player PlayerLinkToDelta( seat, "tag_origin", 1.0, 40, 40, 10, 45 );
+	player freezeControls( false );
+	player takeallweapons();
+	player GiveWeapon( "m14_scoped_arctic" );
+	player SwitchToWeapon( "m14_scoped_arctic" );
+	player enableWeapons();
+	player.mw2coop_seated = GetTime();
+}

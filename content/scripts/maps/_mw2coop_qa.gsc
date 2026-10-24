@@ -226,6 +226,9 @@ main()
 		case "gulagevac":
 			gulagevac();
 			break;
+		case "oilbird":
+			oilbird();
+			break;
 		case "climbview":
 			if ( isdefined( level.mw2coop_qa_climbview ) )
 				[[ level.mw2coop_qa_climbview ]]();
@@ -1120,6 +1123,81 @@ gulagevac()
 	wait 3;
 	qa_shot( "flying" );
 	check( level.player IsLinked() && level.player2 IsLinked(), "both are on the rope while it flies" );
+	report( "done" );
+}
+
+nearest_seat( bird, org )
+{
+	best = "none";
+	d = 100000;
+	for ( n = 1; n <= 4; n++ )
+	{
+		dd = Distance( org, bird GetTagOrigin( "tag_guy" + n ) );
+		if ( dd < d )
+		{
+			d = dd;
+			best = "tag_guy" + n + " (" + int( dd ) + ")";
+		}
+	}
+	return best;
+}
+
+// Oil Rig's escape (start "escape"): the little bird that takes the players off the roof. Sets the
+// flags the walk would, waits for the landing, and logs the seats (tags) and the riders.
+oilbird()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 3;
+	t = 0;
+	while ( !flag( "escape_littlebird_landed" ) && t < 120 )
+	{
+		// the walk's flags, in order, as the level reaches the waits for them
+		foreach ( name in strtok( "barracks_cleared player_headed_out_of_barracks player_approaching_derrick_building_exit player_approaching_helipad", " " ) )
+			if ( isdefined( level.flag[ name ] ) && !flag( name ) && ( name != "player_headed_out_of_barracks" || flag( "littlebird_escape_spawned" ) ) )
+				flag_set( name );
+		wait 1;
+		t += 1;
+	}
+	check( flag( "escape_littlebird_landed" ), "the little bird landed (" + t + " s)" );
+	wait 4;
+	bird = level.littlebird_escape;
+	check( isdefined( bird ), "the bird exists" );
+	if ( !isdefined( bird ) )
+		return;
+	report( "bird at " + vec_int( bird.origin ) + " angles " + bird.angles );
+	for ( n = 1; n <= 4; n++ )
+		report( "tag_guy" + n + " at " + vec_int( bird GetTagOrigin( "tag_guy" + n ) ) );
+	t = 0;
+	while ( ( !isdefined( bird.riders ) || bird.riders.size < 8 ) && t < 40 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	report( "riders loaded: " + bird.riders.size + " (" + t + " s)" );
+	foreach ( ai in GetAIArray( "allies" ) )
+		if ( isdefined( ai.script_startingposition ) )
+			report( "ally pos " + ai.script_startingposition + " at " + vec_int( ai.origin ) + " nearest seat " + nearest_seat( bird, ai.origin ) + " name " + ai.classname );
+	report( "players " + vec_int( level.player.origin ) + " " + vec_int( level.player2.origin ) );
+	qa_shot( "bird" );
+	// both walk up to the seat trigger: the bird takes them
+	spot = bird GetTagOrigin( "tag_guy3" ) + ( 0, 0, 10 );
+	level.player SetOrigin( spot );
+	wait 0.5;
+	level.player2 SetOrigin( spot + ( 20, 0, 0 ) );
+	wait 4;
+	check( level.player IsLinked() && level.player2 IsLinked(), "both are seated on the bird (" + level.player IsLinked() + " " + level.player2 IsLinked() + ")" );
+	t = 0;
+	while ( !flag( "player_on_board_littlebird" ) && t < 20 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "player_on_board_littlebird" ), "both are on board, the bird may go (" + t + " s)" );
+	qa_shot( "seated" );
+	report( "seats: player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	wait 8;
+	qa_shot( "flying" );
+	check( level.player IsLinked() && level.player2 IsLinked(), "both are still seated in flight" );
 	report( "done" );
 }
 
