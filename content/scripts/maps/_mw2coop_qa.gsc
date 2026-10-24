@@ -220,6 +220,12 @@ main()
 		case "chopperjump":
 			chopperjump();
 			break;
+		case "scenewatch":
+			scenewatch();
+			break;
+		case "gulagevac":
+			gulagevac();
+			break;
 		case "climbview":
 			if ( isdefined( level.mw2coop_qa_climbview ) )
 				[[ level.mw2coop_qa_climbview ]]();
@@ -1057,6 +1063,63 @@ chopperjump()
 	check( flag( "solorun_player_boarded_chopper" ), "the chopper took them" );
 	wait 10;
 	check( level.player2 IsLinked() && level.player IsLinked(), "both still on the rope while the chopper flies" );
+	report( "done" );
+}
+
+// Any scripted scene: nobody touches anything. Every 5 s both screens are saved (host = player 1,
+// client = player 2) and each player's state is logged: linked, stance, position, weapon.
+scenewatch()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	for ( n = 0; n < 9; n++ )
+	{
+		wait 4.4;
+		qa_shot( "scene" + n );
+		foreach ( player in level.players )
+			report( "t" + n + " " + player_name( player ) + ": at " + vec_int( player.origin ) + ", linked " + player IsLinked() + ", " + player GetStance() + ", weapon " + player GetCurrentWeapon() + ", alive " + isalive( player ) );
+	}
+	report( "done" );
+}
+
+// The Gulag's evacuation (start "evac"): both players lie buried, get free, clip on the Pavelow's rope
+// by their own use and are pulled away together. Frames of both screens at each step.
+gulagevac()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 4;
+	qa_shot( "buried" );
+	check( level.player IsLinked() && level.player2 IsLinked(), "both are buried in the scene (" + level.player IsLinked() + " " + level.player2 IsLinked() + ")" );
+	t = 0;
+	while ( level.player IsLinked() && t < 40 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	wait 1;
+	check( !level.player IsLinked() && !level.player2 IsLinked(), "both are free (" + t + " s)" );
+	trigger = getEntWithFlag( "player_uses_rig" );
+	check( isdefined( trigger ), "the rope's trigger exists" );
+	qa_shot( "free" );
+	trigger notify( "trigger", level.player );
+	wait 1.5;
+	check( level.player IsLinked() && !level.player2 IsLinked(), "player 1 clipped on, player 2 not yet" );
+	check( !flag( "player_gets_pulled" ), "nobody is pulled away yet" );
+	trigger notify( "trigger", level.player2 );
+	wait 1.5;
+	check( level.player2 IsLinked(), "player 2 clipped on too" );
+	qa_shot( "clipped" );
+	t = 0;
+	while ( !flag( "player_gets_pulled" ) && t < 40 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "player_gets_pulled" ), "Soap pulls (" + t + " s)" );
+	wait 1;
+	qa_shot( "pulled" );
+	wait 3;
+	qa_shot( "flying" );
+	check( level.player IsLinked() && level.player2 IsLinked(), "both are on the rope while it flies" );
 	report( "done" );
 }
 
