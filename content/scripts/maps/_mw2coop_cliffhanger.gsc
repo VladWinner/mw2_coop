@@ -157,7 +157,7 @@ snowmobile_copy( rider, other )
 // own (co-op body and head) sits on the seat instead; the rider never sees it, and his own model
 // is taken off for the ride.
 // self: the snowmobile.
-// The rider's pose, as the level's AI driver steering straight (animscripts\snowmobile::
+// The rider's pose, as the level's AI driver going straight (animscripts\snowmobile::
 // snowmobile_loop_driver). His co-op body's multiplayer skeleton twists these animations (QA
 // snowview, 2026-10-24: an arm thrown up, the body bent across the seat; no multiplayer pose sits
 // on a seat with the hands on the grips and the feet on the footrests), so the rider wears Soap's
@@ -168,7 +168,11 @@ rider_pose()
 	self UseAnimTree( #animtree );
 	self SetAnimKnobAll( %sm_turn, %body, 1, 0 );
 	self SetAnim( %snowmobile_driver_driving_idle, 1, 0 );
-	self SetAnimKnob( %snowmobile_driver_lean_L2R, 1, 0 );
+	// held still (rate 0): played on, it ran to the right end of the lean and he sat leaning
+	// over to the right (owner: "he sits at an angle")
+	self SetAnimKnob( %snowmobile_driver_lean_L2R, 1, 0, 0 );
+	// upright at the middle of the left-to-right lean (QA snowview: head and chest on the seat's
+	// middle line, the hands on both grips)
 	self SetAnimTime( %snowmobile_driver_lean_L2R, 0.5 );
 }
 
