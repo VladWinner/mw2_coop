@@ -154,6 +154,8 @@ static int bits_rule(const uint8_t *donor)
 	return -1;
 }
 
+static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name, const char *donor_name);
+
 static int transplant(const char *target_name, const char *donor_name)
 {
 	uint8_t *target = find_model(target_name), *donor = find_model(donor_name);
@@ -167,6 +169,12 @@ static int transplant(const char *target_name, const char *donor_name)
 	}
 	if (*(void **)(target + 0x58) == *(void **)(donor + 0x58))
 		return 1; // done already (a restart of the level)
+	return put_surfaces(target, donor, target_name, donor_name);
+}
+
+// The donor's surfaces and materials on the target's skeleton (see the top of the file).
+static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name, const char *donor_name)
+{
 	int rule = bits_rule(donor);
 	if (rule < 0) {
 		log_printf("transplant: the donor's partBits follow neither rule; not done");
@@ -255,6 +263,110 @@ static int transplant(const char *target_name, const char *donor_name)
 	return 1;
 }
 
+// A model that is a copy of another, under its own name: "mw2coop_rider" (the dvar of that name
+// holding "<skeleton> <mesh>") is the skeleton model (bones, hit locations, collision, bounds: an
+// AI body the campaign's animations are made for) wearing the mesh model's surfaces (a player's
+// co-op body). Cliffhanger's snowmobile rider: the level's AI driving animations twist the co-op
+// body's multiplayer skeleton, and Soap's own model cannot take the mesh (Soap rides beside the
+// players). DB_FindXAssetHeader answers the name with the copy (localize.c's hook calls
+// transplant_clone) and DB_IsXAssetDefault calls it no default (hook_is_default), so
+// PrecacheModel and SetModel take it like any model. Made once per pair while the level's zones
+// are loaded, made again when the next level loads new models under the same names (a level's
+// zones free and refill the pools, the entry included).
+#define CLONE_NAME "mw2coop_rider" // model and dvar: the dvar holds "<skeleton> <mesh>"
+#define RVA_POOLS 0x3bfe00 // void *[43]: { free list head; entries[] } (see zones.c)
+
+static struct {
+	char name[160];
+	uint8_t *skeleton, *mesh; // the models it was made from (a new level loads new ones)
+	uint8_t *model;
+} clones[4];
+
+static size_t gcd(size_t a, size_t b)
+{
+	while (b) {
+		size_t t = a % b;
+		a = b;
+		b = t;
+	}
+	return a;
+}
+
+// The copy lives in the XModel pool, like every model: made outside it (calloc), the game hung
+// a frame after the first script_model wore it (QA snowview, 2026-10-24), while the same mesh on
+// Soap's own model did not. An entry is taken off the pool's free list as the game's pool alloc
+// (rva 0xeee20) does. The entry size is not stored: it is the greatest common divisor of where
+// entries sit from the start of the entries (two models in use and the free list's first ones).
+static uint8_t *pool_entry(uint8_t *model_a, uint8_t *model_b, size_t *size)
+{
+	void **pool = ((void ***)(base + RVA_POOLS))[4];
+	if (!pool || !*pool)
+		return NULL;
+	uint8_t *entries = (uint8_t *)pool + 8;
+	size_t g = 0;
+	uint8_t *samples[34] = {model_a, model_b};
+	int n = 2;
+	for (uint8_t *e = *pool; e && n < 34; e = *(uint8_t **)e)
+		samples[n++] = e;
+	for (int i = 0; i < n; i++) {
+		if (samples[i] < entries)
+			return NULL; // not one pool after all
+		g = gcd(g, (size_t)(samples[i] - entries));
+	}
+	if (g < MODEL_LODS + 4 * LOD_SIZE || g > 0x1000)
+		return NULL;
+	uint8_t *entry = *pool;
+	*pool = *(void **)entry;
+	*size = g;
+	return entry;
+}
+
+void *transplant_clone(const char *name, void *(*find)(int, const char *))
+{
+	if (strcmp(name, CLONE_NAME) != 0)
+		return NULL;
+	char req[160], skel_name[64], mesh_name[64];
+	if (!game_dvar_raw(CLONE_NAME, req, sizeof(req)) || sscanf(req, "%63s %63s", skel_name, mesh_name) != 2)
+		return NULL;
+	name = req; // the clone is known by the pair
+	uint8_t *skeleton = find(4, skel_name), *mesh = find(4, mesh_name);
+	if (!skeleton || !mesh || !*(void **)(skeleton + 0x28) || !*(void **)(mesh + 0x28))
+		return NULL;
+	int free_slot = -1;
+	for (int i = 0; i < 4; i++) {
+		if (strcmp(clones[i].name, name) == 0) {
+			if (clones[i].skeleton == skeleton && clones[i].mesh == mesh)
+				return clones[i].model;
+			free_slot = i; // the same name in a new level: made again
+			break;
+		}
+		if (!clones[i].name[0] && free_slot < 0)
+			free_slot = i;
+	}
+	if (free_slot < 0)
+		return NULL;
+	size_t size = 0;
+	uint8_t *model = pool_entry(skeleton, mesh, &size);
+	if (!model) {
+		log_printf("transplant: %s: no XModel pool entry", name);
+		return NULL;
+	}
+	memcpy(model, skeleton, size);
+	char *own = (char *)CLONE_NAME;
+	*(char **)model = own;
+	if (put_surfaces(model, mesh, skel_name, mesh_name) != 1) {
+		memcpy(model, skeleton, size); // a working model in the entry; the name is still ours
+		*(char **)model = own;
+		return NULL;
+	}
+	lstrcpynA(clones[free_slot].name, name, sizeof(clones[free_slot].name));
+	clones[free_slot].skeleton = skeleton;
+	clones[free_slot].mesh = mesh;
+	clones[free_slot].model = model;
+	log_printf("transplant: %s made in the XModel pool (entry of %u bytes, from %s)", name, (unsigned)size, skel_name);
+	return model;
+}
+
 // Whether the map in the request runs now (mapname changes as soon as another level loads).
 static int request(char *req, size_t size, char *target, char *donor)
 {
@@ -298,9 +410,61 @@ void transplant_poll(void)
 	game_cbuf_addtext("mw2coop_transplant\n");
 }
 
+// DB_IsXAssetDefault (rva 0xefff0) on a name the database does not have returns "default" without
+// taking itself off the database's reader count (its lookup loop returns before the decrement),
+// so the next lookup that waits for no readers (a playsound) waited for ever: both machines hung
+// a frame after a script_model wore the rider copy (QA snowview, 2026-10-24; the count at rva
+// 0xa8a830). For the copy's name it answers "not default" itself, before the count is touched.
+#define RVA_DB_IS_DEFAULT 0x0efff0
+typedef char (*is_default_t)(unsigned type, const char *name);
+static is_default_t is_default_original;
+
+static char is_default(unsigned type, const char *name)
+{
+	if (type == 4 && name && strcmp(name, CLONE_NAME) == 0)
+		for (int i = 0; i < 4; i++)
+			if (clones[i].model)
+				return 0;
+	return is_default_original(type, name);
+}
+
+// mov [rsp+8],rbx; mov [rsp+10h],rbp; mov [rsp+18h],rsi (the same as DB_FindXAssetHeader's)
+static const uint8_t is_default_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
+
+static void hook_is_default(void)
+{
+	uint8_t *target = base + RVA_DB_IS_DEFAULT;
+	if (memcmp(target, is_default_bytes, sizeof(is_default_bytes)) != 0) {
+		log_printf("transplant: unexpected bytes at DB_IsXAssetDefault, not hooking");
+		return;
+	}
+	// trampoline: the 15 original bytes, then jmp [rip+0] to target+15
+	uint8_t *tramp = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	if (!tramp)
+		return;
+	memcpy(tramp, target, sizeof(is_default_bytes));
+	uint8_t back[14] = {0xff, 0x25, 0, 0, 0, 0};
+	uint64_t to = (uint64_t)(uintptr_t)(target + sizeof(is_default_bytes));
+	memcpy(back + 6, &to, 8);
+	memcpy(tramp + sizeof(is_default_bytes), back, sizeof(back));
+	FlushInstructionCache(GetCurrentProcess(), tramp, 64);
+	is_default_original = (is_default_t)tramp;
+
+	uint8_t jmp[14] = {0xff, 0x25, 0, 0, 0, 0};
+	to = (uint64_t)(uintptr_t)is_default;
+	memcpy(jmp + 6, &to, 8);
+	DWORD old;
+	VirtualProtect(target, sizeof(is_default_bytes), PAGE_EXECUTE_READWRITE, &old);
+	memcpy(target, jmp, sizeof(jmp));
+	target[14] = 0xcc; // the 15th copied byte is never run: the trampoline resumes at +15
+	VirtualProtect(target, sizeof(is_default_bytes), old, &old);
+	FlushInstructionCache(GetCurrentProcess(), target, 15);
+}
+
 void transplant_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
+	hook_is_default();
 	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
 	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
 		commands[i].next = *head;

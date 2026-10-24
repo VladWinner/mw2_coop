@@ -61,6 +61,16 @@ transplant_request( level_name )
 	return "";
 }
 
+// The snowmobile rider's model for a co-op body (Cliffhanger): Soap's model, whose skeleton the
+// level's AI driving animations are made for, wearing the co-op body's mesh. The DLL makes it on
+// the first lookup of the name, from the pair in the dvar of that name (src/transplant.c
+// transplant_clone).
+rider_model( body )
+{
+	SetDvar( "mw2coop_rider", "body_hero_soap_arctic " + body );
+	return "mw2coop_rider";
+}
+
 models( body, head )
 {
 	m = [];
@@ -78,72 +88,4 @@ give_body( model_func )
 {
 	self maps\_utility::SetModelFunc( model_func );
 	self SetAnim( %code, 1, 0 );
-}
-
-// self: a script_model in a co-op body (multiplayer skeleton). Holds one of the multiplayer
-// player-body poses; the campaign's AI animations twist this skeleton (owner, 2026-10-24: the
-// snowmobile rider). Returns false for an unknown name.
-mp_pose( name )
-{
-	switch ( name )
-	{
-		case "crouch_hold":
-			pose = %pb_crouch_hold_idle;
-			break;
-		case "crouch_alert":
-			pose = %pb_crouch_alert;
-			break;
-		case "crouch_pistol":
-			pose = %pb_crouch_alert_pistol;
-			break;
-		case "saw_lowwall":
-			pose = %pb_saw_gunner_lowwall_aim_level_center;
-			break;
-		case "saw_down":
-			pose = %pb_saw_gunner_aim_down_center;
-			break;
-		case "crouch_akimbo":
-			pose = %pb_crouch_alert_akimbo;
-			break;
-		case "crouch_ads":
-			pose = %pb_crouch_ads;
-			break;
-		case "mg42_level":
-			pose = %pb_standmg42gunner_aim_forward_level;
-			break;
-		case "mg42_down":
-			pose = %pb_standmg42gunner_aim_forward_15down;
-			break;
-		case "prone_mg42":
-			pose = %pb_pronemg42gunner_aim_forward_level;
-			break;
-		case "crouch_shield":
-			pose = %pb_crouch_alert_shield;
-			break;
-		case "crouch_rpg":
-			pose = %pb_crouch_alert_rpg;
-			break;
-		case "climbup":
-			pose = %pb_climbup;
-			break;
-		case "deadhands":
-			pose = %pb_deadhands_idle;
-			break;
-		default:
-			return false;
-	}
-	self UseAnimTree( #animtree );
-	self SetAnimKnobAllRestart( pose, %code, 1, 0 );
-	return true;
-}
-
-// self: a script_model in a co-op body. The akimbo crouch blended with the ladder climb (its
-// hands wider apart) at weight w of the climb, the climb held at fraction t of its length.
-mp_blend_climb( w, t )
-{
-	self UseAnimTree( #animtree );
-	self SetAnimKnobAllRestart( %pb_crouch_alert_akimbo, %code, 1, 0 );
-	self SetAnim( %pb_crouch_alert_akimbo, 1 - w, 0 );
-	self SetAnim( %pb_climbup, w, 0, 0 );
-	self SetAnimTime( %pb_climbup, t );
 }

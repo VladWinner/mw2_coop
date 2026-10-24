@@ -8,6 +8,7 @@
 // alongside). Both players are tougher for the ride.
 #include common_scripts\utility;
 #include maps\_utility;
+#using_animtree( "generic_human" );
 
 // self: player 1's snowmobile, just spawned from spawner. mount_now: start points that put
 // the players on their snowmobiles right away.
@@ -156,33 +157,29 @@ snowmobile_copy( rider, other )
 // own (co-op body and head) sits on the seat instead; the rider never sees it, and his own model
 // is taken off for the ride.
 // self: the snowmobile.
-// The rider's pose: his co-op body has the multiplayer skeleton, which the level's AI driving
-// animations twist (QA snowview, 2026-10-24: the AI driver pose on it threw an arm up or bent him
-// across the seat, while on Soap's body it sits right). There is no seated multiplayer pose. The
-// first-person hands hold the handlebar's grips 20 ahead of tag_driver, 12 to each side, 58 up;
-// the crouches hold the hands together in the middle (owner: "the hands are not on the
-// handlebar"), the ladder climb holds them 10 to each side. Blended 0.7 climb (half-way through)
-// with 0.3 crouch and set onto the seat, the wrists come to 20 ahead, 9 and 11 to the sides, 56
-// and 61 up (QA snowview prints the bones).
+// The rider's pose, as the level's AI driver steering straight (animscripts\snowmobile::
+// snowmobile_loop_driver). His co-op body's multiplayer skeleton twists these animations (QA
+// snowview, 2026-10-24: an arm thrown up, the body bent across the seat; no multiplayer pose sits
+// on a seat with the hands on the grips and the feet on the footrests), so the rider wears Soap's
+// skeleton with his own body's mesh (maps\_mw2coop_bodies::rider_model; owner: "take Soap's ready
+// skeleton and use it").
 rider_pose()
 {
-	self maps\_mw2coop_bodies::mp_blend_climb( 0.7, 0.5 );
-}
-
-// from tag_driver
-rider_offset()
-{
-	return ( 2, 0, 19 );
+	self UseAnimTree( #animtree );
+	self SetAnimKnobAll( %sm_turn, %body, 1, 0 );
+	self SetAnim( %snowmobile_driver_driving_idle, 1, 0 );
+	self SetAnimKnob( %snowmobile_driver_lean_L2R, 1, 0 );
+	self SetAnimTime( %snowmobile_driver_lean_L2R, 0.5 );
 }
 
 snowmobile_rider( rider, other )
 {
 	body = Spawn( "script_model", self GetTagOrigin( "tag_driver" ) );
-	// his own co-op body and head
-	body SetModel( rider.mw2coop_body );
+	// his own body's mesh on Soap's skeleton, and his head
+	body SetModel( maps\_mw2coop_bodies::rider_model( rider.mw2coop_body ) );
 	body Attach( rider.mw2coop_head, "", true );
 	body.angles = self GetTagAngles( "tag_driver" );
-	body LinkTo( self, "tag_driver", rider_offset(), ( 0, 0, 0 ) );
+	body LinkTo( self, "tag_driver", ( 0, 0, 0 ), ( 0, 0, 0 ) );
 	body rider_pose();
 	body hideOnClient( rider );
 	self.mw2coop_rider = body;	// QA snowview

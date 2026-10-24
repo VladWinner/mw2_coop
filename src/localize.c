@@ -13,6 +13,7 @@
 
 #include "game.h"
 #include "localize.h"
+#include "transplant.h"
 #include "log.h"
 
 #define ASSET_TYPE_LOCALIZE_ENTRY 27
@@ -246,6 +247,11 @@ static void *find_header(int type, const char *name)
 			entries[i].value = text_of(i);
 			return &entries[i];
 		}
+	}
+	if (type == 4 && name && name[0] == 'm') {
+		void *clone = transplant_clone(name, original);
+		if (clone)
+			return clone;
 	}
 	return original(type, name);
 }

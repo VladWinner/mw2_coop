@@ -110,6 +110,8 @@ set_bodies()
 			return;
 		PrecacheModel( models[ 0 ] );
 		PrecacheModel( models[ 1 ] );
+		if ( level.script == "cliffhanger" )
+			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ] ) );
 		player.mw2coop_body = models[ 0 ];
 		player.mw2coop_head = models[ 1 ];
 		player maps\_mw2coop_bodies::give_body( ::body_model );

@@ -4,6 +4,7 @@
 // handlers or Windows still decide what happens).
 #include <windows.h>
 #include <stdint.h>
+#include <tlhelp32.h>
 
 #include "crash.h"
 #include "log.h"
@@ -55,6 +56,88 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// Return addresses into the exe among the first stack slots from sp (a rough call stack).
+static void stack_rvas(HANDLE out, const char *what, uintptr_t rip, const uintptr_t *sp, int slots)
+{
+	char line[512];
+	int n = wsprintfA(line, "%s at %s %lx, stack rvas:", what, in_image(rip) ? "rva" : "address",
+			  (unsigned long)(in_image(rip) ? rip - image_base : rip));
+	int found = 0;
+	for (int i = 0; i < slots && found < 24; i++) {
+		uintptr_t v = sp[i];
+		if (in_image(v) && n < (int)sizeof(line) - 20) {
+			n += wsprintfA(line + n, " %lx", (unsigned long)(v - image_base));
+			found++;
+		}
+	}
+	lstrcatA(line, "\r\n");
+	DWORD wrote;
+	WriteFile(out, line, lstrlenA(line), &wrote, NULL);
+}
+
+// QA, for a hang: every other thread of the game, where it is and what called it, into
+// <game dir>\mw2coop\stacks.txt. A thread of its own runs it when <game dir>\mw2coop\dumpstacks
+// appears (and deletes that file); it takes no lock of the game's or the log's, which a hung game
+// may hold (the control thread stopped with it, 2026-10-24).
+static void dump_threads(HANDLE out)
+{
+	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+	if (snap == INVALID_HANDLE_VALUE)
+		return;
+	THREADENTRY32 te = {.dwSize = sizeof(te)};
+	DWORD self = GetCurrentThreadId(), pid = GetCurrentProcessId();
+	for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+		if (te.th32OwnerProcessID != pid || te.th32ThreadID == self)
+			continue;
+		HANDLE t = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, te.th32ThreadID);
+		if (!t)
+			continue;
+		// copy what is needed while it is suspended, write only after it runs again (it may hold a
+		// lock the writing needs)
+		static uintptr_t stack[1024];
+		uintptr_t rip = 0;
+		int got = 0;
+		if (SuspendThread(t) != (DWORD)-1) {
+			CONTEXT c = {.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER};
+			if (GetThreadContext(t, &c)) {
+				rip = (uintptr_t)c.Rip;
+				SIZE_T read = 0;
+				ReadProcessMemory(GetCurrentProcess(), (void *)c.Rsp, stack, sizeof(stack), &read);
+				if (!read) // the stack's end is near: read what is there
+					for (size_t want = sizeof(stack) / 2; want >= 64 && !read; want /= 2)
+						ReadProcessMemory(GetCurrentProcess(), (void *)c.Rsp, stack, want, &read);
+				got = (int)(read / sizeof(uintptr_t));
+			}
+			ResumeThread(t);
+		}
+		if (rip) {
+			char what[64];
+			wsprintfA(what, "stacks: thread %lu", te.th32ThreadID);
+			stack_rvas(out, what, rip, stack, got);
+		}
+		CloseHandle(t);
+	}
+	CloseHandle(snap);
+}
+
+static char flag_path[MAX_PATH], out_path[MAX_PATH];
+
+static DWORD WINAPI watchdog(LPVOID arg)
+{
+	(void)arg;
+	for (;;) {
+		Sleep(500);
+		if (!DeleteFileA(flag_path))
+			continue;
+		HANDLE out = CreateFileA(out_path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, 0, NULL);
+		if (out == INVALID_HANDLE_VALUE)
+			continue;
+		dump_threads(out);
+		CloseHandle(out);
+	}
+	return 0;
+}
+
 void crash_install(void)
 {
 	HMODULE exe = GetModuleHandleA(NULL);
@@ -62,5 +145,13 @@ void crash_install(void)
 	image_base = (uintptr_t)exe;
 	image_end = image_base + nt->OptionalHeader.SizeOfImage;
 	AddVectoredExceptionHandler(1, on_exception);
+	DWORD n = GetModuleFileNameA(NULL, flag_path, MAX_PATH);
+	while (n > 0 && flag_path[n - 1] != '\\')
+		n--;
+	flag_path[n] = 0;
+	lstrcpynA(out_path, flag_path, MAX_PATH);
+	lstrcatA(flag_path, "mw2coop\\dumpstacks");
+	lstrcatA(out_path, "mw2coop\\stacks.txt");
+	CloseHandle(CreateThread(NULL, 0, watchdog, NULL, 0, NULL));
 	log_printf("crash: exception logger installed");
 }

@@ -949,6 +949,17 @@ snowview()
 				}
 			}
 		}
+		// Soap keeps his own look (the rider is a copy of his model)
+		if ( isdefined( level.price ) )
+		{
+			report( "soap wears " + level.price.model );
+			spot = level.price.origin + AnglesToForward( level.price.angles ) * 90;
+			spot = PlayerPhysicsTrace( spot + ( 0, 0, 60 ), spot - ( 0, 0, 300 ) );
+			level.player SetOrigin( spot );
+			level.player SetPlayerAngles( VectorToAngles( level.price.origin + ( 0, 0, 40 ) - level.player GetEye() ) );
+			wait 0.8;
+			qa_shot( "soap" );
+		}
 		report( "done" );
 		return;
 	}
