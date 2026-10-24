@@ -661,3 +661,21 @@ ent.viewModel Show();
 @@@ to
 ent.viewModel maps\_mw2coop_climb::rig_show( ent.player );
 @@@ end
+
+13. A swing clicked while the last one is still playing counts (owner, 2026-10-24: now and then
+    the ice pick needed two clicks; also in the original game). A finished stab wiped every
+    press counted so far (button_press_num_last = button_press_num, meant to make him let go of
+    the button), including one made during its animation. It wipes only the press that began the
+    stab. Not reproduced by QA (the bot never clicks early): to be revert-ed if the click still
+    needs repeating.
+@@@ subst arm_completes_stab
+stab_success = arm_stabs( ent, skipRelink );
+@@@ to
+ent.mw2coop_press_at_stab = ent.button_press_num;
+	stab_success = arm_stabs( ent, skipRelink );
+@@@ end
+@@@ subst player_finishes_climbing
+ent.button_press_num_last = ent.button_press_num;
+@@@ to
+ent.button_press_num_last = ent.mw2coop_press_at_stab;
+@@@ end
