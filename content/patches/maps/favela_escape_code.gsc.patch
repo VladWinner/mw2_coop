@@ -90,6 +90,13 @@ who
 
 @@@ end
 @@@ replace
+	// catch the jump
+@@@ with
+	thread maps\_mw2coop_favelaescape::slide_sync();
+
+	// catch the jump
+@@@ end
+@@@ replace
 	chopper thread anim_single( player_and_ladder, jump_scene, propsTag );
 @@@ with
 	chopper thread anim_single( player_and_ladder, jump_scene, propsTag );

@@ -104,6 +104,7 @@ for rel, title, scenes in SCRIPTS:
                   '\twho = level.player;\n\tif ( maps\\_mw2coop_favelaescape::coop() )\n\t{\n' + spots +
                   '\t\twho = maps\\_mw2coop_favelaescape::catch_leap( jumpstart_vol, ladder, altLookSpots );\n\t}\n\telse\n\t{\n' +
                   single + '\t}\n\n')
+        p.replace('\t// catch the jump\n', '\tthread maps\\_mw2coop_favelaescape::slide_sync();\n\n\t// catch the jump\n')
         p.replace('\tchopper thread anim_single( player_and_ladder, jump_scene, propsTag );\n',
                   '\tchopper thread anim_single( player_and_ladder, jump_scene, propsTag );\n'
                   '\tthread maps\\_mw2coop_favelaescape::partner_jumps( who, chopper, jump_scene, propsTag );\n')

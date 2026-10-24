@@ -82,3 +82,28 @@ partner_black( fade_time )
 	hud FadeOverTime( fade_time );
 	hud.alpha = 1;
 }
+
+// solorun_chopperjump(), after the chopper starts to fly in: the rooftop slide carries a player to the
+// ledge and nobody can wait on it (the gap's kill trigger fails the mission), so the players have to
+// arrive together. When the first one is on the slide and the other is still far behind, the
+// other is brought next to him and the two jump for the rope themselves.
+slide_sync()
+{
+	if ( !coop() )
+		return;
+	level endon( "chopperjump_player_jump" );
+	level endon( "mw2coop_level_end" );
+	flag_wait( "trig_solorun_player_on_slide" );
+	wait 2;
+	ladder = level.chopperladder;
+	if ( !isdefined( ladder ) )
+		return;
+	first = level.player;
+	if ( Distance2D( level.player2.origin, ladder.origin ) < Distance2D( level.player.origin, ladder.origin ) )
+		first = level.player2;
+	other = maps\_mw2coop::other_player( first );
+	if ( !isalive( other ) || Distance2D( other.origin, first.origin ) < 500 )
+		return;
+	maps\_mw2coop::state( "favela_escape: the second player is brought to the slide" );
+	other maps\_mw2coop::teleport_to_partner_when_safe( first, 5 );
+}

@@ -1040,6 +1040,12 @@ chopperjump()
 	}
 	wait 3;
 	check( flag( "chopperjump_player_jump" ), "the jump was caught" );
+	// frames of both screens (host = player 1, client = player 2): on the rope, climbing, flying away
+	qa_shot( "rope-a" );
+	wait 1.5;
+	qa_shot( "rope-b" );
+	wait 2.5;
+	qa_shot( "rope-c" );
 	check( level.player2 IsLinked(), "player 2 is on the rope" );
 	check( level.player IsLinked(), "player 1 caught the rope too" );
 	t = 0;
