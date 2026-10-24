@@ -13,3 +13,119 @@ self SetGoalEntity( level.player )
 @@@ to
 self SetGoalEntity( maps\_mw2coop::seek_player( self.origin ) )
 @@@ end
+
+2. The chopper's rope ladder for both players (maps\_mw2coop_favelaescape): whichever player
+   leaps for the ladder first starts the scene (who), and the other catches the same rope with a
+   rig of his own (partner_jumps).
+@@@ subst solorun_chopperjump
+level.player
+@@@ to
+who
+@@@ end
+@@@ replace
+	thread player_jump_watcher();
+	
+	altLookSpots = GetStructArray( "struct_chopperjump_alt_lookspot", "targetname" );
+	ASSERT( altLookSpots.size );
+	
+	while( 1 )
+	{
+		breakout = false;
+		
+		while( who IsTouching( jumpstart_vol ) )
+		{
+			flag_wait( "player_jumping" );
+			if( player_leaps_to_chopper( jumpstart_vol, ladder, altLookSpots, true ) )
+			{
+				breakout = true;
+				break;
+			}
+			wait( 0.05 );
+		}
+		
+		if( breakout )
+		{
+			break;
+		}
+		wait( 0.05 );
+	}
+	
+@@@ with
+	who = level.player;
+	if ( maps\_mw2coop_favelaescape::coop() )
+	{
+	altLookSpots = GetStructArray( "struct_chopperjump_alt_lookspot", "targetname" );
+		who = maps\_mw2coop_favelaescape::catch_leap( jumpstart_vol, ladder, altLookSpots );
+	}
+	else
+	{
+	thread player_jump_watcher();
+	
+	altLookSpots = GetStructArray( "struct_chopperjump_alt_lookspot", "targetname" );
+	ASSERT( altLookSpots.size );
+	
+	while( 1 )
+	{
+		breakout = false;
+		
+		while( level.player IsTouching( jumpstart_vol ) )
+		{
+			flag_wait( "player_jumping" );
+			if( player_leaps_to_chopper( jumpstart_vol, ladder, altLookSpots, true, level.player ) )
+			{
+				breakout = true;
+				break;
+			}
+			wait( 0.05 );
+		}
+		
+		if( breakout )
+		{
+			break;
+		}
+		wait( 0.05 );
+	}
+	
+	}
+
+@@@ end
+@@@ replace
+	chopper thread anim_single( player_and_ladder, jump_scene, propsTag );
+@@@ with
+	chopper thread anim_single( player_and_ladder, jump_scene, propsTag );
+	thread maps\_mw2coop_favelaescape::partner_jumps( who, chopper, jump_scene, propsTag );
+@@@ end
+@@@ replace
+	thread chopperjump_player_blend_to_anim( player_rig );
+@@@ with
+	thread chopperjump_player_blend_to_anim( player_rig, who );
+@@@ end
+@@@ replace
+chopperjump_player_blend_to_anim( player_rig )
+{
+@@@ with
+chopperjump_player_blend_to_anim( player_rig, who )
+{
+@@@ end
+@@@ subst chopperjump_player_blend_to_anim
+level.player
+@@@ to
+who
+@@@ end
+@@@ replace
+player_leaps_to_chopper( volume, ladder, altLookSpots, checkIsOnGround )
+{
+@@@ with
+player_leaps_to_chopper( volume, ladder, altLookSpots, checkIsOnGround, who )
+{
+@@@ end
+@@@ subst player_leaps_to_chopper
+level.player IsOnGround()
+@@@ to
+( who IsOnGround() || maps\_mw2coop::is_standing( who ) )
+@@@ end
+@@@ subst player_leaps_to_chopper
+level.player
+@@@ to
+who
+@@@ end

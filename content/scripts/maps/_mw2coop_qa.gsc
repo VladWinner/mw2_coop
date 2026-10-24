@@ -217,6 +217,9 @@ main()
 		case "rappel":
 			rappel();
 			break;
+		case "chopperjump":
+			chopperjump();
+			break;
 		case "climbview":
 			if ( isdefined( level.mw2coop_qa_climbview ) )
 				[[ level.mw2coop_qa_climbview ]]();
@@ -994,6 +997,60 @@ cave_rappel()
 	check( !level.player IsLinked() && Distance( level.player.origin, bottom1 ) < 200, "player 1 stayed at the bottom while player 2 rappelled (" + int( Distance( level.player.origin, bottom1 ) ) + " units)" );
 	report( "at the bottom: " + int( Distance( level.player.origin, level.player2.origin ) ) + " units apart" );
 	report( "player 1 holds " + level.player GetCurrentWeapon() + ", player 2 holds " + level.player2 GetCurrentWeapon() );
+	report( "done" );
+}
+
+// Escape from Favela (start "chopperjump"): player 2 leaps for the chopper's rope ladder (real keys:
+// forward, then jump, facing the ladder); player 1 catches the rope too; both are on it when the
+// chopper flies off.
+chopperjump()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 8;
+	vol = GetEnt( "trig_player_chopperjump", "script_noteworthy" );
+	check( isdefined( vol ), "the jump volume exists" );
+	t = 0;
+	while ( !isdefined( level.chopperladder ) && t < 30 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( isdefined( level.chopperladder ), "the ladder exists (" + t + " s)" );
+	if ( !isdefined( vol ) || !isdefined( level.chopperladder ) )
+		return;
+	report( "volume " + vol.origin + ", ladder " + level.chopperladder.origin + ", player 1 at " + level.player.origin + ", player 2 at " + level.player2.origin );
+	// a run-up of 130 units to the ledge, facing the ladder, then jumps while running (the first
+	// attempt pressed jump 0.7 s after forward: he had walked off the ledge by then)
+	look = level.chopperladder.origin + ( 0, 0, -85 );
+	toward = VectorNormalize( ( look[ 0 ] - vol.origin[ 0 ], look[ 1 ] - vol.origin[ 1 ], 0 ) );
+	start = vol.origin - toward * 130;
+	spot = PlayerPhysicsTrace( start + ( 0, 0, 40 ), start - ( 0, 0, 400 ) );
+	level.player2 SetOrigin( spot );
+	wait 0.5;
+	level.player2 SetPlayerAngles( VectorToAngles( look - level.player2 GetEye() ) );
+	wait 0.5;
+	report( "player 2 starts at " + level.player2.origin + " and the volume is touched: " + level.player2 IsTouching( vol ) );
+	press( level.player2, "forward", 3000 );
+	wait 0.5;
+	for ( n = 0; n < 12 && !flag( "chopperjump_player_jump" ); n++ )
+	{
+		press( level.player2, "gostand", 150 );
+		wait 0.1;
+		report( "run " + n + ": player 2 at " + level.player2.origin + " speed " + int( Length( level.player2 GetVelocity() ) ) + " touches " + level.player2 IsTouching( vol ) );
+	}
+	wait 3;
+	check( flag( "chopperjump_player_jump" ), "the jump was caught" );
+	check( level.player2 IsLinked(), "player 2 is on the rope" );
+	check( level.player IsLinked(), "player 1 caught the rope too" );
+	t = 0;
+	while ( !flag( "solorun_player_boarded_chopper" ) && t < 20 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "solorun_player_boarded_chopper" ), "the chopper took them" );
+	wait 10;
+	check( level.player2 IsLinked() && level.player IsLinked(), "both still on the rope while the chopper flies" );
 	report( "done" );
 }
 

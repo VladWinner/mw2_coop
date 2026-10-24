@@ -89,6 +89,32 @@ for rel, title, scenes in SCRIPTS:
         for fn in ('af_caves_rappel_behavior', 'player_decent_death', 'hurt_player_on_bounce'):
             p.subst(fn, 'level.player', 'who')
         n += 1
+    if rel == 'favela_escape/maps/favela_escape_code.gsc':
+        # the chopper's rope ladder for both players (maps\_mw2coop_favelaescape.gsc)
+        p.note("""{0}. The chopper's rope ladder for both players (maps\\_mw2coop_favelaescape): whichever player
+   leaps for the ladder first starts the scene (who), and the other catches the same rope with a
+   rig of his own (partner_jumps).""".format(n + 1))
+        src = p.func('solorun_chopperjump')
+        orig = src[src.index('\tthread player_jump_watcher();\n'):src.index('\tflag_set( "chopperjump_player_jump" );')]
+        p.subst('solorun_chopperjump', 'level.player', 'who')
+        single = orig.replace('altLookSpots, true )', 'altLookSpots, true, level.player )')
+        spots = '\taltLookSpots = GetStructArray( "struct_chopperjump_alt_lookspot", "targetname" );\n'
+        assert spots in orig
+        p.replace(orig.replace('level.player', 'who'),
+                  '\twho = level.player;\n\tif ( maps\\_mw2coop_favelaescape::coop() )\n\t{\n' + spots +
+                  '\t\twho = maps\\_mw2coop_favelaescape::catch_leap( jumpstart_vol, ladder, altLookSpots );\n\t}\n\telse\n\t{\n' +
+                  single + '\t}\n\n')
+        p.replace('\tchopper thread anim_single( player_and_ladder, jump_scene, propsTag );\n',
+                  '\tchopper thread anim_single( player_and_ladder, jump_scene, propsTag );\n'
+                  '\tthread maps\\_mw2coop_favelaescape::partner_jumps( who, chopper, jump_scene, propsTag );\n')
+        p.replace('\tthread chopperjump_player_blend_to_anim( player_rig );\n', '\tthread chopperjump_player_blend_to_anim( player_rig, who );\n')
+        p.replace('chopperjump_player_blend_to_anim( player_rig )\n{\n', 'chopperjump_player_blend_to_anim( player_rig, who )\n{\n')
+        p.subst('chopperjump_player_blend_to_anim', 'level.player', 'who')
+        p.replace('player_leaps_to_chopper( volume, ladder, altLookSpots, checkIsOnGround )\n{\n',
+                  'player_leaps_to_chopper( volume, ladder, altLookSpots, checkIsOnGround, who )\n{\n')
+        p.subst('player_leaps_to_chopper', 'level.player IsOnGround()', '( who IsOnGround() || maps\\_mw2coop::is_standing( who ) )')
+        p.subst('player_leaps_to_chopper', 'level.player', 'who')
+        n += 1
     if rel == 'af_caves/maps/af_caves.gsc':
         p.note("""{0}. The opening rappel for both players (maps\_mw2coop_cave): whoever uses the hook-up first
    rappels; it is free again for the other player afterwards.""".format(n + 1))
