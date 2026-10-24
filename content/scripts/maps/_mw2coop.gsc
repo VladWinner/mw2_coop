@@ -102,10 +102,6 @@ main()
 
 set_bodies()
 {
-	// Cliffhanger: the arctic soldier body the rider dummy on a snowmobile wears
-	// (_mw2coop_cliffhanger::snowmobile_rider); precached before the first wait
-	if ( level.script == "cliffhanger" )
-		PrecacheModel( "body_arctic_nml" );
 	SetDvar( "mw2coop_transplant", maps\_mw2coop_bodies::transplant_request( level.script ) );
 	foreach ( n, player in level.players )
 	{

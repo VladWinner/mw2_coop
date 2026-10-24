@@ -862,6 +862,21 @@ qa_flag_set( name )
 	flag_set( name );
 }
 
+// "head f/r/u ..." of a rider body: its bones from the vehicle's tag_driver, along the vehicle
+rider_bones( r, v )
+{
+	seat = v GetTagOrigin( "tag_driver" );
+	fwd = AnglesToForward( v.angles );
+	right = AnglesToRight( v.angles );
+	text = "";
+	foreach ( tag in strtok( "j_head j_spine4 j_hip_le j_wrist_ri j_wrist_le j_knee_le j_ankle_le", " " ) )
+	{
+		d = r GetTagOrigin( tag ) - seat;
+		text += tag + " " + int( VectorDot( d, fwd ) ) + "/" + int( VectorDot( d, right ) ) + "/" + int( d[ 2 ] ) + "  ";
+	}
+	return text;
+}
+
 // Cliffhanger, start "snowmobile": how each player's snowmobile looks to the other (frames of both
 // machines; the host's is player 1's, looking at player 2's snowmobile beside him).
 snowview()
@@ -885,13 +900,35 @@ snowview()
 			report( "spawner " + sp.classname + " vehicletype " + sp.vehicletype );
 		report( "vehicle type " + v.vehicletype + ", riders " + isdefined( v.riders ) + ", seats " + v maps\_mw2coop::seats_text() );
 		report( "player 2 rides model " + v.model + ", first person " + isdefined( v.firstPerson ) + ", copy " + isdefined( v.mw2coop_copy ) );
-		for ( n = 0; n < 3; n++ )
+		// four fixed views around the snowmobile, 130 units away, standing on the snow
+		report( "rider body " + isdefined( v.mw2coop_rider ) );
+		if ( isdefined( v.mw2coop_rider ) )
+			report( "rider at " + v.mw2coop_rider.origin + " tag_driver " + v GetTagOrigin( "tag_driver" ) + " model " + v.mw2coop_rider.model );
+		if ( isdefined( v.mw2coop_copy ) )
 		{
-			d = v.origin + ( 0, 0, 20 ) - level.player GetEye();
-			level.player SetOrigin( v.origin - VectorNormalize( ( d[ 0 ], d[ 1 ], 0 ) ) * ( 160 - n * 40 ) );
-			level.player SetPlayerAngles( VectorToAngles( v.origin + ( 0, 0, 20 ) - level.player GetEye() ) );
-			wait 0.7;
-			qa_shot( "snow-p1-sees-p2-" + n );
+			d = v.mw2coop_copy GetTagOrigin( "tag_driver" ) - v GetTagOrigin( "tag_driver" );
+			report( "tag_driver of the third-person copy minus the vehicle's: " + d + ", copy origin minus vehicle " + ( v.mw2coop_copy.origin - v.origin ) );
+		}
+		if ( isdefined( v.mw2coop_rider ) )
+		{
+			r = v.mw2coop_rider;
+			center = v GetTagOrigin( "tag_driver" ) + ( 0, 0, 45 );
+			variant = "seated";
+			{
+				wait 0.5;
+				report( "pose " + variant + ": " + rider_bones( r, v ) );
+				// right side and front-left, 110 units away, on the snow
+				for ( n = 0; n < 4; n++ )
+				{
+					dir = AnglesToForward( ( 0, v.angles[ 1 ] - 90 + n * 90, 0 ) );
+					spot = center + dir * 110;
+					spot = PlayerPhysicsTrace( spot + ( 0, 0, 60 ), spot - ( 0, 0, 300 ) );
+					level.player SetOrigin( spot );
+					level.player SetPlayerAngles( VectorToAngles( center - level.player GetEye() ) );
+					wait 0.8;
+					qa_shot( "rider-pose" + variant + "-" + n );
+				}
+			}
 		}
 		report( "done" );
 		return;

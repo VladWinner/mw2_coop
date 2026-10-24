@@ -79,3 +79,36 @@ give_body( model_func )
 	self maps\_utility::SetModelFunc( model_func );
 	self SetAnim( %code, 1, 0 );
 }
+
+// self: a script_model in a co-op body (multiplayer skeleton). Holds one of the multiplayer
+// player-body poses; the campaign's AI animations twist this skeleton (owner, 2026-10-24: the
+// snowmobile rider). Returns false for an unknown name.
+mp_pose( name )
+{
+	switch ( name )
+	{
+		case "crouch_hold":
+			pose = %pb_crouch_hold_idle;
+			break;
+		case "crouch_alert":
+			pose = %pb_crouch_alert;
+			break;
+		case "crouch_pistol":
+			pose = %pb_crouch_alert_pistol;
+			break;
+		case "saw_lowwall":
+			pose = %pb_saw_gunner_lowwall_aim_level_center;
+			break;
+		case "saw_down":
+			pose = %pb_saw_gunner_aim_down_center;
+			break;
+		case "deadhands":
+			pose = %pb_deadhands_idle;
+			break;
+		default:
+			return false;
+	}
+	self UseAnimTree( #animtree );
+	self SetAnimKnobAllRestart( pose, %code, 1, 0 );
+	return true;
+}

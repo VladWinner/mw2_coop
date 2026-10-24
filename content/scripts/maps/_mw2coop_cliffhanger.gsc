@@ -8,7 +8,6 @@
 // alongside). Both players are tougher for the ride.
 #include common_scripts\utility;
 #include maps\_utility;
-#using_animtree( "generic_human" );
 
 // self: player 1's snowmobile, just spawned from spawner. mount_now: start points that put
 // the players on their snowmobiles right away.
@@ -153,27 +152,36 @@ snowmobile_copy( rider, other )
 }
 
 // The rider's own body stays where he got on (the level hides it from the other player and
-// leaves the snowmobile empty: owner, 2026-10-23, "where is the player itself?"). A body in the
-// level's own driving animation sits on the seat instead, as maps\_mw2coop_boat does; the rider
-// never sees it, and his own model is taken off for the ride.
+// leaves the snowmobile empty: owner, 2026-10-23, "where is the player itself?"). A body of his
+// own (co-op body and head) sits on the seat instead; the rider never sees it, and his own model
+// is taken off for the ride.
 // self: the snowmobile.
+// The rider's pose: his co-op body has the multiplayer skeleton, which the level's AI driving
+// animations twist (QA snowview, 2026-10-24: the AI driver pose on it threw an arm up or bent him
+// across the seat, while on Soap's body it sits right). Of the multiplayer player-body poses the
+// crouch holding a weapon, lifted onto the seat, matched Soap's seated driver best by the bones
+// (head, chest, knees, ankles and hands within 6 units; leaning forward the same).
+rider_mp_pose()
+{
+	return "crouch_hold";
+}
+
+rider_lift()
+{
+	return 32;
+}
+
 snowmobile_rider( rider, other )
 {
 	body = Spawn( "script_model", self GetTagOrigin( "tag_driver" ) );
-	// the level's arctic soldier body (the driving animations are made for that skeleton; on the co-op body
-	// they twisted it across the seat) with the rider's own head
-	body SetModel( "body_arctic_nml" );
+	// his own co-op body and head, in the seated pose
+	body SetModel( rider.mw2coop_body );
 	body Attach( rider.mw2coop_head, "", true );
-	body UseAnimTree( #animtree );
 	body.angles = self GetTagAngles( "tag_driver" );
-	body LinkTo( self, "tag_driver", ( 0, 0, 0 ), ( 0, 0, 0 ) );
-	// as the level's AI driver (animscripts\snowmobile::snowmobile_loop_driver): the driving pose, leaning
-	// from the middle of the left-right blend
-	body SetAnimKnobAll( %sm_turn, %body, 1, 0 );
-	body SetAnim( %snowmobile_driver_driving_idle, 1, 0 );
-	body SetAnimKnob( %snowmobile_driver_lean_L2R, 1, 0 );
-	body SetAnimTime( %snowmobile_driver_lean_L2R, 0.5 );
+	body LinkTo( self, "tag_driver", ( 0, 0, rider_lift() ), ( 0, 0, 0 ) );
+	body maps\_mw2coop_bodies::mp_pose( rider_mp_pose() );
 	body hideOnClient( rider );
+	self.mw2coop_rider = body;	// QA snowview
 	rider maps\_utility::SetModelFunc( undefined );
 	self waittill_either( "vehicle_dismount", "death" );
 	body Delete();
