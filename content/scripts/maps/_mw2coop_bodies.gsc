@@ -102,6 +102,30 @@ mp_pose( name )
 		case "saw_down":
 			pose = %pb_saw_gunner_aim_down_center;
 			break;
+		case "crouch_akimbo":
+			pose = %pb_crouch_alert_akimbo;
+			break;
+		case "crouch_ads":
+			pose = %pb_crouch_ads;
+			break;
+		case "mg42_level":
+			pose = %pb_standmg42gunner_aim_forward_level;
+			break;
+		case "mg42_down":
+			pose = %pb_standmg42gunner_aim_forward_15down;
+			break;
+		case "prone_mg42":
+			pose = %pb_pronemg42gunner_aim_forward_level;
+			break;
+		case "crouch_shield":
+			pose = %pb_crouch_alert_shield;
+			break;
+		case "crouch_rpg":
+			pose = %pb_crouch_alert_rpg;
+			break;
+		case "climbup":
+			pose = %pb_climbup;
+			break;
 		case "deadhands":
 			pose = %pb_deadhands_idle;
 			break;
@@ -111,4 +135,15 @@ mp_pose( name )
 	self UseAnimTree( #animtree );
 	self SetAnimKnobAllRestart( pose, %code, 1, 0 );
 	return true;
+}
+
+// self: a script_model in a co-op body. The akimbo crouch blended with the ladder climb (its
+// hands wider apart) at weight w of the climb, the climb held at fraction t of its length.
+mp_blend_climb( w, t )
+{
+	self UseAnimTree( #animtree );
+	self SetAnimKnobAllRestart( %pb_crouch_alert_akimbo, %code, 1, 0 );
+	self SetAnim( %pb_crouch_alert_akimbo, 1 - w, 0 );
+	self SetAnim( %pb_climbup, w, 0, 0 );
+	self SetAnimTime( %pb_climbup, t );
 }

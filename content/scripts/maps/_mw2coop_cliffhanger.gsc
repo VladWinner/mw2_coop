@@ -158,28 +158,32 @@ snowmobile_copy( rider, other )
 // self: the snowmobile.
 // The rider's pose: his co-op body has the multiplayer skeleton, which the level's AI driving
 // animations twist (QA snowview, 2026-10-24: the AI driver pose on it threw an arm up or bent him
-// across the seat, while on Soap's body it sits right). Of the multiplayer player-body poses the
-// crouch holding a weapon, lifted onto the seat, matched Soap's seated driver best by the bones
-// (head, chest, knees, ankles and hands within 6 units; leaning forward the same).
-rider_mp_pose()
+// across the seat, while on Soap's body it sits right). There is no seated multiplayer pose. The
+// first-person hands hold the handlebar's grips 20 ahead of tag_driver, 12 to each side, 58 up;
+// the crouches hold the hands together in the middle (owner: "the hands are not on the
+// handlebar"), the ladder climb holds them 10 to each side. Blended 0.7 climb (half-way through)
+// with 0.3 crouch and set onto the seat, the wrists come to 20 ahead, 9 and 11 to the sides, 56
+// and 61 up (QA snowview prints the bones).
+rider_pose()
 {
-	return "crouch_hold";
+	self maps\_mw2coop_bodies::mp_blend_climb( 0.7, 0.5 );
 }
 
-rider_lift()
+// from tag_driver
+rider_offset()
 {
-	return 32;
+	return ( 2, 0, 19 );
 }
 
 snowmobile_rider( rider, other )
 {
 	body = Spawn( "script_model", self GetTagOrigin( "tag_driver" ) );
-	// his own co-op body and head, in the seated pose
+	// his own co-op body and head
 	body SetModel( rider.mw2coop_body );
 	body Attach( rider.mw2coop_head, "", true );
 	body.angles = self GetTagAngles( "tag_driver" );
-	body LinkTo( self, "tag_driver", ( 0, 0, rider_lift() ), ( 0, 0, 0 ) );
-	body maps\_mw2coop_bodies::mp_pose( rider_mp_pose() );
+	body LinkTo( self, "tag_driver", rider_offset(), ( 0, 0, 0 ) );
+	body rider_pose();
 	body hideOnClient( rider );
 	self.mw2coop_rider = body;	// QA snowview
 	rider maps\_utility::SetModelFunc( undefined );

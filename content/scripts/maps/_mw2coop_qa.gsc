@@ -862,6 +862,21 @@ qa_flag_set( name )
 	flag_set( name );
 }
 
+// self: a snowmobile ridden in first person: where its attached hands hold the bars
+report_grips()
+{
+	seat = self GetTagOrigin( "tag_driver" );
+	fwd = AnglesToForward( self.angles );
+	right = AnglesToRight( self.angles );
+	text = "grips:";
+	foreach ( tag in strtok( "j_wrist_ri j_wrist_le", " " ) )
+	{
+		d = self GetTagOrigin( tag ) - seat;
+		text += " " + tag + " " + int( VectorDot( d, fwd ) ) + "/" + int( VectorDot( d, right ) ) + "/" + int( d[ 2 ] );
+	}
+	report( text );
+}
+
 // "head f/r/u ..." of a rider body: its bones from the vehicle's tag_driver, along the vehicle
 rider_bones( r, v )
 {
@@ -913,6 +928,10 @@ snowview()
 		{
 			r = v.mw2coop_rider;
 			center = v GetTagOrigin( "tag_driver" ) + ( 0, 0, 45 );
+			// the grips: the first-person hands attached to the snowmobile hold them
+			// in a thread of its own: should the vehicle not answer for the hands' bones, only it stops
+			v thread report_grips();
+			wait 1;
 			variant = "seated";
 			{
 				wait 0.5;
