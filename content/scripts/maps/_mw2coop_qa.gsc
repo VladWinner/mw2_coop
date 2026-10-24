@@ -214,6 +214,12 @@ main()
 		case "tour":
 			tour();
 			break;
+		case "climbview":
+			if ( isdefined( level.mw2coop_qa_climbview ) )
+				[[ level.mw2coop_qa_climbview ]]();
+			else
+				report( "climbview: not on Cliffhanger" );
+			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
 			// other maps' zones do not have)

@@ -29,6 +29,7 @@ climb_coop()
 climb_setup()
 {
 	level.mw2coop_qa_climb = maps\_mw2coop_climb_qa::climb;
+	level.mw2coop_qa_climbview = maps\_mw2coop_climb_qa::climbview;
 	if ( !climb_coop() )
 	{
 		level.player thread maps\_climb::player_slides_off_cliff();
@@ -682,4 +683,127 @@ climb_start_dir()
 		maps\_mw2coop::state( "climb: climb_startdir is '" + dir + "', climbing up" );
 	}
 	return "up";
+}
+
+// --------------------------------------------------------------------------------------------
+// What the partner sees of a climber. The climb draws the climber as its first-person arms and
+// picks (player_rig, a world model everyone sees) with his body standing beside them: the partner
+// saw four arms (owner's playtest, 2026-10-24). The arms are hidden from the partner, the
+// climber's own model is taken off, and the partner sees him as Soap climbs: his body's mesh on
+// Soap's skeleton (maps\_mw2coop_bodies::rider_model, the snowmobile rider's model), a pick in
+// each hand, in Soap's climbing animation, his eyes at the rig's view. The animation runs while
+// he goes up and stops while he hangs.
+
+#using_animtree( "generic_human" );
+
+// player_finishes_climbing(), self: the climb's player_rig.
+rig_seen_by_partner( climber )
+{
+	if ( !climb_coop() )
+		return;
+	other = maps\_mw2coop::other_player( climber );
+	if ( !isdefined( other ) || !isdefined( climber.mw2coop_body ) )
+		return;
+	self hideOnClient( other );
+	body = Spawn( "script_model", self GetTagOrigin( "tag_player" ) );
+	body SetModel( maps\_mw2coop_bodies::rider_model( climber.mw2coop_body ) );
+	body Attach( climber.mw2coop_head, "", true );
+	body Attach( "weapon_ice_picker", "tag_inhand" );
+	body Attach( "weapon_ice_picker", "tag_weapon_left" );
+	body.angles = ( 0, self GetTagAngles( "tag_player" )[ 1 ], 0 );
+	body UseAnimTree( #animtree );
+	body SetAnimKnobAllRestart( %cliffhanger_climb_up_mid, %body, 1, 0, 0 );
+	body SetAnimTime( %cliffhanger_climb_up_mid, climb_anim_from() );
+	wait 0.05;
+	if ( !isdefined( self ) )
+	{
+		body Delete();
+		return;
+	}
+	body climb_body_to_eyes( self, climber );
+	body hideOnClient( climber );
+	climber.mw2coop_climb_body = body;	// QA climbview
+	climber.mw2coop_climb_rig = self;	// QA climbview
+	climber maps\_utility::SetModelFunc( undefined );
+	body thread climb_body_moves( self, climber );
+	self waittill( "death" );
+	body Delete();
+	if ( isdefined( climber ) && IsAlive( climber ) )
+		climber maps\_mw2coop_bodies::give_body( maps\_mw2coop::body_model );
+}
+
+// The climb shows and hides its arms as it goes (player_relinks_to_tag, player_gets_back_on_wall:
+// ent.viewModel Show()); a Show() undoes hideOnClient, and the partner saw the arms again over
+// the climber's head (QA climbview frame, 2026-10-24). self: the climb's arms; climber: their
+// player.
+rig_show( climber )
+{
+	self Show();
+	if ( !climb_coop() || !isdefined( climber ) )
+		return;
+	other = maps\_mw2coop::other_player( climber );
+	if ( isdefined( other ) )
+		self hideOnClient( other );
+}
+
+// self: the climbing body. His head at the climber's eyes, a little behind them, facing as the
+// rig does: Soap's climb moves the body about within the animation (its head drifted 12 to 27
+// units from the view, QA climbview), so this is done every frame rather than once by a link.
+// The rig's tag_player is not his eyes: it was up to 56 units off the wall from them, and the
+// body hung in the air there.
+climb_body_to_eyes( rig, climber )
+{
+	self.angles = ( 0, rig GetTagAngles( "tag_player" )[ 1 ], 0 );
+	eyes = climber GetEye() - AnglesToForward( self.angles ) * climb_eyes_back();
+	self.origin = eyes - ( self GetTagOrigin( "j_head" ) - self.origin );
+}
+
+climb_anim_from()
+{
+	return 0.3;	// a stretch of Soap's climb up the open wall
+}
+
+climb_eyes_back()
+{
+	return 4;
+}
+
+// self: the climbing body; rig: the climb's arms. Soap's climb plays while the climber works his
+// picks (a swing button pressed or let go in the last second) or the rig rises, and holds while
+// he hangs still (owner: the body's arms stood still while his first-person arms swung). It
+// starts over from the same stretch before it reaches the top of Soap's wall.
+climb_body_moves( rig, climber )
+{
+	self endon( "death" );
+	rig endon( "death" );
+	last = rig.origin[ 2 ];
+	rate = 0;
+	held = [];
+	held[ "left" ] = climber swing_pressed( "left", "mouse1" );
+	held[ "right" ] = climber swing_pressed( "right", "mouse2" );
+	busy_until = 0;
+	for ( ;; )
+	{
+		wait 0.05;
+		left = climber swing_pressed( "left", "mouse1" );
+		right = climber swing_pressed( "right", "mouse2" );
+		if ( left != held[ "left" ] || right != held[ "right" ] )
+			busy_until = GetTime() + 1000;
+		held[ "left" ] = left;
+		held[ "right" ] = right;
+		if ( rig.origin[ 2 ] - last > 0.2 )
+			busy_until = GetTime() + 300;
+		last = rig.origin[ 2 ];
+		want = 0;
+		if ( GetTime() < busy_until )
+			want = 1;
+		if ( want != rate )
+		{
+			rate = want;
+			self SetAnim( %cliffhanger_climb_up_mid, 1, 0.2, rate );
+		}
+		if ( self GetAnimTime( %cliffhanger_climb_up_mid ) > 0.85 )
+			self SetAnimTime( %cliffhanger_climb_up_mid, climb_anim_from() );
+		self climb_body_to_eyes( rig, climber );
+	}
 }

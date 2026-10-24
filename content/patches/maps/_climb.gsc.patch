@@ -641,3 +641,23 @@ gaz.fakegun Delete();
 if ( isdefined( gaz.fakegun ) )
 		gaz.fakegun Delete();
 @@@ end
+
+12. What the partner sees of a climber: his first-person arms are hidden from the partner (also
+    each time the climb shows them again), who sees his body as Soap climbs
+    (maps\_mw2coop_climb::rig_seen_by_partner, rig_show).
+@@@ subst player_finishes_climbing
+model anim_spawn_tag_model( "viewmodel_ice_picker_03", "tag_weapon_left" );
+@@@ to
+model anim_spawn_tag_model( "viewmodel_ice_picker_03", "tag_weapon_left" );
+	model thread maps\_mw2coop_climb::rig_seen_by_partner( self );
+@@@ end
+@@@ subst player_relinks_to_tag
+ent.viewModel Show();
+@@@ to
+ent.viewModel maps\_mw2coop_climb::rig_show( ent.player );
+@@@ end
+@@@ subst player_gets_back_on_wall
+ent.viewModel Show();
+@@@ to
+ent.viewModel maps\_mw2coop_climb::rig_show( ent.player );
+@@@ end

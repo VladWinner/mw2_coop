@@ -3,6 +3,7 @@
 // exists only in Cliffhanger's zone, so no script loaded on every map may name this file.
 #include common_scripts\utility;
 #include maps\_utility;
+#using_animtree( "generic_human" );
 
 // Cliffhanger ice climb (default start): a bot plays both players. Swings go through the climb's
 // co-op input (self.mw2coop_qa_hold, read by maps\_mw2coop_climb::swing_pressed in place of the
@@ -27,6 +28,95 @@ climb()
 	d = Distance( level.player.origin, level.player2.origin );
 	maps\_mw2coop_qa::check( d < 400, "both players together at the top (" + int( d ) + " units)" );
 	maps\_mw2coop_qa::report( "done" );
+}
+
+// Scenario "climbview" (default start): what the players look like with the ice picks. Before the
+// climb player 2 draws his picks (frames of both machines: player 1 looking at him, his own
+// view); then only player 2 climbs (the bot) while player 1 stays below and looks at him from the
+// side and from behind.
+climbview()
+{
+	maps\_mw2coop_qa::check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 3;
+	foreach ( player in level.players )
+		maps\_mw2coop_qa::report( maps\_mw2coop_climb::player_name( player ) + " holds " + player GetCurrentWeapon() + ", has " + weapons_text( player ) );
+	if ( level.player2 HasWeapon( "ice_picker" ) )
+		level.player2 SwitchToWeapon( "ice_picker" );
+	wait 2.5;
+	maps\_mw2coop_qa::report( "player 2 holds " + level.player2 GetCurrentWeapon() );
+	look_at( level.player2, 110, 30 );
+	maps\_mw2coop_qa::qa_shot( "picks-drawn" );
+	look_at( level.player2, 110, 120 );
+	maps\_mw2coop_qa::qa_shot( "picks-drawn-side" );
+	level.player2 thread climb_bot();
+	wait 6;
+	if ( !flag( "price_begins_climbing" ) )
+		flag_set( "price_begins_climbing" );
+	level.player2 ent_flag_wait( "player_starts_climbing" );
+	cam = Spawn( "script_origin", level.player.origin );
+	for ( n = 0; n < 3; n++ )
+	{
+		wait 3;
+		body = level.player2.mw2coop_climb_body;
+		if ( isdefined( body ) )
+		{
+			soap = "none";
+			if ( isdefined( level.price ) )
+				soap = "" + level.price.origin;
+			maps\_mw2coop_qa::report( "body " + body.origin + " player 2 " + level.player2.origin + " soap " + soap );
+			// hang player 1's view beside the body, at its height: the wall's side, then behind
+			aim = body GetTagOrigin( "j_spine4" );
+			dir = AnglesToForward( ( 0, body.angles[ 1 ] + 100 + n * 40, 0 ) );
+			level.player Unlink();
+			cam.origin = aim + dir * 110 - ( 0, 0, 60 );
+			level.player SetOrigin( cam.origin );
+			level.player PlayerLinkTo( cam );
+			wait 0.1;
+			level.player SetPlayerAngles( VectorToAngles( aim - level.player GetEye() ) );
+			wait 0.7;
+		}
+		else
+			look_from_lane( level.player2, n * 60 );
+		if ( isdefined( level.player2.mw2coop_climb_body ) )
+		{
+			b = level.player2.mw2coop_climb_body;
+			maps\_mw2coop_qa::report( "climb body " + b.model + " head " + b GetTagOrigin( "j_head" ) + " eye " + level.player2 GetEye() + " anim time " + b GetAnimTime( %cliffhanger_climb_up_mid ) );
+		}
+		else
+			maps\_mw2coop_qa::report( "no climb body" );
+		maps\_mw2coop_qa::qa_shot( "climbing-" + n );
+	}
+	maps\_mw2coop_qa::report( "done" );
+}
+
+// Player 1 stands dist away from who, yaw degrees round from his facing, at his height, and
+// looks at him.
+look_at( who, dist, yaw )
+{
+	dir = AnglesToForward( ( 0, who.angles[ 1 ] + yaw, 0 ) );
+	level.player SetOrigin( who.origin + dir * dist );
+	level.player SetPlayerAngles( VectorToAngles( who GetEye() - ( 0, 0, 20 ) - level.player GetEye() ) );
+	wait 0.8;
+}
+
+// Player 1 at the foot of his own lane (where he would climb beside him), looking at who.
+look_from_lane( who, back )
+{
+	start = level.player.mw2coop_climb_start;
+	if ( !isdefined( start ) )
+		return;
+	away = VectorNormalize( ( start[ 0 ] - who.origin[ 0 ], start[ 1 ] - who.origin[ 1 ], 0 ) );
+	level.player SetOrigin( start + away * back );
+	level.player SetPlayerAngles( VectorToAngles( who GetEye() - ( 0, 0, 20 ) - level.player GetEye() ) );
+	wait 0.8;
+}
+
+weapons_text( player )
+{
+	text = "";
+	foreach ( w in player GetWeaponsList() )
+		text += w + " ";
+	return text;
 }
 
 climb_text( p )
