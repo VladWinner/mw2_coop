@@ -229,6 +229,12 @@ main()
 		case "oilbird":
 			oilbird();
 			break;
+		case "invconvoy":
+			invconvoy();
+			break;
+		case "bigjump":
+			bigjump();
+			break;
 		case "climbview":
 			if ( isdefined( level.mw2coop_qa_climbview ) )
 				[[ level.mw2coop_qa_climbview ]]();
@@ -1051,7 +1057,9 @@ chopperjump()
 	check( flag( "chopperjump_player_jump" ), "the jump was caught" );
 	// frames of both screens (host = player 1, client = player 2): on the rope, climbing, flying away
 	qa_shot( "rope-a" );
-	wait 1.5;
+	report( "rope: player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	qa_outside( "rope-outside" );
+	wait 1.0;
 	qa_shot( "rope-b" );
 	wait 2.5;
 	qa_shot( "rope-c" );
@@ -1111,6 +1119,8 @@ gulagevac()
 	wait 1.5;
 	check( level.player2 IsLinked(), "player 2 clipped on too" );
 	qa_shot( "clipped" );
+	report( "evac: player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	qa_outside( "outside" );
 	t = 0;
 	while ( !flag( "player_gets_pulled" ) && t < 40 )
 	{
@@ -1198,6 +1208,99 @@ oilbird()
 	wait 8;
 	qa_shot( "flying" );
 	check( level.player IsLinked() && level.player2 IsLinked(), "both are still seated in flight" );
+	report( "done" );
+}
+
+// Wolverines!' end (start "convoy"): the convoy arrives, player 1 walks to its parked Humvee and is
+// seated on tag_guy1, player 2 on another free seat of the same Humvee; frames of both screens.
+invconvoy()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	t = 0;
+	while ( !flag( "convoy_in_position" ) && t < 120 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "convoy_in_position" ), "the convoy arrived (" + t + " s)" );
+	flag_set( "player_at_convoy" );
+	humvee = level.convoy;
+	check( isdefined( humvee ), "the player's Humvee exists" );
+	if ( !isdefined( humvee ) )
+		return;
+	t = 0;
+	while ( humvee.veh_speed != 0 && t < 40 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	report( "the Humvee stopped (" + t + " s) at " + vec_int( humvee.origin ) );
+	level.player SetOrigin( humvee GetTagOrigin( "tag_guy1" ) + ( 0, 0, 10 ) );
+	wait 3;
+	check( level.player IsLinked(), "player 1 is seated" );
+	check( level.player2 IsLinked(), "player 2 is seated too" );
+	report( "player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	qa_shot( "seated" );
+	wait 4;
+	qa_shot( "later" );
+	report( "done" );
+}
+
+// Escape from Favela (start "roofrun_bigjump"): player 2 runs up and jumps over the gap; the level plays
+// the animated jump for player 1 (his rig) and player 2 plays his own beside it, then both wake up.
+bigjump()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 8;
+	vol = GetEnt( "trig_roofrun_player_bigjump_start", "targetname" );
+	edge = GetStruct( "struct_player_bigjump_edge_reference", "targetname" );
+	check( isdefined( vol ) && isdefined( edge ), "the jump trigger and the edge exist" );
+	if ( !isdefined( vol ) || !isdefined( edge ) )
+		return;
+	forward = AnglesToForward( edge.angles );
+	report( "edge " + vec_int( edge.origin ) + " angles " + edge.angles + ", player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( level.player2.origin ) );
+	start = edge.origin - forward * 140;
+	spot = PlayerPhysicsTrace( start + ( 0, 0, 40 ), start - ( 0, 0, 400 ) );
+	level.player2 SetOrigin( spot );
+	wait 0.5;
+	level.player2 SetPlayerAngles( ( 0, edge.angles[ 1 ], 0 ) );
+	wait 0.5;
+	report( "player 2 starts at " + vec_int( level.player2.origin ) );
+	press( level.player2, "forward", 3000 );
+	wait 0.5;
+	for ( n = 0; n < 14 && !flag( "roofrun_player_bigjump_start" ); n++ )
+	{
+		press( level.player2, "gostand", 150 );
+		wait 0.1;
+		report( "run " + n + ": player 2 at " + vec_int( level.player2.origin ) + " speed " + int( Length( level.player2 GetVelocity() ) ) + " touches " + level.player2 IsTouching( vol ) );
+	}
+	check( flag( "roofrun_player_bigjump_start" ), "the jump was caught" );
+	wait 0.7;
+	check( level.player IsLinked() && level.player2 IsLinked(), "both are in their jump rigs (" + level.player IsLinked() + " " + level.player2 IsLinked() + ")" );
+	report( "player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	qa_shot( "jump-a" );
+	wait 0.6;
+	qa_shot( "jump-b" );
+	t = 0;
+	while ( !flag( "player_recovery_blackscreen" ) && t < 40 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "player_recovery_blackscreen" ), "the black screen came (" + t + " s)" );
+	wait 8;
+	qa_shot( "wake-a" );
+	t = 0;
+	while ( !flag( "player_recovery_done" ) && t < 60 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "player_recovery_done" ), "the wake-up is over (" + t + " s)" );
+	wait 2;
+	check( !level.player IsLinked() && !level.player2 IsLinked(), "both are free (" + level.player IsLinked() + " " + level.player2 IsLinked() + ")" );
+	report( "after: player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	qa_shot( "up" );
 	report( "done" );
 }
 
@@ -2333,6 +2436,22 @@ trigger_text( trigger )
 	else if ( isdefined( trigger.targetname ) )
 		text += " " + trigger.targetname;
 	return text;
+}
+
+// A view from outside for the host's screen (player 1): his camera is moved to a point 80 units behind and
+// 60 to the left of player 2, looking at him; whatever is linked to them in the scene stays there. The frame
+// shows whether the two players' rigs and bodies overlap. Not for the client's screen.
+qa_outside( label )
+{
+	p2 = level.player2;
+	angles = ( 0, p2 GetPlayerAngles()[ 1 ], 0 );
+	spot = p2.origin + AnglesToForward( angles ) * -80 + AnglesToRight( angles ) * -60 + ( 0, 0, 30 );
+	cam = Spawn( "script_origin", spot );
+	cam.angles = VectorToAngles( p2.origin + ( 0, 0, 20 ) - spot );
+	level.player PlayerLinkTo( cam );
+	wait 0.5;
+	report( label + ": camera " + vec_int( spot ) + ", players " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	qa_shot( label );
 }
 
 // both machines save their own frame (src/shot.c): <map>-<section>-<label>

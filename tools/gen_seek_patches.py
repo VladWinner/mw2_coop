@@ -116,6 +116,30 @@ for rel, title, scenes in SCRIPTS:
         p.subst('player_leaps_to_chopper', 'level.player IsOnGround()', '( who IsOnGround() || maps\\_mw2coop::is_standing( who ) )')
         p.subst('player_leaps_to_chopper', 'level.player', 'who')
         n += 1
+        # the big jump over the gap and the wake-up for both players (maps\_mw2coop_favelaescape.gsc)
+        p.note("""{0}. The big jump over the gap on the roofs for both players (maps\\_mw2coop_favelaescape):
+   whichever player leaps (or falls) first starts it; player 1 keeps the level's flow, player 2 plays the
+   same jump and wake-up with a rig of his own, 55 units beside player 1's (partner_bigjump,
+   partner_fall).""".format(n + 1))
+        body = p.func('roofrun_player_bigjump')
+        orig = body[body.index('\twhile( 1 )\n\t{\n\t\tbreakout = false;'):body.index('\tflag_set( "player_jump_watcher_stop" );')]
+        single = orig.replace('0.915, true )', '0.915, true, level.player )')
+        p.replace(orig, '\tif ( maps\\_mw2coop_favelaescape::coop() )\n\t\tmaps\\_mw2coop_favelaescape::catch_bigjump( jumpstart_trig, jumpForward );\n\telse\n\t{\n' + single + '\t}\n\n')
+        p.replace('\tanimref thread anim_single_solo( player_rig, jump_scene );\n',
+                  '\tanimref thread anim_single_solo( player_rig, jump_scene );\n'
+                  '\tthread maps\\_mw2coop_favelaescape::partner_bigjump( startpoint, startangles, groundref );\n')
+        p.replace('player_leaps( trig, jump_forward, goodDot, checkIsOnGround )\n{\n',
+                  'player_leaps( trig, jump_forward, goodDot, checkIsOnGround, who )\n{\n')
+        p.subst('player_leaps', 'level.player IsOnGround()', '( who IsOnGround() || maps\\_mw2coop::is_standing( who ) )')
+        p.subst('player_leaps', 'level.player', 'who')
+        p.replace('\tthread roofrun_player_recovery();\n',
+                  '\tthread roofrun_player_recovery();\n'
+                  '\tthread maps\\_mw2coop_favelaescape::partner_fall( GetStruct( "struct_player_recovery_animref", "targetname" ) );\n')
+        p.subst('roofrun_player_bigjump', 'player.origin[ 1 ]', 'maps\\_mw2coop_favelaescape::start_y( player )')
+        p.subst('roofrun_player_recovery', 'level.player EnableInvulnerability();', 'maps\\_mw2coop_favelaescape::invulnerable( true );')
+        p.subst('roofrun_player_recovery', 'level.player DisableInvulnerability();', 'maps\\_mw2coop_favelaescape::invulnerable( false );')
+        p.subst('roofrun_player_recovery', 'while( !level.player IsOnGround() )', 'while( !maps\\_mw2coop_favelaescape::all_landed() )')
+        n += 1
     if rel == 'af_caves/maps/af_caves.gsc':
         p.note("""{0}. The opening rappel for both players (maps\_mw2coop_cave): whoever uses the hook-up first
    rappels; it is free again for the other player afterwards.""".format(n + 1))

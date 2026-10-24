@@ -136,3 +136,110 @@ level.player
 @@@ to
 who
 @@@ end
+
+3. The big jump over the gap on the roofs for both players (maps\_mw2coop_favelaescape):
+   whichever player leaps (or falls) first starts it; player 1 keeps the level's flow, player 2 plays the
+   same jump and wake-up with a rig of his own, 55 units beside player 1's (partner_bigjump,
+   partner_fall).
+@@@ replace
+	while( 1 )
+	{
+		breakout = false;
+		
+		while( level.player IsTouching( jumpstart_trig ) )
+		{
+			flag_wait( "player_jumping" );
+			if( player_leaps( jumpstart_trig, jumpForward, 0.915, true ) )  // 0.925
+			{
+				breakout = true;
+				break;
+			}
+			wait( 0.05 );
+		}
+		
+		if( breakout )
+		{
+			break;
+		}
+		wait( 0.05 );
+	}
+	
+@@@ with
+	if ( maps\_mw2coop_favelaescape::coop() )
+		maps\_mw2coop_favelaescape::catch_bigjump( jumpstart_trig, jumpForward );
+	else
+	{
+	while( 1 )
+	{
+		breakout = false;
+		
+		while( level.player IsTouching( jumpstart_trig ) )
+		{
+			flag_wait( "player_jumping" );
+			if( player_leaps( jumpstart_trig, jumpForward, 0.915, true, level.player ) )  // 0.925
+			{
+				breakout = true;
+				break;
+			}
+			wait( 0.05 );
+		}
+		
+		if( breakout )
+		{
+			break;
+		}
+		wait( 0.05 );
+	}
+	
+	}
+
+@@@ end
+@@@ replace
+	animref thread anim_single_solo( player_rig, jump_scene );
+@@@ with
+	animref thread anim_single_solo( player_rig, jump_scene );
+	thread maps\_mw2coop_favelaescape::partner_bigjump( startpoint, startangles, groundref );
+@@@ end
+@@@ replace
+player_leaps( trig, jump_forward, goodDot, checkIsOnGround )
+{
+@@@ with
+player_leaps( trig, jump_forward, goodDot, checkIsOnGround, who )
+{
+@@@ end
+@@@ subst player_leaps
+level.player IsOnGround()
+@@@ to
+( who IsOnGround() || maps\_mw2coop::is_standing( who ) )
+@@@ end
+@@@ subst player_leaps
+level.player
+@@@ to
+who
+@@@ end
+@@@ replace
+	thread roofrun_player_recovery();
+@@@ with
+	thread roofrun_player_recovery();
+	thread maps\_mw2coop_favelaescape::partner_fall( GetStruct( "struct_player_recovery_animref", "targetname" ) );
+@@@ end
+@@@ subst roofrun_player_bigjump
+player.origin[ 1 ]
+@@@ to
+maps\_mw2coop_favelaescape::start_y( player )
+@@@ end
+@@@ subst roofrun_player_recovery
+level.player EnableInvulnerability();
+@@@ to
+maps\_mw2coop_favelaescape::invulnerable( true );
+@@@ end
+@@@ subst roofrun_player_recovery
+level.player DisableInvulnerability();
+@@@ to
+maps\_mw2coop_favelaescape::invulnerable( false );
+@@@ end
+@@@ subst roofrun_player_recovery
+while( !level.player IsOnGround() )
+@@@ to
+while( !maps\_mw2coop_favelaescape::all_landed() )
+@@@ end

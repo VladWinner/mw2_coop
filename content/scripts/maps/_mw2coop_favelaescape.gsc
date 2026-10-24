@@ -107,3 +107,195 @@ slide_sync()
 	maps\_mw2coop::state( "favela_escape: the second player is brought to the slide" );
 	other maps\_mw2coop::teleport_to_partner_when_safe( first, 5 );
 }
+
+// --------------------------------------------------------------------------------------------
+// The big jump over the gap on the roofs (roofrun_player_bigjump) and the wake-up on the ground
+// (roofrun_player_recovery). The level plays both for level.player: an animated jump with his rig
+// (the roof falls away, Soap reaches for him), black screen, shell shock, "recover" animation, and he
+// is free. Player 1 keeps that flow as it was. Whoever leaps first (or falls) starts it, and player 2
+// plays the same animations with a rig of his own, beside player 1's (55 units: where he stood, but
+// not nearer than that to player 1's start), and wakes up beside him; the roof, Soap, the angry mob,
+// dialogue and music are the level's, once.
+bigjump_spacing()
+{
+	return 55;
+}
+
+// roofrun_player_bigjump(): the player who leaps over the gap first (see catch_leap).
+catch_bigjump( volume, jump_forward )
+{
+	foreach ( player in level.players )
+	{
+		player.mw2coop_stood = true;
+		player.mw2coop_jumping = false;
+	}
+	for ( ;; )
+	{
+		foreach ( player in level.players )
+		{
+			if ( !isalive( player ) )
+				continue;
+			standing = maps\_mw2coop::is_standing( player );
+			vel = player GetVelocity();
+			if ( standing )
+				player.mw2coop_jumping = false;
+			else if ( player.mw2coop_stood && vel[ 2 ] > 100 )
+				player.mw2coop_jumping = true;
+			player.mw2coop_stood = standing;
+			if ( player.mw2coop_jumping && maps\favela_escape_code::player_leaps( volume, jump_forward, 0.915, true, player ) )
+			{
+				jump_lanes( volume, player );
+				return player;
+			}
+		}
+		wait 0.05;
+	}
+}
+
+// Where along the edge each player's rig starts (level.mw2coop_jump_y[ 1 ], [ 2 ]): the one who leaps stands
+// where he is. The other stands where he is, when he is at the edge too (in the jump trigger) and not nearer
+// than the spacing to the first; else beside him, on the side he is on. The level took player 1's place
+// alone, and one who was elsewhere on the roof started inside a wall (QA frames, 2026-10-25).
+jump_lanes( volume, leaper )
+{
+	other = maps\_mw2coop::other_player( leaper );
+	y_leaper = leaper.origin[ 1 ];
+	y_other = other.origin[ 1 ];
+	if ( !other IsTouching( volume ) || abs( y_other - y_leaper ) < bigjump_spacing() )
+	{
+		side = 1;
+		if ( y_other < y_leaper )
+			side = -1;
+		y_other = y_leaper + side * bigjump_spacing();
+	}
+	level.mw2coop_jump_y = [];
+	level.mw2coop_jump_y[ 1 ] = y_leaper;
+	level.mw2coop_jump_y[ 2 ] = y_other;
+	if ( leaper != level.player )
+	{
+		level.mw2coop_jump_y[ 1 ] = y_other;
+		level.mw2coop_jump_y[ 2 ] = y_leaper;
+	}
+}
+
+// roofrun_player_bigjump(), the y of player 1's rig (the level's own: where he stands).
+start_y( player )
+{
+	if ( !coop() || !isdefined( level.mw2coop_jump_y ) )
+		return player.origin[ 1 ];
+	return level.mw2coop_jump_y[ 1 ];
+}
+
+// roofrun_player_recovery(), where it makes the player invulnerable for the fall (and not).
+invulnerable( on )
+{
+	foreach ( player in level.players )
+	{
+		if ( on )
+			player EnableInvulnerability();
+		else
+			player DisableInvulnerability();
+	}
+}
+
+// roofrun_player_recovery(), the wait for a player who fell to be on the ground: everybody is.
+all_landed()
+{
+	if ( !coop() )
+		return level.player IsOnGround();
+	foreach ( player in level.players )
+		if ( isalive( player ) && !maps\_mw2coop::is_standing( player ) )
+			return false;
+	return true;
+}
+
+// Where player 2's rig is, beside player 1's: 55 units along the edge (or the ground reference).
+beside( origin, angles, y_of_other, y_of_first )
+{
+	side = 1;
+	if ( isdefined( y_of_other ) && isdefined( y_of_first ) && y_of_other < y_of_first )
+		side = -1;
+	return origin + AnglesToRight( angles ) * ( side * bigjump_spacing() );
+}
+
+// roofrun_player_bigjump(), as the jump scene starts: player 2's own jump.
+partner_bigjump( startpoint, startangles, groundref )
+{
+	if ( !coop() )
+		return;
+	p2 = level.player2;
+	if ( !isalive( p2 ) )
+		return;
+	level endon( "mw2coop_level_end" );
+	scene = "jump";
+	anim_jump = level.scr_anim[ "player_bigjump" ][ scene ];
+	spot = ( startpoint[ 0 ], level.mw2coop_jump_y[ 2 ], startpoint[ 2 ] );
+	ref = Spawn( "script_origin", spot );
+	ref.angles = startangles;
+	rig = spawn_anim_model( "player_bigjump", GetStartOrigin( spot, startangles, anim_jump ) );
+	rig.angles = GetStartAngles( spot, startangles, anim_jump );
+	rig Hide();
+	p2 TakeAllWeapons();
+	p2 notify( "stop_sliding" );
+	rig delaycall( 1.0, ::Show );
+	ref thread anim_single_solo( rig, scene );
+	wait 0.3;
+	p2 PlayerLinkToBlend( rig, "tag_player", 0.6, 0.2, 0.4 );
+	maps\_mw2coop::state( "favela_escape: player 2 jumps over the gap beside player 1" );
+	rig waittillmatch( "single anim", "start_soap" );
+	p2 FreezeControls( true );
+	rig waittillmatch( "single anim", "blackout" );
+	partner_recover( rig, groundref );
+	ref Delete();
+}
+
+// roofrun_player_bigjump(): player 2 fell the normal way (or player 1 did; both are brought).
+partner_fall( groundref )
+{
+	if ( !coop() )
+		return;
+	level endon( "mw2coop_level_end" );
+	flag_wait( "player_recovery_blackscreen" );
+	partner_recover( undefined, groundref );
+}
+
+// The wake-up of player 2: roofrun_player_recovery() for him. rig: his jump rig (undefined when he
+// fell: his rig starts the recovery).
+partner_recover( rig, groundref )
+{
+	p2 = level.player2;
+	blacktime = 6.5;
+	gref = Spawn( "script_origin", beside( groundref.origin, groundref.angles, 1, 0 ) );
+	gref.angles = groundref.angles;
+	p2 PlayRumbleLoopOnEntity( "artillery_rumble" );
+	p2 delaycall( 1, ::StopRumble, "artillery_rumble" );
+	p2 Shellshock( "favela_escape_player_recovery", blacktime + 0.1 );
+	black = maps\_hud_util::create_client_overlay( "black", 0, p2 );
+	black.alpha = 1;
+	p2 allowcrouch( false );
+	p2 AllowProne( false );
+	p2 setstance( "stand" );
+	p2 TakeAllWeapons();
+	p2 FreezeControls( true );
+	recover = level.scr_anim[ "player_bigjump" ][ "recover" ];
+	if ( !isdefined( rig ) )
+	{
+		rig = spawn_anim_model( "player_bigjump", GetStartOrigin( gref.origin, gref.angles, recover ) );
+		rig.angles = GetStartAngles( gref.origin, gref.angles, recover );
+		p2 PlayerLinkToBlend( rig, "tag_player", 0.05 );
+	}
+	wait blacktime;
+	gref thread anim_single_solo( rig, "recover" );
+	wait 0.1;
+	black FadeOverTime( 1 );
+	black.alpha = 0;
+	rig waittillmatch( "single anim", "end" );
+	p2 allowcrouch( true );
+	p2 AllowProne( true );
+	black Destroy();
+	p2 Unlink();
+	p2 FreezeControls( false );
+	rig Delete();
+	gref Delete();
+	maps\_mw2coop::state( "favela_escape: player 2 is up after the fall" );
+}
