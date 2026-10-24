@@ -58,7 +58,8 @@ table( level_name )
 			break;
 		case "af_caves":
 			t[ t.size ] = pair( "rappel_threads", "rappel" );
-			t[ t.size ] = pair( "player_killing_guard", "barracks" );
+			// both players are down the rope (_mw2coop_cave), not when the first starts the knife kill
+			t[ t.size ] = pair( "mw2coop_cave_down", "barracks" );
 			t[ t.size ] = pair( "steamroom_ambush_finish_dialogue_ended", "ledge" );
 			t[ t.size ] = pair( "player_crossed_bridge", "overlook" );
 			t[ t.size ] = pair( "player_right_near_breach", "control" );

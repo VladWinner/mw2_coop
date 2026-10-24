@@ -53,6 +53,54 @@ for rel, title, scenes in SCRIPTS:
         p.subst('player_init', 'level.player stealth_cliffhanger();',
                 'foreach ( mw2coop_player in level.players )\n\t\tmw2coop_player stealth_cliffhanger();')
         n += 1
+    if rel == 'af_caves/maps/af_caves_code.gsc':
+        # the opening rappel for both players (maps\_mw2coop_cave.gsc)
+        p.note("""{0}. The opening rappel for both players (maps\_mw2coop_cave): af_caves_rappel_behavior( who )
+   is the descent of whoever used the hook-up; the other player rappels the same way afterwards
+   (second_done: no guard is left to kill). The guard below shoots the first player. The level's
+   flag "rappel_end" is the first player's, so each player has an ending of his own.""".format(n + 1))
+        p.replace('af_caves_rappel_behavior()\n{\n', 'af_caves_rappel_behavior( who )\n{\n\tsecond = maps\_mw2coop_cave::is_second( who );\n')
+        # the spawners are gone for the second descent: the guards' spawn functions stay registered
+        fns = (('2', 'rappel_guard2_patrol'), ('2', 'rappel_guard2_kill_player'), ('2', 'rappel_guard2_death'),
+               ('1', 'rappel_guard1_kill_player'), ('2', 'rappel_guards_think'), ('1', 'rappel_guards_think'))
+        lines = ''.join('\tarray_spawn_function_noteworthy( "rappel_guard_%s", ::%s );\n' % f for f in fns)
+        p.replace(lines, '\tif ( !second )\n\t{\n' + ''.join('\t' + l + '\n' for l in lines.split('\n')[:-1]) + '\t}\n')
+        p.replace('\tplayer_rope = spawn_anim_model( "rope" );\n',
+                  '\tplayer_rope = spawn_anim_model( "rope" );\n\tmaps\_mw2coop_cave::rope_made( player_rope );\n')
+        p.replace('\tarray_spawn( rappel_baddie_spawners );\n',
+                  '\tif ( !second )\n\t\tarray_spawn( rappel_baddie_spawners );\n')
+        p.replace('\telse\n\t{\n\n\t\tfor ( ;; )\n\t\t{\n\t\t\tif ( !isalive( level.player ) )\n',
+                  '\telse\n\t{\n\t\tif ( second )\n\t\t{\n\t\t\tmaps\_mw2coop_cave::second_done( who, ending_player_rig, player_rig, old_weapon );\n\t\t\treturn;\n\t\t}\n\n\t\tfor ( ;; )\n\t\t{\n\t\t\tif ( !isalive( level.player ) )\n')
+        p.replace('\tthread player_decent_death();\n', '\tthread player_decent_death( who );\n')
+        p.replace('::hurt_player_on_bounce );\n', '::hurt_player_on_bounce, who );\n')
+        # the hook-up's view link and the knife kill's relink were player 1's (the second player's
+        # rig pulled player 1 up to the top; owner, 2026-10-24)
+        p.replace('::player_gets_groundref_and_opens_fov, tag_origin );\n', '::player_gets_groundref_and_opens_fov, tag_origin, who );\n')
+        p.replace('player_gets_groundref_and_opens_fov( tag_origin )\n{\n', 'player_gets_groundref_and_opens_fov( tag_origin, who )\n{\n')
+        p.subst('player_gets_groundref_and_opens_fov', 'open_up_fov( ', 'maps\\_mw2coop_cave::link_fov( who, ')
+        p.subst('player_gets_groundref_and_opens_fov', 'level.player', 'who')
+        p.replace('relink_player_for_knife_kill( percentage );\n', 'relink_player_for_knife_kill( percentage, who );\n')
+        p.replace('relink_player_for_knife_kill( percentage )\n{\n', 'relink_player_for_knife_kill( percentage, who )\n{\n')
+        p.subst('relink_player_for_knife_kill', 'level.player', 'who')
+        p.replace('player_decent_death()\n{\n', 'player_decent_death( who )\n{\n')
+        p.replace('hurt_player_on_bounce()\n{\n', 'hurt_player_on_bounce( who )\n{\n')
+        p.subst('af_caves_rappel_behavior', 'flag_set( "rappel_end" )', 'maps\_mw2coop_cave::rappel_end_set( who )')
+        p.subst('af_caves_rappel_behavior', 'flag( "rappel_end" )', 'maps\_mw2coop_cave::rappel_ending( who )')
+        for fn in ('af_caves_rappel_behavior', 'player_decent_death', 'hurt_player_on_bounce'):
+            p.subst(fn, 'level.player', 'who')
+        n += 1
+    if rel == 'af_caves/maps/af_caves.gsc':
+        p.note("""{0}. The opening rappel for both players (maps\_mw2coop_cave): whoever uses the hook-up first
+   rappels; it is free again for the other player afterwards.""".format(n + 1))
+        p.subst('rappel_player_rappel_setup', 'rappel_trigger waittill( "trigger" );', 'rappel_trigger waittill( "trigger", who );')
+        p.subst('rappel_player_rappel_setup', 'level.player', 'who')
+        p.subst('rappel_player_rappel_setup', 'rappel_trigger delete();', 'maps\_mw2coop_cave::trigger_used( rappel_trigger, who );')
+        p.subst('rappel_player_rappel_setup', 'af_caves_rappel_behavior();',
+                'af_caves_rappel_behavior( who );\n\tmaps\_mw2coop_cave::partner_turn( rappel_trigger, who );')
+        p.subst('rappel_guard1_kill_player', 'flag_wait( "rappel_end" );',
+                'flag_wait( "rappel_end" );\n\tfirst = maps\_mw2coop_cave::first_rappeller();')
+        p.subst('rappel_guard1_kill_player', 'level.player', 'first')
+        n += 1
     p.write(name + '.patch', '''
 mw2coop patch for maps/{0} ({1}, Modern Warfare 2, 64-bit Steam build). Generated by
 tools/gen_seek_patches.py; do not edit by hand.

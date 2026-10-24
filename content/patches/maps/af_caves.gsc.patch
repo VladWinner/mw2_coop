@@ -43,3 +43,38 @@ self.favoriteenemy = level.player
 @@@ to
 self.favoriteenemy = maps\_mw2coop::seek_player( self.origin )
 @@@ end
+
+2. The opening rappel for both players (maps\_mw2coop_cave): whoever uses the hook-up first
+   rappels; it is free again for the other player afterwards.
+@@@ subst rappel_player_rappel_setup
+rappel_trigger waittill( "trigger" );
+@@@ to
+rappel_trigger waittill( "trigger", who );
+@@@ end
+@@@ subst rappel_player_rappel_setup
+level.player
+@@@ to
+who
+@@@ end
+@@@ subst rappel_player_rappel_setup
+rappel_trigger delete();
+@@@ to
+maps\_mw2coop_cave::trigger_used( rappel_trigger, who );
+@@@ end
+@@@ subst rappel_player_rappel_setup
+af_caves_rappel_behavior();
+@@@ to
+af_caves_rappel_behavior( who );
+	maps\_mw2coop_cave::partner_turn( rappel_trigger, who );
+@@@ end
+@@@ subst rappel_guard1_kill_player
+flag_wait( "rappel_end" );
+@@@ to
+flag_wait( "rappel_end" );
+	first = maps\_mw2coop_cave::first_rappeller();
+@@@ end
+@@@ subst rappel_guard1_kill_player
+level.player
+@@@ to
+first
+@@@ end

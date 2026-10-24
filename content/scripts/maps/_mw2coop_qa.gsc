@@ -906,6 +906,11 @@ rider_bones( r, v )
 rappel()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	if ( level.script == "af_caves" )
+	{
+		cave_rappel();
+		return;
+	}
 	wait 4;
 	trigger = GetEnt( "rappel_trigger", "script_noteworthy" );
 	check( isdefined( trigger ), "the rope's use trigger exists" );
@@ -930,6 +935,64 @@ rappel()
 	check( !level.player2 IsLinked() && d2 > 100, "player 2 came down and was let go (" + int( d2 ) + " units)" );
 	d = Distance( level.player.origin, level.player2.origin );
 	report( "at the bottom: " + int( d ) + " units apart" );
+	report( "player 1 holds " + level.player GetCurrentWeapon() + ", player 2 holds " + level.player2 GetCurrentWeapon() );
+	report( "done" );
+}
+
+// Just Like Old Times (start "rappel"): player 1 hooks up, rappels and kills the guard; the hook-up is
+// free again, player 2 hooks up and rappels; both end up below, not linked, with their weapons.
+cave_rappel()
+{
+	t = 0;
+	while ( !flag( "price_hooksup" ) && t < 60 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "price_hooksup" ), "Price hooked up" );
+	wait 2;
+	trigger = GetEnt( "player_rappel_trigger", "targetname" );
+	check( isdefined( trigger ), "the hook-up's use trigger exists" );
+	top = level.player.origin;
+	level.player2 SetOrigin( top + ( 40, 0, 0 ) );
+	wait 1;
+	trigger notify( "trigger", level.player );
+	wait 3;
+	check( level.player IsLinked(), "player 1 is on the rope" );
+	t = 0;
+	while ( !flag( "end_of_rappel_scene" ) && t < 90 )
+	{
+		if ( flag( "rappel_end" ) && !flag( "player_killing_guard" ) )
+			press( level.player, "melee", 500 );
+		wait 0.5;
+		t += 0.5;
+	}
+	check( flag( "player_killing_guard" ), "player 1 killed the guard" );
+	check( flag( "end_of_rappel_scene" ), "player 1's scene ended (" + t + " s)" );
+	wait 6;
+	d1 = top[ 2 ] - level.player.origin[ 2 ];
+	check( !level.player IsLinked() && d1 > 100, "player 1 came down and was let go (" + int( d1 ) + " units)" );
+	check( isdefined( trigger ), "the hook-up is usable again for player 2" );
+	// the barracks' "abandoned Price" check fails the mission for a player 1 who stays at the bottom
+	if ( isdefined( level.flag[ "barracks_stealthbreak_survived" ] ) )
+		flag_set( "barracks_stealthbreak_survived" );
+	bottom1 = level.player.origin;
+	level.player2 SetOrigin( top + ( 40, 0, 0 ) );
+	wait 1;
+	trigger notify( "trigger", level.player2 );
+	wait 3;
+	check( level.player2 IsLinked(), "player 2 is on the rope" );
+	t = 0;
+	while ( level.player2 IsLinked() && t < 90 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	wait 2;
+	d2 = top[ 2 ] - level.player2.origin[ 2 ];
+	check( !level.player2 IsLinked() && d2 > 100, "player 2 came down and was let go (" + int( d2 ) + " units, " + t + " s)" );
+	check( !level.player IsLinked() && Distance( level.player.origin, bottom1 ) < 200, "player 1 stayed at the bottom while player 2 rappelled (" + int( Distance( level.player.origin, bottom1 ) ) + " units)" );
+	report( "at the bottom: " + int( Distance( level.player.origin, level.player2.origin ) ) + " units apart" );
 	report( "player 1 holds " + level.player GetCurrentWeapon() + ", player 2 holds " + level.player2 GetCurrentWeapon() );
 	report( "done" );
 }

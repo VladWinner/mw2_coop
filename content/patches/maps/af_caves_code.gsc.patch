@@ -8,3 +8,154 @@ self SetGoalEntity( level.player )
 @@@ to
 self SetGoalEntity( maps\_mw2coop::seek_player( self.origin ) )
 @@@ end
+
+2. The opening rappel for both players (maps\_mw2coop_cave): af_caves_rappel_behavior( who )
+   is the descent of whoever used the hook-up; the other player rappels the same way afterwards
+   (second_done: no guard is left to kill). The guard below shoots the first player. The level's
+   flag "rappel_end" is the first player's, so each player has an ending of his own.
+@@@ replace
+af_caves_rappel_behavior()
+{
+@@@ with
+af_caves_rappel_behavior( who )
+{
+	second = maps\_mw2coop_cave::is_second( who );
+@@@ end
+@@@ replace
+	array_spawn_function_noteworthy( "rappel_guard_2", ::rappel_guard2_patrol );
+	array_spawn_function_noteworthy( "rappel_guard_2", ::rappel_guard2_kill_player );
+	array_spawn_function_noteworthy( "rappel_guard_2", ::rappel_guard2_death );
+	array_spawn_function_noteworthy( "rappel_guard_1", ::rappel_guard1_kill_player );
+	array_spawn_function_noteworthy( "rappel_guard_2", ::rappel_guards_think );
+	array_spawn_function_noteworthy( "rappel_guard_1", ::rappel_guards_think );
+@@@ with
+	if ( !second )
+	{
+		array_spawn_function_noteworthy( "rappel_guard_2", ::rappel_guard2_patrol );
+		array_spawn_function_noteworthy( "rappel_guard_2", ::rappel_guard2_kill_player );
+		array_spawn_function_noteworthy( "rappel_guard_2", ::rappel_guard2_death );
+		array_spawn_function_noteworthy( "rappel_guard_1", ::rappel_guard1_kill_player );
+		array_spawn_function_noteworthy( "rappel_guard_2", ::rappel_guards_think );
+		array_spawn_function_noteworthy( "rappel_guard_1", ::rappel_guards_think );
+	}
+@@@ end
+@@@ replace
+	player_rope = spawn_anim_model( "rope" );
+@@@ with
+	player_rope = spawn_anim_model( "rope" );
+	maps\_mw2coop_cave::rope_made( player_rope );
+@@@ end
+@@@ replace
+	array_spawn( rappel_baddie_spawners );
+@@@ with
+	if ( !second )
+		array_spawn( rappel_baddie_spawners );
+@@@ end
+@@@ replace
+	else
+	{
+
+		for ( ;; )
+		{
+			if ( !isalive( level.player ) )
+@@@ with
+	else
+	{
+		if ( second )
+		{
+			maps\_mw2coop_cave::second_done( who, ending_player_rig, player_rig, old_weapon );
+			return;
+		}
+
+		for ( ;; )
+		{
+			if ( !isalive( level.player ) )
+@@@ end
+@@@ replace
+	thread player_decent_death();
+@@@ with
+	thread player_decent_death( who );
+@@@ end
+@@@ replace
+::hurt_player_on_bounce );
+@@@ with
+::hurt_player_on_bounce, who );
+@@@ end
+@@@ replace
+::player_gets_groundref_and_opens_fov, tag_origin );
+@@@ with
+::player_gets_groundref_and_opens_fov, tag_origin, who );
+@@@ end
+@@@ replace
+player_gets_groundref_and_opens_fov( tag_origin )
+{
+@@@ with
+player_gets_groundref_and_opens_fov( tag_origin, who )
+{
+@@@ end
+@@@ subst player_gets_groundref_and_opens_fov
+open_up_fov( 
+@@@ to
+maps\_mw2coop_cave::link_fov( who, 
+@@@ end
+@@@ subst player_gets_groundref_and_opens_fov
+level.player
+@@@ to
+who
+@@@ end
+@@@ replace
+relink_player_for_knife_kill( percentage );
+@@@ with
+relink_player_for_knife_kill( percentage, who );
+@@@ end
+@@@ replace
+relink_player_for_knife_kill( percentage )
+{
+@@@ with
+relink_player_for_knife_kill( percentage, who )
+{
+@@@ end
+@@@ subst relink_player_for_knife_kill
+level.player
+@@@ to
+who
+@@@ end
+@@@ replace
+player_decent_death()
+{
+@@@ with
+player_decent_death( who )
+{
+@@@ end
+@@@ replace
+hurt_player_on_bounce()
+{
+@@@ with
+hurt_player_on_bounce( who )
+{
+@@@ end
+@@@ subst af_caves_rappel_behavior
+flag_set( "rappel_end" )
+@@@ to
+maps\_mw2coop_cave::rappel_end_set( who )
+@@@ end
+@@@ subst af_caves_rappel_behavior
+flag( "rappel_end" )
+@@@ to
+maps\_mw2coop_cave::rappel_ending( who )
+@@@ end
+@@@ subst af_caves_rappel_behavior
+level.player
+@@@ to
+who
+@@@ end
+@@@ subst player_decent_death
+level.player
+@@@ to
+who
+@@@ end
+@@@ subst hurt_player_on_bounce
+level.player
+@@@ to
+who
+@@@ end
