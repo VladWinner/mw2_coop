@@ -9,6 +9,7 @@
 // landing. A seat at the other door (QA tour 2026-10-22) had him look at the cabin's floor.
 #include common_scripts\utility;
 #include maps\_utility;
+#include maps\_anim;
 
 // Where a player's view controller sits on tag_guy2 (player 1: 1, player 2: 2); player 1 alone
 // keeps the level's own place.
@@ -144,4 +145,83 @@ partner_chase_fade( org, max_black, black_range )
 	alpha = 1 - ( ( Distance2D( level.player2.origin, org ) - max_black ) / black_range );
 	level.mw2coop_chase_black.alpha = clamp( alpha, 0, 1 );
 	level.mw2coop_chase_black FadeOverTime( 0.2 );
+}
+
+// --------------------------------------------------------------------------------------------
+// The cellblock rappel (gulag_code.gsc player_rappels, cellblock_rappel_player): the level's
+// player alone held the use button at the rope, rode the rope's animation with his own rig and
+// came off at the bottom; player 2 stayed at the top (owner, 2026-10-24: "the rope: there may be
+// problems like with the ice pick"). Now whoever uses the rope first rappels, and the other uses it
+// after him: the same rope plays its animation again for him (rappel_rope_again), with a rig of
+// his own. The level goes on as soon as the first is on the rope, as it did.
+
+// player_rappels(): who goes down this time. Before co-op's second rappel the rope is not usable.
+rappel_wait( trigger, flag_name )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
+	{
+		flag_wait( flag_name );
+		return level.player;
+	}
+	for ( ;; )
+	{
+		trigger waittill( "trigger", who );
+		if ( !isdefined( who ) || !IsPlayer( who ) || isdefined( who.mw2coop_rappelled ) || isdefined( level.mw2coop_rappelling ) )
+			continue;
+		who.mw2coop_rappelled = true;
+		level.mw2coop_rappelling = who;
+		flag_set( flag_name );
+		return who;
+	}
+}
+
+// player_rappels(), where it deleted the use trigger. self: the trigger. who: this rappel's player.
+rappel_trigger_used( who )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
+	{
+		self Delete();
+		return;
+	}
+	// the rope stays usable for the other player once the first is down
+	self trigger_off();
+	other = maps\_mw2coop::other_player( who );
+	if ( isdefined( other.mw2coop_rappelled ) )
+		self Delete();
+}
+
+// player_rappels(), where it deleted the rope's glowing outline. self: the outline. The first
+// player only hides it: the other player's rope needs it again.
+rappel_obj_done( who )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
+	{
+		self Delete();
+		return;
+	}
+	other = maps\_mw2coop::other_player( who );
+	if ( isdefined( other.mw2coop_rappelled ) )
+		self Delete();
+	else
+		self Hide();
+}
+
+// cellblock_rappel_player(), after the first player is on the rope. self: level. When his scene is
+// over the rope hangs ready again and the other player uses it, as the first did.
+rappel_partner( ent )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
+		return;
+	level endon( "mw2coop_level_end" );
+	wait ent.unlink_time + 6;	// the scene is over: the first player is down
+	level.mw2coop_rappelling = undefined;
+	ent.rope_ent anim_first_frame_solo( ent.rope, ent.scene );
+	if ( isdefined( ent.rope_obj ) )
+		ent.rope_obj Show();
+	trigger = GetEnt( "rappel_trigger", "script_noteworthy" );
+	if ( !isdefined( trigger ) )
+		return;
+	trigger trigger_on();
+	maps\_mw2coop::state( "gulag: the rope is free for the second player" );
+	maps\gulag_code::player_rappels( ent );
 }

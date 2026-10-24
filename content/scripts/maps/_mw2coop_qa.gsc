@@ -214,6 +214,9 @@ main()
 		case "tour":
 			tour();
 			break;
+		case "rappel":
+			rappel();
+			break;
 		case "climbview":
 			if ( isdefined( level.mw2coop_qa_climbview ) )
 				[[ level.mw2coop_qa_climbview ]]();
@@ -896,6 +899,39 @@ rider_bones( r, v )
 		text += tag + " " + int( VectorDot( d, fwd ) ) + "/" + int( VectorDot( d, right ) ) + "/" + int( d[ 2 ] ) + "  ";
 	}
 	return text;
+}
+
+// The Gulag's cellblock rope (start "rappel"): player 1 uses it and rappels, the rope hangs ready
+// again, player 2 uses it and rappels; both end up below, not linked, with their weapons.
+rappel()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 4;
+	trigger = GetEnt( "rappel_trigger", "script_noteworthy" );
+	check( isdefined( trigger ), "the rope's use trigger exists" );
+	top = level.player.origin;
+	level.player2 SetOrigin( level.player.origin + ( 30, 0, 0 ) );
+	wait 1;
+	trigger notify( "trigger", level.player );
+	wait 3;
+	check( level.player IsLinked(), "player 1 is on the rope" );
+	level.player2 SetOrigin( level.player.origin + ( 30, 0, 0 ) );
+	wait 12;
+	d1 = top[ 2 ] - level.player.origin[ 2 ];
+	check( !level.player IsLinked() && d1 > 100, "player 1 came down and was let go (" + int( d1 ) + " units)" );
+	check( isdefined( GetEnt( "rappel_trigger", "script_noteworthy" ) ), "the rope is usable again for player 2" );
+	level.player2 SetOrigin( top + ( 20, 0, 0 ) );
+	wait 1;
+	trigger notify( "trigger", level.player2 );
+	wait 3;
+	check( level.player2 IsLinked(), "player 2 is on the rope" );
+	wait 12;
+	d2 = top[ 2 ] - level.player2.origin[ 2 ];
+	check( !level.player2 IsLinked() && d2 > 100, "player 2 came down and was let go (" + int( d2 ) + " units)" );
+	d = Distance( level.player.origin, level.player2.origin );
+	report( "at the bottom: " + int( d ) + " units apart" );
+	report( "player 1 holds " + level.player GetCurrentWeapon() + ", player 2 holds " + level.player2 GetCurrentWeapon() );
+	report( "done" );
 }
 
 // Cliffhanger, start "snowmobile": how each player's snowmobile looks to the other (frames of both

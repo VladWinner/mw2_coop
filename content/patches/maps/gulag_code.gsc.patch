@@ -53,3 +53,33 @@ level.player
 @@@ to
 self
 @@@ end
+
+4. The cellblock rappel for both players (maps\_mw2coop_gulag::rappel_wait, rappel_trigger_used,
+   rappel_partner): whoever uses the rope first rappels with a rig of his own, then the rope hangs
+   ready again and the other uses it. The level goes on as soon as the first is on the rope.
+@@@ subst player_rappels
+flag_wait( ent.flag_name );
+@@@ to
+who = maps\_mw2coop_gulag::rappel_wait( trigger_ent, ent.flag_name );
+@@@ end
+@@@ subst player_rappels
+trigger_ent Delete();
+@@@ to
+trigger_ent maps\_mw2coop_gulag::rappel_trigger_used( who );
+@@@ end
+@@@ subst player_rappels
+ent.rope_obj Delete();
+@@@ to
+ent.rope_obj maps\_mw2coop_gulag::rappel_obj_done( who );
+@@@ end
+@@@ subst player_rappels
+level.player
+@@@ to
+who
+@@@ end
+@@@ subst cellblock_rappel_player
+player_rappels( ent );
+@@@ to
+player_rappels( ent );
+	level thread maps\_mw2coop_gulag::rappel_partner( ent );
+@@@ end
