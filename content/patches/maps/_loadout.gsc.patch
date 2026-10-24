@@ -24,3 +24,18 @@ mw2coop patch for maps/_loadout.gsc (common zone; Modern Warfare 2, 64-bit Steam
 
 			level.player2 giveWeapon( "m4_grenadier" );
 @@@ end
+
+2. A co-op body holds Cliffhanger's ice picks upright, one in each hand, not as a pistol (owner,
+   2026-10-24: drawn before the climb they were held like pistols): maps\_mw2coop::
+   attach_weapon_model and attach_weapon_model_left (the picks are a dual-wield weapon: its
+   left-hand copy stuck out ahead too, four picks); the other weapons as before.
+@@@ subst UpdateModel
+					self attach( weapon_model, "tag_weapon_right", true );
+@@@ to
+					self maps\_mw2coop::attach_weapon_model( weapon_model );
+@@@ end
+@@@ subst UpdateModel
+				self attach( weapon_model, "tag_weapon_left", true );
+@@@ to
+				self maps\_mw2coop::attach_weapon_model_left( weapon_model );
+@@@ end

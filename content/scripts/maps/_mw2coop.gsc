@@ -111,11 +111,38 @@ set_bodies()
 		PrecacheModel( models[ 0 ] );
 		PrecacheModel( models[ 1 ] );
 		if ( level.script == "cliffhanger" )
+		{
 			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ] ) );
+			PrecacheModel( "mw2coop_pick_up" );
+		}
 		player.mw2coop_body = models[ 0 ];
 		player.mw2coop_head = models[ 1 ];
 		player maps\_mw2coop_bodies::give_body( ::body_model );
 	}
+}
+
+// maps\_loadout::UpdateModel, for the current weapon's model (in the default case, attached to the
+// right hand). Cliffhanger's ice picks: in the pistol grip the pick stuck out ahead of the fist
+// like a pistol (owner: "turn them upright, right into his hands"): the DLL's upright copy of the
+// pick (mw2coop_pick_up, src/transplant.c upright_pick), one in each hand.
+attach_weapon_model( weapon_model )
+{
+	if ( weapon_model == "weapon_ice_picker" && is_campaign_coop() && level.script == "cliffhanger" )
+	{
+		self attach( "mw2coop_pick_up", "tag_weapon_right", true );
+		self attach( "mw2coop_pick_up", "tag_weapon_left", true );
+		return;
+	}
+	self attach( weapon_model, "tag_weapon_right", true );
+}
+
+// The left hand's copy of a dual-wield weapon: none for the ice picks, whose upright pair
+// attach_weapon_model puts in both hands (a pick ahead of the left fist made four picks, owner).
+attach_weapon_model_left( weapon_model )
+{
+	if ( weapon_model == "weapon_ice_picker" && is_campaign_coop() && level.script == "cliffhanger" )
+		return;
+	self attach( weapon_model, "tag_weapon_left", true );
 }
 
 body_model()

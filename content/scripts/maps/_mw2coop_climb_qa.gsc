@@ -44,10 +44,11 @@ climbview()
 		level.player2 SwitchToWeapon( "ice_picker" );
 	wait 2.5;
 	maps\_mw2coop_qa::report( "player 2 holds " + level.player2 GetCurrentWeapon() );
-	look_at( level.player2, 110, 30 );
+	look_at( level.player2, 70, 20 );
 	maps\_mw2coop_qa::qa_shot( "picks-drawn" );
-	look_at( level.player2, 110, 120 );
+	look_at( level.player2, 70, 90 );
 	maps\_mw2coop_qa::qa_shot( "picks-drawn-side" );
+	level.player Unlink();
 	level.player2 thread climb_bot();
 	wait 6;
 	if ( !flag( "price_begins_climbing" ) )
@@ -89,14 +90,22 @@ climbview()
 	maps\_mw2coop_qa::report( "done" );
 }
 
-// Player 1 stands dist away from who, yaw degrees round from his facing, at his height, and
-// looks at him.
+// Player 1's view hangs dist away from who's chest, yaw degrees round from his facing, and looks
+// at it (linked to a script_origin, so he does not fall).
 look_at( who, dist, yaw )
 {
+	if ( !isdefined( level.mw2coop_qa_cam ) )
+		level.mw2coop_qa_cam = Spawn( "script_origin", level.player.origin );
+	cam = level.mw2coop_qa_cam;
+	aim = who GetEye() - ( 0, 0, 20 );
 	dir = AnglesToForward( ( 0, who.angles[ 1 ] + yaw, 0 ) );
-	level.player SetOrigin( who.origin + dir * dist );
-	level.player SetPlayerAngles( VectorToAngles( who GetEye() - ( 0, 0, 20 ) - level.player GetEye() ) );
-	wait 0.8;
+	level.player Unlink();
+	cam.origin = aim + dir * dist - ( 0, 0, 60 );
+	level.player SetOrigin( cam.origin );
+	level.player PlayerLinkTo( cam );
+	wait 0.1;
+	level.player SetPlayerAngles( VectorToAngles( aim - level.player GetEye() ) );
+	wait 0.7;
 }
 
 // Player 1 at the foot of his own lane (where he would climb beside him), looking at who.
@@ -114,7 +123,10 @@ look_from_lane( who, back )
 weapons_text( player )
 {
 	text = "";
-	foreach ( w in player GetWeaponsList() )
+	list = player GetWeaponsList();
+	if ( !isdefined( list ) )
+		return text;
+	foreach ( w in list )
 		text += w + " ";
 	return text;
 }
