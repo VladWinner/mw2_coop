@@ -782,12 +782,12 @@ static void find_mission_items(uint8_t *menu)
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	uint8_t *pic = NULL, *name = NULL;
 	for (int i = 0; i < count; i++) {
-		float *r = (float *)(items[i] + 8);
+		float *r = (float *)(items[i] + ITEM_RECT);
 		if (r[2] == 216 && r[3] == 120 && *(void **)(items[i] + ITEM_MATERIAL_EXP))
 			pic = items[i];
 	}
 	for (int i = 0; pic && i < count; i++) {
-		float *r = (float *)(items[i] + 8), *pr = (float *)(pic + 8);
+		float *r = (float *)(items[i] + ITEM_RECT), *pr = (float *)(pic + ITEM_RECT);
 		if (r[2] == 216 && r[3] == 20 && r[1] == pr[1] - 20 && *(void **)(items[i] + ITEM_TEXT_EXP))
 			name = items[i];
 	}
