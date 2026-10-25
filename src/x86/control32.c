@@ -17,52 +17,38 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "game.h"
 #include "log.h"
 
 // void Cbuf_AddText(int localClientNum, const char *text); cdecl, locks critical section 0x21 (thread safe),
 // "Cbuf_AddText: overflow" inside. Official build FC9E4843...52D7 (docs/32bit-plan.md).
-#define RVA_CBUF_ADDTEXT 0x9b40
 
-// dvar_t *Dvar_FindVar(name) at 0x633480: USERCALL, name in EDI, result in EAX; it takes the dvar lock itself.
-// 32-bit dvar_t (read from Dvar_GetString 0x4e7470 and the value formatter 0x4c5ae0): name +0x00, type byte +0x0c,
-// current value +0x10 (16 bytes), next in the hash chain +0x4c.
-#define RVA_DVAR_FINDVAR 0x233480
-enum { DVAR_BOOL = 0, DVAR_FLOAT = 1, DVAR_INT = 5, DVAR_ENUM = 6, DVAR_STRING = 7 };
-
-static const uint8_t *find_dvar(const char *name)
-{
-	const uint8_t *dvar;
-	const char *arg = name;
-	__asm__ volatile("call *%[fn]" : "=a"(dvar), "+D"(arg) : [fn] "r"((uint8_t *)GetModuleHandleW(NULL) + RVA_DVAR_FINDVAR)
-			 : "ecx", "edx", "memory", "cc");
-	return dvar;
-}
-
+// The 32-bit dvar_t (game.h): type byte +0x0c, current value +0x10.
 // The current value as text; 0 when the dvar does not exist.
 static int dvar_text(const char *name, char *buf, int size)
 {
-	const uint8_t *d = find_dvar(name);
+	const dvar_t *d = game_find_dvar(name);
 	if (!d)
 		return 0;
-	const uint8_t *value = d + 0x10;
-	switch (d[0x0c]) {
-	case DVAR_BOOL:
+	const uint8_t *value = (const uint8_t *)&d->current;
+	switch (d->type) {
+	case DVAR_TYPE_BOOL:
 		snprintf(buf, size, "%d", *value);
 		break;
-	case DVAR_FLOAT:
+	case DVAR_TYPE_FLOAT:
 		snprintf(buf, size, "%g", *(const float *)value);
 		break;
-	case DVAR_INT:
-	case DVAR_ENUM:
+	case DVAR_TYPE_INT:
+	case DVAR_TYPE_ENUM:
 		snprintf(buf, size, "%d", *(const int32_t *)value);
 		break;
-	case DVAR_STRING: {
+	case DVAR_TYPE_STRING: {
 		const char *s = *(const char *const *)value;
 		snprintf(buf, size, "%s", s ? s : "");
 		break;
 	}
 	default:
-		snprintf(buf, size, "<type %d>", d[0x0c]);
+		snprintf(buf, size, "<type %d>", d->type);
 	}
 	return 1;
 }
@@ -70,8 +56,6 @@ static int dvar_text(const char *name, char *buf, int size)
 // Console command mw2coop_launch_map (as party.c in the 64-bit DLL): starts "map <coop_mapName>" the way the game's own
 // co-op launch does (void (int localClient) at 0x47bd80: slot state 3, then the map command), without the check that two
 // members are in the lobby. Cmd_AddCommand is cdecl (name, function, storage for the command node, 0) at 0x428090.
-#define RVA_COOP_LAUNCH_MAP 0x7bd80
-#define RVA_CMD_ADDCOMMAND  0x28090
 
 static void launch_map_f(void)
 {
@@ -84,30 +68,18 @@ static void launch_map_f(void)
 	((void (*)(int))((uint8_t *)GetModuleHandleW(NULL) + RVA_COOP_LAUNCH_MAP))(0);
 }
 
-// The console command's arguments (read from the game's own command parser): nesting at 0x144c950, argc[nesting] at
-// 0x144c994, argv[nesting] at 0x144c9b4 (seen in the "connect" command, 0x57a5b0).
-static const char *cmd_argv(int n)
-{
-	uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
-	int nest = *(int *)(base + 0x104c950);
-	int argc = ((int *)(base + 0x104c994))[nest];
-	char **argv = ((char ***)(base + 0x104c9b4))[nest];
-	return n < argc && argv ? argv[n] : "";
-}
-
 // mw2coop_join <ip> [port]: join a host by address without a Steam lobby (as party.c in the 64-bit DLL). The game's
 // own client party join, PartyClient_Join at 0x42fc40 (cdecl: local client, host info, out ip, out port): Party_Reset,
 // Lobby_Join, the address translation, Party_Activate. The host info is the one the Steam lobby would give: +0 xuid,
 // +8 internal IPv4, +0xc external IPv4, +0x10 internal port, +0x12 external port (host order). Then "connect ip port"
 // with the port byte-swapped (connect stores it as is into a network-order field).
-#define RVA_PARTY_JOIN 0x2fc40
 #define RVA_CBUF_ADDTEXT_JOIN RVA_CBUF_ADDTEXT
 
 static void join_f(void)
 {
 	unsigned a, b, c, d;
 	char tail;
-	const char *ip = cmd_argv(1), *port_text = cmd_argv(2);
+	const char *ip = game_cmd_argv(1), *port_text = game_cmd_argv(2);
 	log_printf("party: mw2coop_join '%s' '%s'", ip, port_text);
 	if (sscanf(ip, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 || a > 255 || b > 255 || c > 255 || d > 255) {
 		log_printf("party: usage: mw2coop_join <ip> [port]");
@@ -173,14 +145,6 @@ static void press_key(const char *name)
 	log_printf("control: key %s", name);
 }
 
-// For zones.c (and later parts shared with the 64-bit DLL): the dvar's value as text, "<missing>" when it does not exist.
-const char *game_dvar_string(const char *name, char *buf, int size)
-{
-	if (!dvar_text(name, buf, size))
-		snprintf(buf, size, "<missing>");
-	return buf;
-}
-
 #define MAX_WATCH 24
 static char watch_names[MAX_WATCH][64];
 static char watch_last[MAX_WATCH][256];
@@ -197,19 +161,52 @@ static void sync_dvar_flags(void)
 {
 	static int done[sizeof(synced_dvars) / sizeof(synced_dvars[0])];
 	for (size_t i = 0; i < sizeof(synced_dvars) / sizeof(synced_dvars[0]); i++) {
-		uint8_t *d = (uint8_t *)find_dvar(synced_dvars[i]);
-		if (!d || (*(uint32_t *)(d + 8) & 0x20c4))
+		dvar_t *d = game_find_dvar(synced_dvars[i]);
+		if (!d || (d->flags & 0x20c4))
 			continue;
-		*(uint32_t *)(d + 8) |= 0x80;
+		d->flags |= 0x80;
 		if (!done[i]++)
-			log_printf("control: dvar %s made readable by co-op scripts (flags now 0x%x)", synced_dvars[i], *(uint32_t *)(d + 8));
+			log_printf("control: dvar %s made readable by co-op scripts (flags now 0x%x)", synced_dvars[i], d->flags);
 	}
+}
+
+// The scripts' requests (maps\_mw2coop.gsc request(): mw2coop_cmd "<what> @<time>#<n>"), as script_request in control.c:
+// the next mission starts on both machines (each runs the launch itself), a restart is the host's fast_restart (the
+// game sends the client coopRestart), a checkpoint is progress the host would save (progress.c is not ported yet).
+static char last_cmd[256];
+
+static void script_request(const char *cmd)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
+	int host = base[0x534448]; // the party's host flag (listen sets it, a client's join clears it)
+	log_printf("script: request '%s' (%s)", cmd, host ? "host, acting" : "client, host acts");
+	if (strncmp(cmd, "nextmap ", 8) == 0) {
+		char map[64] = "", text[128];
+		sscanf(cmd + 8, "%63s", map);
+		if (map[0] == '@') // last mission: no next one
+			map[0] = 0;
+		if (map[0]) {
+			snprintf(text, sizeof(text), "set coop_mapName %s\nmw2coop_launch_map\n", map);
+			((void (*)(int, const char *))(base + RVA_CBUF_ADDTEXT))(0, text);
+		}
+		return;
+	}
+	if (!host)
+		return;
+	if (strncmp(cmd, "restart", 7) == 0)
+		((void (*)(int, const char *))(base + RVA_CBUF_ADDTEXT))(0, "fast_restart\n");
+	else if (strncmp(cmd, "checkpoint ", 11) == 0)
+		log_printf("script: checkpoint not saved (progress.c is not ported to the 32-bit build yet)");
 }
 
 static void poll(void)
 {
 	char v[256];
 	sync_dvar_flags();
+	if (dvar_text("mw2coop_cmd", v, sizeof(v)) && v[0] && strcmp(v, last_cmd) != 0) {
+		lstrcpynA(last_cmd, v, sizeof(last_cmd));
+		script_request(v);
+	}
 	if (dvar_text("mw2coop_state", v, sizeof(v)) && strcmp(v, last_state) != 0) {
 		log_printf("script: %s", v);
 		lstrcpynA(last_state, v, sizeof(last_state));

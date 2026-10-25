@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 
+#ifdef _WIN64
 // Addresses in iw4sp.exe of the 64-bit Steam build (buildid 25374375, PE timestamp 0x6aaaa257,
 // SHA-256 2F8C9CFD...D805), as RVAs from the image base. Found with Ghidra, see NOTES.md.
 #define IW4SP_TIMESTAMP 0x6aaaa257u
@@ -44,6 +45,48 @@
 #define RVA_DB_RAWFILE_LEN  0x0efdc0 // int DB_GetRawFileLen(RawFile *)
 #define RVA_DB_RAW_BUFFER   0x0efc70 // void DB_GetRawBuffer(RawFile *, char *buf, int size)
 #define RVA_HUNK_TEMP_HIGH  0x2693f0 // void *Hunk_AllocateTempMemoryHigh(int64 size)
+#else
+// Addresses in iw4sp.exe of the 32-bit official Steam build (linked 2010-02-10, code SHA-256 FC9E4843...52D7), as RVAs
+// from the image base 0x400000. Found with Ghidra on the memory dump, see docs/32bit-plan.md. Names as above; a 0 means
+// "not found yet" and the module that needs it stays off.
+#define IW4SP_TIMESTAMP 0u // the exe on disk is rewritten per account by Steam's wrapper: the build is known by its code hash (main32.c)
+
+#define RVA_CBUF_ADDTEXT   0x009b40  // void Cbuf_AddText(int localClientNum, const char *text); cdecl, locks CS 0x21
+#define RVA_DVAR_FINDVAR   0x233480  // dvar_t *Dvar_FindVar(const char *name): USERCALL, name in EDI
+#define RVA_CMD_ADDCOMMAND 0x028090  // void Cmd_AddCommand(name, function, node, 0); cdecl
+#define RVA_CMD_ARGS       0x104c950 // nesting; argc[nesting] at +0x44, argv[nesting] at +0x64
+#define RVA_SV_CMD_ARGS    0
+#define RVA_SV_CMD_DEVMAP  0
+#define RVA_CMD_FUNCTIONS  0
+#define RVA_XUID_TABLE     0x15fbf88 // uint64 xuid of local client i at +i*0x68 (read by 0x46f800)
+
+// Co-op party (lobby) state
+#define RVA_PARTY_SKILL          0
+#define RVA_PARTY_LOBBY          0x534450 // lobby object * (its first field is the name "gameSession")
+#define RVA_PARTY_IS_HOST        0x534448 // uint8: set by listen (0x57a860), cleared by a client's join
+#define RVA_PARTY_ACTIVE         0x534449 // uint8, gates the party frame (0x4a4be0); lobby +8 must be set too
+#define RVA_PARTY_LAUNCH         0x53444b // uint8, set by coopLaunch (0x57aa20); the frame (0x57c800) launches with two members
+#define RVA_PARTY_MEMBER_NAMES   0
+#define RVA_PARTY_START_TIME     0x53444c // int32
+#define RVA_LOBBY_SLOT_USED      0
+#define RVA_PARTY_RESET          0x02f0f0 // void Party_Reset(void)
+#define RVA_PARTY_CLEAR_MEMBERS  0x0b82f0 // void (int)
+#define RVA_LOBBY_JOIN           0x092e80 // void Lobby_Join(lobby, xuid, 0x322, hostInfo, 0, 0, 2, 0); cdecl, 8 args
+#define RVA_PARTY_JOIN           0x02fc40 // char PartyClient_Join(int localClient, hostInfo, int *ip, short *port): the whole client join
+#define RVA_PARTY_ACTIVATE       0x05dde0 // void Party_Activate(void)
+#define RVA_PARTY_AFTER_JOIN     0x019810 // void (void)
+#define RVA_SYS_MILLISECONDS     0x04e1b0 // int Sys_Milliseconds(void)
+#define RVA_COOP_LAUNCH_MAP      0x07bd80 // void (int localClient): coop slot state 3, then "map <coop_mapName>"
+#define RVA_COOP_SLOT_STATE      0x525bc0 // int32 per local client (stride 16): 0 idle, 3 launched
+
+// Script loading
+#define RVA_SCR_ADD_SOURCE_BUFFER 0x07f8e0 // char *Scr_AddSourceBuffer(filename, extFilename, codePos, archive); cdecl wrapper
+#define RVA_DB_FIND_HEADER  0x0f6f10
+#define RVA_DB_IS_DEFAULT   0x0c32b0
+#define RVA_DB_RAWFILE_LEN  0x0e3080
+#define RVA_DB_RAW_BUFFER   0x0e55f0
+#define RVA_HUNK_TEMP_HIGH  0x00eed0 // void *Hunk_AllocateTempMemoryHigh(int size)
+#endif
 
 typedef enum {
 	DVAR_TYPE_BOOL = 0,
@@ -65,6 +108,7 @@ typedef union {
 	const char *string;
 } dvar_value_t;
 
+#ifdef _WIN64
 typedef struct dvar_s {
 	const char *name;    // 0x00
 	uint32_t flags;      // 0x08
@@ -77,6 +121,22 @@ typedef struct dvar_s {
 	uint8_t domain[0x18]; // 0x40
 	struct dvar_s *hash_next; // 0x58
 } dvar_t;
+#else
+// 32-bit: name +0, description +4, flags +8, type +0xc, current +0x10 ... hash chain +0x4c (same offsets as 64 up to 0x40)
+typedef struct dvar_s {
+	const char *name;    // 0x00
+	const char *description; // 0x04
+	uint32_t flags;      // 0x08
+	uint8_t type;        // 0x0c
+	uint8_t modified;    // 0x0d
+	uint8_t pad[2];
+	dvar_value_t current; // 0x10
+	dvar_value_t latched; // 0x20
+	dvar_value_t reset;   // 0x30
+	uint8_t domain[0x0c]; // 0x40
+	struct dvar_s *hash_next; // 0x4c
+} dvar_t;
+#endif
 
 typedef struct cmd_function_s {
 	struct cmd_function_s *next; // 0x00

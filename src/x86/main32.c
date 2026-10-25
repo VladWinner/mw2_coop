@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "game.h"
 #include "log.h"
 #include "scripts.h"
 #include "zones.h"
@@ -143,6 +144,7 @@ static DWORD WINAPI identify(LPVOID unused)
 	for (size_t i = 0; i < sizeof(builds) / sizeof(builds[0]); i++) {
 		if (strcmp(hex, builds[i].code_sha256) == 0) {
 			log_printf("main32: known build: %s", builds[i].name);
+			game_init();
 			scripts_install();
 			zones_install();
 			control32_start();
