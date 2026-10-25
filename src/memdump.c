@@ -251,6 +251,47 @@ int memdump_command(char *line)
 			memdump((uintptr_t)h, 0x180);
 		return 1;
 	}
+	if (strncmp(line, "!font ", 6) == 0) {
+		// "!font <name>": a Font_s (asset type 24: name +0, pixelHeight +8, glyphCount +0xc, material +0x10, glowMaterial
+		// +0x18, glyphs +0x20; 64-bit) with some of its glyphs (24 bytes each: letter u16, x0 y0 s8, dx pixelWidth pixelHeight
+		// u8, pad, s0 t0 s1 t1 float) and the first bytes of its material
+		typedef void *(*find_t)(int, const char *);
+		uint8_t *f = ((find_t)((uint8_t *)GetModuleHandleA(NULL) + RVA_DB_FIND_HEADER))(24, line + 6);
+		if (!f || !readable((uintptr_t)f, 0x28))
+			return 1;
+		int height = *(int *)(f + 8), count = *(int *)(f + 0xc);
+		uint8_t *material = *(uint8_t **)(f + 0x10), *glow = *(uint8_t **)(f + 0x18), *glyphs = *(uint8_t **)(f + 0x20);
+		log_printf("mem: font %s at %p: pixelHeight %d, %d glyphs, material %p, glow %p, glyphs %p", line + 6, (void *)f, height,
+			   count, (void *)material, (void *)glow, (void *)glyphs);
+		static const int wanted[] = {0x20, 0x41, 0x61, 0xc0, 0xe0, 0xff};
+		for (int i = 0; i < count && readable((uintptr_t)(glyphs + i * 24), 24); i++) {
+			const uint8_t *g = glyphs + i * 24;
+			unsigned letter = *(const uint16_t *)g;
+			int show = i < 3;
+			for (size_t k = 0; k < sizeof(wanted) / sizeof(wanted[0]); k++)
+				show |= (int)letter == wanted[k];
+			if (show)
+				log_printf("mem: glyph[%d] letter 0x%02x x0 %d y0 %d dx %u w %u h %u  s %g %g  t %g %g", i, letter, (int8_t)g[2],
+					   (int8_t)g[3], g[4], g[5], g[6], *(const float *)(g + 8), *(const float *)(g + 16), *(const float *)(g + 12),
+					   *(const float *)(g + 20));
+		}
+		if (material && readable((uintptr_t)material, 0x100)) {
+			memdump((uintptr_t)material, 0x80);
+			// Material: textureTable (MaterialTextureDef, 16 bytes: hash, names, sampler, semantic, GfxImage * at +8) at +0x60
+			uint8_t *table = *(uint8_t **)(material + 0x60);
+			log_printf("mem: material textureTable %p", (void *)table);
+			if (table && readable((uintptr_t)table, 0x40)) {
+				memdump((uintptr_t)table, 0x40);
+				for (int i = 0; i < 2; i++) {
+					uint8_t *image = *(uint8_t **)(table + i * 16 + 8);
+					log_printf("mem: texture %d image %p", i, (void *)image);
+					if (image && readable((uintptr_t)image, 0x80))
+						memdump((uintptr_t)image, 0x80);
+				}
+			}
+		}
+		return 1;
+	}
 	if (strncmp(line, "!menu ", 6) == 0) {
 		// "!menu <name> [item]": the menu's items with every string field, or one item in full
 		// (menuDef_t: itemCount +0xbc, itemDef_t **items +0x168)

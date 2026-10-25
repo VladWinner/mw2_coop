@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "fonts.h"
 #include "localize.h"
 #include "transplant.h"
 #include "hook.h"
@@ -26,6 +27,7 @@ typedef struct {
 
 typedef void *(*db_find_header_t)(int type, const char *name);
 
+#define ASSET_TYPE_FONT 24
 static db_find_header_t original;
 static int russian = -1;	// -1 unknown yet
 
@@ -206,6 +208,7 @@ static Alias aliases[] = {
 
 static LocalizeEntry entries[sizeof(strings) / sizeof(strings[0])];
 
+int localize_is_russian(void);
 static int game_is_russian(void)
 {
 	if (russian < 0) {
@@ -214,6 +217,11 @@ static int game_is_russian(void)
 		log_printf("localize: game language %s", russian ? "Russian" : "not Russian, mod strings in English");
 	}
 	return russian;
+}
+
+int localize_is_russian(void)
+{
+	return game_is_russian();
 }
 
 static const char *text_of(int i)
@@ -254,7 +262,10 @@ static void *find_header(int type, const char *name)
 		if (clone)
 			return clone;
 	}
-	return original(type, name);
+	void *found = original(type, name);
+	if (type == ASSET_TYPE_FONT)
+		fonts_seen(found, name, original);
+	return found;
 }
 
 void localize_select(const char *alias, const char *name)
