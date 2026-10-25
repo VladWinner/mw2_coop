@@ -6,6 +6,7 @@
 //     pad     = 0..3     the XInput pad that drives this copy; -1 (default): the keyboard and mouse as always
 //     slot    = 0 | 1    one shared window for both copies: slot 0 makes it, both copies put their game window in it (top and
 //                        bottom; stacked=0: left and right) while a level runs and take it out again in the menus
+//     fovscale = 0.3..1  cg_fovScale while the shared window is up (default 0.65)
 //     speed   = 1..100   the right stick's turn speed in pixels per 10 ms at full tilt (default 14)
 //     fakepad = 1        QA: the pad's state is read from mw2coop\fakepad.txt ("lx ly rx ry buttons lt rt", XInput units)
 // A pad copy has its own virtual cursor (the game's GetCursorPos/SetCursorPos are redirected, the real cursor stays with
@@ -271,6 +272,7 @@ static int slot = -1; // 0 first (left or top), 1 second
 static int stacked = 1; // 1 (default): one above the other, 0: side by side
 static HWND container;
 static int joined;
+static char fov_scale[16] = "0.65"; // the picture is very wide (3.7:1): the engine widens the view with it and the world looks flattened
 static int embed; // 1: the game windows become child windows (they flicker: two processes drawing into one window); 0 (default): they stay windows of their own,
                   // owned by the shared window, so that they move, minimise and show in the taskbar with it
 static LONG saved_style, saved_exstyle;
@@ -408,8 +410,17 @@ static void container_poll(HWND w)
 		joined = 0;
 		log_printf("splitscreen: slot %d leaves the shared window", slot);
 	}
-	if (joined)
+	if (joined) {
 		layout_child(w);
+		static DWORD fov_at;
+		DWORD now = GetTickCount();
+		if (now - fov_at > 1000) { // the game's scripts may put the scale back
+			fov_at = now;
+			char cmd[64];
+			snprintf(cmd, sizeof(cmd), "set cg_fovScale %s%c", fov_scale, 10);
+			game_cbuf_addtext(cmd);
+		}
+	}
 }
 
 static HWND find_game_window(int tries)
@@ -498,6 +509,7 @@ void splitscreen_install(void)
 	fakepad = GetPrivateProfileIntA("splitscreen", "fakepad", 0, ini_path) != 0;
 	GetPrivateProfileStringA("splitscreen", "window", "", window_spec, sizeof(window_spec), ini_path);
 	slot = GetPrivateProfileIntA("splitscreen", "slot", -1, ini_path);
+	GetPrivateProfileStringA("splitscreen", "fovscale", "0.65", fov_scale, sizeof(fov_scale), ini_path);
 	embed = GetPrivateProfileIntA("splitscreen", "embed", 0, ini_path) != 0;
 	stacked = GetPrivateProfileIntA("splitscreen", "stacked", 1, ini_path) != 0;
 	if (pad < 0 && !window_spec[0] && slot < 0)
