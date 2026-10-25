@@ -6,7 +6,8 @@
 //     pad     = 0..3     the XInput pad that drives this copy; -1 (default): the keyboard and mouse as always
 //     slot    = 0 | 1    one shared window for both copies: slot 0 makes it, both copies put their game window in it (top and
 //                        bottom; stacked=0: left and right) while a level runs and take it out again in the menus
-//     fovscale = 0.3..1  cg_fovScale while the shared window is up (default 0.65)
+//     view    = 60..120  the horizontal view in degrees of a half while the shared window is up (default 72; the very wide halves
+//                        stretch the picture at the edges when the engine widens the standard view to them)
 //     speed   = 1..100   the right stick's turn speed in pixels per 10 ms at full tilt (default 14)
 //     fakepad = 1        QA: the pad's state is read from mw2coop\fakepad.txt ("lx ly rx ry buttons lt rt", XInput units)
 // A pad copy has its own virtual cursor (the game's GetCursorPos/SetCursorPos are redirected, the real cursor stays with
@@ -15,6 +16,8 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "game.h"
@@ -272,7 +275,31 @@ static int slot = -1; // 0 first (left or top), 1 second
 static int stacked = 1; // 1 (default): one above the other, 0: side by side
 static HWND container;
 static int joined;
-static char fov_scale[16] = "0.65"; // the picture is very wide (3.7:1): the engine widens the view with it and the world looks flattened
+static void slot_size(int *w, int *h);
+static float view_degrees = 72; // the horizontal view of a half: the picture is very wide (3.7:1), the engine widens the view with it and the edges stretch
+
+// cg_fov that gives the half a horizontal view of view_degrees (the engine takes cg_fov for a 4:3 picture and widens it with the aspect);
+// written into the dvar itself, like fov.c does: its range (65 to 80) is not for this
+static void apply_fov(void)
+{
+	dvar_t *fov = game_find_dvar("cg_fov"), *min = game_find_dvar("cg_fovMin");
+	if (!fov || fov->type != DVAR_TYPE_FLOAT)
+		return;
+	char over[32] = "";
+	float want = view_degrees;
+	if (game_dvar_raw("mw2coop_split_fov", over, sizeof(over)) && over[0]) // QA: set mw2coop_split_fov to try a value
+		want = (float)atof(over);
+	int w, h;
+	slot_size(&w, &h);
+	double k = ((double)w / h) / (4.0 / 3.0);
+	double rad = want * 3.14159265358979 / 180.0;
+	float value = (float)(2.0 * atan(tan(rad / 2.0) / k) * 180.0 / 3.14159265358979);
+	if (min && min->type == DVAR_TYPE_FLOAT)
+		min->current.value = 1;
+	if (fov->current.value != value)
+		fov->current.value = value;
+}
+
 static int embed; // 1: the game windows become child windows (they flicker: two processes drawing into one window); 0 (default): they stay windows of their own,
                   // owned by the shared window, so that they move, minimise and show in the taskbar with it
 static LONG saved_style, saved_exstyle;
@@ -410,15 +437,21 @@ static void container_poll(HWND w)
 		joined = 0;
 		log_printf("splitscreen: slot %d leaves the shared window", slot);
 	}
+	if (!joined && slot > 0) {
+		// the second copy has no window of its own in the menus: no taskbar button, nothing on the screen
+		LONG ex = GetWindowLongA(w, GWL_EXSTYLE);
+		if (!(ex & WS_EX_TOOLWINDOW) || (ex & WS_EX_APPWINDOW))
+			SetWindowLongA(w, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
+		if (IsWindowVisible(w))
+			ShowWindow(w, SW_HIDE);
+	}
 	if (joined) {
 		layout_child(w);
 		static DWORD fov_at;
 		DWORD now = GetTickCount();
-		if (now - fov_at > 1000) { // the game's scripts may put the scale back
+		if (now - fov_at > 100) { // the game's scripts may put the field of view back
 			fov_at = now;
-			char cmd[64];
-			snprintf(cmd, sizeof(cmd), "set cg_fovScale %s%c", fov_scale, 10);
-			game_cbuf_addtext(cmd);
+			apply_fov();
 		}
 	}
 }
@@ -509,7 +542,7 @@ void splitscreen_install(void)
 	fakepad = GetPrivateProfileIntA("splitscreen", "fakepad", 0, ini_path) != 0;
 	GetPrivateProfileStringA("splitscreen", "window", "", window_spec, sizeof(window_spec), ini_path);
 	slot = GetPrivateProfileIntA("splitscreen", "slot", -1, ini_path);
-	GetPrivateProfileStringA("splitscreen", "fovscale", "0.65", fov_scale, sizeof(fov_scale), ini_path);
+	view_degrees = (float)GetPrivateProfileIntA("splitscreen", "view", 72, ini_path);
 	embed = GetPrivateProfileIntA("splitscreen", "embed", 0, ini_path) != 0;
 	stacked = GetPrivateProfileIntA("splitscreen", "stacked", 1, ini_path) != 0;
 	if (pad < 0 && !window_spec[0] && slot < 0)
