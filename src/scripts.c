@@ -38,13 +38,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN64
 #include "game.h"
+#endif
 #include "hook.h"
 #include "log.h"
 #include "scrdebug.h"
 #include "scripts.h"
 
 #define ASSET_TYPE_RAWFILE 0x24
+#ifdef _WIN64
+#define JUMP_SIZE_FOR_SCRIPTS 14
+#else
+#define JUMP_SIZE_FOR_SCRIPTS 5
+#endif
 
 static uint8_t *base;
 static char mod_dir[MAX_PATH];
@@ -55,8 +62,20 @@ static add_source_buffer_t chained;	// another mod's replacement installed befor
 typedef void *(*db_find_header_t)(int type, const char *name);
 typedef int (*db_is_default_t)(int type, const char *name);
 typedef int (*db_rawfile_len_t)(void *raw);
-typedef char *(*hunk_temp_high_t)(int64_t size);
 typedef void (*db_raw_buffer_t)(void *raw, char *buf, int size);
+#ifdef _WIN64
+typedef char *(*hunk_temp_high_t)(int64_t size);
+#else
+// The 32-bit official Steam build (code SHA-256 FC9E4843...52D7, image base 0x400000), docs/32bit-plan.md.
+// All of these are cdecl; the wrapper takes the same four arguments as the 64-bit function.
+typedef char *(*hunk_temp_high_t)(int size);
+#define RVA_SCR_ADD_SOURCE_BUFFER 0x7f8e0
+#define RVA_DB_FIND_HEADER        0xf6f10
+#define RVA_DB_IS_DEFAULT         0xc32b0
+#define RVA_DB_RAWFILE_LEN        0xe3080
+#define RVA_DB_RAW_BUFFER         0xe55f0
+#define RVA_HUNK_TEMP_HIGH        0x0eed0
+#endif
 
 // Reads <mod_dir>\<sub>\<ext><suffix> into a malloc'd, NUL-terminated buffer with '\r' removed.
 static char *read_mod_file(const char *sub, const char *ext, const char *suffix, int *size)
@@ -307,7 +326,7 @@ static char *apply_patches(const char *ext, const char *suffix, char *src, int *
 
 static char *to_hunk(const char *text, int len)
 {
-	char *buf = FN(RVA_HUNK_TEMP_HIGH, hunk_temp_high_t)((int64_t)len + 1);
+	char *buf = FN(RVA_HUNK_TEMP_HIGH, hunk_temp_high_t)(len + 1);
 	memcpy(buf, text, len);
 	buf[len] = 0;
 	return buf;
@@ -367,9 +386,13 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 	return out;
 }
 
+#ifdef _WIN64
 // Expected first bytes of the original, to make sure we patch the right code.
 static const uint8_t expected[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x56, 0x48, 0x83, 0xec, 0x20, 0xb9, 0x24, 0x00, 0x00, 0x00};
-
+#else
+// The first two instructions and more of the cdecl wrapper at 0x47f8e0 (it forwards to a usercall body).
+static const uint8_t expected[] = {0x8b, 0x44, 0x24, 0x10, 0x8b, 0x4c, 0x24, 0x04, 0x53, 0x8b, 0x5c, 0x24, 0x10, 0x56, 0x8b, 0x74, 0x24, 0x10, 0x50, 0x51};
+#endif
 void scripts_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
@@ -380,14 +403,17 @@ void scripts_install(void)
 	lstrcatA(mod_dir, "mw2coop");
 
 	uint8_t *target = base + RVA_SCR_ADD_SOURCE_BUFFER;
+#ifdef _WIN64
 	static const uint8_t jmp_rip[6] = {0xff, 0x25, 0, 0, 0, 0};
 	if (memcmp(target, jmp_rip, sizeof(jmp_rip)) == 0) {
 		memcpy(&chained, target + 6, sizeof(chained));
 		log_printf("scripts: Scr_AddSourceBuffer already replaced by another mod (%p): chained", (void *)chained);
-	} else if (memcmp(target, expected, sizeof(expected)) != 0) {
+	} else
+#endif
+	if (memcmp(target, expected, sizeof(expected)) != 0) {
 		log_printf("scripts: unexpected bytes at Scr_AddSourceBuffer, not patching");
 		return;
 	}
-	hook_jump(target, 14, add_source_buffer, 0x90);
+	hook_jump(target, JUMP_SIZE_FOR_SCRIPTS, add_source_buffer, 0x90);
 	log_printf("scripts: Scr_AddSourceBuffer replaced, mod files from %s", mod_dir);
 }

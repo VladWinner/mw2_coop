@@ -1,7 +1,7 @@
 // mw2coop for the 32-bit build of Modern Warfare 2 (the build before the 2026 move to 64 bits). The first
 // slice: the winmm.dll proxy loads into iw4sp.exe, logs what game it is in and whether it knows that build.
-// Nothing of the game is patched yet; the hooks of the 64-bit DLL come over one at a time, each with the
-// addresses of this build (see docs/32bit-plan.md).
+// The hooks of the 64-bit DLL come over one at a time, each with the addresses of this build (see
+// docs/32bit-plan.md); so far the script loader (scripts.c) and the QA command file.
 #include <windows.h>
 #include <bcrypt.h>
 #include <stdint.h>
@@ -9,8 +9,10 @@
 #include <string.h>
 
 #include "log.h"
+#include "scripts.h"
 
 int proxy_init(void);
+void control32_start(void);
 
 // The official exe is wrapped by Steam's DRM and Steam rewrites that wrapper for each account at the first start
 // (the file in a test copy grew from 3,497,984 to 3,503,672 bytes and its hash changed), so the file's hash
@@ -140,6 +142,8 @@ static DWORD WINAPI identify(LPVOID unused)
 	for (size_t i = 0; i < sizeof(builds) / sizeof(builds[0]); i++) {
 		if (strcmp(hex, builds[i].code_sha256) == 0) {
 			log_printf("main32: known build: %s", builds[i].name);
+			scripts_install();
+			control32_start();
 			return 0;
 		}
 	}

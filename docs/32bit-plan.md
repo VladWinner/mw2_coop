@@ -51,6 +51,18 @@ In 32 bits the hook is a 5-byte relative jump at 0x47F8E0 (the first two instruc
 copies them cleanly); `size_t` and pointers are 4 bytes, so `scripts.c` needs the build profile of step 3 before it can
 be shared.
 
+## Done in the 32-bit DLL (2026-10-25, test copy only)
+
+- `scripts.c` builds for both bit widths (`#ifdef _WIN64`): the 32-bit profile holds the VAs above as RVAs and the
+  wrapper's expected bytes; `hook.c` writes a 5-byte relative jump in 32 bits (trampolines are built in place).
+- `src/x86/control32.c`: `mw2coop\commands.txt` (plain lines to `Cbuf_AddText`, found at 0x409b40, cdecl, locks
+  critical section 0x21; `!sleep`).
+- Checked in the official game (`devmap trainer` through the command file, patch file `patches/maps/trainer.gsc.patch`
+  with one appended function): the log says `scripts: maps/trainer.gsc <- zone + 1/1 patches`, the map loaded. The
+  command line `+devmap` is ignored by this build (main menu only).
+- Not yet: the mod's real patches on 32-bit scripts (they were generated from the 64-bit scripts; `check_patches.py`
+  against the 32-bit zone text will say which still apply), natives the patched scripts call, party/menus.
+
 ## Steps
 
 1. Done: the 32-bit proxy loads into the real game, logs, recognises the build, dumps the image.
