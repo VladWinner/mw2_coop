@@ -5,6 +5,15 @@
 Everything here is in `main` and tested with bots on two game copies on one PC (host + client); none of it has
 been played through by two people yet.
 
+### New: fonts closer to the English original (Russian game)
+
+The Russian game draws every text in one generic condensed sans, while the English original uses Bank Gothic (headings,
+HUD numbers), ITC Conduit (running text) and T26 Carbon (mission intro screens), none of which has Cyrillic. The mod now
+renders the game's own font tables again from free fonts with Cyrillic and puts them into the game's memory: **Tektur**
+for the headings, the HUD and the mission intro text, **Fira Sans Condensed** for descriptions and subtitles (SIL OFL,
+shipped in `mw2cooponts`). Works in the 64-bit and the 32-bit build. `fonts=0` under `[display]` in `settings.ini`
+keeps the game's own font; the English game is never touched.
+
 ### New: scenes that only the first player had are now for both
 
 These scenes were scripted for one player; the other stood by or was left behind. Each now plays for two, with a

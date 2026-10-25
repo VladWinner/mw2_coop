@@ -27,6 +27,7 @@
 #include "fonts.h"
 #include "localize.h"
 #include "log.h"
+#include "settings.h"
 
 #ifdef _WIN64
 #define FONT_HEIGHT 8
@@ -37,13 +38,15 @@
 #define IMAGE_DIMS 0x18
 #define IMAGE_DATALEN 0x10
 #else
+// 32-bit (mapped with the probe of 2026-10-25, official build FC9E4843...52D7): the same fonts and glyphs, the pointers 4 bytes; the
+// material's textureTable at +0x54, the GfxImage's width/height at +0x14 and its two data lengths at +0x0c and +0x10
 #define FONT_HEIGHT 4
 #define FONT_COUNT 8
 #define FONT_MATERIAL 0x0c
 #define FONT_GLYPHS 0x14
-#define MATERIAL_TABLE 0x30
-#define IMAGE_DIMS 0x18
-#define IMAGE_DATALEN 0x10
+#define MATERIAL_TABLE 0x54
+#define IMAGE_DIMS 0x14
+#define IMAGE_DATALEN 0x0c
 #endif
 #define DEF_IMAGE 8
 #define GLYPH_SIZE 24
@@ -434,10 +437,6 @@ static void patch_all(void *(*find)(int, const char *), const uint8_t *atlas_mat
 void fonts_seen(void *font, const char *name, void *(*find)(int, const char *))
 {
 	(void)name;
-#ifndef _WIN64
-	(void)find;
-	return; // the 32-bit layouts (FONT_* and MATERIAL_TABLE above are guesses) are not mapped yet
-#endif
 	if (patched || !font)
 		return;
 	const uint8_t *f = (const uint8_t *)font;
@@ -452,7 +451,7 @@ void fonts_seen(void *font, const char *name, void *(*find)(int, const char *))
 	uint8_t *image = material_image(mat);
 	if (!image || !*(void **)image)
 		return; // the renderer has not made the texture yet
-	if (!localize_is_russian())
+	if (!settings_fonts() || !localize_is_russian())
 		return;
 	patch_all(find, mat);
 }

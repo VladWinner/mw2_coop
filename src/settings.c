@@ -25,6 +25,7 @@
 #define DEFAULT_PORT 28960
 static uint16_t port = DEFAULT_PORT;
 static int steam_relay;
+static int fonts_on = 1;
 static char player_id[33];
 static char player_ini[MAX_PATH];
 
@@ -108,6 +109,7 @@ void settings_load(void)
 	else
 		log_printf("settings: bad port %u in settings.ini", p);
 	steam_relay = GetPrivateProfileIntA("network", "steam_relay", 0, path) != 0;
+	fonts_on = GetPrivateProfileIntA("display", "fonts", 1, path) != 0;
 	log_printf("settings: %s port %u, steam_relay %d", path, (unsigned)port, steam_relay);
 	if (port != DEFAULT_PORT)
 		patch_port(port);
@@ -128,6 +130,11 @@ const char *settings_player_id(void)
 int settings_steam_relay(void)
 {
 	return steam_relay;
+}
+
+int settings_fonts(void)
+{
+	return fonts_on;
 }
 
 uint16_t settings_port(void)
