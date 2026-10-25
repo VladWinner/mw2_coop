@@ -4,7 +4,7 @@
 #include <windows.h>
 
 #include "log.h"
-#include "winmm_names.h"
+#include <winmm_names.h>
 
 void *winmm_real[WINMM_EXPORT_COUNT];
 

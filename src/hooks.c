@@ -4,7 +4,7 @@
 #define WIN32_LEAN_AND_MEAN // keep mmsystem.h's dllimport prototypes out
 #include <windows.h>
 
-#include "winmm_names.h"
+#include <winmm_names.h>
 
 extern void *winmm_real[];
 
