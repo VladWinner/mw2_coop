@@ -10,6 +10,7 @@
 
 #include "log.h"
 #include "scripts.h"
+#include "zones.h"
 
 int proxy_init(void);
 void control32_start(void);
@@ -143,6 +144,7 @@ static DWORD WINAPI identify(LPVOID unused)
 		if (strcmp(hex, builds[i].code_sha256) == 0) {
 			log_printf("main32: known build: %s", builds[i].name);
 			scripts_install();
+			zones_install();
 			control32_start();
 			return 0;
 		}

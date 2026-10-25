@@ -74,6 +74,19 @@ be shared.
 - Not yet: the mod's real patches on 32-bit scripts (they were generated from the 64-bit scripts; `check_patches.py`
   against the 32-bit zone text will say which still apply), natives the patched scripts call, party/menus.
 
+## Two 32-bit copies in one co-op session (2026-10-25)
+
+`D:\coop-test\mw2-32` (host) and `mw2-32-b` (client) run a real session: the host `listen`s and `coopLaunch`es, the client runs
+`mw2coop_join <own LAN ip>` (control32.c: the game's own `PartyClient_Join` at 0x42fc40 with a host-info block, then
+`connect`). `!xuid_add 1` on the client (both copies share one Steam account; the host rejects its own XUID).
+`MW2COOP_BITS=32 sh deploy.sh` and `MW2COOP_BITS=32 sh tools/qa_pair.sh <scenario> <start> <seconds> <map>` do what they do in
+64 bits. `xrequirelivesignin` is not needed (and made the join flaky). `zones.c` is ported (level zone loader 0x4d0450, hooked
+with the same table): the Spec Ops zone brings the `coop_body_*` models, so player 2 has a body and a name in the 32-bit
+S.S.D.D. (owner saw both). Not ported yet: model transplant (No Russian, ice picks), the pool extension (Just Like Old
+Times), `mw2coop_bind` (QA button presses), the menus/lobby UI, Steam invites, the relay, progress/saves, mirror.
+
+Scenario `bay` on trainer: PASS 1-5 on both copies, three runs in a row.
+
 ## Steps
 
 1. Done: the 32-bit proxy loads into the real game, logs, recognises the build, dumps the image.

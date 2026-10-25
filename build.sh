@@ -13,7 +13,7 @@ if [ "$1" = x86 ]; then
 	# the 32-bit build of the game (see docs/32bit-plan.md): only the first slice is ported so far
 	CC32="$LLVM_MINGW/bin/i686-w64-mingw32-clang"
 	mkdir -p build/x86
-	"$CC32" -O2 -Wall -Wextra -shared -static -static-libgcc -Isrc/x86 -Isrc -o build/x86/winmm.dll 		src/x86/main32.c src/x86/stubs32.c src/x86/control32.c src/log.c src/proxy.c src/hooks.c src/hook.c src/scripts.c src/x86/winmm_stubs.S src/x86/winmm.def -lbcrypt
+	"$CC32" -O2 -Wall -Wextra -shared -static -static-libgcc -Isrc/x86 -Isrc -o build/x86/winmm.dll 		src/x86/main32.c src/x86/stubs32.c src/x86/control32.c src/log.c src/proxy.c src/hooks.c src/hook.c src/scripts.c src/zones.c src/x86/winmm_stubs.S src/x86/winmm.def -lbcrypt
 	echo "built build/x86/winmm.dll"
 	exit 0
 fi

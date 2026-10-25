@@ -14,14 +14,25 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "game.h"
 #include "hook.h"
 #include "log.h"
-#include "transplant.h"
 #include "zones.h"
+#ifdef _WIN64
+#include "game.h"
+#include "transplant.h"
 
 #define RVA_LOAD_LEVEL_ZONES 0x0f09b0
 #define RVA_DB_LOAD_XASSETS  0x0f0ae0
+#else
+// The 32-bit official build (docs/32bit-plan.md): the level zone loader (map, flag) at 0x4d0450 and DB_LoadXAssets at
+// 0x49edb0, both cdecl; the model transplant and the pool extension are not ported yet.
+#define RVA_LOAD_LEVEL_ZONES 0x0d0450
+#define RVA_DB_LOAD_XASSETS  0x09edb0
+const char *game_dvar_string(const char *name, char *buf, int size); // control32.c
+static void transplant_new_level(void)
+{
+}
+#endif
 
 typedef struct {
 	const char *name;
@@ -68,6 +79,7 @@ static const struct {
 // DB_Init (rva 0xeff10) builds the lists from the size table. The asset alloc (rva 0xeee30) fails
 // with that message when the list is empty. More entries are linked in front of the list; the
 // ones in use stay where they are. The size table is only read for that message and DB_Init.
+#ifdef _WIN64
 #define RVA_POOL_SIZES 0x3bf930 // int[43]
 #define RVA_POOLS      0x3bfe00 // void *[43]
 #define ASSET_TYPE_LOADED_SOUND 13
@@ -89,6 +101,8 @@ static void pool_extend(int type, int extra, size_t entry_size)
 	sizes[type] += extra;
 }
 
+#endif
+
 static void load_level_zones(const char *map, int flag)
 {
 	transplant_new_level();
@@ -97,9 +111,11 @@ static void load_level_zones(const char *map, int flag)
 	log_printf("zones: loading level zones for '%s' (coop '%s', flag %d)", map ? map : "", coop, flag);
 	if (coop[0] == '1' && map) {
 		// once, before the first co-op level's zones: the database thread is idle here
+#ifdef _WIN64
 		static int extended;
 		if (!extended++)
 			pool_extend(ASSET_TYPE_LOADED_SOUND, 650, 64); // 64: the pool's span / 1350
+#endif
 
 		for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
 			if (strcmp(map, zones[i].level) != 0)
@@ -119,9 +135,14 @@ static void load_level_zones(const char *map, int flag)
 	original(map, flag);
 }
 
+#ifdef _WIN64
 // mov rax,rsp; mov [rax+8],rbx; mov [rax+10h],rbp; mov [rax+18h],rsi; push rdi
 static const uint8_t expected[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48,
 				   0x89, 0x68, 0x10, 0x48, 0x89, 0x70, 0x18, 0x57};
+#else
+// sub esp,10h; push ebx; push ebp; push esi; mov esi,[esp+20h]
+static const uint8_t expected[] = {0x83, 0xec, 0x10, 0x53, 0x55, 0x56, 0x8b, 0x74, 0x24, 0x20};
+#endif
 
 void zones_install(void)
 {

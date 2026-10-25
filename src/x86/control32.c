@@ -6,6 +6,7 @@
 //   !key ESC|ENTER|SPACE -> press that key in the game window (skips the briefing video)
 //   !peek <address hex> [size] -> log game memory at that virtual address (QA, reverse engineering)
 //   !pokeptr <address hex> <offset hex> <byte hex> -> QA only: write a byte at (the pointer stored at address) + offset
+//   !xuid_add <n> -> QA only: shift this copy's XUID (two copies on one Steam account; the host rejects its own XUID)
 //   !watch a b  -> log those dvars whenever one changes (checked every 250 ms)
 //   # comment
 // The level scripts' channel is read as in control.c: mw2coop_state is logged as "script: ...", mw2coop_qa_log as
@@ -83,10 +84,65 @@ static void launch_map_f(void)
 	((void (*)(int))((uint8_t *)GetModuleHandleW(NULL) + RVA_COOP_LAUNCH_MAP))(0);
 }
 
+// The console command's arguments (read from the game's own command parser): nesting at 0x144c950, argc[nesting] at
+// 0x144c994, argv[nesting] at 0x144c9b4 (seen in the "connect" command, 0x57a5b0).
+static const char *cmd_argv(int n)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
+	int nest = *(int *)(base + 0x104c950);
+	int argc = ((int *)(base + 0x104c994))[nest];
+	char **argv = ((char ***)(base + 0x104c9b4))[nest];
+	return n < argc && argv ? argv[n] : "";
+}
+
+// mw2coop_join <ip> [port]: join a host by address without a Steam lobby (as party.c in the 64-bit DLL). The game's
+// own client party join, PartyClient_Join at 0x42fc40 (cdecl: local client, host info, out ip, out port): Party_Reset,
+// Lobby_Join, the address translation, Party_Activate. The host info is the one the Steam lobby would give: +0 xuid,
+// +8 internal IPv4, +0xc external IPv4, +0x10 internal port, +0x12 external port (host order). Then "connect ip port"
+// with the port byte-swapped (connect stores it as is into a network-order field).
+#define RVA_PARTY_JOIN 0x2fc40
+#define RVA_CBUF_ADDTEXT_JOIN RVA_CBUF_ADDTEXT
+
+static void join_f(void)
+{
+	unsigned a, b, c, d;
+	char tail;
+	const char *ip = cmd_argv(1), *port_text = cmd_argv(2);
+	log_printf("party: mw2coop_join '%s' '%s'", ip, port_text);
+	if (sscanf(ip, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 || a > 255 || b > 255 || c > 255 || d > 255) {
+		log_printf("party: usage: mw2coop_join <ip> [port]");
+		return;
+	}
+	unsigned port = port_text[0] ? (unsigned)atoi(port_text) : 28960;
+	if (port == 0 || port > 65535) {
+		log_printf("party: bad port '%s'", port_text);
+		return;
+	}
+	uint8_t info[64] = {0};
+	uint8_t addr[4] = {(uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d};
+	uint16_t p = (uint16_t)port;
+	memcpy(info + 8, addr, 4);
+	memcpy(info + 0xc, addr, 4);
+	memcpy(info + 0x10, &p, 2);
+	memcpy(info + 0x12, &p, 2);
+	uint32_t out_ip = 0;
+	uint16_t out_port = 0;
+	uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
+	char ok = ((char (*)(int, void *, uint32_t *, uint16_t *))(base + RVA_PARTY_JOIN))(0, info, &out_ip, &out_port);
+	log_printf("party: client party joined (%d, host %u.%u.%u.%u:%u, active %d, host flag %d)", ok, a, b, c, d, port,
+		   base[0x534449], base[0x534448]);
+	char cmd[64];
+	snprintf(cmd, sizeof(cmd), "connect %u.%u.%u.%u %u\n", a, b, c, d, (unsigned)(uint16_t)((p >> 8) | (p << 8)));
+	((void (*)(int, const char *))(base + RVA_CBUF_ADDTEXT_JOIN))(0, cmd);
+}
+
 static void add_commands(void)
 {
-	static uint8_t node[32];
-	((void (*)(const char *, void (*)(void), void *, int))((uint8_t *)GetModuleHandleW(NULL) + RVA_CMD_ADDCOMMAND))("mw2coop_launch_map", launch_map_f, node, 0);
+	static uint8_t node[2][32];
+	uint8_t *base = (uint8_t *)GetModuleHandleW(NULL);
+	void (*add)(const char *, void (*)(void), void *, int) = (void (*)(const char *, void (*)(void), void *, int))(base + RVA_CMD_ADDCOMMAND);
+	add("mw2coop_launch_map", launch_map_f, node[0], 0);
+	add("mw2coop_join", join_f, node[1], 0);
 }
 
 static BOOL CALLBACK find_game_window(HWND h, LPARAM out)
@@ -117,15 +173,43 @@ static void press_key(const char *name)
 	log_printf("control: key %s", name);
 }
 
+// For zones.c (and later parts shared with the 64-bit DLL): the dvar's value as text, "<missing>" when it does not exist.
+const char *game_dvar_string(const char *name, char *buf, int size)
+{
+	if (!dvar_text(name, buf, size))
+		snprintf(buf, size, "<missing>");
+	return buf;
+}
+
 #define MAX_WATCH 24
 static char watch_names[MAX_WATCH][64];
 static char watch_last[MAX_WATCH][256];
 static int watch_count;
 static char last_state[256], last_qa[256];
 
+// In a co-op session GSC getdvar only returns dvars whose flags (dvar +8) contain one of 0x20c4; for all others it returns
+// "" so both lockstep machines see the same. The dvars the mod's scripts read get 0x80 as soon as they exist (see
+// sync_dvar_flags in control.c, the same list and flag).
+static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
+					   "mw2coop_qa", "mw2coop_qa_phase"};
+
+static void sync_dvar_flags(void)
+{
+	static int done[sizeof(synced_dvars) / sizeof(synced_dvars[0])];
+	for (size_t i = 0; i < sizeof(synced_dvars) / sizeof(synced_dvars[0]); i++) {
+		uint8_t *d = (uint8_t *)find_dvar(synced_dvars[i]);
+		if (!d || (*(uint32_t *)(d + 8) & 0x20c4))
+			continue;
+		*(uint32_t *)(d + 8) |= 0x80;
+		if (!done[i]++)
+			log_printf("control: dvar %s made readable by co-op scripts (flags now 0x%x)", synced_dvars[i], *(uint32_t *)(d + 8));
+	}
+}
+
 static void poll(void)
 {
 	char v[256];
+	sync_dvar_flags();
 	if (dvar_text("mw2coop_state", v, sizeof(v)) && strcmp(v, last_state) != 0) {
 		log_printf("script: %s", v);
 		lstrcpynA(last_state, v, sizeof(last_state));
@@ -182,6 +266,12 @@ static void run_line(char *line)
 				obj[off] = (uint8_t)val;
 				log_printf("control: poked %02lx at *%08lx+%lx", val, at, off);
 			}
+		} else if (strncmp(line, "!xuid_add ", 10) == 0) {
+			// uint64 XUID of local client 0 at 0x19fbf88 (stride 0x68 per local client; read by 0x46f800)
+			uint64_t *xuid = (uint64_t *)((uint8_t *)GetModuleHandleW(NULL) + 0x15fbf88);
+			uint64_t before = *xuid;
+			*xuid = before + (uint64_t)strtoll(line + 10, NULL, 10);
+			log_printf("control: xuid %016llx -> %016llx", (unsigned long long)before, (unsigned long long)*xuid);
 		} else if (strncmp(line, "!key ", 5) == 0) {
 			press_key(line + 5);
 		} else if (strncmp(line, "!watch ", 7) == 0) {

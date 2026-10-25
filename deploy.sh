@@ -4,10 +4,12 @@
 #   MW2COOP_TEST_ROOT  folder holding the test copies (default /d/coop-test); targets must be inside it
 #   MW2COOP_GSC_DIR    extracted game scripts, to check the patches first (optional)
 # Default targets: $MW2COOP_TEST_ROOT/mw2-64 (host) and $MW2COOP_TEST_ROOT/mw2-64-b (client).
+#   MW2COOP_BITS=32   build the 32-bit DLL (sh build.sh x86) and deploy it to mw2-32 and mw2-32-b instead (docs/32bit-plan.md)
 set -e
 cd "$(dirname "$0")"
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
-sh build.sh
+BITS=${MW2COOP_BITS:-64}
+if [ "$BITS" = 32 ]; then DLL=build/x86/winmm.dll; sh build.sh x86; else DLL=build/winmm.dll; sh build.sh; fi
 if [ -n "$MW2COOP_GSC_DIR" ]; then
 	# a patch that does not apply stops the deploy: the game would load a script that fails to compile
 	if ! out=$(python -I tools/check_patches.py content "$MW2COOP_GSC_DIR"); then
@@ -17,12 +19,12 @@ if [ -n "$MW2COOP_GSC_DIR" ]; then
 	fi
 	printf '%s\n' "$out" | tail -1
 fi
-[ $# -gt 0 ] || set -- "$ROOT/mw2-64" "$ROOT/mw2-64-b"
+[ $# -gt 0 ] || set -- "$ROOT/mw2-$BITS" "$ROOT/mw2-$BITS-b"
 # a running copy holds its winmm.dll: close the ones left from an earlier test run first
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/close_test_copies.ps1 -Root "$(cygpath -w "$ROOT")" | tr -d '\r'
 for t in "$@"; do
 	case "$t" in "$ROOT"/*) ;; *) echo "refusing to deploy outside $ROOT: $t"; exit 1 ;; esac
-	cp build/winmm.dll "$t/winmm.dll"
+	cp "$DLL" "$t/winmm.dll"
 	rm -rf "$t/mw2coop/scripts" "$t/mw2coop/patches"
 	mkdir -p "$t/mw2coop"
 	cp -r content/scripts content/patches "$t/mw2coop/"
