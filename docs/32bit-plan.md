@@ -60,6 +60,17 @@ be shared.
 - Checked in the official game (`devmap trainer` through the command file, patch file `patches/maps/trainer.gsc.patch`
   with one appended function): the log says `scripts: maps/trainer.gsc <- zone + 1/1 patches`, the map loaded. The
   command line `+devmap` is ignored by this build (main menu only).
+- The mod's patches from the 64-bit scripts all apply to the 32-bit zone scripts (trainer 26/26, `_utility` 7/7, `_coop` 6/6,
+  `_introscreen` 19/19 ...) and the FNV hashes of the patched `_utility`, `_coop` and `_mw2coop` are the same as in the
+  64-bit build: the scripts are identical, which both builds need for one lockstep session.
+- More addresses (official build): `Dvar_FindVar` 0x633480 (usercall, name in EDI), 32-bit `dvar_t` (type +0x0c, value +0x10,
+  next +0x4c), `Cmd_AddCommand(name, fn, node, 0)` 0x428090, `listen` 0x57a860 (host + `gameSession` lobby object at
+  [0x934450]), `coopLaunch` 0x57aa20 (sets 0x93444b; the frame function 0x57c800 launches only with two lobby members:
+  bytes +0x68 and +0xa0 of the lobby), map launch `void (int)` 0x47bd80, `Party_Reset` 0x42f0f0.
+- `control32.c` also has `!watch`, `!dvars`, `!peek`, `!pokeptr`, `!key` and the console command `mw2coop_launch_map`
+  (launches `coop_mapName` without waiting for a second member). One copy then starts the map as a co-op host (map
+  `trainer` runs, briefing video plays); the engine's `coop` dvar stays 0 there, so the mod's scripts stay inactive: a real
+  session needs a second copy joining (party/net port).
 - Not yet: the mod's real patches on 32-bit scripts (they were generated from the 64-bit scripts; `check_patches.py`
   against the 32-bit zone text will say which still apply), natives the patched scripts call, party/menus.
 

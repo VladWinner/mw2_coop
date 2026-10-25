@@ -77,6 +77,11 @@ public class XrefStrings extends GhidraScript {
 				Function f = getFunctionAt(fa);
 				if (f == null)
 					f = getFunctionContaining(fa);
+				if (f == null) {
+					// code reached only through a pointer table is not a function yet: make it one
+					disassemble(fa);
+					f = createFunction(fa, null);
+				}
 				println("=== function " + raw + " -> " + (f == null ? "none" : f.getName() + "@" + f.getEntryPoint()));
 				if (f != null) {
 					if (di == null) {
