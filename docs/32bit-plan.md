@@ -31,6 +31,26 @@ for depots 10182, 10181 and the language depot, 10189 for Russian). Merge the th
   `mw2coop\image32.bin` (the image from memory, 34,930,688 bytes) and deletes the flag. Load it in Ghidra as a raw
   binary (language `x86:LE:32:default`, base address 0x400000).
 
+## Addresses found (official build, code SHA-256 `FC9E4843...52D7`, image base 0x400000)
+
+Found by Ghidra on the memory dump (`tools/ghidra/run.sh`, raw binary `image32.bin`), each read from the code, not
+taken from another project. All are cdecl unless said otherwise. Bytes are from the dump.
+
+| Function | VA | First bytes | How it was found |
+|---|---|---|---|
+| `Scr_AddSourceBuffer(filename, extFilename, codePos, archive)` | 0x47F8E0 | `8b 44 24 10 8b 4c 24 04 53 8b 5c 24 10 56 8b 74 24 10 50 51 e8` | the script loader (0x410920, `"%s.gsc"`) calls it with 4 pushes and cleans 0x10; it only forwards to 0x6100d0 with ESI/EBX as register arguments, so this thin cdecl wrapper is the hook point (2 callers: 0x410920, 0x607660) |
+| the usercall body behind it | 0x6100d0 | `51 a1 b8 2b 95 01 8b 48 10 80 39 00` | not hooked |
+| rawfile read (the zone path) | 0x610020 | `53 56 8b 74 24 10 56 6a 24 e8` | `DB_FindXAssetHeader(0x24, name)`, `DB_IsXAssetDefault(0x24, name)`, length, `Hunk_AllocateTempMemoryHigh`, copy |
+| `DB_FindXAssetHeader(type, name)` | 0x4F6F10 | `51 53 8b 1d 6c 11 69 00` | called from 0x610020 |
+| `DB_IsXAssetDefault(type, name)` | 0x4C32B0 | `53 8b 5c 24 0c 56 57 8b 7c 24 10` | same |
+| `DB_GetRawFileLen(RawFile *)` | 0x4E3080 | `8b 44 24 04 8b 40 08 83 c0 01 c3` | returns `[rawfile+8] + 1` |
+| `DB_GetRawBuffer(RawFile *, buf, len)` | 0x4E55F0 | `83 ec 3c 53 55 56 57 68 00 00 02 00` | same |
+| `Hunk_AllocateTempMemoryHigh(size)` | 0x40EED0 | `a1 8c 75 95 01 8b 54 24 04` | same |
+
+In 32 bits the hook is a 5-byte relative jump at 0x47F8E0 (the first two instructions are 8 bytes, so a trampoline
+copies them cleanly); `size_t` and pointers are 4 bytes, so `scripts.c` needs the build profile of step 3 before it can
+be shared.
+
 ## Steps
 
 1. Done: the 32-bit proxy loads into the real game, logs, recognises the build, dumps the image.

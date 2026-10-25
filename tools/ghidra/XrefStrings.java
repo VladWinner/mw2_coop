@@ -58,6 +58,19 @@ public class XrefStrings extends GhidraScript {
 				}
 				continue;
 			}
+			if (raw.startsWith("dis:")) {
+				// "dis:<address hex>:<count>": the count instructions from that address (image base + address)
+				String[] p = raw.substring(4).split(":");
+				Address da = currentProgram.getImageBase().add(Long.parseLong(p[0].replace("0x", ""), 16));
+				int count = p.length > 1 ? Integer.parseInt(p[1]) : 40;
+				println("=== disassembly " + da);
+				Instruction ins = getInstructionAt(da);
+				if (ins == null)
+					ins = getInstructionContaining(da);
+				for (int i = 0; ins != null && i < count; i++, ins = ins.getNext())
+					println("  " + ins.getAddress() + "  " + ins.toString());
+				continue;
+			}
 			if (raw.startsWith("@")) {
 				// "@<rva hex>": decompile the function at image base + rva
 				Address fa = currentProgram.getImageBase().add(Long.parseLong(raw.substring(1).replace("0x", ""), 16));
