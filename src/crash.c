@@ -140,6 +140,10 @@ static void dump_threads(HANDLE out)
 // DAT_00c3e85c = 1, DAT_00a961a4 = the answer of 0x4d3e70.
 static void dump_db_state(HANDLE out)
 {
+#ifdef MW2COOP_IW4X
+	(void)out; // these addresses are the official build's; not mapped for the 1.0.159 exe
+	return;
+#endif
 	const uint8_t *exe = (const uint8_t *)image_base;
 	char line[512];
 	int n = 0;

@@ -82,6 +82,56 @@ static int sha256_code(char out[65], unsigned *bytes)
 	return ok;
 }
 
+#ifdef MW2COOP_IW4X
+// The iw4x-sp client (docs: games/modern-warfare-2/NOTES.md, "iw4x-sp support") maps the 1.0.159 iw4sp.exe into its own process and patches
+// the code in memory, so the code hash changes with the client's build. The build is known by the SHA-256 of the iw4sp.exe file next to it.
+static int sha256_file(const char *path, char out[65])
+{
+	HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	if (f == INVALID_HANDLE_VALUE)
+		return 0;
+	BCRYPT_ALG_HANDLE alg = NULL;
+	BCRYPT_HASH_HANDLE hash = NULL;
+	int ok = 0;
+	if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0) == 0 && BCryptCreateHash(alg, &hash, NULL, 0, NULL, 0, 0) == 0) {
+		static uint8_t buf[1 << 16];
+		DWORD got;
+		ok = 1;
+		while (ReadFile(f, buf, sizeof(buf), &got, NULL) && got)
+			if (BCryptHashData(hash, buf, got, 0) != 0)
+				ok = 0;
+		uint8_t digest[32];
+		if (ok && BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0)
+			hex_of(digest, out);
+		else
+			ok = 0;
+	}
+	if (hash)
+		BCryptDestroyHash(hash);
+	if (alg)
+		BCryptCloseAlgorithmProvider(alg, 0);
+	CloseHandle(f);
+	return ok;
+}
+
+static const char iw4x_exe_sha256[] = "9480909B18CF5A4EC483C989AAFCE929D2172C5F9448F8C23B723683D1A43565"; // SP_ALTER_HASH of iw4x-sp
+static int iw4x_known(void)
+{
+	char dir[MAX_PATH], hex[65] = "";
+	DWORD n = GetModuleFileNameA(NULL, dir, MAX_PATH);
+	while (n > 0 && dir[n - 1] != '\\')
+		n--;
+	dir[n] = 0;
+	lstrcatA(dir, "iw4sp.exe");
+	if (!sha256_file(dir, hex)) {
+		log_printf("main32: cannot hash iw4sp.exe next to the client");
+		return 0;
+	}
+	log_printf("main32: iw4sp.exe file SHA-256 %s", hex);
+	return strcmp(hex, iw4x_exe_sha256) == 0;
+}
+#endif
+
 static BOOL CALLBACK find_game_window(HWND h, LPARAM out)
 {
 	DWORD pid;
@@ -157,9 +207,15 @@ static DWORD WINAPI identify(LPVOID unused)
 		return 0;
 	}
 	log_printf("main32: image base %p, code sections %u bytes, SHA-256 %s", (void *)GetModuleHandleW(NULL), bytes, hex);
+#ifdef MW2COOP_IW4X
+	for (size_t i = 0; i < 1; i++) {
+		if (iw4x_known()) {
+			log_printf("main32: known build: 1.0.159 iw4sp.exe of the iw4x-sp client");
+#else
 	for (size_t i = 0; i < sizeof(builds) / sizeof(builds[0]); i++) {
 		if (strcmp(hex, builds[i].code_sha256) == 0) {
 			log_printf("main32: known build: %s", builds[i].name);
+#endif
 			game_init();
 			crash_install();
 			log_printf("main32: settings port %u", (unsigned)settings_port());

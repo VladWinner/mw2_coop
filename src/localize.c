@@ -14,6 +14,7 @@
 #include "game.h"
 #include "fonts.h"
 #include "localize.h"
+#include "scripts.h"
 #include "transplant.h"
 #include "hook.h"
 #include "log.h"
@@ -257,6 +258,13 @@ static void *find_header(int type, const char *name)
 			return &entries[i];
 		}
 	}
+#ifdef MW2COOP_IW4X
+	if (type == 0x24) { // a script of ours: the iw4x client reads it as a rawfile (scripts.c)
+		void *raw = scripts_raw_override(name);
+		if (raw)
+			return raw;
+	}
+#endif
 	if (type == 4 && name && name[0] == 'm') {
 		void *clone = transplant_clone(name, original);
 		if (clone)
@@ -299,7 +307,12 @@ const char *localize_text(const char *name)
 static const uint8_t expected[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
 #else
 // 32-bit DB_FindXAssetHeader (0x4f6f10): push ecx; push ebx; mov ebx, [0x69116c] (an absolute address, copied as it is)
+#ifdef MW2COOP_IW4X
+// the 1.0.159 exe (iw4x-sp): the same, with the absolute address 0x69415c
+static const uint8_t expected[] = {0x51, 0x53, 0x8b, 0x1d, 0x5c, 0x41, 0x69, 0x00};
+#else
 static const uint8_t expected[] = {0x51, 0x53, 0x8b, 0x1d, 0x6c, 0x11, 0x69, 0x00};
+#endif
 #endif
 
 void localize_install(void)

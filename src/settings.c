@@ -34,7 +34,11 @@ static const uint32_t net_port_immediates[] = {0x293381, 0x292f03}; // "mov edx,
 #define PORT_OPCODE 0xba
 #else
 // the 32-bit build registers net_port with "push 28960" (68 20 71 00 00) before "push 'net_port'" (0x48c5f6, 0x63908e)
+#ifdef MW2COOP_IW4X
+static const uint32_t net_port_immediates[] = {0x94e27, 0x23b87f}; // the 1.0.159 exe of iw4x-sp
+#else
 static const uint32_t net_port_immediates[] = {0x8c5f7, 0x23908f};
+#endif
 #define PORT_OPCODE 0x68
 #endif
 

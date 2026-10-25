@@ -35,6 +35,7 @@
 #include "hook.h"
 #include "log.h"
 #include "transplant.h"
+#include "scripts.h"
 
 // Layouts (the 64-bit ones mapped with "!asset 4"; the 32-bit ones are the same fields with 4-byte pointers, checked on
 // coop_body_us_army: lodInfo[0].dist 300.0 at +0x40, [1].dist 500.0 at +0x6c).
@@ -364,7 +365,11 @@ static uint8_t *pick_model, *pick_source;
 #ifdef _WIN64
 #define RVA_POOLS 0x3bfe00 // void *[43]: { free list head; entries[] } (see zones.c)
 #else
+#ifdef MW2COOP_IW4X
+#define RVA_POOLS 0x3337f8 // the 1.0.159 exe of iw4x-sp
+#else
 #define RVA_POOLS 0x3307f8 // void *[43] at 0x7307f8, read by the per-type allocator (0x5801b0 for models): { free list head; entries[] }
+#endif
 #endif
 
 static struct {
@@ -615,6 +620,10 @@ static is_default_t is_default_original;
 
 static char is_default(unsigned type, const char *name)
 {
+#ifdef MW2COOP_IW4X
+	if (type == 0x24 && name && scripts_is_override(name)) // a script of ours (scripts.c): the rawfile exists
+		return 0;
+#endif
 	if (type == 4 && name && strcmp(name, PICK_NAME) == 0 && pick_model)
 		return 0;
 	if (type == 4 && name && strcmp(name, CLONE_NAME) == 0)

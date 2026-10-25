@@ -21,6 +21,12 @@ BITS=${MW2COOP_BITS:-64}
 # a mixed pair (MW2COOP_BITS_HOST=64 MW2COOP_BITS_CLIENT=32 or the other way round) checks the 64<->32 cross play
 HB=${MW2COOP_BITS_HOST:-$BITS}; CB=${MW2COOP_BITS_CLIENT:-$BITS}
 A=$ROOT/mw2-$HB; B=$ROOT/mw2-$CB-b
+# MW2COOP_IW4X=1: two copies of the iw4x-sp client (mw2-iw4x, mw2-iw4x-b), the 32-bit paths below
+if [ "$MW2COOP_IW4X" = 1 ]; then BITS=32; HB=32; CB=32; A=$ROOT/mw2-iw4x; B=$ROOT/mw2-iw4x-b; fi
+# MW2COOP_DIR_A / MW2COOP_DIR_B: any two copies (a folder with iw4x-sp.exe starts the iw4x client); with HB/CB the bits of each, e.g.
+# iw4x host and official 32-bit client: MW2COOP_DIR_A=$ROOT/mw2-iw4x MW2COOP_DIR_B=$ROOT/mw2-32-b MW2COOP_BITS=32
+[ -n "$MW2COOP_DIR_A" ] && A=$MW2COOP_DIR_A
+[ -n "$MW2COOP_DIR_B" ] && B=$MW2COOP_DIR_B
 HERE=$(cd "$(dirname "$0")" && pwd -W)
 # a copy left from an earlier run (a crashed one keeps its window) holds the ports, the log and winmm.dll
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies.ps1" -Root "$(cygpath -w "$ROOT")" | tr -d '\r'

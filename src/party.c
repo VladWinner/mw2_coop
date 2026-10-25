@@ -137,8 +137,13 @@ static void join_f(void)
 		return;
 	// connect stores its port argument as-is into a network-order field
 	char cmd[64];
+#ifdef MW2COOP_IW4X
+	// the iw4x-sp client replaces `connect` by one that takes the plain port, swaps it and runs the game's own as `connect_coop`
+	snprintf(cmd, sizeof(cmd), "connect %u.%u.%u.%u %u\n", addr[0], addr[1], addr[2], addr[3], (unsigned)port);
+#else
 	snprintf(cmd, sizeof(cmd), "connect %u.%u.%u.%u %u\n", addr[0], addr[1], addr[2], addr[3],
 		 (unsigned)(uint16_t)((port >> 8) | (port << 8)));
+#endif
 	game_cbuf_addtext(cmd);
 }
 

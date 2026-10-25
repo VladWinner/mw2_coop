@@ -56,7 +56,11 @@ typedef struct {
 #else
 // 32-bit: the uiContext_t at 0x191cef0 ("openmenu", 0x61ed60, passes it to Menus_OpenByName 0x465010); menus[640] at +0x38 and
 // the count after them at +0xa38; handlers have 4-byte pointers (no padding)
+#ifdef MW2COOP_IW4X
+#define RVA_UI_CONTEXT 0x1520470 // the 1.0.159 exe of iw4x-sp (uiInfoArray)
+#else
 #define RVA_UI_CONTEXT 0x151cef0
+#endif
 #define UI_MENUS 0x38
 #define UI_MENU_COUNT 0xa38
 #define UI_MAX_MENUS 640

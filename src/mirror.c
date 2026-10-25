@@ -28,7 +28,11 @@
 #define GENTITY_SIZE 0x2a0
 #else
 // 32-bit: g_entities at 0xea76b8, 0x270 bytes each; the entity reference is the method's one stack argument
+#ifdef MW2COOP_IW4X
+#define RVA_G_ENTITIES 0xaaac38 // the 1.0.159 exe of iw4x-sp
+#else
 #define RVA_G_ENTITIES 0xaa76b8
+#endif
 #define GENTITY_SIZE 0x270
 #endif
 #define GENTITY_CLIENT 0x108
@@ -47,6 +51,12 @@ static const struct {
 	{0x339110, "givemaxammo"},
 	{0x3390f8, "givestartammo"},
 	{0x348c50, "setthreatbiasgroup"}, // in the AI (sentient) method table
+#elif defined(MW2COOP_IW4X)
+	{0x2ebde4, "setactionslot"},
+	{0x2ebc34, "setoffhandsecondaryclass"},
+	{0x2ebb38, "givemaxammo"},
+	{0x2ebb2c, "givestartammo"},
+	{0x2ee030, "setthreatbiasgroup"}, // in the AI (sentient) method table
 #else
 	{0x2e8ec4, "setactionslot"},
 	{0x2e8d14, "setoffhandsecondaryclass"},
