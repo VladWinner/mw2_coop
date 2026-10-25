@@ -129,3 +129,9 @@ Deliberately 64-bit only (no player-facing effect):
 
 Open: an intermittent hang of both copies in DB_FindXAssetHeader (see `crash.c` dumpstacks; `tools/qa_pair.sh` now watches
 for it from 20 s after the start and keeps stacks in `hang-reports/`).
+
+## Cross play 64 <-> 32 (checked 2026-10-25)
+
+`MW2COOP_BITS_HOST=64 MW2COOP_BITS_CLIENT=32 sh tools/qa_pair.sh bay "" 35 trainer` (and the other way round): the join, the
+level load, both players in the level, `bay` PASS 5/5 in both directions, one run each, trainer only. The patched `_utility`,
+`_coop` and `_mw2coop` hashes are equal in both builds. Not checked: other maps, set pieces, long sessions.

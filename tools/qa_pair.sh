@@ -18,7 +18,9 @@ GOD=${MW2COOP_GOD:-1}
 [ "$SCEN" = "restart" ] && GOD=0
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
 BITS=${MW2COOP_BITS:-64}
-A=$ROOT/mw2-$BITS; B=$ROOT/mw2-$BITS-b
+# a mixed pair (MW2COOP_BITS_HOST=64 MW2COOP_BITS_CLIENT=32 or the other way round) checks the 64<->32 cross play
+HB=${MW2COOP_BITS_HOST:-$BITS}; CB=${MW2COOP_BITS_CLIENT:-$BITS}
+A=$ROOT/mw2-$HB; B=$ROOT/mw2-$CB-b
 HERE=$(cd "$(dirname "$0")" && pwd -W)
 # a copy left from an earlier run (a crashed one keeps its window) holds the ports, the log and winmm.dll
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies.ps1" -Root "$(cygpath -w "$ROOT")" | tr -d '\r'
@@ -35,7 +37,39 @@ LATE="$(printf '%s' "${MW2COOP_QA_LATE:-}" | tr ';' '
 ')"
 HOSTCMDS="$(printf '%s' "${MW2COOP_HOST_CMDS:-}" | tr ';' '
 ')"
-if [ "$BITS" = 32 ]; then
+if [ "$HB" != "$CB" ]; then
+	# mixed pair: the slower timings of the 64-bit game for both, the 32-bit prelude on the 32-bit side, the PC's own address
+	OWN_IP=$(powershell.exe -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { \$_.IPAddress -notlike '169.*' -and \$_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1).IPAddress" | tr -d '')
+	PRE_H=""; PRE_C=""
+	[ "$HB" = 32 ] && PRE_H='set arcademode 0
+set solo_play 0'
+	[ "$CB" = 32 ] && PRE_C='set arcademode 0
+set solo_play 0'
+	printf '# host
+%s
+%s
+set start "%s"
+set mw2coop_god "%s"
+!sleep 35000
+%s
+listen
+!sleep 2000
+%s
+coopLaunch
+%s
+!sleep %d
+' "$COMMON" "$PRE_H" "$HOST_START" "$GOD" "$LAUNCH" "$HOSTCMDS" "$LATE" $LONG > $A/mw2coop/commands.txt
+	printf '# client
+%s
+%s
+set start "%s"
+!sleep 20000
+!xuid_add 1
+!sleep 19000
+mw2coop_join %s
+!sleep %d
+' "$COMMON" "$PRE_C" "$START" "$OWN_IP" $LONG > $B/mw2coop/commands.txt
+elif [ "$BITS" = 32 ]; then
 	# the 32-bit game: loads faster, needs the sign-in command before listening, and its join takes the PC's own address
 	# (a loopback address makes the host ignore the client's heartbeat, see party.c)
 	PRE='set arcademode 0
