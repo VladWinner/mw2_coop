@@ -13,6 +13,9 @@
 #include "scripts.h"
 #include "zones.h"
 #include "control.h"
+#include "crash.h"
+#include "fov.h"
+#include "shot.h"
 #include "party.h"
 #include "settings.h"
 #include "upnp.h"
@@ -148,11 +151,14 @@ static DWORD WINAPI identify(LPVOID unused)
 		if (strcmp(hex, builds[i].code_sha256) == 0) {
 			log_printf("main32: known build: %s", builds[i].name);
 			game_init();
+			crash_install();
 			log_printf("main32: settings port %u", (unsigned)settings_port());
 			scripts_install();
 			zones_install();
 			party_install();
 			upnp_install();
+			shot_install();
+			fov_install();
 			control_start();
 			return 0;
 		}

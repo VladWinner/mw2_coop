@@ -9,6 +9,15 @@
 #include "crash.h"
 #include "log.h"
 
+// the registers of the exception context: 64 bits Rip/Rsp..., 32 bits Eip/Esp...
+#ifdef _WIN64
+#define CTX_IP(c) ((c)->Rip)
+#define CTX_SP(c) ((c)->Rsp)
+#else
+#define CTX_IP(c) ((c)->Eip)
+#define CTX_SP(c) ((c)->Esp)
+#endif
+
 static uintptr_t image_base, image_end;
 static volatile LONG logged;
 
@@ -26,7 +35,7 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 	if (InterlockedIncrement(&logged) > 3)
 		return EXCEPTION_CONTINUE_SEARCH;
 	CONTEXT *c = info->ContextRecord;
-	uintptr_t rip = (uintptr_t)c->Rip;
+	uintptr_t rip = (uintptr_t)CTX_IP(c);
 	ULONG_PTR *ei = info->ExceptionRecord->ExceptionInformation;
 	if (code == EXCEPTION_ACCESS_VIOLATION)
 		log_printf("CRASH: access violation (%s 0x%llx) at %s 0x%llx", ei[0] == 1 ? "write" : ei[0] == 8 ? "execute" : "read",
@@ -35,10 +44,15 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 	else
 		log_printf("CRASH: exception 0x%lx at %s 0x%llx", code, in_image(rip) ? "rva" : "address",
 			   (unsigned long long)(in_image(rip) ? rip - image_base : rip));
+#ifdef _WIN64
 	log_printf("CRASH: rax %llx rbx %llx rcx %llx rdx %llx rsi %llx rdi %llx r8 %llx r9 %llx",
 		   c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->R8, c->R9);
+#else
+	log_printf("CRASH: eax %lx ebx %lx ecx %lx edx %lx esi %lx edi %lx ebp %lx", c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi,
+		   c->Ebp);
+#endif
 	// return addresses into the exe among the first stack slots (a rough call stack)
-	const uintptr_t *sp = (const uintptr_t *)c->Rsp;
+	const uintptr_t *sp = (const uintptr_t *)CTX_SP(c);
 	char line[512];
 	int n = 0, found = 0;
 	n += wsprintfA(line, "CRASH: stack rvas:");
@@ -100,12 +114,12 @@ static void dump_threads(HANDLE out)
 		if (SuspendThread(t) != (DWORD)-1) {
 			CONTEXT c = {.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER};
 			if (GetThreadContext(t, &c)) {
-				rip = (uintptr_t)c.Rip;
+				rip = (uintptr_t)CTX_IP(&c);
 				SIZE_T read = 0;
-				ReadProcessMemory(GetCurrentProcess(), (void *)c.Rsp, stack, sizeof(stack), &read);
+				ReadProcessMemory(GetCurrentProcess(), (void *)CTX_SP(&c), stack, sizeof(stack), &read);
 				if (!read) // the stack's end is near: read what is there
 					for (size_t want = sizeof(stack) / 2; want >= 64 && !read; want /= 2)
-						ReadProcessMemory(GetCurrentProcess(), (void *)c.Rsp, stack, want, &read);
+						ReadProcessMemory(GetCurrentProcess(), (void *)CTX_SP(&c), stack, want, &read);
 				got = (int)(read / sizeof(uintptr_t));
 			}
 			ResumeThread(t);
@@ -141,7 +155,11 @@ static DWORD WINAPI watchdog(LPVOID arg)
 void crash_install(void)
 {
 	HMODULE exe = GetModuleHandleA(NULL);
+#ifdef _WIN64
 	IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)((uint8_t *)exe + ((IMAGE_DOS_HEADER *)exe)->e_lfanew);
+#else
+	IMAGE_NT_HEADERS32 *nt = (IMAGE_NT_HEADERS32 *)((uint8_t *)exe + ((IMAGE_DOS_HEADER *)exe)->e_lfanew);
+#endif
 	image_base = (uintptr_t)exe;
 	image_end = image_base + nt->OptionalHeader.SizeOfImage;
 	AddVectoredExceptionHandler(1, on_exception);
