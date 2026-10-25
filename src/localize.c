@@ -293,8 +293,7 @@ void localize_install(void)
 		log_printf("localize: unexpected bytes at DB_FindXAssetHeader, not hooking");
 		return;
 	}
-	original = (db_find_header_t)hook_function(target, expected, sizeof(expected), find_header);
-	if (!original)
+	if (!hook_function(target, expected, sizeof(expected), find_header, (void **)&original))
 		return;
 	log_printf("localize: DB_FindXAssetHeader hooked for MW2COOP_ strings");
 }

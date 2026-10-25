@@ -17,6 +17,7 @@
 #include "game.h"
 #include "hook.h"
 #include "log.h"
+#include "transplant.h"
 #include "zones.h"
 
 #define RVA_LOAD_LEVEL_ZONES 0x0f09b0
@@ -90,6 +91,7 @@ static void pool_extend(int type, int extra, size_t entry_size)
 
 static void load_level_zones(const char *map, int flag)
 {
+	transplant_new_level();
 	char coop[8] = "";
 	game_dvar_string("coop", coop, sizeof(coop)); // a bool: "0" / "1"
 	log_printf("zones: loading level zones for '%s' (coop '%s', flag %d)", map ? map : "", coop, flag);
@@ -128,8 +130,7 @@ void zones_install(void)
 		log_printf("zones: unexpected bytes at the level zone loader, not hooking");
 		return;
 	}
-	original = (load_level_zones_t)hook_function(target, expected, sizeof(expected), load_level_zones);
-	if (!original)
+	if (!hook_function(target, expected, sizeof(expected), load_level_zones, (void **)&original))
 		return;
 	log_printf("zones: level zone loader hooked");
 }

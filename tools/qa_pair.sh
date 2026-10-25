@@ -19,6 +19,9 @@ GOD=${MW2COOP_GOD:-1}
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
 A=$ROOT/mw2-64; B=$ROOT/mw2-64-b
 HERE=$(cd "$(dirname "$0")" && pwd -W)
+# a copy left from an earlier run (a crashed one keeps its window) holds the ports, the log and winmm.dll
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies.ps1" -Root "$(cygpath -w "$ROOT")" | tr -d '\r'
+HERE=$(cd "$(dirname "$0")" && pwd -W)
 HOST_START="$START"; LAUNCH="set coop_mapName $MAP"
 if [ "$START" = "@continue" ]; then HOST_START=""; START=""; LAUNCH="mw2coop_continue"; fi
 COMMON="!watch coop mapname sv_running specialops mw2coop_qa start mw2coop_god ${MW2COOP_QA_WATCH:-}

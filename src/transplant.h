@@ -8,3 +8,6 @@ void transplant_poll(void);
 // model wearing the mesh model's surfaces (NULL for other names or when the models are not
 // loaded); called from the DB_FindXAssetHeader hook with the original function.
 void *transplant_clone(const char *name, void *(*find)(int, const char *));
+
+// A level is loading (zones.c): the buffers of the models made two levels ago are freed.
+void transplant_new_level(void);

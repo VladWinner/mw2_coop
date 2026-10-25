@@ -45,16 +45,17 @@ void hook_jump(uint8_t *target, size_t len, const void *replacement, uint8_t fil
 	FlushInstructionCache(GetCurrentProcess(), target, len);
 }
 
-void *hook_function(uint8_t *target, const uint8_t *expected, size_t len, void *replacement)
+int hook_function(uint8_t *target, const uint8_t *expected, size_t len, void *replacement, void **original)
 {
 	if (len < JUMP_SIZE || len > MAX_LEN || memcmp(target, expected, len) != 0)
-		return NULL;
+		return 0;
 	uint8_t code[MAX_LEN + JUMP_SIZE];
 	memcpy(code, target, len);
 	hook_jump_bytes(code + len, target + len);
 	uint8_t *trampoline = hook_code(code, len + JUMP_SIZE);
 	if (!trampoline)
-		return NULL;
+		return 0;
+	*original = trampoline; // before the patch, not after it
 	hook_jump(target, len, replacement, 0xcc); // never run: the jump leaves, the trampoline resumes after them
-	return trampoline;
+	return 1;
 }

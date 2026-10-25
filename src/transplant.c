@@ -157,46 +157,44 @@ static int bits_rule(const uint8_t *donor)
 
 static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name, const char *donor_name);
 
-// Buffers made for a model the game keeps (surfaces, bone lists, copies of the model-surface headers). The
-// game frees and refills its model pools with each level, so a model made for an earlier level is gone
-// and its buffers are dead, but nothing here may be freed while the game could still draw with it: a bag is
-// emptied only when its turn comes round again, sixteen makes later (a restart makes the models again; a level makes three at most).
-#define BAGS 16
+// Buffers made for a model the game keeps (surfaces, bone lists, copies of the model-surface headers) belong to
+// the level that made them. The game frees and refills its model pools with every level load, so a model made for
+// an earlier level is gone, but the previous level's may still be drawn while the next one loads: the buffers of
+// a level are freed when the level after next loads (transplant_new_level, from the zone loader's hook), never
+// by how many models were made: a level makes dozens (No Russian's crew) and every one of them is live.
+#define GENERATIONS 3
 static struct {
 	void **item;
 	int count, cap;
-} bags[BAGS];
-static int bag_next;
-static int bag_now = -1;
+} generations[GENERATIONS];
+static int generation_now;
 
-static void bag_begin(void)
+void transplant_new_level(void)
 {
-	bag_now = bag_next;
-	bag_next = (bag_next + 1) % BAGS;
-	for (int i = 0; i < bags[bag_now].count; i++)
-		free(bags[bag_now].item[i]);
-	bags[bag_now].count = 0;
+	generation_now = (generation_now + 1) % GENERATIONS;
+	for (int i = 0; i < generations[generation_now].count; i++)
+		free(generations[generation_now].item[i]);
+	generations[generation_now].count = 0;
 }
 
 static void *bag_add(void *buffer)
 {
-	if (!buffer || bag_now < 0)
-		return buffer; // never freed: a buffer made outside a make
-	if (bags[bag_now].count == bags[bag_now].cap) {
-		int cap = bags[bag_now].cap ? bags[bag_now].cap * 2 : 64;
-		void **more = realloc(bags[bag_now].item, (size_t)cap * sizeof(void *));
+	if (!buffer)
+		return buffer;
+	if (generations[generation_now].count == generations[generation_now].cap) {
+		int cap = generations[generation_now].cap ? generations[generation_now].cap * 2 : 64;
+		void **more = realloc(generations[generation_now].item, (size_t)cap * sizeof(void *));
 		if (!more)
-			return buffer;
-		bags[bag_now].item = more;
-		bags[bag_now].cap = cap;
+			return buffer; // never freed
+		generations[generation_now].item = more;
+		generations[generation_now].cap = cap;
 	}
-	bags[bag_now].item[bags[bag_now].count++] = buffer;
+	generations[generation_now].item[generations[generation_now].count++] = buffer;
 	return buffer;
 }
 
 static int transplant(const char *target_name, const char *donor_name)
 {
-	bag_begin();
 	uint8_t *target = find_model(target_name), *donor = find_model(donor_name);
 	if (!target || !donor || !*(void **)(target + 0x28) || !*(void **)(donor + 0x28)) {
 		static DWORD logged;
@@ -395,7 +393,6 @@ void *transplant_clone(const char *name, void *(*find)(int, const char *))
 	}
 	if (free_slot < 0)
 		return NULL;
-	bag_begin();
 	size_t size = 0;
 	uint8_t *model = pool_entry(skeleton, mesh, &size);
 	if (!model) {
@@ -432,7 +429,6 @@ static void *upright_pick(void *(*find)(int, const char *))
 		return NULL;
 	if (pick_model && pick_source == src)
 		return pick_model;
-	bag_begin();
 	size_t size = 0;
 	uint8_t *model = pool_entry(src, src, &size);
 	if (!model) {
@@ -587,8 +583,7 @@ static void hook_is_default(void)
 		log_printf("transplant: unexpected bytes at DB_IsXAssetDefault, not hooking");
 		return;
 	}
-	is_default_original = (is_default_t)hook_function(target, is_default_bytes, sizeof(is_default_bytes), is_default);
-	if (!is_default_original)
+	if (!hook_function(target, is_default_bytes, sizeof(is_default_bytes), is_default, (void **)&is_default_original))
 		return;
 }
 

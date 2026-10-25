@@ -1,0 +1,80 @@
+# Changelog
+
+## Unreleased (since v0.4.7-beta)
+
+Everything here is in `main` and tested with bots on two game copies on one PC (host + client); none of it has
+been played through by two people yet.
+
+### New: scenes that only the first player had are now for both
+
+These scenes were scripted for one player; the other stood by or was left behind. Each now plays for two, with a
+rig of his own where the animation needs one.
+
+- **The Gulag, cellblock rope**: both rappel down, one after the other.
+- **The Gulag, the evacuation**: both lie buried, each clips on the Pavelow's rope with his own use key (the
+  rope's trigger stays on until both have), both are pulled away. A player who is too late is buried by the
+  cave-in, as before.
+- **Just Like Old Times, the opening rappel**: whoever hooks up first rappels and kills the guard below; the hook-up
+  is free again and the other rappels the same way. The barracks checkpoint waits until both are down (it used to
+  pull player 1 up to the top in the middle of his knife kill).
+- **Escape from Favela, the big jump over the gap**: whoever leaps (or falls) first starts it; both play the
+  jump (Soap reaches for both) and wake up on the ground side by side. Each rig starts 55 units from the other, so
+  nobody begins inside a wall or inside the other.
+- **Escape from Favela, the chopper's rope ladder**: whoever leaps for the ladder first starts the scene, the other
+  catches the same rope. A partner far behind is brought to the rooftop slide, so you reach the ledge together.
+  Both screens fade out at the end.
+- **The Only Easy Day..., the escape**: both board the little bird, side by side on the bench; it takes off
+  when both are on board.
+- **Wolverines!, the Humvee at the end**: checked (it was already done): player 2 gets a seat of the parked Humvee.
+
+### Cliffhanger and the other levels, from the playtest and after
+
+- **Cliffhanger**: both players get the level's stealth visibility (player 2 was seen at any distance); the other
+  player sees the snowmobile's full third-person model; the rider sits on his snowmobile in his own body (the
+  co-op body's mesh on Soap's skeleton, so the AI driving animation fits), hands on the handlebar, upright; on the
+  ice climb the partner sees the climber's body, not four arms, and the ice picks stand upright in both hands.
+  A swing clicked during the last one counts (the mouse buttons sometimes needed two clicks); this one is a
+  guess and easy to revert on its own.
+- **S.S.D.D.**: the course's gates close once both players are through; either player's sprint counts.
+- **Team Player**: either player can start the seat swap; the passenger starts looking ahead; nobody hurts the
+  other during the ride.
+- **Lobby**: the password mode has its own Password row, and Start is refused until a password is set.
+
+### Fixes in the engine side
+
+- The game leaks a reader count when a model name is unknown, and the next `playsound` then hangs; hooked.
+- GSC `GetEntArray( flag, "script_flag" )` finds nothing in this build; the S.S.D.D. gates and the checkpoint leader
+  now look at the trigger classes.
+
+### Hardening and housekeeping (code audit, `docs/audit-2026-10-25.md`)
+
+- The host's start packet and the lobby's "ready" packet are acted on only when they come from the partner's
+  address; anyone else's is dropped (the first five are logged).
+- The command file (`mw2coop\commands.txt`, the QA interface) is read only if it exists when the game starts.
+- `mw2coop.log` past 5 MB is set aside as `mw2coop.log.old`; the recorder wrote about 1 MB an hour and nothing
+  ever emptied it.
+- The buffers of the models made for the game (the co-op rider, the ice pick, No Russian's crew) are freed when the
+  level after next loads, instead of never.
+- One helper (`src/hook.c`) for all the code patches; its trampoline pages are read-execute, not writable and
+  executable.
+
+### Development
+
+- QA scenarios for each new scene, a generic scene watcher, and tools to turn the frames of both screens into
+  contact sheets (`tools/shots2png.ps1`, `tools/sheet.ps1`, `tools/spoof_test.py`).
+- The patch generators are one per level; `deploy.sh` stops when a patch does not apply.
+
+### Checked by hand
+
+Joining through a Steam invite between two different Steam accounts works (tested by the owner with a friend); it
+is off the known issues.
+
+### Not changed
+
+Slow motion still shows on both screens; the Museum epilogue and No Russian's far ending: see the known issues of
+the next release.
+
+*Кратко по-русски:* Гулаг (верёвка в блоке и эвакуация к вертолёту), спуск в «Таком же, как в старые времена»,
+большой прыжок и лестница вертолёта в «Побеге из фавел», посадка на вертолёт в «Единственном лёгком дне» теперь
+проходятся вдвоём; исправлены найденные в игре баги Скалолаза, S.S.D.D. и «Командной игры»; пакеты старта и готовности
+принимаются только от напарника; лог больше не растёт бесконечно.

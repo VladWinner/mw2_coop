@@ -18,6 +18,8 @@ if [ -n "$MW2COOP_GSC_DIR" ]; then
 	printf '%s\n' "$out" | tail -1
 fi
 [ $# -gt 0 ] || set -- "$ROOT/mw2-64" "$ROOT/mw2-64-b"
+# a running copy holds its winmm.dll: close the ones left from an earlier test run first
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/close_test_copies.ps1 -Root "$(cygpath -w "$ROOT")" | tr -d '\r'
 for t in "$@"; do
 	case "$t" in "$ROOT"/*) ;; *) echo "refusing to deploy outside $ROOT: $t"; exit 1 ;; esac
 	cp build/winmm.dll "$t/winmm.dll"
