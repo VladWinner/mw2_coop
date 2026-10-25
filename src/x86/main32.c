@@ -22,6 +22,7 @@
 #include "net.h"
 #include "progress.h"
 #include "steamnet.h"
+#include "transplant.h"
 #include "mirror.h"
 #include "shot.h"
 #include "party.h"
@@ -163,6 +164,7 @@ static DWORD WINAPI identify(LPVOID unused)
 			log_printf("main32: settings port %u", (unsigned)settings_port());
 			scripts_install();
 			mirror_install();
+			transplant_install();
 			localize_install();
 			zones_install();
 			net_install();

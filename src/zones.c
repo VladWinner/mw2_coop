@@ -81,6 +81,11 @@ static const struct {
 #ifdef _WIN64
 #define RVA_POOL_SIZES 0x3bf930 // int[43]
 #define RVA_POOLS      0x3bfe00 // void *[43]
+#else
+// 32-bit: the per-type tables the asset alloc (0x57ea60) reads: sizes at 0x730510, pool pointers at 0x7307f8
+#define RVA_POOL_SIZES 0x330510
+#define RVA_POOLS      0x3307f8
+#endif
 #define ASSET_TYPE_LOADED_SOUND 13
 
 static void pool_extend(int type, int extra, size_t entry_size)
@@ -88,7 +93,13 @@ static void pool_extend(int type, int extra, size_t entry_size)
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	void **head = ((void ***)(base + RVA_POOLS))[type];
 	int *sizes = (int *)(base + RVA_POOL_SIZES);
-	uint8_t *more = VirtualAlloc(NULL, (size_t)extra * entry_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (head && !entry_size && *head) {
+		// the entry size is not stored: a fresh free list runs through the entries in order
+		uint8_t *e1 = (uint8_t *)*head, *e2 = *(uint8_t **)e1;
+		size_t d = e2 > e1 ? (size_t)(e2 - e1) : (size_t)(e1 - e2);
+		entry_size = d >= 16 && d <= 4096 ? d : 0;
+	}
+	uint8_t *more = entry_size ? VirtualAlloc(NULL, (size_t)extra * entry_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) : NULL;
 	if (!head || !more) {
 		log_printf("zones: pool %d not extended", type);
 		return;
@@ -100,7 +111,6 @@ static void pool_extend(int type, int extra, size_t entry_size)
 	sizes[type] += extra;
 }
 
-#endif
 
 static void load_level_zones(const char *map, int flag)
 {
@@ -110,11 +120,10 @@ static void load_level_zones(const char *map, int flag)
 	log_printf("zones: loading level zones for '%s' (coop '%s', flag %d)", map ? map : "", coop, flag);
 	if (coop[0] == '1' && map) {
 		// once, before the first co-op level's zones: the database thread is idle here
-#ifdef _WIN64
 		static int extended;
 		if (!extended++)
-			pool_extend(ASSET_TYPE_LOADED_SOUND, 650, 64); // 64: the pool's span / 1350
-#endif
+			pool_extend(ASSET_TYPE_LOADED_SOUND, 650, sizeof(void *) == 8 ? 64 : 0); // 64: the pool's span / 1350; 0: found
+
 
 		for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
 			if (strcmp(map, zones[i].level) != 0)

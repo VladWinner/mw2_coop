@@ -36,11 +36,59 @@
 #include "log.h"
 #include "transplant.h"
 
+// Layouts (the 64-bit ones mapped with "!asset 4"; the 32-bit ones are the same fields with 4-byte pointers, checked on
+// coop_body_us_army: lodInfo[0].dist 300.0 at +0x40, [1].dist 500.0 at +0x6c).
+#ifdef _WIN64
+#define M_BONES 8	  // XModel: u8 numBones
+#define M_ROOTS 9	  // u8 numRootBones
+#define M_SURFS 0xa	  // u8 numsurfs
+#define M_BONENAMES 0x28  // script string indices
+#define M_PARENTS 0x30	  // u8 per non-root bone: its index minus its parent's
+#define M_QUATS 0x38	  // short[4] per non-root bone
+#define M_TRANS 0x40	  // float[3] per non-root bone
+#define M_MATERIALS 0x58  // Material **
 #define MODEL_LODS 0x60
 #define LOD_SIZE 0x38
+#define L_MSURFS 8	  // lodInfo: XModelSurfs *
+#define L_PARTBITS 0x10
+#define L_SURFS 0x28	  // XSurface *
 #define SURF_SIZE 0x58
+#define S_VCOUNT 0x18	  // XSurface: vertInfo.vertCount[4]
+#define S_BLEND 0x20	  // vertsBlend
+#define S_NLISTS 0x30	  // vertListCount
+#define S_LISTS 0x38	  // XRigidVertList *
+#define S_PARTBITS 0x40
+#define VL_SIZE 0x10	  // XRigidVertList
 #define MODELSURFS_SIZE 0x30
+#define MS_SURFS 8	  // XModelSurfs: name, surfs, numsurfs, partBits[6]
+#define MS_PARTBITS 0x14
 #define BONE_STRIDE 64
+#else
+#define M_BONES 4
+#define M_ROOTS 5
+#define M_SURFS 6
+#define M_BONENAMES 0x24
+#define M_PARENTS 0x28
+#define M_QUATS 0x2c
+#define M_TRANS 0x30
+#define M_MATERIALS 0x3c
+#define MODEL_LODS 0x40
+#define LOD_SIZE 0x2c
+#define L_MSURFS 8
+#define L_PARTBITS 0xc
+#define L_SURFS 0x24
+#define SURF_SIZE 0x40
+#define S_VCOUNT 0x10
+#define S_BLEND 0x18
+#define S_NLISTS 0x20
+#define S_LISTS 0x24
+#define S_PARTBITS 0x28
+#define VL_SIZE 0xc
+#define MODELSURFS_SIZE 0x24
+#define MS_SURFS 4
+#define MS_PARTBITS 0xc
+#define BONE_STRIDE 64
+#endif
 
 typedef void *(*find_t)(int, const char *);
 static uint8_t *base;
@@ -55,10 +103,10 @@ static uint8_t *find_model(const char *name)
 
 static int parent_of(const uint8_t *m, int bone)
 {
-	int roots = m[9];
+	int roots = m[M_ROOTS];
 	if (bone < roots)
 		return -1;
-	return bone - (*(uint8_t **)(m + 0x30))[bone - roots];
+	return bone - (*(uint8_t **)(m + M_PARENTS))[bone - roots];
 }
 
 // partBits: one bit per bone, bone 0 the top bit of word 0 (checked on the donor's own surfaces
@@ -79,13 +127,13 @@ typedef void (*bone_fn)(void *ctx, uint16_t *value);
 
 static int blend_len(const uint8_t *s)
 {
-	const int16_t *vc = (const int16_t *)(s + 0x18);
+	const int16_t *vc = (const int16_t *)(s + S_VCOUNT);
 	return vc[0] + 3 * vc[1] + 5 * vc[2] + 7 * vc[3];
 }
 
 static void each_bone(uint8_t *s, uint16_t *blend, uint8_t *lists, bone_fn f, void *ctx)
 {
-	const int16_t *vc = (const int16_t *)(s + 0x18);
+	const int16_t *vc = (const int16_t *)(s + S_VCOUNT);
 	if (s[1] && blend) {
 		uint16_t *p = blend;
 		for (int g = 0; g < 4; g++) {
@@ -95,9 +143,9 @@ static void each_bone(uint8_t *s, uint16_t *blend, uint8_t *lists, bone_fn f, vo
 					f(ctx, p + k);
 		}
 	}
-	uint32_t n = *(uint32_t *)(s + 0x30);
+	uint32_t n = *(uint32_t *)(s + S_NLISTS);
 	for (uint32_t k = 0; lists && k < n; k++)
-		f(ctx, (uint16_t *)(lists + 0x10 * k));
+		f(ctx, (uint16_t *)(lists + VL_SIZE * k));
 }
 
 struct bits_ctx {
@@ -136,13 +184,13 @@ static int bits_rule(const uint8_t *donor)
 	for (int l = 0; l < 4; l++) {
 		const uint8_t *lod = donor + MODEL_LODS + LOD_SIZE * l;
 		int n = *(const uint16_t *)(lod + 4);
-		uint8_t *surfs = *(uint8_t **)(lod + 0x28);
+		uint8_t *surfs = *(uint8_t **)(lod + L_SURFS);
 		for (int i = 0; surfs && i < n; i++, total++) {
 			uint8_t *s = surfs + SURF_SIZE * i;
 			for (int a = 0; a < 2; a++) {
 				struct bits_ctx ctx = {donor, {0}, a};
-				each_bone(s, *(uint16_t **)(s + 0x20), *(uint8_t **)(s + 0x38), bits_cb, &ctx);
-				if (memcmp(ctx.bits, s + 0x40, sizeof(ctx.bits)) == 0)
+				each_bone(s, *(uint16_t **)(s + S_BLEND), *(uint8_t **)(s + S_LISTS), bits_cb, &ctx);
+				if (memcmp(ctx.bits, s + S_PARTBITS, sizeof(ctx.bits)) == 0)
 					match[a]++;
 			}
 		}
@@ -196,7 +244,7 @@ static void *bag_add(void *buffer)
 static int transplant(const char *target_name, const char *donor_name)
 {
 	uint8_t *target = find_model(target_name), *donor = find_model(donor_name);
-	if (!target || !donor || !*(void **)(target + 0x28) || !*(void **)(donor + 0x28)) {
+	if (!target || !donor || !*(void **)(target + M_BONENAMES) || !*(void **)(donor + M_BONENAMES)) {
 		static DWORD logged;
 		if (GetTickCount() - logged > 10000) {
 			log_printf("transplant: %s or %s not loaded (yet)", target_name, donor_name);
@@ -204,7 +252,7 @@ static int transplant(const char *target_name, const char *donor_name)
 		}
 		return 0; // tried again a second later
 	}
-	if (*(void **)(target + 0x58) == *(void **)(donor + 0x58))
+	if (*(void **)(target + M_MATERIALS) == *(void **)(donor + M_MATERIALS))
 		return 1; // done already (a restart of the level)
 	return put_surfaces(target, donor, target_name, donor_name);
 }
@@ -219,8 +267,8 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 	}
 
 	// donor bone -> target bone, by name, else the nearest ancestor the target has
-	int tbones = target[8], dbones = donor[8];
-	uint16_t *tnames = *(uint16_t **)(target + 0x28), *dnames = *(uint16_t **)(donor + 0x28);
+	int tbones = target[M_BONES], dbones = donor[M_BONES];
+	uint16_t *tnames = *(uint16_t **)(target + M_BONENAMES), *dnames = *(uint16_t **)(donor + M_BONENAMES);
 	int map[256];
 	char missing[512] = "";
 	for (int i = 0; i < dbones; i++) {
@@ -244,7 +292,7 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 	for (int l = 0; l < 4; l++) {
 		uint8_t *lod = lods + LOD_SIZE * l;
 		int n = *(uint16_t *)(lod + 4);
-		uint8_t *from = *(uint8_t **)(lod + 0x28);
+		uint8_t *from = *(uint8_t **)(lod + L_SURFS);
 		if (!n || !from)
 			continue;
 		uint8_t *surfs = bag_add(calloc((size_t)n, SURF_SIZE));
@@ -254,37 +302,37 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 			memcpy(s, from + SURF_SIZE * i, SURF_SIZE);
 			uint16_t *blend = NULL;
 			uint8_t *lists = NULL;
-			if (s[1] && *(uint16_t **)(s + 0x20)) {
+			if (s[1] && *(uint16_t **)(s + S_BLEND)) {
 				size_t len = (size_t)blend_len(s) * 2;
 				blend = bag_add(malloc(len));
-				memcpy(blend, *(uint16_t **)(s + 0x20), len);
-				*(uint16_t **)(s + 0x20) = blend;
+				memcpy(blend, *(uint16_t **)(s + S_BLEND), len);
+				*(uint16_t **)(s + S_BLEND) = blend;
 			}
-			uint32_t nl = *(uint32_t *)(s + 0x30);
-			if (nl && *(uint8_t **)(s + 0x38)) {
-				lists = bag_add(malloc(0x10u * nl));
-				memcpy(lists, *(uint8_t **)(s + 0x38), 0x10u * nl);
-				*(uint8_t **)(s + 0x38) = lists;
+			uint32_t nl = *(uint32_t *)(s + S_NLISTS);
+			if (nl && *(uint8_t **)(s + S_LISTS)) {
+				lists = bag_add(malloc(VL_SIZE * nl));
+				memcpy(lists, *(uint8_t **)(s + S_LISTS), VL_SIZE * nl);
+				*(uint8_t **)(s + S_LISTS) = lists;
 			}
 			struct remap_ctx rc = {map, dbones, 0};
 			each_bone(s, blend, lists, remap_cb, &rc);
 			bad += rc.bad;
 			struct bits_ctx bc = {target, {0}, rule};
 			each_bone(s, blend, lists, bits_cb, &bc);
-			memcpy(s + 0x40, bc.bits, sizeof(bc.bits));
+			memcpy(s + S_PARTBITS, bc.bits, sizeof(bc.bits));
 			for (int k = 0; k < 6; k++)
 				lod_bits[k] |= bc.bits[k];
 			surfaces++;
 		}
-		*(uint8_t **)(lod + 0x28) = surfs;
-		memcpy(lod + 0x10, lod_bits, sizeof(lod_bits));
-		uint8_t *ms = *(uint8_t **)(lod + 8);
+		*(uint8_t **)(lod + L_SURFS) = surfs;
+		memcpy(lod + L_PARTBITS, lod_bits, sizeof(lod_bits));
+		uint8_t *ms = *(uint8_t **)(lod + L_MSURFS);
 		if (ms) {
 			uint8_t *copy = bag_add(malloc(MODELSURFS_SIZE));
 			memcpy(copy, ms, MODELSURFS_SIZE);
-			*(uint8_t **)(copy + 8) = surfs;
-			memcpy(copy + 0x14, lod_bits, sizeof(lod_bits));
-			*(uint8_t **)(lod + 8) = copy;
+			*(uint8_t **)(copy + MS_SURFS) = surfs;
+			memcpy(copy + MS_PARTBITS, lod_bits, sizeof(lod_bits));
+			*(uint8_t **)(lod + L_MSURFS) = copy;
 		}
 	}
 	if (bad) {
@@ -293,8 +341,8 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 	}
 	// swap in: LODs, surface count, materials (indexed by the LODs' surfIndex)
 	memcpy(target + MODEL_LODS, lods, sizeof(lods));
-	target[0xa] = donor[0xa];
-	*(void **)(target + 0x58) = *(void **)(donor + 0x58);
+	target[M_SURFS] = donor[M_SURFS];
+	*(void **)(target + M_MATERIALS) = *(void **)(donor + M_MATERIALS);
 	log_printf("transplant: done, %d surfaces in %d LODs, partBits %s ancestors", surfaces, 4,
 		   rule ? "with" : "without");
 	return 1;
@@ -313,7 +361,11 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 #define PICK_NAME "mw2coop_pick_up" // see upright_pick
 static uint8_t *pick_model, *pick_source;
 #define CLONE_NAME "mw2coop_rider" // model and dvar: the dvar holds "<skeleton> <mesh>"
+#ifdef _WIN64
 #define RVA_POOLS 0x3bfe00 // void *[43]: { free list head; entries[] } (see zones.c)
+#else
+#define RVA_POOLS 0x3307f8 // void *[43] at 0x7307f8, read by the per-type allocator (0x5801b0 for models): { free list head; entries[] }
+#endif
 
 static struct {
 	char name[160];
@@ -341,7 +393,7 @@ static uint8_t *pool_entry(uint8_t *model_a, uint8_t *model_b, size_t *size)
 	void **pool = ((void ***)(base + RVA_POOLS))[4];
 	if (!pool || !*pool)
 		return NULL;
-	uint8_t *entries = (uint8_t *)pool + 8;
+	uint8_t *entries = (uint8_t *)pool + sizeof(void *);
 	size_t g = 0;
 	uint8_t *samples[34] = {model_a, model_b};
 	int n = 2;
@@ -378,7 +430,7 @@ void *transplant_clone(const char *name, void *(*find)(int, const char *))
 		return NULL;
 	name = req; // the clone is known by the pair
 	uint8_t *skeleton = find(4, skel_name), *mesh = find(4, mesh_name);
-	if (!skeleton || !mesh || !*(void **)(skeleton + 0x28) || !*(void **)(mesh + 0x28))
+	if (!skeleton || !mesh || !*(void **)(skeleton + M_BONENAMES) || !*(void **)(mesh + M_BONENAMES))
 		return NULL;
 	int free_slot = -1;
 	for (int i = 0; i < 4; i++) {
@@ -425,7 +477,7 @@ void *transplant_clone(const char *name, void *(*find)(int, const char *))
 static void *upright_pick(void *(*find)(int, const char *))
 {
 	uint8_t *src = find(4, "weapon_ice_picker");
-	if (!src || src[8] != 2 || src[9] != 1)
+	if (!src || src[M_BONES] != 2 || src[M_ROOTS] != 1)
 		return NULL;
 	if (pick_model && pick_source == src)
 		return pick_model;
@@ -442,8 +494,8 @@ static void *upright_pick(void *(*find)(int, const char *))
 	// vertex is drawn as bone * inverse(base pose) * vertex, so the bone is set to R * its base
 	// pose, R being 90 degrees about Y (ahead becomes up) about the grip: the rotation R * q, the
 	// offset R * t. Overwriting q (it is not the identity: -0.31 0.63 0.63 0.31) lost the pick.
-	const int16_t *q0 = *(const int16_t **)(src + 0x38);
-	const float *t0 = *(const float **)(src + 0x40);
+	const int16_t *q0 = *(const int16_t **)(src + M_QUATS);
+	const float *t0 = *(const float **)(src + M_TRANS);
 	float bx = q0[0] / 32767.0f, by = q0[1] / 32767.0f, bz = q0[2] / 32767.0f, bw = q0[3] / 32767.0f;
 	const float ra = -0.70710678f, rc = 0.70710678f; // R = (0, ra, 0, rc)
 	float q[4];
@@ -454,20 +506,20 @@ static void *upright_pick(void *(*find)(int, const char *))
 	int16_t *quats = bag_add(malloc(8));
 	for (int k = 0; k < 4; k++)
 		quats[k] = (int16_t)(q[k] * 32767.0f + (q[k] < 0 ? -0.5f : 0.5f));
-	*(int16_t **)(model + 0x38) = quats;
+	*(int16_t **)(model + M_QUATS) = quats;
 	float *trans = bag_add(malloc(3 * sizeof(float)));
 	// R: x' = -z, z' = x; then back toward the wrist: the model's origin is ahead of the fist
 	// (QA frame: upright, but 8 to 10 units ahead of it)
 	trans[0] = -t0[2] + pick_grip_back();
 	trans[1] = t0[1];
 	trans[2] = t0[0];
-	*(float **)(model + 0x40) = trans;
+	*(float **)(model + M_TRANS) = trans;
 	// every LOD's surfaces: copies drawn by bone 1
 	int map[2] = {1, 1};
 	for (int l = 0; l < 4; l++) {
 		uint8_t *lod = model + MODEL_LODS + LOD_SIZE * l;
 		int n = *(uint16_t *)(lod + 4);
-		uint8_t *from = *(uint8_t **)(lod + 0x28);
+		uint8_t *from = *(uint8_t **)(lod + L_SURFS);
 		if (!n || !from)
 			continue;
 		uint8_t *surfs = bag_add(calloc((size_t)n, SURF_SIZE));
@@ -477,31 +529,31 @@ static void *upright_pick(void *(*find)(int, const char *))
 			memcpy(sf, from + SURF_SIZE * i, SURF_SIZE);
 			uint16_t *blend = NULL;
 			uint8_t *lists = NULL;
-			if (sf[1] && *(uint16_t **)(sf + 0x20)) {
+			if (sf[1] && *(uint16_t **)(sf + S_BLEND)) {
 				size_t len = (size_t)blend_len(sf) * 2;
 				blend = bag_add(malloc(len));
-				memcpy(blend, *(uint16_t **)(sf + 0x20), len);
-				*(uint16_t **)(sf + 0x20) = blend;
+				memcpy(blend, *(uint16_t **)(sf + S_BLEND), len);
+				*(uint16_t **)(sf + S_BLEND) = blend;
 			}
-			uint32_t nlists = *(uint32_t *)(sf + 0x30);
-			if (nlists && *(uint8_t **)(sf + 0x38)) {
-				lists = bag_add(malloc(0x10u * nlists));
-				memcpy(lists, *(uint8_t **)(sf + 0x38), 0x10u * nlists);
-				*(uint8_t **)(sf + 0x38) = lists;
+			uint32_t nlists = *(uint32_t *)(sf + S_NLISTS);
+			if (nlists && *(uint8_t **)(sf + S_LISTS)) {
+				lists = bag_add(malloc(VL_SIZE * nlists));
+				memcpy(lists, *(uint8_t **)(sf + S_LISTS), VL_SIZE * nlists);
+				*(uint8_t **)(sf + S_LISTS) = lists;
 			}
 			struct remap_ctx rc = {map, 2, 0};
 			each_bone(sf, blend, lists, remap_cb, &rc);
-			memcpy(sf + 0x40, bits, sizeof(bits));
+			memcpy(sf + S_PARTBITS, bits, sizeof(bits));
 		}
-		*(uint8_t **)(lod + 0x28) = surfs;
-		memcpy(lod + 0x10, bits, sizeof(bits));
-		uint8_t *ms = *(uint8_t **)(lod + 8);
+		*(uint8_t **)(lod + L_SURFS) = surfs;
+		memcpy(lod + L_PARTBITS, bits, sizeof(bits));
+		uint8_t *ms = *(uint8_t **)(lod + L_MSURFS);
 		if (ms) {
 			uint8_t *copy = bag_add(malloc(MODELSURFS_SIZE));
 			memcpy(copy, ms, MODELSURFS_SIZE);
-			*(uint8_t **)(copy + 8) = surfs;
-			memcpy(copy + 0x14, bits, sizeof(bits));
-			*(uint8_t **)(lod + 8) = copy;
+			*(uint8_t **)(copy + MS_SURFS) = surfs;
+			memcpy(copy + MS_PARTBITS, bits, sizeof(bits));
+			*(uint8_t **)(lod + L_MSURFS) = copy;
 		}
 	}
 	pick_model = model;
@@ -532,7 +584,7 @@ static void transplant_f(void)
 }
 
 static cmd_function_t commands[] = {
-	{NULL, "mw2coop_transplant", NULL, NULL, transplant_f},
+	{NULL, "mw2coop_transplant", NULL, NULL, transplant_f CMD_NODE_FLAG},
 };
 
 // Control thread, every 250 ms: while a level runs and asks for a transplant, have the main
@@ -558,7 +610,6 @@ void transplant_poll(void)
 // so the next lookup that waits for no readers (a playsound) waited for ever: both machines hung
 // a frame after a script_model wore the rider copy (QA snowview, 2026-10-24; the count at rva
 // 0xa8a830). For the copy's name it answers "not default" itself, before the count is touched.
-#define RVA_DB_IS_DEFAULT 0x0efff0
 typedef char (*is_default_t)(unsigned type, const char *name);
 static is_default_t is_default_original;
 
@@ -574,7 +625,12 @@ static char is_default(unsigned type, const char *name)
 }
 
 // mov [rsp+8],rbx; mov [rsp+10h],rbp; mov [rsp+18h],rsi (the same as DB_FindXAssetHeader's)
+#ifdef _WIN64
 static const uint8_t is_default_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
+#else
+// 32-bit DB_IsXAssetDefault (0x4c32b0): push ebx; mov ebx,[esp+0xc]; push esi; push edi; mov edi,[esp+0x10]
+static const uint8_t is_default_bytes[] = {0x53, 0x8b, 0x5c, 0x24, 0x0c, 0x56, 0x57, 0x8b, 0x7c, 0x24, 0x10};
+#endif
 
 static void hook_is_default(void)
 {
@@ -591,9 +647,6 @@ void transplant_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	hook_is_default();
-	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
-	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-		commands[i].next = *head;
-		*head = &commands[i];
-	}
+	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
+		game_add_command(&commands[i]);
 }

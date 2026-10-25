@@ -20,8 +20,13 @@
 
 static int readable(uintptr_t p, size_t n)
 {
+#ifdef _WIN64
 	if (p < 0x10000 || p >= 0x7fffffffffffull)
 		return 0;
+#else
+	if (p < 0x10000)
+		return 0;
+#endif
 	MEMORY_BASIC_INFORMATION mbi;
 	if (!VirtualQuery((void *)p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
 		return 0;
@@ -51,6 +56,17 @@ void memdump(uintptr_t addr, size_t size)
 		log_printf("mem: %p+0x%zx not readable", (void *)addr, size);
 		return;
 	}
+#ifndef _WIN64
+	for (size_t off = 0; off + 4 <= size; off += 4) {
+		uint32_t d = *(uint32_t *)(addr + off);
+		float f;
+		memcpy(&f, &d, 4);
+		char what[96];
+		describe(d, what, sizeof(what));
+		log_printf("mem: %p +%03zx %08x  %d  %g  %s", (void *)(addr + off), off, d, (int32_t)d, f, what);
+	}
+	return;
+#endif
 	for (size_t off = 0; off + 8 <= size; off += 8) {
 		uint64_t q = *(uint64_t *)(addr + off);
 		int32_t lo = (int32_t)q, hi = (int32_t)(q >> 32);
@@ -64,6 +80,7 @@ void memdump(uintptr_t addr, size_t size)
 	}
 }
 
+#ifdef _WIN64
 static void print_statement(const char *what, uint8_t *st);
 
 // MenuEventHandlerSet {int count; MenuEventHandler **handlers}; MenuEventHandler {data; char type}:
@@ -226,8 +243,11 @@ static void dump_surfs(const char *name)
 	}
 }
 
+#endif
+
 int memdump_command(char *line)
 {
+#ifdef _WIN64
 	if (strncmp(line, "!bones ", 7) == 0) {
 		dump_bones(line + 7);
 		return 1;
@@ -236,6 +256,7 @@ int memdump_command(char *line)
 		dump_surfs(line + 7);
 		return 1;
 	}
+#endif
 	if (strncmp(line, "!asset ", 7) == 0) {
 		char *end;
 		int type = (int)strtol(line + 7, &end, 0);
@@ -259,8 +280,13 @@ int memdump_command(char *line)
 		uint8_t *f = ((find_t)((uint8_t *)GetModuleHandleA(NULL) + RVA_DB_FIND_HEADER))(24, line + 6);
 		if (!f || !readable((uintptr_t)f, 0x28))
 			return 1;
+#ifdef _WIN64
 		int height = *(int *)(f + 8), count = *(int *)(f + 0xc);
 		uint8_t *material = *(uint8_t **)(f + 0x10), *glow = *(uint8_t **)(f + 0x18), *glyphs = *(uint8_t **)(f + 0x20);
+#else
+		int height = *(int *)(f + 4), count = *(int *)(f + 8);
+		uint8_t *material = *(uint8_t **)(f + 0xc), *glow = *(uint8_t **)(f + 0x10), *glyphs = *(uint8_t **)(f + 0x14);
+#endif
 		log_printf("mem: font %s at %p: pixelHeight %d, %d glyphs, material %p, glow %p, glyphs %p", line + 6, (void *)f, height,
 			   count, (void *)material, (void *)glow, (void *)glyphs);
 		static const int wanted[] = {0x20, 0x41, 0x61, 0xc0, 0xe0, 0xff};
@@ -278,7 +304,11 @@ int memdump_command(char *line)
 		if (material && readable((uintptr_t)material, 0x100)) {
 			memdump((uintptr_t)material, 0x80);
 			// Material: textureTable (MaterialTextureDef, 16 bytes: hash, names, sampler, semantic, GfxImage * at +8) at +0x60
+			#ifdef _WIN64
 			uint8_t *table = *(uint8_t **)(material + 0x60);
+#else
+			uint8_t *table = *(uint8_t **)(material + 0x54);
+#endif
 			log_printf("mem: material textureTable %p", (void *)table);
 			if (table && readable((uintptr_t)table, 0x40)) {
 				memdump((uintptr_t)table, 0x40);
@@ -292,6 +322,7 @@ int memdump_command(char *line)
 		}
 		return 1;
 	}
+#ifdef _WIN64
 	if (strncmp(line, "!menu ", 6) == 0) {
 		// "!menu <name> [item]": the menu's items with every string field, or one item in full
 		// (menuDef_t: itemCount +0xbc, itemDef_t **items +0x168)
@@ -377,6 +408,7 @@ int memdump_command(char *line)
 		}
 		return 1;
 	}
+#endif
 	if (strncmp(line, "!rva ", 5) == 0) {
 		// "!rva <rva> <size>": like !mem, at an address relative to the exe
 		char *end;
