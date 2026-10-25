@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased (since v0.4.7-beta)
+## v0.5.0-beta (2026-10-25)
 
-Everything here is in `main` and tested with bots on two game copies on one PC (host + client); none of it has
-been played through by two people yet.
+Everything here was tested with bots on two game copies on one PC (host + client); none of it has been played through
+by two people yet.
 
 ### New: fonts closer to the English original (Russian game)
 
@@ -48,6 +48,13 @@ rig of his own where the animation needs one.
 - **Team Player**: either player can start the seat swap; the passenger starts looking ahead; nobody hurts the
   other during the ride.
 - **Lobby**: the password mode has its own Password row, and Start is refused until a password is set.
+
+### The 32-bit build (source only, not in the archive)
+
+The code now also builds for the older 32-bit MW2 (`sh build.sh x86`, official Steam copy of the old depots): two copies
+play a co-op session on trainer, joining by address, the script patches apply and give the same patched scripts as the
+64-bit build, and a 64-bit host with a 32-bit client was checked on trainer. It is not in this release's archive:
+the screenshot helper, Steam relay and some set pieces are not ported yet. See `docs/32bit-plan.md`.
 
 ### Fixes in the engine side
 
