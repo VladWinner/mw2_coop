@@ -1,0 +1,501 @@
+// Split screen: two copies of the game side by side on one PC (the co-op between them runs over the PC's own
+// address like any other). The game has no controller support and reads the mouse by recentring the cursor,
+// so a copy that is driven by a gamepad gets its input from this module instead of the keyboard and mouse:
+//   settings.ini [splitscreen]
+//     window  = left | right | top | bottom | full | <x>,<y>,<w>,<h>   where this copy's window goes (empty keeps it)
+//     pad     = 0..3     the XInput pad that drives this copy; -1 (default): the keyboard and mouse as always
+//     slot    = 0 | 1    one shared window for both copies: slot 0 makes it, both copies put their game window in it (top and
+//                        bottom; stacked=0: left and right) while a level runs and take it out again in the menus
+//     speed   = 1..100   the right stick's turn speed in pixels per 10 ms at full tilt (default 14)
+//     fakepad = 1        QA: the pad's state is read from mw2coop\fakepad.txt ("lx ly rx ry buttons lt rt", XInput units)
+// A pad copy has its own virtual cursor (the game's GetCursorPos/SetCursorPos are redirected, the real cursor stays with
+// the other copy), is told that it is the active window (the game ignores the mouse of a background window), and gets
+// the pad's keys as window messages (those work in a window that does not have the keyboard).
+#include <windows.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "game.h"
+#include "log.h"
+#include "splitscreen.h"
+
+static int pad = -1;
+static int turn_speed = 14;
+static int fakepad;
+static char window_spec[64];
+static char ini_path[MAX_PATH];
+static HWND game_window;
+
+// the virtual cursor of a pad copy
+static volatile LONG vx = 400, vy = 300;
+
+typedef struct {
+	WORD buttons;
+	BYTE lt, rt;
+	SHORT lx, ly, rx, ry;
+} PadState;
+
+typedef DWORD(WINAPI *xinput_get_t)(DWORD, void *);
+static xinput_get_t xinput_get;
+
+// ---------------------------------------------------------------- the import table
+
+static void iat_patch(const char *dll, const char *func, void *replacement)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+	IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+	IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+	if (!dir->VirtualAddress)
+		return;
+	for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir->VirtualAddress); d->Name; d++) {
+		if (lstrcmpiA((const char *)(base + d->Name), dll) != 0)
+			continue;
+		IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + (d->OriginalFirstThunk ? d->OriginalFirstThunk : d->FirstThunk));
+		IMAGE_THUNK_DATA *slots = (IMAGE_THUNK_DATA *)(base + d->FirstThunk);
+		for (; names->u1.AddressOfData; names++, slots++) {
+			if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))
+				continue;
+			IMAGE_IMPORT_BY_NAME *n = (IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData);
+			if (lstrcmpA((const char *)n->Name, func) != 0)
+				continue;
+			DWORD old;
+			if (!VirtualProtect(&slots->u1.Function, sizeof(void *), PAGE_READWRITE, &old))
+				return;
+			slots->u1.Function = (ULONG_PTR)replacement;
+			VirtualProtect(&slots->u1.Function, sizeof(void *), old, &old);
+			log_printf("splitscreen: %s redirected", func);
+			return;
+		}
+	}
+	log_printf("splitscreen: %s!%s is not imported", dll, func);
+}
+
+// ---------------------------------------------------------------- the redirected calls
+
+static volatile LONG get_calls, set_calls;
+
+static BOOL WINAPI my_get_cursor_pos(POINT *p)
+{
+	InterlockedIncrement(&get_calls);
+	if (!p)
+		return FALSE;
+	p->x = vx;
+	p->y = vy;
+	return TRUE;
+}
+
+static BOOL WINAPI my_set_cursor_pos(int x, int y)
+{
+	InterlockedIncrement(&set_calls);
+	vx = x;
+	vy = y;
+	return TRUE;
+}
+
+static HWND WINAPI my_get_foreground_window(void)
+{
+	return game_window ? game_window : GetForegroundWindow();
+}
+
+static HWND WINAPI my_get_active_window(void)
+{
+	return game_window ? game_window : GetActiveWindow();
+}
+
+// ---------------------------------------------------------------- the pad
+
+static int read_pad(PadState *s)
+{
+	memset(s, 0, sizeof(*s));
+	if (fakepad) {
+		char path[MAX_PATH];
+		lstrcpynA(path, ini_path, MAX_PATH);
+		char *slash = strrchr(path, '\\');
+		if (slash)
+			lstrcpynA(slash + 1, "fakepad.txt", (int)(MAX_PATH - (slash + 1 - path)));
+		FILE *f = fopen(path, "r");
+		if (!f)
+			return 1;
+		int lx = 0, ly = 0, rx = 0, ry = 0, b = 0, lt = 0, rt = 0;
+		if (fscanf(f, "%d %d %d %d %d %d %d", &lx, &ly, &rx, &ry, &b, &lt, &rt) >= 4) {
+			s->lx = (SHORT)lx, s->ly = (SHORT)ly, s->rx = (SHORT)rx, s->ry = (SHORT)ry;
+			s->buttons = (WORD)b, s->lt = (BYTE)lt, s->rt = (BYTE)rt;
+		}
+		fclose(f);
+		return 1;
+	}
+	if (!xinput_get)
+		return 0;
+	// XINPUT_STATE is {DWORD packet; XINPUT_GAMEPAD}, XINPUT_GAMEPAD is {WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry}
+	struct {
+		DWORD packet;
+		PadState gp;
+	} raw;
+	if (xinput_get((DWORD)pad, &raw) != ERROR_SUCCESS)
+		return 0;
+	*s = raw.gp;
+	return 1;
+}
+
+#define BTN_UP 0x0001
+#define BTN_DOWN 0x0002
+#define BTN_START 0x0010
+#define BTN_BACK 0x0020
+#define BTN_LTHUMB 0x0040
+#define BTN_RTHUMB 0x0080
+#define BTN_LB 0x0100
+#define BTN_RB 0x0200
+#define BTN_A 0x1000
+#define BTN_B 0x2000
+#define BTN_X 0x4000
+#define BTN_Y 0x8000
+
+// virtual input slots; the game's default keys
+enum { K_W, K_A, K_S, K_D, K_SPACE, K_CTRL, K_R, K_F, K_G, K_Q, K_SHIFT, K_V, K_ESC, K_TAB, K_1, K_2, K_ENTER, K_COUNT };
+static const UINT key_vk[K_COUNT] = {'W', 'A', 'S', 'D', VK_SPACE, VK_CONTROL, 'R', 'F', 'G', 'Q', VK_SHIFT, 'V', VK_ESCAPE, VK_TAB, '1', '2', VK_RETURN};
+#define M_LEFT K_COUNT
+#define M_RIGHT (K_COUNT + 1)
+#define SLOTS (K_COUNT + 2)
+static char held[SLOTS];
+static DWORD sent_at[SLOTS];
+
+static void send_slot(int slot, int down)
+{
+	if (!game_window)
+		return;
+	// a key that is held is sent again every 250 ms: a level load clears the game's key states under it
+	DWORD now = GetTickCount();
+	if (held[slot] == down && !(down && now - sent_at[slot] > 250))
+		return;
+	sent_at[slot] = now;
+	held[slot] = (char)down;
+	if (slot == M_LEFT || slot == M_RIGHT) {
+		UINT msg = slot == M_LEFT ? (down ? WM_LBUTTONDOWN : WM_LBUTTONUP) : (down ? WM_RBUTTONDOWN : WM_RBUTTONUP);
+		WPARAM w = down ? (slot == M_LEFT ? MK_LBUTTON : MK_RBUTTON) : 0;
+		PostMessageA(game_window, msg, w, MAKELPARAM(vx, vy));
+		return;
+	}
+	UINT vk = key_vk[slot];
+	UINT scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+	LPARAM lp = 1 | (LPARAM)(scan << 16);
+	if (!down)
+		lp |= (LPARAM)1 << 30 | (LPARAM)1 << 31;
+	PostMessageA(game_window, down ? WM_KEYDOWN : WM_KEYUP, vk, lp);
+}
+
+static void apply(const PadState *s)
+{
+	int want[SLOTS] = {0};
+	want[K_W] = s->ly > 12000;
+	want[K_S] = s->ly < -12000;
+	want[K_D] = s->lx > 12000;
+	want[K_A] = s->lx < -12000;
+	want[K_SPACE] = !!(s->buttons & BTN_A);
+	want[K_CTRL] = !!(s->buttons & BTN_B);
+	want[K_R] = !!(s->buttons & BTN_X);
+	want[K_F] = !!(s->buttons & BTN_X); // reload and use are on one button: the game takes the one that fits
+	want[K_1] = !!(s->buttons & BTN_Y);
+	want[K_G] = !!(s->buttons & BTN_LB);
+	want[K_Q] = !!(s->buttons & BTN_RB);
+	want[K_SHIFT] = !!(s->buttons & BTN_LTHUMB);
+	want[K_V] = !!(s->buttons & BTN_RTHUMB);
+	want[K_ESC] = !!(s->buttons & BTN_START);
+	want[K_TAB] = !!(s->buttons & BTN_BACK);
+	want[K_2] = !!(s->buttons & BTN_UP);
+	want[K_ENTER] = !!(s->buttons & BTN_DOWN);
+	want[M_LEFT] = s->rt > 100;
+	want[M_RIGHT] = s->lt > 100;
+	for (int i = 0; i < SLOTS; i++)
+		send_slot(i, want[i]);
+	if (s->rx > 6000 || s->rx < -6000)
+		vx += (LONG)((long long)s->rx * turn_speed / 32768);
+	if (s->ry > 6000 || s->ry < -6000)
+		vy -= (LONG)((long long)s->ry * turn_speed / 32768);
+}
+
+// ---------------------------------------------------------------- the window
+
+static BOOL CALLBACK find_window(HWND h, LPARAM out)
+{
+	DWORD pid;
+	GetWindowThreadProcessId(h, &pid);
+	if (pid != GetCurrentProcessId() || !IsWindowVisible(h) || GetWindow(h, GW_OWNER))
+		return TRUE;
+	char cls[64] = "";
+	GetClassNameA(h, cls, sizeof(cls));
+	if (strstr(cls, "Splash")) // the splash screen comes first and goes away
+		return TRUE;
+	RECT r;
+	GetWindowRect(h, &r);
+	if (r.right - r.left < 200)
+		return TRUE;
+	*(HWND *)out = h;
+	return FALSE;
+}
+
+static void place_window(HWND w)
+{
+	if (!window_spec[0])
+		return;
+	RECT screen;
+	SystemParametersInfoA(SPI_GETWORKAREA, 0, &screen, 0);
+	int sw = screen.right - screen.left, sh = screen.bottom - screen.top;
+	int x, y, cw, ch;
+	if (sscanf(window_spec, "%d,%d,%d,%d", &x, &y, &cw, &ch) == 4) {
+	} else if (!lstrcmpiA(window_spec, "left")) {
+		x = screen.left, y = screen.top, cw = sw / 2, ch = sh;
+	} else if (!lstrcmpiA(window_spec, "right")) {
+		x = screen.left + sw / 2, y = screen.top, cw = sw / 2, ch = sh;
+	} else if (!lstrcmpiA(window_spec, "top")) {
+		x = screen.left, y = screen.top, cw = sw, ch = sh / 2;
+	} else if (!lstrcmpiA(window_spec, "bottom")) {
+		x = screen.left, y = screen.top + sh / 2, cw = sw, ch = sh / 2;
+	} else if (!lstrcmpiA(window_spec, "full")) {
+		x = screen.left, y = screen.top, cw = sw, ch = sh;
+	} else {
+		log_printf("splitscreen: unknown window '%s'", window_spec);
+		return;
+	}
+	SetWindowPos(w, NULL, x, y, cw, ch, SWP_NOZORDER | SWP_NOACTIVATE);
+	log_printf("splitscreen: window at %d,%d size %dx%d", x, y, cw, ch);
+}
+
+// ---------------------------------------------------------------- one window for both
+
+// slot 0 makes the container window (its own thread and message loop); every slot's game window becomes a child of it
+// while a level runs, and goes back to being a window of its own in the menus
+#define CONTAINER_CLASS "MW2COOPSplit"
+static int slot = -1; // 0 first (left or top), 1 second
+static int stacked = 1; // 1 (default): one above the other, 0: side by side
+static HWND container;
+static int joined;
+static LONG saved_style;
+static RECT saved_rect;
+
+// the shared window's client size: 90% of the work area, even numbers; a slot's picture is half of it
+static void client_size(int *w, int *h)
+{
+	RECT area;
+	SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
+	*w = (area.right - area.left) * 9 / 10 & ~1;
+	*h = (area.bottom - area.top) * 9 / 10 & ~3;
+}
+
+static void slot_size(int *w, int *h)
+{
+	client_size(w, h);
+	if (stacked)
+		*h /= 2;
+	else
+		*w /= 2;
+}
+
+static LRESULT CALLBACK container_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
+{
+	if (msg == WM_CLOSE) {
+		log_printf("splitscreen: the window was closed");
+		ExitProcess(0);
+	}
+	if (msg == WM_ERASEBKGND)
+		return 1;
+	return DefWindowProcA(h, msg, w, l);
+}
+
+static DWORD WINAPI container_thread(LPVOID unused)
+{
+	(void)unused;
+	WNDCLASSA wc = {0};
+	wc.lpfnWndProc = container_proc;
+	wc.hInstance = GetModuleHandleA(NULL);
+	wc.lpszClassName = CONTAINER_CLASS;
+	wc.hCursor = LoadCursorA(NULL, IDC_ARROW);
+	wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+	RegisterClassA(&wc);
+	RECT area;
+	SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
+	int cw, ch;
+	client_size(&cw, &ch);
+	RECT r = {0, 0, cw, ch};
+	AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+	int w = r.right - r.left, h = r.bottom - r.top;
+	HWND c = CreateWindowExA(0, CONTAINER_CLASS, "Modern Warfare 2 - split screen", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, area.left + (area.right - area.left - w) / 2,
+				 area.top + (area.bottom - area.top - h) / 2, w, h, NULL, NULL, wc.hInstance, NULL);
+	container = c;
+	MSG m;
+	while (GetMessageA(&m, NULL, 0, 0) > 0) {
+		TranslateMessage(&m);
+		DispatchMessageA(&m);
+	}
+	return 0;
+}
+
+static int level_running(void)
+{
+	dvar_t *d = game_find_dvar("mapname");
+	return d && d->type == DVAR_TYPE_STRING && d->current.string && d->current.string[0];
+}
+
+static void layout_child(HWND w)
+{
+	RECT c;
+	GetClientRect(container, &c);
+	int cw = c.right, ch = c.bottom;
+	int x = stacked ? 0 : slot * cw / 2, y = stacked ? slot * ch / 2 : 0;
+	int ww = stacked ? cw : cw / 2, hh = stacked ? ch / 2 : ch;
+	RECT now;
+	GetWindowRect(w, &now);
+	POINT tl = {now.left, now.top};
+	ScreenToClient(container, &tl);
+	if (tl.x != x || tl.y != y || now.right - now.left != ww || now.bottom - now.top != hh)
+		SetWindowPos(w, NULL, x, y, ww, hh, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// called every 100 ms
+static void container_poll(HWND w)
+{
+	if (slot < 0)
+		return;
+	if (!container || !IsWindow(container)) {
+		container = FindWindowA(CONTAINER_CLASS, NULL);
+		if (!container && joined) {
+			log_printf("splitscreen: the shared window is gone");
+			ExitProcess(0);
+		}
+	}
+	int want = level_running() && container && IsWindow(container);
+	if (want && !joined) {
+		GetWindowRect(w, &saved_rect);
+		saved_style = GetWindowLongA(w, GWL_STYLE);
+		SetWindowLongA(w, GWL_STYLE, (saved_style & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_SYSMENU)) | WS_CHILD | WS_VISIBLE);
+		SetParent(w, container);
+		ShowWindow(w, SW_SHOWNA);
+		ShowWindow(container, SW_SHOW);
+		joined = 1;
+		log_printf("splitscreen: slot %d joins the shared window", slot);
+	} else if (!want && joined) {
+		SetParent(w, NULL);
+		SetWindowLongA(w, GWL_STYLE, saved_style);
+		SetWindowPos(w, NULL, saved_rect.left, saved_rect.top, saved_rect.right - saved_rect.left, saved_rect.bottom - saved_rect.top, SWP_NOZORDER | SWP_FRAMECHANGED);
+		if (slot == 0)
+			ShowWindow(container, SW_HIDE);
+		joined = 0;
+		log_printf("splitscreen: slot %d leaves the shared window", slot);
+	}
+	if (joined)
+		layout_child(w);
+}
+
+static HWND find_game_window(int tries)
+{
+	HWND w = NULL;
+	for (int i = 0; i < tries && !w; i++) {
+		EnumWindows(find_window, (LPARAM)&w);
+		if (!w)
+			Sleep(100);
+	}
+	return w;
+}
+
+// the game draws at the size of its half of the shared window: no stretching
+static void set_resolution(void)
+{
+	int w, h;
+	slot_size(&w, &h);
+	char want[32], cmd[128];
+	snprintf(want, sizeof(want), "%dx%d", w, h);
+	char have[64] = "";
+	if (game_dvar_raw("r_customMode", have, sizeof(have)) && strcmp(have, want) == 0)
+		return;
+	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cvid_restart%c", want, 10, 10);
+	game_cbuf_addtext(cmd);
+	log_printf("splitscreen: video mode %s (was '%s')", want, have);
+}
+
+static DWORD WINAPI split_thread(LPVOID unused)
+{
+	(void)unused;
+	HWND w = find_game_window(600); // up to a minute: the 32-bit game opens its window late
+	if (!w) {
+		log_printf("splitscreen: no game window found");
+		return 0;
+	}
+	game_window = w;
+	Sleep(500);
+	if (slot >= 0) {
+		set_resolution();
+		Sleep(4000);
+	}
+	if (slot < 0)
+		place_window(w);
+	if (pad >= 0)
+		log_printf("splitscreen: pad %d drives this copy%s", pad, fakepad ? " (fakepad.txt)" : "");
+	DWORD last_activate = 0, last_poll = 0;
+	for (;;) {
+		Sleep(10);
+		DWORD now = GetTickCount();
+		if (now - last_poll > 100) {
+			last_poll = now;
+			if (!IsWindow(w)) { // a video restart makes a new window
+				HWND n = find_game_window(100);
+				if (n && n != w) {
+					log_printf("splitscreen: new game window %p", (void *)n);
+					w = game_window = n;
+					joined = 0;
+				}
+			}
+			container_poll(w);
+		}
+		if (pad < 0)
+			continue;
+		if (now - last_activate > 500) { // the game ignores the mouse of a window that is not active
+			last_activate = now;
+			PostMessageA(w, WM_ACTIVATE, WA_ACTIVE, 0);
+			PostMessageA(w, WM_ACTIVATEAPP, TRUE, 0);
+		}
+		PadState s;
+		if (read_pad(&s))
+			apply(&s);
+	}
+	return 0;
+}
+
+void splitscreen_install(void)
+{
+	DWORD n = GetModuleFileNameA(NULL, ini_path, MAX_PATH);
+	while (n > 0 && ini_path[n - 1] != '\\')
+		n--;
+	ini_path[n] = 0;
+	lstrcatA(ini_path, "mw2coop\\settings.ini");
+	pad = GetPrivateProfileIntA("splitscreen", "pad", -1, ini_path);
+	turn_speed = GetPrivateProfileIntA("splitscreen", "speed", 14, ini_path);
+	fakepad = GetPrivateProfileIntA("splitscreen", "fakepad", 0, ini_path) != 0;
+	GetPrivateProfileStringA("splitscreen", "window", "", window_spec, sizeof(window_spec), ini_path);
+	slot = GetPrivateProfileIntA("splitscreen", "slot", -1, ini_path);
+	stacked = GetPrivateProfileIntA("splitscreen", "stacked", 1, ini_path) != 0;
+	if (pad < 0 && !window_spec[0] && slot < 0)
+		return;
+	if (pad >= 0 && !fakepad) {
+		const char *dlls[] = {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"};
+		for (int i = 0; i < 3 && !xinput_get; i++) {
+			HMODULE h = LoadLibraryA(dlls[i]);
+			if (h)
+				xinput_get = (xinput_get_t)GetProcAddress(h, "XInputGetState");
+		}
+		if (!xinput_get) {
+			log_printf("splitscreen: no XInput, the pad cannot be read");
+			pad = -1;
+		}
+	}
+	if (pad >= 0) {
+		iat_patch("USER32.dll", "GetCursorPos", my_get_cursor_pos);
+		iat_patch("USER32.dll", "SetCursorPos", my_set_cursor_pos);
+		iat_patch("USER32.dll", "GetForegroundWindow", my_get_foreground_window);
+		iat_patch("USER32.dll", "GetActiveWindow", my_get_active_window);
+	}
+	log_printf("splitscreen: pad %d, window '%s'", pad, window_spec);
+	if (slot == 0)
+		CreateThread(NULL, 0, container_thread, NULL, 0, NULL);
+	CreateThread(NULL, 0, split_thread, NULL, 0, NULL);
+}

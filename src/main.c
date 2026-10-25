@@ -9,6 +9,7 @@
 #include "control.h"
 #include "crash.h"
 #include "firewall.h"
+#include "splitscreen.h"
 #include "game.h"
 #include "localize.h"
 #include "log.h"
@@ -73,6 +74,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		firewall_install();
 		shot_install();
 		fov_install();
+		splitscreen_install();
 		control_start();
 	}
 	return 0;

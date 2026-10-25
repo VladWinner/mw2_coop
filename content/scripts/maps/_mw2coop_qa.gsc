@@ -73,6 +73,9 @@ main()
 		case "intro":
 			intro();
 			break;
+		case "padwalk":
+			padwalk();
+			break;
 		case "restart":
 			restart();
 			break;
@@ -2767,6 +2770,41 @@ press( player, button, ms )
 // --------------------------------------------------------------------------------------------
 // Real input (any map): each player's own machine presses Forward, then Use (press()). He walks
 // forward, and the server sees his Use button held, not the other player's.
+// split screen (settings.ini [splitscreen], mw2coopakepad.txt): player 2's copy is driven by a pad (a QA pad file holds the
+// stick forward and turned); he walks and his view turns, player 1, driven by nobody, stays
+padwalk()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 6;
+	from = [];
+	yaw = [];
+	foreach ( n, player in level.players )
+	{
+		from[ n ] = player.origin;
+		yaw[ n ] = player GetPlayerAngles()[ 1 ];
+	}
+	wait 5;
+	foreach ( n, player in level.players )
+	{
+		moved = Distance2D( player.origin, from[ n ] );
+		turned = AngleClamp180( player GetPlayerAngles()[ 1 ] - yaw[ n ] );
+		report( "padwalk: " + player_name( player ) + " moved " + int( moved ) + ", turned " + int( turned ) );
+	}
+	// control: a Forward press through the game's own binding moves him, whoever drives the copy
+	foreach ( n, player in level.players )
+	{
+		from[ n ] = player.origin;
+		press( player, "forward", 1000 );
+	}
+	wait 2;
+	foreach ( n, player in level.players )
+		report( "padwalk control: " + player_name( player ) + " moved " + int( Distance2D( player.origin, from[ n ] ) ) );
+	wait 1;
+	report( "done" );
+}
+
 buttons()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
