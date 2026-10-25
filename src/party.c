@@ -43,8 +43,10 @@ static int parse_address(const char *ip, const char *port_text, uint8_t addr[4],
 		return 0;
 	addr[0] = (uint8_t)a, addr[1] = (uint8_t)b, addr[2] = (uint8_t)c, addr[3] = (uint8_t)d;
 	unsigned p = port_text[0] ? (unsigned)atoi(port_text) : settings_port();
-	if (p == 0 || p > 65535)
+	if (p == 0 || p > 65535) {
+		log_printf("party: bad port '%s' (settings port %u)", port_text, (unsigned)settings_port());
 		return 0;
+	}
 	*port = (uint16_t)p;
 	return 1;
 }
@@ -58,6 +60,23 @@ static int party_join(const uint8_t *addr, uint16_t port)
 		return 0;
 	}
 	uint64_t host_info[8] = {0};
+#ifndef _WIN64
+	// The 32-bit game has the whole client join in one function (PartyClient_Join, 0x42fc40: Party_Reset, the lobby join,
+	// the address translation, Party_Activate); the host info is laid out as in 64 bits (see the comment at the top).
+	if (addr) {
+		uint8_t *hi = (uint8_t *)host_info;
+		memcpy(hi + 8, addr, 4);
+		memcpy(hi + 0xc, addr, 4);
+		memcpy(hi + 0x10, &port, 2);
+		memcpy(hi + 0x12, &port, 2);
+	}
+	uint32_t out_ip = 0;
+	uint16_t out_port = 0;
+	char ok = FN(RVA_PARTY_JOIN, char (*)(int, void *, uint32_t *, uint16_t *))(0, host_info, &out_ip, &out_port);
+	log_printf("party: client party joined (%d, active %d, host %u.%u.%u.%u:%u)", ok, base[RVA_PARTY_ACTIVE],
+		   addr ? addr[0] : 0, addr ? addr[1] : 0, addr ? addr[2] : 0, addr ? addr[3] : 0, addr ? port : 0);
+	return ok != 0;
+#else
 	if (addr) {
 		uint8_t *hi = (uint8_t *)host_info;
 		memcpy(hi + 8, addr, 4);
@@ -77,6 +96,7 @@ static int party_join(const uint8_t *addr, uint16_t port)
 		   base[RVA_PARTY_ACTIVE], lobby[0x10], addr ? addr[0] : 0, addr ? addr[1] : 0, addr ? addr[2] : 0,
 		   addr ? addr[3] : 0, addr ? port : 0);
 	return ok != 0;
+#endif
 }
 
 static void party_join_f(void)
@@ -100,7 +120,7 @@ static void join_f(void)
 	uint8_t addr[4];
 	uint16_t port;
 	if (!parse_address(game_cmd_argv(1), game_cmd_argv(2), addr, &port)) {
-		log_printf("party: usage: mw2coop_join <ip> [port]");
+		log_printf("party: usage: mw2coop_join <ip> [port] (got '%s' '%s')", game_cmd_argv(1), game_cmd_argv(2));
 		return;
 	}
 	// A loopback address makes both parties' member addresses loopback (netadr type 2): the
@@ -137,6 +157,13 @@ static void launch_map_f(void)
 void party_log_state(void)
 {
 	uint8_t *lobby = *(uint8_t **)(base + RVA_PARTY_LOBBY);
+#ifndef _WIN64
+	// 32-bit: the flags the party frame (0x4a4be0) and the launch (0x57c800) read: lobby +8 active, bytes +0x68 / +0xa0 mark
+	// the two members present (0x464040 counts them)
+	log_printf("party: active %d host %d launch %d lobby %p (+8 %d) members %d %d", base[RVA_PARTY_ACTIVE], base[RVA_PARTY_IS_HOST],
+		   base[RVA_PARTY_LAUNCH], (void *)lobby, lobby ? lobby[8] : -1, lobby ? lobby[0x68] : -1, lobby ? lobby[0xa0] : -1);
+	return;
+#else
 	log_printf("party: active %d host %d launch %d lobby %p (+0x10 %d)", base[RVA_PARTY_ACTIVE], base[RVA_PARTY_IS_HOST],
 		   base[RVA_PARTY_LAUNCH], (void *)lobby, lobby ? lobby[0x10] : -1);
 	if (!lobby)
@@ -153,21 +180,20 @@ void party_log_state(void)
 			   i, used, (unsigned long long)xuid, local, now - heard, now - sent, *(int *)addr, addr[4], addr[5],
 			   addr[6], addr[7], (unsigned)((addr[8] << 8) | addr[9]));
 	}
+#endif
 }
 
 static cmd_function_t commands[] = {
-	{NULL, "mw2coop_party_join", NULL, NULL, party_join_f},
-	{NULL, "mw2coop_join", NULL, NULL, join_f},
-	{NULL, "mw2coop_launch_map", NULL, NULL, launch_map_f},
+	{NULL, "mw2coop_party_join", NULL, NULL, party_join_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_join", NULL, NULL, join_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_launch_map", NULL, NULL, launch_map_f CMD_NODE_FLAG},
 };
 
 void party_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
-	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
 	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-		commands[i].next = *head;
-		*head = &commands[i];
+		game_add_command(&commands[i]);
 		log_printf("party: added console command %s", commands[i].name);
 	}
 }

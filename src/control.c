@@ -164,12 +164,13 @@ static void partner_name_poll(void)
 //   mw2coop_bind +activate | -activate | +forward | ...
 // runs the binding itself, on the main thread like any console command. The key number is one
 // no keyboard sends, so letting a real key go cannot end the press.
-#define RVA_BIND_INDEX   0x0d1810 // int (const char *name): the name's place in the bind table, 0 if none
-#define RVA_EXEC_BINDING 0x0ce450 // void (int localClient, int index, int key)
 #define QA_KEY           0x1ff
 
 static void bind_f(void)
 {
+#ifdef _WIN64
+#define RVA_BIND_INDEX   0x0d1810 // int (const char *name): the name's place in the bind table, 0 if none
+#define RVA_EXEC_BINDING 0x0ce450 // void (int localClient, int index, int key)
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	const char *name = game_cmd_argv(1);
 	int index = ((int (*)(const char *))(base + RVA_BIND_INDEX))(name);
@@ -179,9 +180,22 @@ static void bind_f(void)
 	}
 	((void (*)(int, int, int))(base + RVA_EXEC_BINDING))(0, index, QA_KEY);
 	log_printf("control: binding %s (%d)", name, index);
+#else
+	// The 32-bit game has the buttons as console commands ("+activate <key> [time]" / "-activate <key>", the kbutton
+	// handlers 0x578340 / 0x5783e0 read the key number from the first argument): the same press with the QA key.
+	char cmd[64];
+	const char *name = game_cmd_argv(1);
+	if (name[0] != '+' && name[0] != '-') {
+		log_printf("control: no binding '%s'", name);
+		return;
+	}
+	snprintf(cmd, sizeof(cmd), "%s %d\n", name, QA_KEY);
+	game_cbuf_addtext(cmd);
+	log_printf("control: binding %s", name);
+#endif
 }
 
-static cmd_function_t bind_cmd = {NULL, "mw2coop_bind", NULL, NULL, bind_f};
+static cmd_function_t bind_cmd = {NULL, "mw2coop_bind", NULL, NULL, bind_f CMD_NODE_FLAG};
 
 // A QA scenario asks for a press with mw2coop_qa_press "<player 1|2> <button> <ms> <n>" (button
 // without the +, n counts the presses). Both machines run the scenario; the one whose own player
@@ -398,8 +412,6 @@ static DWORD WINAPI control_thread(LPVOID path_arg)
 // made: roadkill.gsc sets newintro 1 and then reads 0, which turns the SP-only slam-zoom intro
 // back on in co-op and unlinks player 1 from the opening scene. The builtin's table entry
 // ({name, func, developer}, rva 0x3c1568) is pointed at a wrapper that adds 0x80 after the set.
-#define RVA_FN_SETDVAR_ENTRY 0x3c1568
-#define RVA_SCR_GET_STRING   0x223440 // const char *Scr_GetString(unsigned int index)
 static void (*setdvar_orig)(void);
 
 static void setdvar_wrap(void)
@@ -429,7 +441,7 @@ static void hook_script_setdvar(void)
 		log_printf("control: no setdvar entry at rva 0x%x, script dvars stay unreadable in co-op", RVA_FN_SETDVAR_ENTRY);
 		return;
 	}
-	void (**func)(void) = (void (**)(void))(entry + 8);
+	void (**func)(void) = (void (**)(void))(entry + sizeof(char *));
 	setdvar_orig = *func;
 	DWORD old;
 	VirtualProtect(func, sizeof(*func), PAGE_READWRITE, &old);
@@ -442,9 +454,7 @@ void control_start(void)
 {
 	static char path[MAX_PATH];
 	hook_script_setdvar();
-	cmd_function_t **head = (cmd_function_t **)((uint8_t *)GetModuleHandleA(NULL) + RVA_CMD_FUNCTIONS);
-	bind_cmd.next = *head;
-	*head = &bind_cmd;
+	game_add_command(&bind_cmd);
 	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
 	while (n > 0 && path[n - 1] != '\\')
 		n--;

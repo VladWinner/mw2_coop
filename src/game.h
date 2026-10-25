@@ -45,6 +45,10 @@
 #define RVA_DB_RAWFILE_LEN  0x0efdc0 // int DB_GetRawFileLen(RawFile *)
 #define RVA_DB_RAW_BUFFER   0x0efc70 // void DB_GetRawBuffer(RawFile *, char *buf, int size)
 #define RVA_HUNK_TEMP_HIGH  0x2693f0 // void *Hunk_AllocateTempMemoryHigh(int64 size)
+
+// The script builtin table entry of "setdvar" ({name, function, developer}) and Scr_GetString(index)
+#define RVA_FN_SETDVAR_ENTRY 0x3c1568
+#define RVA_SCR_GET_STRING   0x223440
 #else
 // Addresses in iw4sp.exe of the 32-bit official Steam build (linked 2010-02-10, code SHA-256 FC9E4843...52D7), as RVAs
 // from the image base 0x400000. Found with Ghidra on the memory dump, see docs/32bit-plan.md. Names as above; a 0 means
@@ -86,6 +90,10 @@
 #define RVA_DB_RAWFILE_LEN  0x0e3080
 #define RVA_DB_RAW_BUFFER   0x0e55f0
 #define RVA_HUNK_TEMP_HIGH  0x00eed0 // void *Hunk_AllocateTempMemoryHigh(int size)
+
+// The script builtin table entry of "setdvar" ({name, function, developer}) and Scr_GetString(index)
+#define RVA_FN_SETDVAR_ENTRY 0x331504
+#define RVA_SCR_GET_STRING   0x0d5f20
 #endif
 
 typedef enum {
@@ -144,7 +152,17 @@ typedef struct cmd_function_s {
 	const char *autocomplete_dir; // 0x10
 	const char *autocomplete_ext; // 0x18
 	void (*function)(void);      // 0x20
+#ifndef _WIN64
+	// 32-bit: the node is 0x18 bytes ({next, name, dir, ext, function, 1}); Cmd_AddCommand writes all of it
+	uint32_t flag;               // 0x14
+#endif
 } cmd_function_t;
+// the tail of a static node initializer: nothing in 64 bits, the 32-bit node's last field
+#ifdef _WIN64
+#define CMD_NODE_FLAG
+#else
+#define CMD_NODE_FLAG , 1
+#endif
 
 // Returns 1 when the running exe is the build the addresses above belong to.
 int game_init(void);
@@ -159,6 +177,9 @@ int game_dvar_raw(const char *name, char *buf, int size);
 unsigned long long game_peek_ptr(unsigned long long rva, unsigned long long off, int width);
 // QA only: change local client 0's XUID by delta.
 void game_xuid_add(long long delta);
+// Registers a console command node ({next, name, ..., function}) with the game: put at the head of the command list
+// (64-bit) or through Cmd_AddCommand (32-bit).
+void game_add_command(cmd_function_t *node);
 // Read 1/2/4/8 bytes of the game image at an RVA (0 outside the image).
 unsigned long long game_peek(unsigned long long rva, int width);
 

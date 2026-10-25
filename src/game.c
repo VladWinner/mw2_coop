@@ -194,3 +194,17 @@ const char *game_sv_cmd_argv(int i)
 {
 	return cmd_args_argv(RVA_SV_CMD_ARGS, i);
 }
+
+void game_add_command(cmd_function_t *node)
+{
+	if (!ready)
+		return;
+#ifdef _WIN64
+	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
+	node->next = *head;
+	*head = node;
+#else
+	// Cmd_AddCommand(name, function, node, 0) fills the node itself and links it into the game's list
+	((void (*)(const char *, void (*)(void), void *, int))(base + RVA_CMD_ADDCOMMAND))(node->name, node->function, node, 0);
+#endif
+}

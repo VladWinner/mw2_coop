@@ -28,14 +28,21 @@ static int steam_relay;
 static char player_id[33];
 static char player_ini[MAX_PATH];
 
+#ifdef _WIN64
 static const uint32_t net_port_immediates[] = {0x293381, 0x292f03}; // "mov edx, 28960": ba 20 71 00 00
+#define PORT_OPCODE 0xba
+#else
+// the 32-bit build registers net_port with "push 28960" (68 20 71 00 00) before "push 'net_port'" (0x48c5f6, 0x63908e)
+static const uint32_t net_port_immediates[] = {0x8c5f7, 0x23908f};
+#define PORT_OPCODE 0x68
+#endif
 
 static void patch_port(uint16_t value)
 {
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	for (size_t i = 0; i < sizeof(net_port_immediates) / sizeof(net_port_immediates[0]); i++) {
 		uint8_t *at = base + net_port_immediates[i];
-		if (at[-1] != 0xba || *(uint32_t *)at != DEFAULT_PORT) {
+		if (at[-1] != PORT_OPCODE || *(uint32_t *)at != DEFAULT_PORT) {
 			log_printf("settings: unexpected code at rva 0x%x, net_port stays %d", net_port_immediates[i], DEFAULT_PORT);
 			return;
 		}
@@ -101,6 +108,7 @@ void settings_load(void)
 	else
 		log_printf("settings: bad port %u in settings.ini", p);
 	steam_relay = GetPrivateProfileIntA("network", "steam_relay", 0, path) != 0;
+	log_printf("settings: %s port %u, steam_relay %d", path, (unsigned)port, steam_relay);
 	if (port != DEFAULT_PORT)
 		patch_port(port);
 	lstrcpynA(player_ini, path, MAX_PATH);

@@ -26,12 +26,11 @@
 #else
 // The 32-bit official build (docs/32bit-plan.md): the level zone loader (map, flag) at 0x4d0450 and DB_LoadXAssets at
 // 0x49edb0, both cdecl; the model transplant and the pool extension are not ported yet.
+#include "game.h"
+#include "transplant.h"
+
 #define RVA_LOAD_LEVEL_ZONES 0x0d0450
 #define RVA_DB_LOAD_XASSETS  0x09edb0
-const char *game_dvar_string(const char *name, char *buf, int size); // control32.c
-static void transplant_new_level(void)
-{
-}
 #endif
 
 typedef struct {

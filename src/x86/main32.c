@@ -12,9 +12,12 @@
 #include "log.h"
 #include "scripts.h"
 #include "zones.h"
+#include "control.h"
+#include "party.h"
+#include "settings.h"
+#include "upnp.h"
 
 int proxy_init(void);
-void control32_start(void);
 
 // The official exe is wrapped by Steam's DRM and Steam rewrites that wrapper for each account at the first start
 // (the file in a test copy grew from 3,497,984 to 3,503,672 bytes and its hash changed), so the file's hash
@@ -145,9 +148,12 @@ static DWORD WINAPI identify(LPVOID unused)
 		if (strcmp(hex, builds[i].code_sha256) == 0) {
 			log_printf("main32: known build: %s", builds[i].name);
 			game_init();
+			log_printf("main32: settings port %u", (unsigned)settings_port());
 			scripts_install();
 			zones_install();
-			control32_start();
+			party_install();
+			upnp_install();
+			control_start();
 			return 0;
 		}
 	}
@@ -162,6 +168,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 		return TRUE;
 	DisableThreadLibraryCalls(self);
 	log_open();
+	settings_load(); // before the game registers net_port
 	SYSTEMTIME day;
 	GetLocalTime(&day);
 	log_printf("main32: %04d-%02d-%02d, 32-bit proxy attached, pid %lu", day.wYear, day.wMonth, day.wDay,
