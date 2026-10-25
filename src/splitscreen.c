@@ -271,7 +271,9 @@ static int slot = -1; // 0 first (left or top), 1 second
 static int stacked = 1; // 1 (default): one above the other, 0: side by side
 static HWND container;
 static int joined;
-static LONG saved_style;
+static int embed; // 1: the game windows become child windows (they flicker: two processes drawing into one window); 0 (default): they stay windows of their own,
+                  // owned by the shared window, so that they move, minimise and show in the taskbar with it
+static LONG saved_style, saved_exstyle;
 static RECT saved_rect;
 
 // the shared window's client size: 90% of the work area, even numbers; a slot's picture is half of it
@@ -347,9 +349,19 @@ static void layout_child(HWND w)
 	RECT now;
 	GetWindowRect(w, &now);
 	POINT tl = {now.left, now.top};
-	ScreenToClient(container, &tl);
-	if (tl.x != x || tl.y != y || now.right - now.left != ww || now.bottom - now.top != hh)
+	if (embed)
+		ScreenToClient(container, &tl);
+	else {
+		POINT o = {x, y};
+		ClientToScreen(container, &o);
+		x = o.x, y = o.y;
+	}
+	if (tl.x != x || tl.y != y || now.right - now.left != ww || now.bottom - now.top != hh) {
+		static int fixes;
+		if (fixes++ < 40)
+			log_printf("splitscreen: slot %d window is at %ld,%ld %ldx%ld, put at %d,%d %dx%d", slot, tl.x, tl.y, now.right - now.left, now.bottom - now.top, x, y, ww, hh);
 		SetWindowPos(w, NULL, x, y, ww, hh, SWP_NOZORDER | SWP_NOACTIVATE);
+	}
 }
 
 // called every 100 ms
@@ -368,14 +380,27 @@ static void container_poll(HWND w)
 	if (want && !joined) {
 		GetWindowRect(w, &saved_rect);
 		saved_style = GetWindowLongA(w, GWL_STYLE);
+		saved_exstyle = GetWindowLongA(w, GWL_EXSTYLE);
 		SetWindowLongA(w, GWL_STYLE, (saved_style & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_BORDER | WS_SYSMENU)) | WS_CHILD | WS_VISIBLE);
-		SetParent(w, container);
+		if (embed)
+			SetParent(w, container);
+		else
+		{
+			SetWindowLongA(w, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+			SetWindowLongA(w, GWL_EXSTYLE, saved_exstyle | WS_EX_TOOLWINDOW);
+			SetWindowLongPtrA(w, GWLP_HWNDPARENT, (LONG_PTR)container);
+		}
 		ShowWindow(w, SW_SHOWNA);
 		ShowWindow(container, SW_SHOW);
 		joined = 1;
 		log_printf("splitscreen: slot %d joins the shared window", slot);
 	} else if (!want && joined) {
-		SetParent(w, NULL);
+		if (embed)
+			SetParent(w, NULL);
+		else {
+			SetWindowLongPtrA(w, GWLP_HWNDPARENT, 0);
+			SetWindowLongA(w, GWL_EXSTYLE, saved_exstyle);
+		}
 		SetWindowLongA(w, GWL_STYLE, saved_style);
 		SetWindowPos(w, NULL, saved_rect.left, saved_rect.top, saved_rect.right - saved_rect.left, saved_rect.bottom - saved_rect.top, SWP_NOZORDER | SWP_FRAMECHANGED);
 		if (slot == 0)
@@ -435,7 +460,7 @@ static DWORD WINAPI split_thread(LPVOID unused)
 	for (;;) {
 		Sleep(10);
 		DWORD now = GetTickCount();
-		if (now - last_poll > 100) {
+		if (now - last_poll > (joined ? 16u : 100u)) {
 			last_poll = now;
 			if (!IsWindow(w)) { // a video restart makes a new window
 				HWND n = find_game_window(100);
@@ -449,7 +474,7 @@ static DWORD WINAPI split_thread(LPVOID unused)
 		}
 		if (pad < 0)
 			continue;
-		if (now - last_activate > 500) { // the game ignores the mouse of a window that is not active
+		if (now - last_activate > 5000) { // the game ignores the mouse of a window that is not active
 			last_activate = now;
 			PostMessageA(w, WM_ACTIVATE, WA_ACTIVE, 0);
 			PostMessageA(w, WM_ACTIVATEAPP, TRUE, 0);
@@ -473,6 +498,7 @@ void splitscreen_install(void)
 	fakepad = GetPrivateProfileIntA("splitscreen", "fakepad", 0, ini_path) != 0;
 	GetPrivateProfileStringA("splitscreen", "window", "", window_spec, sizeof(window_spec), ini_path);
 	slot = GetPrivateProfileIntA("splitscreen", "slot", -1, ini_path);
+	embed = GetPrivateProfileIntA("splitscreen", "embed", 0, ini_path) != 0;
 	stacked = GetPrivateProfileIntA("splitscreen", "stacked", 1, ini_path) != 0;
 	if (pad < 0 && !window_spec[0] && slot < 0)
 		return;
