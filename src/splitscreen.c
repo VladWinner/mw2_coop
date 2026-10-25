@@ -6,7 +6,7 @@
 //     pad     = 0..3     the XInput pad that drives this copy; -1 (default): the keyboard and mouse as always
 //     slot    = 0 | 1    one shared window for both copies: slot 0 makes it, both copies put their game window in it (top and
 //                        bottom; stacked=0: left and right) while a level runs and take it out again in the menus
-//     view    = 60..120  the horizontal view in degrees of a half while the shared window is up (default 55; the very wide halves
+//     view    = 60..120  the horizontal view in degrees of a half while the shared window is up (default 90; the very wide halves
 //                        stretch the picture at the edges when the engine widens the standard view to them)
 //     speed   = 1..100   the right stick's turn speed in pixels per 10 ms at full tilt (default 14)
 //     fakepad = 1        QA: the pad's state is read from mw2coop\fakepad.txt ("lx ly rx ry buttons lt rt", XInput units)
@@ -276,12 +276,32 @@ static int stacked = 1; // 1 (default): one above the other, 0: side by side
 static HWND container;
 static int joined;
 static void slot_size(int *w, int *h);
-static float view_degrees = 55; // the horizontal view of a half: the picture is very wide (3.7:1), the engine widens the view with it and the edges stretch
+static float view_degrees = 90; // the horizontal view of a half: the picture is very wide (3.7:1), the engine widens the view with it and the edges stretch
 
 // cg_fov that gives the half a horizontal view of view_degrees (the engine takes cg_fov for a 4:3 picture and widens it with the aspect);
 // written into the dvar itself, like fov.c does: its range (65 to 80) is not for this
+// The engine picks one of three set aspect ratios (4:3, 16:10, 16:9) for the screen and takes the window for a picture of that shape, so a
+// window of another shape is drawn stretched (a half of the shared window is 3.7:1: everything twice as wide). The pixel aspect it works
+// out from that is put right here: the aspect of the picture is the window's own and its pixels are square.
+#ifdef _WIN64
+#define RVA_ASPECT_DISPLAY 0x4113738 // float, set by the video init (rva 0x10550)
+#define RVA_ASPECT_PIXEL 0x411373c   // float, aspect * height / width of the window
+#endif
+
+static void apply_aspect(void)
+{
+#ifdef _WIN64
+	int w, h;
+	slot_size(&w, &h);
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	*(float *)(base + RVA_ASPECT_DISPLAY) = (float)w / h;
+	*(float *)(base + RVA_ASPECT_PIXEL) = 1.0f;
+#endif
+}
+
 static void apply_fov(void)
 {
+	apply_aspect();
 	dvar_t *fov = game_find_dvar("cg_fov"), *min = game_find_dvar("cg_fovMin");
 	if (!fov || fov->type != DVAR_TYPE_FLOAT)
 		return;
@@ -542,7 +562,7 @@ void splitscreen_install(void)
 	fakepad = GetPrivateProfileIntA("splitscreen", "fakepad", 0, ini_path) != 0;
 	GetPrivateProfileStringA("splitscreen", "window", "", window_spec, sizeof(window_spec), ini_path);
 	slot = GetPrivateProfileIntA("splitscreen", "slot", -1, ini_path);
-	view_degrees = (float)GetPrivateProfileIntA("splitscreen", "view", 55, ini_path);
+	view_degrees = (float)GetPrivateProfileIntA("splitscreen", "view", 90, ini_path);
 	embed = GetPrivateProfileIntA("splitscreen", "embed", 0, ini_path) != 0;
 	stacked = GetPrivateProfileIntA("splitscreen", "stacked", 1, ini_path) != 0;
 	if (pad < 0 && !window_spec[0] && slot < 0)
