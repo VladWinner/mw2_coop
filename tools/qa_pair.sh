@@ -48,8 +48,32 @@ printf '# host\n%s\nset start "%s"\nset mw2coop_god "%s"\n!sleep 35000\n%s\nlist
 printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\nset start "%s"\n!sleep 20000\n!xuid_add 1\n!sleep 19000\nmw2coop_join 127.0.0.1\n!sleep %d\n' "$COMMON" "$START" $LONG > $B/mw2coop/commands.txt
 fi
 rm -f $A/mw2coop/mw2coop.log $B/mw2coop/mw2coop.log
+# A hang watchdog: when both logs stand still for 25 s (the games run in lockstep, so a hung copy stops the other too), ask
+# both copies for the stacks of their threads (crash.c: the file mw2coop\dumpstacks) and keep them with the logs in
+# $ROOT/hang-reports/<time>/. The run goes on and ends by its timeout as before.
+(
+	sleep 50
+	while sleep 5; do
+		now=$(date +%s)
+		la=$(stat -c %Y "$A/mw2coop/mw2coop.log" 2>/dev/null || echo 0)
+		lb=$(stat -c %Y "$B/mw2coop/mw2coop.log" 2>/dev/null || echo 0)
+		if [ "$la" -gt 0 ] && [ "$lb" -gt 0 ] && [ $((now - la)) -gt 25 ] && [ $((now - lb)) -gt 25 ]; then
+			rm -f "$A/mw2coop/stacks.txt" "$B/mw2coop/stacks.txt"
+			: > "$A/mw2coop/dumpstacks"; : > "$B/mw2coop/dumpstacks"
+			sleep 6
+			dir="$ROOT/hang-reports/$(date +%Y%m%d-%H%M%S)"
+			mkdir -p "$dir"
+			cp "$A/mw2coop/stacks.txt" "$dir/host-stacks.txt" 2>/dev/null; cp "$B/mw2coop/stacks.txt" "$dir/client-stacks.txt" 2>/dev/null
+			cp "$A/mw2coop/mw2coop.log" "$dir/host.log"; cp "$B/mw2coop/mw2coop.log" "$dir/client.log"
+			echo "HANG: both copies stopped writing their logs; stacks and logs in $dir"
+			exit 0
+		fi
+	done
+) &
+WATCHDOG=$!
 TOTAL=$(( 50 + LEVEL_S ))
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/run_test.ps1" -Tag "qa-$SCEN" -Timeout $TOTAL -TestRoot "$(cygpath -w "$ROOT")" -Dirs "$(cygpath -w "$A"),$(cygpath -w "$B")" -DoneLogs "$(cygpath -w "$A/mw2coop/mw2coop.log"),$(cygpath -w "$B/mw2coop/mw2coop.log")" | grep -E "killing|exited|untouched|TOUCHED|WRONG|closing"
+kill $WATCHDOG 2>/dev/null
 for side in A B; do
 	eval d=\$$side
 	echo "=== $side ($( [ $side = A ] && echo host || echo client ))"

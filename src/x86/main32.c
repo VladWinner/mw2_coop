@@ -21,6 +21,7 @@
 #include "menus.h"
 #include "net.h"
 #include "progress.h"
+#include "scrdebug.h"
 #include "steamnet.h"
 #include "transplant.h"
 #include "mirror.h"
@@ -167,6 +168,7 @@ static DWORD WINAPI identify(LPVOID unused)
 			transplant_install();
 			localize_install();
 			zones_install();
+			scrdebug_install();
 			net_install();
 			party_install();
 			progress_install();

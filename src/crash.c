@@ -134,6 +134,35 @@ static void dump_threads(HANDLE out)
 	CloseHandle(snap);
 }
 
+#ifndef _WIN64
+// 32-bit, for a hang in DB_FindXAssetHeader (0x4f6f10: the caller waits until the database thread has the asset): the request
+// slot it fills first, PTR_DAT_009d7c80 = the asset's table entry (+4 the header, whose first field is usually the name),
+// DAT_00c3e85c = 1, DAT_00a961a4 = the answer of 0x4d3e70.
+static void dump_db_state(HANDLE out)
+{
+	const uint8_t *exe = (const uint8_t *)image_base;
+	char line[512];
+	int n = 0;
+	const uint8_t *entry = *(const uint8_t *const *)(exe + (0x9d7c80 - 0x400000));
+	MEMORY_BASIC_INFORMATION mbi;
+	n += wsprintfA(line + n, "db: request entry %p, flag %lu, status %lu", (const void *)entry, (unsigned long)*(const uint32_t *)(exe + (0xc3e85c - 0x400000)),
+		       (unsigned long)*(const uint32_t *)(exe + (0xa961a4 - 0x400000)));
+	if (entry && VirtualQuery(entry, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT) {
+		const uint8_t *header = *(const uint8_t *const *)(entry + 4);
+		n += wsprintfA(line + n, ", entry bytes %02x%02x%02x%02x %02x%02x%02x%02x flags %02x %02x %02x, header %p", entry[0], entry[1], entry[2], entry[3], entry[4],
+			       entry[5], entry[6], entry[7], entry[8], entry[9], entry[10], (const void *)header);
+		if (header && VirtualQuery(header, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT) {
+			const char *name = *(const char *const *)header;
+			if (name && VirtualQuery(name, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT)
+				n += wsprintfA(line + n, ", name '%.60s'", name);
+		}
+	}
+	lstrcatA(line, "\r\n");
+	DWORD wrote;
+	WriteFile(out, line, lstrlenA(line), &wrote, NULL);
+}
+#endif
+
 static char flag_path[MAX_PATH], out_path[MAX_PATH];
 
 static DWORD WINAPI watchdog(LPVOID arg)
@@ -147,6 +176,9 @@ static DWORD WINAPI watchdog(LPVOID arg)
 		if (out == INVALID_HANDLE_VALUE)
 			continue;
 		dump_threads(out);
+#ifndef _WIN64
+		dump_db_state(out);
+#endif
 		CloseHandle(out);
 	}
 	return 0;
