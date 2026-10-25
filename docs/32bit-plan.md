@@ -116,3 +116,16 @@ a 20-byte node let `Cmd_AddCommand` overwrite a neighbouring static (it zeroed t
 
 A copy of the game from an unknown source (a repack with a Steam emulator was looked at statically only: its
 `steam_api.dll` is 1.29 MB, its exe is not Valve's). Not run, not reused.
+
+## State after the font and hang work
+
+Ported and checked in the 32-bit build: script hook, QA channel, lobby/menus, access, net, firewall, transplant (No Russian crew),
+pool extension (fixed the airport client hang), fonts, script error logging (scrdebug32).
+
+Deliberately 64-bit only (no player-facing effect):
+- `steamnet` (Steam P2P relay): experimental, off by default, never tried with two real accounts even on 64 bits. A stub on 32 bits.
+- `shot` (screenshots from the game's D3D device): a QA aid; the 32-bit device was not found, stubbed.
+- `scrdebug` call-stack mapping: a debugging aid; 32-bit logs the error message only.
+
+Open: an intermittent hang of both copies in DB_FindXAssetHeader (see `crash.c` dumpstacks; `tools/qa_pair.sh` now watches
+for it from 20 s after the start and keeps stacks in `hang-reports/`).

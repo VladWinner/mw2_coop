@@ -52,9 +52,9 @@ rm -f $A/mw2coop/mw2coop.log $B/mw2coop/mw2coop.log
 # both copies for the stacks of their threads (crash.c: the file mw2coop\dumpstacks) and keep them with the logs in
 # $ROOT/hang-reports/<time>/. The run goes on and ends by its timeout as before.
 (
-	sleep 50
+	sleep 20
 	while sleep 5; do
-		now=$(date +%s)
+		now=$(date +%s); [ -n "$WD_DEBUG" ] && echo "$(date +%T) wd a=$(( now - $(stat -c %Y "$A/mw2coop/mw2coop.log" 2>/dev/null || echo 0) )) b=$(( now - $(stat -c %Y "$B/mw2coop/mw2coop.log" 2>/dev/null || echo 0) ))" >> /tmp/wd.txt
 		la=$(stat -c %Y "$A/mw2coop/mw2coop.log" 2>/dev/null || echo 0)
 		lb=$(stat -c %Y "$B/mw2coop/mw2coop.log" 2>/dev/null || echo 0)
 		if [ "$la" -gt 0 ] && [ "$lb" -gt 0 ] && [ $((now - la)) -gt 25 ] && [ $((now - lb)) -gt 25 ]; then
