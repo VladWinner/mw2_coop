@@ -49,12 +49,14 @@ rig of his own where the animation needs one.
   other during the ride.
 - **Lobby**: the password mode has its own Password row, and Start is refused until a password is set.
 
-### The 32-bit build (source only, not in the archive)
+### The 32-bit build (experimental archive)
 
-The code now also builds for the older 32-bit MW2 (`sh build.sh x86`, official Steam copy of the old depots): two copies
-play a co-op session on trainer, joining by address, the script patches apply and give the same patched scripts as the
-64-bit build, and a 64-bit host with a 32-bit client was checked on trainer. It is not in this release's archive:
-the screenshot helper, Steam relay and some set pieces are not ported yet. See `docs/32bit-plan.md`.
+The code now also builds for the older 32-bit MW2 (`sh build.sh x86`, the official Steam copy of the old depots), and
+the release has a second, experimental archive for it: `mw2coop-v0.5.0-beta-x86.zip`. Two copies play a co-op session
+on trainer (joining by address), the script patches apply and give the same patched scripts as the 64-bit build, and a
+64-bit host with a 32-bit client was checked on trainer. Not ported or not checked: playing over the internet on the
+32-bit game, Steam invites and the Steam relay, the screenshot helper; the whole campaign was not played there. See
+`docs/32bit-plan.md`.
 
 ### Fixes in the engine side
 

@@ -65,7 +65,7 @@ All mission intros hold both players; the title plays only on a mission's first 
 
 > You both need **Call of Duty: Modern Warfare 2 (2009) on Steam**, the current **64-bit build**, and **the same mw2coop version**.
 
-1. Download `mw2coop-<version>.zip` from [Releases](https://github.com/stxlvn/mw2_coop/releases/latest).
+1. Download `mw2coop-<version>.zip` from [Releases](https://github.com/stxlvn/mw2_coop/releases/latest). (For the older **32-bit** game: the experimental `mw2coop-<version>-x86.zip` next to it; see its `INSTALL.txt` for what was checked.)
 2. Steam → Library → Modern Warfare 2 → ⚙ Manage → **Browse local files** (the folder with `iw4sp.exe`).
 3. Copy `winmm.dll` and the `mw2coop` folder there. No game file is replaced.
 4. **Host:** Campaign → co-op. Pick the mission and access in the lobby.
@@ -107,7 +107,7 @@ Two copies of the game on one PC (host + client), driven by in-game bots: each c
 - In a co-op session GSC `getdvar` only returns dvars with certain flags; the DLL flags `start` and the QA dvars, and every dvar a level script sets itself, so levels that read back their own dvars behave as in single player.
 - Difficulty: the lobby's popup only latches `g_gameskill`; the DLL hooks `profile_difficultySave` for the host's pick and sends it to the client with `coopLaunch`.
 - Diagnostics in `mw2coop\mw2coop.log`: GSC errors with the script call stack (repeats logged at 1, 2, 3, 10, 100, 1000... hits), crashes with the faulting RVA and stack, `!trace <rva>` logs every call of a builtin method.
-- A 32-bit build of the mod exists in the source only (`sh build.sh x86`, `docs/32bit-plan.md`); it is not in the release archive.
+- A 32-bit build of the mod (`sh build.sh x86`, `docs/32bit-plan.md`) ships as the separate experimental archive `mw2coop-<version>-x86.zip` of each release.
 
 </details>
 
@@ -140,7 +140,7 @@ Needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and a POSIX shell (Gi
 ```
 LLVM_MINGW=/path/to/llvm-mingw-ucrt-x86_64 ./build.sh release
 ```
-`tools/make_release.sh <version>` builds the release DLL (checked for local paths) and packs `dist/mw2coop-<version>.zip` with the scripts, patches and `content/release` (`INSTALL.txt`, `settings.ini`, the firewall helper), plus its SHA-256. `tools/gen_winmm_proxy.py` regenerates the export stubs from the system `winmm.dll`.
+`tools/make_release.sh <version> [x86]` builds the release DLL (checked for local paths) and packs `dist/mw2coop-<version>.zip` with the scripts, patches and `content/release` (`INSTALL.txt`, `settings.ini`, the firewall helper), plus its SHA-256. `tools/gen_winmm_proxy.py` regenerates the export stubs from the system `winmm.dll`.
 
 Testers: use a **copy** of the game folder, not your Steam install, and start it with `SteamAppId=10180` and `SteamGameId=10180` set (without them the Steam DRM wrapper exits and Steam starts your **real** install instead); `tools/run_test.ps1` does this and kills any `iw4sp.exe` outside the test folder.
 
