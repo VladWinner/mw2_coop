@@ -24,6 +24,13 @@ void scrdebug_trace_method(uintptr_t entry_rva)
 	log_printf("scrdebug: !trace %llx is not ported to the 32-bit build yet", (unsigned long long)entry_rva);
 }
 
+void *transplant_clone(const char *name, void *(*find)(int, const char *))
+{
+	(void)name;
+	(void)find;
+	return NULL;
+}
+
 void transplant_poll(void)
 {
 }

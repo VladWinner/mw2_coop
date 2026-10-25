@@ -15,6 +15,8 @@
 #include "control.h"
 #include "crash.h"
 #include "fov.h"
+#include "localize.h"
+#include "mirror.h"
 #include "shot.h"
 #include "party.h"
 #include "settings.h"
@@ -154,6 +156,8 @@ static DWORD WINAPI identify(LPVOID unused)
 			crash_install();
 			log_printf("main32: settings port %u", (unsigned)settings_port());
 			scripts_install();
+			mirror_install();
+			localize_install();
 			zones_install();
 			party_install();
 			upnp_install();

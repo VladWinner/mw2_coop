@@ -23,8 +23,14 @@
 #include "log.h"
 #include "mirror.h"
 
+#ifdef _WIN64
 #define RVA_G_ENTITIES 0xd9e070
 #define GENTITY_SIZE 0x2a0
+#else
+// 32-bit: g_entities at 0xea76b8, 0x270 bytes each; the entity reference is the method's one stack argument
+#define RVA_G_ENTITIES 0xaa76b8
+#define GENTITY_SIZE 0x270
+#endif
 #define GENTITY_CLIENT 0x108
 
 typedef void (*method_t)(uint32_t entref);
@@ -35,11 +41,19 @@ static const struct {
 	uint32_t rva; // the table entry
 	const char *name;
 } mirrored[] = {
+#ifdef _WIN64
 	{0x339668, "setactionslot"},
 	{0x339308, "setoffhandsecondaryclass"},
 	{0x339110, "givemaxammo"},
 	{0x3390f8, "givestartammo"},
 	{0x348c50, "setthreatbiasgroup"}, // in the AI (sentient) method table
+#else
+	{0x2e8ec4, "setactionslot"},
+	{0x2e8d14, "setoffhandsecondaryclass"},
+	{0x2e8c18, "givemaxammo"},
+	{0x2e8c0c, "givestartammo"},
+	{0x2eb140, "setthreatbiasgroup"}, // in the AI (sentient) method table
+#endif
 };
 #define MIRRORED (sizeof(mirrored) / sizeof(mirrored[0]))
 
@@ -87,7 +101,7 @@ void mirror_install(void)
 			log_printf("mirror: no %s at rva 0x%x, player 2 does not get it", mirrored[i].name, mirrored[i].rva);
 			continue;
 		}
-		method_t *func = (method_t *)(entry + 8);
+		method_t *func = (method_t *)(entry + sizeof(char *)); // {name, function, developer}
 		originals[i] = *func;
 		DWORD old;
 		VirtualProtect(func, sizeof(*func), PAGE_READWRITE, &old);
