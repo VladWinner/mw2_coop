@@ -59,8 +59,8 @@
 #define RVA_DVAR_FINDVAR   0x233480  // dvar_t *Dvar_FindVar(const char *name): USERCALL, name in EDI
 #define RVA_CMD_ADDCOMMAND 0x028090  // void Cmd_AddCommand(name, function, node, 0); cdecl
 #define RVA_CMD_ARGS       0x104c950 // nesting; argc[nesting] at +0x44, argv[nesting] at +0x64
-#define RVA_SV_CMD_ARGS    0
-#define RVA_SV_CMD_DEVMAP  0
+#define RVA_SV_CMD_ARGS    0x1057620 // the server commands' arguments, same layout (argc +0x44, argv +0x64); read in the devmap handler 0x659780
+#define RVA_SV_CMD_DEVMAP  0x166ab98 // the server command node of "devmap" (handler 0x659780); the console node is 0x166abb0 (a no-op)
 #define RVA_CMD_FUNCTIONS  0x104c9d8 // cmd_function_t *cmd_functions (list head; Cmd_AddCommand 0x428090 links in front)
 #define RVA_XUID_TABLE     0x15fbf88 // uint64 xuid of local client i at +i*0x68 (read by 0x46f800)
 
@@ -72,7 +72,7 @@
 #define RVA_PARTY_LAUNCH         0x53444b // uint8, set by coopLaunch (0x57aa20); the frame (0x57c800) launches with two members
 #define RVA_PARTY_MEMBER_NAMES   0x534458 // char[32] per member, stride 0x38 (timers at +0x20, difficulty at +0x28)
 #define RVA_PARTY_START_TIME     0x53444c // int32
-#define RVA_LOBBY_SLOT_USED      0
+#define RVA_LOBBY_SLOT_USED      0x035ff0 // char (lobby, slot): the slot is taken (called in Party_Activate 0x45dde0)
 #define RVA_PARTY_RESET          0x02f0f0 // void Party_Reset(void)
 #define RVA_PARTY_CLEAR_MEMBERS  0x0b82f0 // void (int)
 #define RVA_LOBBY_JOIN           0x092e80 // void Lobby_Join(lobby, xuid, 0x322, hostInfo, 0, 0, 2, 0); cdecl, 8 args

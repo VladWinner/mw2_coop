@@ -448,21 +448,18 @@ int access_on_packet(const char *buf, int len, const uint8_t ip[4], uint16_t por
 }
 
 static cmd_function_t commands[] = {
-	{NULL, "mw2coop_edit_ok", NULL, NULL, edit_ok_f},
-	{NULL, "mw2coop_password", NULL, NULL, password_f},
-	{NULL, "mw2coop_join_address", NULL, NULL, join_address_f},
-	{NULL, "mw2coop_access", NULL, NULL, access_f},
-	{NULL, "mw2coop_ff", NULL, NULL, ff_f},
+	{NULL, "mw2coop_edit_ok", NULL, NULL, edit_ok_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_password", NULL, NULL, password_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_join_address", NULL, NULL, join_address_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_access", NULL, NULL, access_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_ff", NULL, NULL, ff_f CMD_NODE_FLAG},
 };
 
 void access_install(void)
 {
 	InitializeCriticalSection(&auth_lock);
 	base = (uint8_t *)GetModuleHandleA(NULL);
-	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
-	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-		commands[i].next = *head;
-		*head = &commands[i];
-	}
+	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
+		game_add_command(&commands[i]);
 	game_cbuf_addtext("set mw2coop_edit \"\"\n");
 }

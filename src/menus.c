@@ -14,7 +14,8 @@
 //               itemDef_t **items +0x168
 //   itemDef_t (0x1e8 bytes): name +0, rect {x,y,w,h} +8, rectClient +0x1c, group +0x30,
 //               dynamicFlags +0x50 (2 = has focus, 4 = visible), text +0xf0, parent menu +0x100,
-//               action +0x128, onFocus +0x138, leaveFocus +0x140, visibleExp +0x198
+//               action +0x128, onFocus +0x138, leaveFocus +0x140, floatExpressions +0x198, disabledExp +0x1a8
+// (the 32-bit values are in menus_ui.h)
 //   MenuEventHandlerSet {int count; MenuEventHandler **handlers}
 //   MenuEventHandler {void *data; char type}  type 0: data is a menu script string
 #include <windows.h>
@@ -35,6 +36,7 @@
 #include "net.h"
 #include "progress.h"
 
+#ifdef _WIN64
 #define RVA_UI_CONTEXT 0x1a3ab00 // uiContext_t (Menus_OpenByName's first argument, "openmenu" @0x24ca10)
 #define UI_MENUS 0x38		 // menuDef_t *menus[]
 #define UI_MENU_COUNT 0x1438	 // int
@@ -51,6 +53,25 @@ typedef struct {
 	int pad;
 	MenuEventHandler **handlers;
 } MenuEventHandlerSet;
+#else
+// 32-bit: the uiContext_t at 0x191cef0 ("openmenu", 0x61ed60, passes it to Menus_OpenByName 0x465010); menus[640] at +0x38 and
+// the count after them at +0xa38; handlers have 4-byte pointers (no padding)
+#define RVA_UI_CONTEXT 0x151cef0
+#define UI_MENUS 0x38
+#define UI_MENU_COUNT 0xa38
+#define UI_MAX_MENUS 640
+
+typedef struct {
+	void *data;
+	char type;
+	char pad[3];
+} MenuEventHandler;
+
+typedef struct {
+	int count;
+	MenuEventHandler **handlers;
+} MenuEventHandlerSet;
+#endif
 
 static uint8_t *base;
 #define FN_SLOT_USED(lobby, i) ((char (*)(void *, int))(base + RVA_LOBBY_SLOT_USED))(lobby, i)
@@ -146,7 +167,7 @@ void menus_log_items(const char *menu_name)
 	for (int i = 0; i < count; i++) {
 		uint8_t *it = items[i];
 		const char *name = *(const char **)it, *text = *(const char **)(it + ITEM_TEXT);
-		float *r = (float *)(it + 0x08);
+		float *r = (float *)(it + ITEM_RECT);
 		log_printf("menus: %s[%d] %s '%s' x %g y %g w %g h %g align %d/%d", menu_name, i, name ? name : "-",
 			   text ? text : "", r[0], r[1], r[2], r[3], it[ITEM_RECT_ALIGN_H], it[ITEM_RECT_ALIGN_V]);
 	}
@@ -676,12 +697,12 @@ static LobbySwap lobby_swaps[] = {
 	// Start: the native button needs coopready(), which counts the Steam lobby's members; a
 	// partner who joined by address has none. mw2coop_start checks the party and the ready state.
 	{"startmatch", ITEM_ACTION, "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_start\" ; ", NULL, NULL, NULL, NULL},
-	{"startmatch", 0x198, NULL, NULL, NULL, NULL, NULL}, // disabled when ( !gamehost() || !coopready() )
-	{"startmatch", 0x1a8, NULL, NULL, NULL, NULL, NULL},
+	{"startmatch", ITEM_FLOAT_EXPS, NULL, NULL, NULL, NULL, NULL}, // disabled when ( !gamehost() || !coopready() )
+	{"startmatch", ITEM_DISABLED_EXP, NULL, NULL, NULL, NULL, NULL},
 	{"startmatch", ITEM_TEXT, NULL, "@MW2COOP_START", NULL, NULL, NULL},
 	// Ready: the Spec Ops difficulty line, shown (greyed) for missions without Spec Ops difficulty
 	{"dont_selectdiff", ITEM_ACTION, "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_ready\" ; ", NULL, NULL, NULL, NULL},
-	{"dont_selectdiff", 0x198, NULL, NULL, NULL, NULL, NULL}, // disabled when the op has no difficulty
+	{"dont_selectdiff", ITEM_FLOAT_EXPS, NULL, NULL, NULL, NULL, NULL}, // disabled when the op has no difficulty
 	{"dont_selectdiff", ITEM_TEXT, NULL, "@MW2COOP_READY", NULL, NULL, NULL},
 	// its focus hint read "not available for this op"
 	{"dont_selectdiff", ITEM_ON_FOCUS, "\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ", NULL, NULL, NULL, NULL},
@@ -748,8 +769,8 @@ static void patch_lobby(int campaign)
 // checkerboard. With a campaign mission the expressions are switched off and the item shows the
 // mission list's own: material "levelshot_mw2_<map>", text "@MENU_SP_SP_<MAP>".
 #define ASSET_TYPE_MATERIAL 5
-#define ITEM_BACKGROUND 0xa8 // window background Material *
-#define ITEM_MATERIAL_EXP 0x1b8
+#define ITEM_BACKGROUND ITEM_BACKGROUND_PTR
+#define ITEM_MATERIAL_EXP ITEM_MATERIAL_EXP_PTR
 static uint8_t *pic_item, *name_item;
 static void *pic_native_material, *pic_native_exp, *name_native_exp;
 static const char *name_native_text;
@@ -1186,22 +1207,22 @@ static void devmap_f(void)
 static void tick_f(void);
 
 static cmd_function_t commands[] = {
-	{NULL, "mw2coop_online", NULL, NULL, online_f},
-	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f},
-	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f},
-	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f},
-	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f},
-	{NULL, "mw2coop_start", NULL, NULL, start_f},
-	{NULL, "mw2coop_ready", NULL, NULL, ready_f},
-	{NULL, "mw2coop_partner_yes", NULL, NULL, partner_yes_f},
-	{NULL, "mw2coop_member_yes", NULL, NULL, member_yes_f},
-	{NULL, "mw2coop_member_no", NULL, NULL, member_no_f},
-	{NULL, "mw2coop_new_game", NULL, NULL, new_game_f},
-	{NULL, "mw2coop_saves_menu", NULL, NULL, saves_menu_f},
-	{NULL, "mw2coop_save_pick", NULL, NULL, save_pick_f},
-	{NULL, "mw2coop_menus_tick", NULL, NULL, tick_f},
-	{NULL, "mw2coop_find", NULL, NULL, find_f},
-	{NULL, "mw2coop_join_found", NULL, NULL, join_found_f},
+	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_start", NULL, NULL, start_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_ready", NULL, NULL, ready_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_partner_yes", NULL, NULL, partner_yes_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_member_yes", NULL, NULL, member_yes_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_member_no", NULL, NULL, member_no_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_new_game", NULL, NULL, new_game_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_saves_menu", NULL, NULL, saves_menu_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_save_pick", NULL, NULL, save_pick_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_menus_tick", NULL, NULL, tick_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_find", NULL, NULL, find_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_join_found", NULL, NULL, join_found_f CMD_NODE_FLAG},
 };
 
 // The menu work runs on the game's main thread, between frames: the control thread only queues
@@ -1275,11 +1296,8 @@ void menus_install(void)
 {
 	InitializeCriticalSection(&lobby_lock);
 	base = (uint8_t *)GetModuleHandleA(NULL);
-	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
-	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-		commands[i].next = *head;
-		*head = &commands[i];
-	}
+	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
+		game_add_command(&commands[i]);
 	// devmap is a server command: the console node's function is empty and the command goes on
 	// to this node (Cmd_AddServerCommand in SV_AddOperatorCommands, rva 0x22bef0)
 	cmd_function_t *sv_devmap = (cmd_function_t *)(base + RVA_SV_CMD_DEVMAP);

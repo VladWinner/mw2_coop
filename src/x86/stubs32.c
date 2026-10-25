@@ -5,8 +5,7 @@
 
 #include "log.h"
 #include "memdump.h"
-#include "menus.h"
-#include "net.h"
+#include "steamnet.h"
 #include "scrdebug.h"
 #include "shot.h"
 #include "transplant.h"
@@ -44,29 +43,10 @@ int memdump_command(char *line)
 	return 0;
 }
 
-void menus_poll(void)
-{
-}
 
-void menus_log_names(void)
-{
-}
 
-void menus_log_items(const char *menu_name)
-{
-	(void)menu_name;
-}
 
-void menus_log_action(const char *menu_name, const char *item_name)
-{
-	(void)menu_name;
-	(void)item_name;
-}
 
-void net_log_budget(int packets)
-{
-	(void)packets;
-}
 
 
 // The 32-bit game's Direct3D device is not located yet: a static search finds no call of its methods in the exe, a throwaway
@@ -78,4 +58,26 @@ void shot_install(void)
 void shot_request(const char *name)
 {
 	log_printf("shot: %s not saved (the 32-bit build cannot find the game's Direct3D device yet)", name);
+}
+
+// Steam P2P for Steam joins (steam_relay=1, off by default and untested with two real accounts): not ported to the 32-bit build yet.
+void steamnet_install(void)
+{
+}
+
+int steamnet_send(const char *buf, int len, const struct sockaddr *to)
+{
+	(void)buf;
+	(void)len;
+	(void)to;
+	return 0;
+}
+
+int steamnet_receive(char *buf, int len, struct sockaddr *from, int *fromlen)
+{
+	(void)buf;
+	(void)len;
+	(void)from;
+	(void)fromlen;
+	return 0;
 }

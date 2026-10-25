@@ -2,12 +2,14 @@
 // Menu structures of this 64-bit build and helpers shared by menus.c and access.c (see menus.c).
 #include <stdint.h>
 
+#ifdef _WIN64
 #define ITEM_SIZE 0x1e8
 #define MENU_SIZE 0x200 // menuDef_t is smaller; copies only need the fields up to items (+0x168)
 #define MENU_ITEM_COUNT 0xbc
 #define MENU_ON_OPEN 0xe0
 #define MENU_ON_CLOSE 0xf0
 #define MENU_ITEMS 0x168
+#define ITEM_RECT 0x08 // rectDef_t {x, y, w, h floats, horzAlign, vertAlign chars}
 #define ITEM_RECT_Y 0x0c
 #define ITEM_RECT_ALIGN_H 0x18 // char: 1 left (the lobby's buttons), 3 right
 #define ITEM_RECT_ALIGN_V 0x19 // char: 1 top, 3 bottom
@@ -25,6 +27,42 @@
 #define ITEM_DVAR 0x148
 #define ITEM_TYPE_DATA 0x188 // itemDefData_t: editFieldDef * for edit fields
 #define ITEM_TEXT_EXP 0x1b0
+#define ITEM_FLOAT_EXPS 0x198 // floatExpressions (visibleExp is +0x1a0, disabledExp +0x1a8)
+#define ITEM_DISABLED_EXP 0x1a8
+#define ITEM_BACKGROUND_PTR 0xa8 // window background Material *
+#define ITEM_MATERIAL_EXP_PTR 0x1b8
+#else
+// 32-bit: the layouts of iw4x-sp's structs.hpp (itemDef_s 0x17c bytes, menuDef_t 0x190, windowDef_t 0xa4, rectDef_s 0x14,
+// 4-byte pointers), added up by hand; static_asserts there give the sizes
+#define ITEM_SIZE 0x17c
+#define MENU_SIZE 0x1a0 // menuDef_t is 0x190; copies read a little over, as in 64 bits
+#define MENU_ITEM_COUNT 0xac
+#define MENU_ON_OPEN 0xcc
+#define MENU_ON_CLOSE 0xd4
+#define MENU_ITEMS 0x118
+#define ITEM_RECT 0x04
+#define ITEM_RECT_Y 0x08
+#define ITEM_RECT_ALIGN_H 0x14
+#define ITEM_RECT_ALIGN_V 0x15
+#define ITEM_RECT_CLIENT_Y 0x1c
+#define ITEM_DYNAMIC_FLAGS 0x48
+#define ITEM_TYPE 0xb8
+#define ITEM_DATA_TYPE 0xbc
+#define ITEM_TYPE_EDITFIELD 4
+#define ITEM_TEXT 0xe4
+#define ITEM_PARENT 0xec
+#define ITEM_ACTION 0x100
+#define ITEM_ACCEPT 0x104
+#define ITEM_ON_FOCUS 0x108
+#define ITEM_LEAVE_FOCUS 0x10c
+#define ITEM_DVAR 0x110
+#define ITEM_TYPE_DATA 0x134
+#define ITEM_TEXT_EXP 0x14c
+#define ITEM_FLOAT_EXPS 0x140
+#define ITEM_DISABLED_EXP 0x148
+#define ITEM_BACKGROUND_PTR 0xa0
+#define ITEM_MATERIAL_EXP_PTR 0x150
+#endif
 #define WINDOW_HASFOCUS 2
 #define WINDOW_VISIBLE 4
 #define BUTTON_HEIGHT 20.0f

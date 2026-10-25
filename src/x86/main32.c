@@ -15,7 +15,13 @@
 #include "control.h"
 #include "crash.h"
 #include "fov.h"
+#include "access.h"
+#include "firewall.h"
 #include "localize.h"
+#include "menus.h"
+#include "net.h"
+#include "progress.h"
+#include "steamnet.h"
 #include "mirror.h"
 #include "shot.h"
 #include "party.h"
@@ -159,8 +165,14 @@ static DWORD WINAPI identify(LPVOID unused)
 			mirror_install();
 			localize_install();
 			zones_install();
+			net_install();
 			party_install();
+			progress_install();
+			menus_install();
+			access_install();
 			upnp_install();
+			steamnet_install();
+			firewall_install();
 			shot_install();
 			fov_install();
 			control_start();

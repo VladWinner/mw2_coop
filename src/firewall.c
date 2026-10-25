@@ -114,15 +114,11 @@ void firewall_tick(int hosting)
 }
 
 static cmd_function_t commands[] = {
-	{NULL, "mw2coop_firewall_fix", NULL, NULL, fix_f},
+	{NULL, "mw2coop_firewall_fix", NULL, NULL, fix_f CMD_NODE_FLAG},
 };
 
 void firewall_install(void)
 {
-	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
-	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
-	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-		commands[i].next = *head;
-		*head = &commands[i];
-	}
+	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
+		game_add_command(&commands[i]);
 }
