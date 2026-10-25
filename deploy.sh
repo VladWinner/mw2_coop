@@ -9,7 +9,13 @@ cd "$(dirname "$0")"
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
 sh build.sh
 if [ -n "$MW2COOP_GSC_DIR" ]; then
-	python -I tools/check_patches.py content "$MW2COOP_GSC_DIR" | tail -1
+	# a patch that does not apply stops the deploy: the game would load a script that fails to compile
+	if ! out=$(python -I tools/check_patches.py content "$MW2COOP_GSC_DIR"); then
+		printf '%s\n' "$out" | grep -v '^  ok'
+		echo "patches do not apply: nothing deployed (fix them, or unset MW2COOP_GSC_DIR to skip the check)"
+		exit 1
+	fi
+	printf '%s\n' "$out" | tail -1
 fi
 [ $# -gt 0 ] || set -- "$ROOT/mw2-64" "$ROOT/mw2-64-b"
 for t in "$@"; do
