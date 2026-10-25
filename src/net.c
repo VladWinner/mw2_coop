@@ -166,6 +166,31 @@ int net_broadcast_mod(const char *text, uint16_t port)
 	return sent;
 }
 
+// mw2coop's start packet (the host's session dvars and difficulty) and ready packet (the partner's id and
+// readiness) mean something only from the other player of this session. Anybody who knew the port could send
+// them, so they are acted on only when they come from the address the game talks to (remember_peer; by IP: the
+// port a NAT gives may differ). The lobby's own packets (access, list of games) are answered as before.
+static volatile LONG ignored_packets;
+
+static int is_session_packet(const char *buf, int len)
+{
+	static const char start[] = "\xff\xff\xff\xffmw2coop_start";
+	static const char ready[] = "\xff\xff\xff\xffmw2coop_ready";
+	return (len >= (int)sizeof(start) - 1 && memcmp(buf, start, sizeof(start) - 1) == 0) ||
+	       (len >= (int)sizeof(ready) - 1 && memcmp(buf, ready, sizeof(ready) - 1) == 0);
+}
+
+static int from_partner(const struct sockaddr *from)
+{
+	if (!from || from->sa_family != AF_INET)
+		return 0;
+	EnterCriticalSection(&peer_lock);
+	int same = peer_socket != INVALID_SOCKET &&
+		   ((const struct sockaddr_in *)from)->sin_addr.s_addr == peer.sin_addr.s_addr;
+	LeaveCriticalSection(&peer_lock);
+	return same;
+}
+
 static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
 {
 	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu)
@@ -207,7 +232,17 @@ static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
 			if (reply_len > 0 && reply_len < (int)sizeof(reply))
 				send_to(s, reply, reply_len, 0, from, sizeof(struct sockaddr_in));
 		}
-		if (lobby || progress_on_packet(buf, r) || menus_on_packet(buf, r)) {
+		int ours = lobby;
+		if (!ours && is_session_packet(buf, r)) {
+			// consumed either way: the game has nothing to do with it
+			if (from_partner(from)) {
+				if (!progress_on_packet(buf, r))
+					menus_on_packet(buf, r);
+			} else if (InterlockedIncrement(&ignored_packets) <= 5)
+				log_printf("net: a start or ready packet from an address that is not the partner's was ignored");
+			ours = 1;
+		}
+		if (ours) {
 			WSASetLastError(WSAEWOULDBLOCK); // ours: the game sees "no packet this time"
 			return SOCKET_ERROR;
 		}

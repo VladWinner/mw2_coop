@@ -39,6 +39,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "hook.h"
 #include "log.h"
 #include "scrdebug.h"
 #include "scripts.h"
@@ -387,13 +388,6 @@ void scripts_install(void)
 		log_printf("scripts: unexpected bytes at Scr_AddSourceBuffer, not patching");
 		return;
 	}
-	uint8_t jmp[14] = {0xff, 0x25, 0, 0, 0, 0};
-	uint64_t to = (uint64_t)(uintptr_t)add_source_buffer;
-	memcpy(jmp + 6, &to, 8);
-	DWORD old;
-	VirtualProtect(target, sizeof(jmp), PAGE_EXECUTE_READWRITE, &old);
-	memcpy(target, jmp, sizeof(jmp));
-	VirtualProtect(target, sizeof(jmp), old, &old);
-	FlushInstructionCache(GetCurrentProcess(), target, sizeof(jmp));
+	hook_jump(target, 14, add_source_buffer, 0x90);
 	log_printf("scripts: Scr_AddSourceBuffer replaced, mod files from %s", mod_dir);
 }

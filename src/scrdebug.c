@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "hook.h"
 #include "log.h"
 #include "scrdebug.h"
 
@@ -205,10 +206,8 @@ static void hook_end_load(void)
 		log_printf("scrdebug: unexpected bytes at Scr_EndLoadScripts, no script stacks");
 		return;
 	}
-	uint8_t *t = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-	if (!t)
-		return;
-	uint8_t *p = t;
+	uint8_t code[64];
+	uint8_t *p = code;
 	memcpy(p, target, 6); // push rbx; sub rsp, 0x20
 	p += 6;
 	uint64_t callee = (uint64_t)(uintptr_t)(base + RVA_END_LOAD_CALLEE);
@@ -220,21 +219,12 @@ static void hook_end_load(void)
 	*p++ = 0xd0;
 	memcpy(p, target + 11, 5); // mov ecx, 2
 	p += 5;
-	uint64_t back = (uint64_t)(uintptr_t)(target + 16);
-	uint8_t jmp_back[6] = {0xff, 0x25, 0, 0, 0, 0};
-	memcpy(p, jmp_back, 6);
-	memcpy(p + 6, &back, 8);
-	FlushInstructionCache(GetCurrentProcess(), t, 64);
-	end_load_original = (void (*)(void))t;
-
-	uint8_t jmp[16] = {0xff, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x90, 0x90};
-	uint64_t to = (uint64_t)(uintptr_t)end_load_scripts;
-	memcpy(jmp + 6, &to, 8);
-	DWORD old;
-	VirtualProtect(target, sizeof(jmp), PAGE_EXECUTE_READWRITE, &old);
-	memcpy(target, jmp, sizeof(jmp));
-	VirtualProtect(target, sizeof(jmp), old, &old);
-	FlushInstructionCache(GetCurrentProcess(), target, sizeof(jmp));
+	hook_jump_bytes(p, target + 16); // back to +16
+	p += 14;
+	end_load_original = (void (*)(void))hook_code(code, (size_t)(p - code));
+	if (!end_load_original)
+		return;
+	hook_jump(target, 16, end_load_scripts, 0x90);
 }
 
 static void log_stack(void)
@@ -301,14 +291,7 @@ void scrdebug_install(void)
 		log_printf("scrdebug: unexpected bytes at Scr_Error, not hooking");
 		return;
 	}
-	uint8_t jmp[14] = {0xff, 0x25, 0, 0, 0, 0};
-	uint64_t to = (uint64_t)(uintptr_t)scr_error;
-	memcpy(jmp + 6, &to, 8);
-	DWORD old;
-	VirtualProtect(target, sizeof(jmp), PAGE_EXECUTE_READWRITE, &old);
-	memcpy(target, jmp, sizeof(jmp));
-	VirtualProtect(target, sizeof(jmp), old, &old);
-	FlushInstructionCache(GetCurrentProcess(), target, sizeof(jmp));
+	hook_jump(target, 14, scr_error, 0x90);
 	log_printf("scrdebug: Scr_Error replaced (runtime script errors are logged)");
 	hook_end_load();
 }

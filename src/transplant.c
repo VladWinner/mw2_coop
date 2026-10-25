@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "hook.h"
 #include "log.h"
 #include "transplant.h"
 
@@ -156,8 +157,46 @@ static int bits_rule(const uint8_t *donor)
 
 static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name, const char *donor_name);
 
+// Buffers made for a model the game keeps (surfaces, bone lists, copies of the model-surface headers). The
+// game frees and refills its model pools with each level, so a model made for an earlier level is gone
+// and its buffers are dead, but nothing here may be freed while the game could still draw with it: a bag is
+// emptied only when its turn comes round again, sixteen makes later (a restart makes the models again; a level makes three at most).
+#define BAGS 16
+static struct {
+	void **item;
+	int count, cap;
+} bags[BAGS];
+static int bag_next;
+static int bag_now = -1;
+
+static void bag_begin(void)
+{
+	bag_now = bag_next;
+	bag_next = (bag_next + 1) % BAGS;
+	for (int i = 0; i < bags[bag_now].count; i++)
+		free(bags[bag_now].item[i]);
+	bags[bag_now].count = 0;
+}
+
+static void *bag_add(void *buffer)
+{
+	if (!buffer || bag_now < 0)
+		return buffer; // never freed: a buffer made outside a make
+	if (bags[bag_now].count == bags[bag_now].cap) {
+		int cap = bags[bag_now].cap ? bags[bag_now].cap * 2 : 64;
+		void **more = realloc(bags[bag_now].item, (size_t)cap * sizeof(void *));
+		if (!more)
+			return buffer;
+		bags[bag_now].item = more;
+		bags[bag_now].cap = cap;
+	}
+	bags[bag_now].item[bags[bag_now].count++] = buffer;
+	return buffer;
+}
+
 static int transplant(const char *target_name, const char *donor_name)
 {
+	bag_begin();
 	uint8_t *target = find_model(target_name), *donor = find_model(donor_name);
 	if (!target || !donor || !*(void **)(target + 0x28) || !*(void **)(donor + 0x28)) {
 		static DWORD logged;
@@ -210,7 +249,7 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 		uint8_t *from = *(uint8_t **)(lod + 0x28);
 		if (!n || !from)
 			continue;
-		uint8_t *surfs = calloc((size_t)n, SURF_SIZE);
+		uint8_t *surfs = bag_add(calloc((size_t)n, SURF_SIZE));
 		int32_t lod_bits[6] = {0};
 		for (int i = 0; i < n; i++) {
 			uint8_t *s = surfs + SURF_SIZE * i;
@@ -219,13 +258,13 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 			uint8_t *lists = NULL;
 			if (s[1] && *(uint16_t **)(s + 0x20)) {
 				size_t len = (size_t)blend_len(s) * 2;
-				blend = malloc(len);
+				blend = bag_add(malloc(len));
 				memcpy(blend, *(uint16_t **)(s + 0x20), len);
 				*(uint16_t **)(s + 0x20) = blend;
 			}
 			uint32_t nl = *(uint32_t *)(s + 0x30);
 			if (nl && *(uint8_t **)(s + 0x38)) {
-				lists = malloc(0x10u * nl);
+				lists = bag_add(malloc(0x10u * nl));
 				memcpy(lists, *(uint8_t **)(s + 0x38), 0x10u * nl);
 				*(uint8_t **)(s + 0x38) = lists;
 			}
@@ -243,7 +282,7 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 		memcpy(lod + 0x10, lod_bits, sizeof(lod_bits));
 		uint8_t *ms = *(uint8_t **)(lod + 8);
 		if (ms) {
-			uint8_t *copy = malloc(MODELSURFS_SIZE);
+			uint8_t *copy = bag_add(malloc(MODELSURFS_SIZE));
 			memcpy(copy, ms, MODELSURFS_SIZE);
 			*(uint8_t **)(copy + 8) = surfs;
 			memcpy(copy + 0x14, lod_bits, sizeof(lod_bits));
@@ -356,6 +395,7 @@ void *transplant_clone(const char *name, void *(*find)(int, const char *))
 	}
 	if (free_slot < 0)
 		return NULL;
+	bag_begin();
 	size_t size = 0;
 	uint8_t *model = pool_entry(skeleton, mesh, &size);
 	if (!model) {
@@ -392,6 +432,7 @@ static void *upright_pick(void *(*find)(int, const char *))
 		return NULL;
 	if (pick_model && pick_source == src)
 		return pick_model;
+	bag_begin();
 	size_t size = 0;
 	uint8_t *model = pool_entry(src, src, &size);
 	if (!model) {
@@ -414,11 +455,11 @@ static void *upright_pick(void *(*find)(int, const char *))
 	q[1] = rc * by + ra * bw;
 	q[2] = rc * bz - ra * bx;
 	q[3] = rc * bw - ra * by;
-	int16_t *quats = malloc(8);
+	int16_t *quats = bag_add(malloc(8));
 	for (int k = 0; k < 4; k++)
 		quats[k] = (int16_t)(q[k] * 32767.0f + (q[k] < 0 ? -0.5f : 0.5f));
 	*(int16_t **)(model + 0x38) = quats;
-	float *trans = malloc(3 * sizeof(float));
+	float *trans = bag_add(malloc(3 * sizeof(float)));
 	// R: x' = -z, z' = x; then back toward the wrist: the model's origin is ahead of the fist
 	// (QA frame: upright, but 8 to 10 units ahead of it)
 	trans[0] = -t0[2] + pick_grip_back();
@@ -433,7 +474,7 @@ static void *upright_pick(void *(*find)(int, const char *))
 		uint8_t *from = *(uint8_t **)(lod + 0x28);
 		if (!n || !from)
 			continue;
-		uint8_t *surfs = calloc((size_t)n, SURF_SIZE);
+		uint8_t *surfs = bag_add(calloc((size_t)n, SURF_SIZE));
 		int32_t bits[6] = {(int32_t)0xc0000000u, 0, 0, 0, 0, 0}; // bones 0 and 1
 		for (int i = 0; i < n; i++) {
 			uint8_t *sf = surfs + SURF_SIZE * i;
@@ -442,13 +483,13 @@ static void *upright_pick(void *(*find)(int, const char *))
 			uint8_t *lists = NULL;
 			if (sf[1] && *(uint16_t **)(sf + 0x20)) {
 				size_t len = (size_t)blend_len(sf) * 2;
-				blend = malloc(len);
+				blend = bag_add(malloc(len));
 				memcpy(blend, *(uint16_t **)(sf + 0x20), len);
 				*(uint16_t **)(sf + 0x20) = blend;
 			}
 			uint32_t nlists = *(uint32_t *)(sf + 0x30);
 			if (nlists && *(uint8_t **)(sf + 0x38)) {
-				lists = malloc(0x10u * nlists);
+				lists = bag_add(malloc(0x10u * nlists));
 				memcpy(lists, *(uint8_t **)(sf + 0x38), 0x10u * nlists);
 				*(uint8_t **)(sf + 0x38) = lists;
 			}
@@ -460,7 +501,7 @@ static void *upright_pick(void *(*find)(int, const char *))
 		memcpy(lod + 0x10, bits, sizeof(bits));
 		uint8_t *ms = *(uint8_t **)(lod + 8);
 		if (ms) {
-			uint8_t *copy = malloc(MODELSURFS_SIZE);
+			uint8_t *copy = bag_add(malloc(MODELSURFS_SIZE));
 			memcpy(copy, ms, MODELSURFS_SIZE);
 			*(uint8_t **)(copy + 8) = surfs;
 			memcpy(copy + 0x14, bits, sizeof(bits));
@@ -546,27 +587,9 @@ static void hook_is_default(void)
 		log_printf("transplant: unexpected bytes at DB_IsXAssetDefault, not hooking");
 		return;
 	}
-	// trampoline: the 15 original bytes, then jmp [rip+0] to target+15
-	uint8_t *tramp = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-	if (!tramp)
+	is_default_original = (is_default_t)hook_function(target, is_default_bytes, sizeof(is_default_bytes), is_default);
+	if (!is_default_original)
 		return;
-	memcpy(tramp, target, sizeof(is_default_bytes));
-	uint8_t back[14] = {0xff, 0x25, 0, 0, 0, 0};
-	uint64_t to = (uint64_t)(uintptr_t)(target + sizeof(is_default_bytes));
-	memcpy(back + 6, &to, 8);
-	memcpy(tramp + sizeof(is_default_bytes), back, sizeof(back));
-	FlushInstructionCache(GetCurrentProcess(), tramp, 64);
-	is_default_original = (is_default_t)tramp;
-
-	uint8_t jmp[14] = {0xff, 0x25, 0, 0, 0, 0};
-	to = (uint64_t)(uintptr_t)is_default;
-	memcpy(jmp + 6, &to, 8);
-	DWORD old;
-	VirtualProtect(target, sizeof(is_default_bytes), PAGE_EXECUTE_READWRITE, &old);
-	memcpy(target, jmp, sizeof(jmp));
-	target[14] = 0xcc; // the 15th copied byte is never run: the trampoline resumes at +15
-	VirtualProtect(target, sizeof(is_default_bytes), old, &old);
-	FlushInstructionCache(GetCurrentProcess(), target, 15);
 }
 
 void transplant_install(void)

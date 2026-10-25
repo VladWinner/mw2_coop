@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "hook.h"
 #include "log.h"
 #include "settings.h"
 #include "steamnet.h"
@@ -214,14 +215,7 @@ void steamnet_install(void)
 		enabled = 0;
 		return;
 	}
-	uint8_t jmp[14] = {0xff, 0x25, 0, 0, 0, 0};
-	uint64_t to = (uint64_t)(uintptr_t)steam_join;
-	memcpy(jmp + 6, &to, 8);
-	DWORD old;
-	VirtualProtect(at, sizeof(jmp), PAGE_EXECUTE_READWRITE, &old);
-	memcpy(at, jmp, sizeof(jmp));
-	VirtualProtect(at, sizeof(jmp), old, &old);
-	FlushInstructionCache(GetCurrentProcess(), at, sizeof(jmp));
+	hook_jump(at, 14, steam_join, 0x90);
 
 	HMODULE h = GetModuleHandleA("steam_api64.dll");
 	void (*reg)(void *, int) = h ? (void (*)(void *, int))GetProcAddress(h, "SteamAPI_RegisterCallback") : NULL;

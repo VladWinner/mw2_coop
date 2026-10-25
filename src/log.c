@@ -4,6 +4,8 @@
 
 #include "log.h"
 
+#define LOG_MAX_BYTES (5u * 1024 * 1024)
+
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION log_lock;
 
@@ -19,6 +21,14 @@ void log_open(void)
 
 	char path[MAX_PATH];
 	snprintf(path, sizeof(path), "%s\\mw2coop.log", dir);
+	// The recorder writes about 1 MB an hour and nothing else empties the file: past 5 MB the old log is
+	// set aside (the one before it is replaced) and a new one starts.
+	WIN32_FILE_ATTRIBUTE_DATA info;
+	if (GetFileAttributesExA(path, GetFileExInfoStandard, &info) && (info.nFileSizeHigh || info.nFileSizeLow > LOG_MAX_BYTES)) {
+		char old[MAX_PATH];
+		snprintf(old, sizeof(old), "%s.old", path);
+		MoveFileExA(path, old, MOVEFILE_REPLACE_EXISTING);
+	}
 	InitializeCriticalSection(&log_lock);
 	log_file = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 }

@@ -347,6 +347,11 @@ static void run_line(char *line)
 	game_cbuf_addtext(cmd);
 }
 
+// The command file (QA: tools/qa_pair.sh) runs console commands, so it is read only when the file is
+// already there at start-up: a file that shows up in the game folder later is not run, and a normal
+// session does not look for it four times a second.
+static int commands_enabled;
+
 static DWORD WINAPI control_thread(LPVOID path_arg)
 {
 	const char *path = (const char *)path_arg;
@@ -357,6 +362,8 @@ static DWORD WINAPI control_thread(LPVOID path_arg)
 		Sleep(250);
 		watch_poll();
 		menus_poll();
+		if (!commands_enabled)
+			continue;
 		HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
 				       OPEN_EXISTING, 0, NULL);
 		if (f == INVALID_HANDLE_VALUE)
@@ -443,6 +450,10 @@ void control_start(void)
 		n--;
 	path[n] = 0;
 	lstrcatA(path, "mw2coop\\commands.txt");
-	log_printf("control: reading %s", path);
+	commands_enabled = GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+	if (commands_enabled)
+		log_printf("control: reading %s (QA)", path);
+	else
+		log_printf("control: no %s at start-up, the command file is not read", path);
 	CloseHandle(CreateThread(NULL, 0, control_thread, path, 0, NULL));
 }

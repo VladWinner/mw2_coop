@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "hook.h"
 #include "log.h"
 #include "zones.h"
 
@@ -127,26 +128,8 @@ void zones_install(void)
 		log_printf("zones: unexpected bytes at the level zone loader, not hooking");
 		return;
 	}
-	uint8_t *tramp = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-	if (!tramp)
+	original = (load_level_zones_t)hook_function(target, expected, sizeof(expected), load_level_zones);
+	if (!original)
 		return;
-	memcpy(tramp, target, sizeof(expected));
-	uint8_t back[14] = {0xff, 0x25, 0, 0, 0, 0};
-	uint64_t to = (uint64_t)(uintptr_t)(target + sizeof(expected));
-	memcpy(back + 6, &to, 8);
-	memcpy(tramp + sizeof(expected), back, sizeof(back));
-	FlushInstructionCache(GetCurrentProcess(), tramp, 64);
-	original = (load_level_zones_t)tramp;
-
-	uint8_t jmp[16] = {0xff, 0x25, 0, 0, 0, 0};
-	to = (uint64_t)(uintptr_t)load_level_zones;
-	memcpy(jmp + 6, &to, 8);
-	jmp[14] = 0xcc;
-	jmp[15] = 0xcc;
-	DWORD old;
-	VirtualProtect(target, sizeof(jmp), PAGE_EXECUTE_READWRITE, &old);
-	memcpy(target, jmp, sizeof(jmp));
-	VirtualProtect(target, sizeof(jmp), old, &old);
-	FlushInstructionCache(GetCurrentProcess(), target, sizeof(jmp));
 	log_printf("zones: level zone loader hooked");
 }

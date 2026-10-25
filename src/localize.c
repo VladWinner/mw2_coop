@@ -14,6 +14,7 @@
 #include "game.h"
 #include "localize.h"
 #include "transplant.h"
+#include "hook.h"
 #include "log.h"
 
 #define ASSET_TYPE_LOCALIZE_ENTRY 27
@@ -292,26 +293,8 @@ void localize_install(void)
 		log_printf("localize: unexpected bytes at DB_FindXAssetHeader, not hooking");
 		return;
 	}
-	// trampoline: the 15 original bytes, then jmp [rip+0] to target+15
-	uint8_t *tramp = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-	if (!tramp)
+	original = (db_find_header_t)hook_function(target, expected, sizeof(expected), find_header);
+	if (!original)
 		return;
-	memcpy(tramp, target, sizeof(expected));
-	uint8_t back[14] = {0xff, 0x25, 0, 0, 0, 0};
-	uint64_t to = (uint64_t)(uintptr_t)(target + sizeof(expected));
-	memcpy(back + 6, &to, 8);
-	memcpy(tramp + sizeof(expected), back, sizeof(back));
-	FlushInstructionCache(GetCurrentProcess(), tramp, 64);
-	original = (db_find_header_t)tramp;
-
-	uint8_t jmp[14] = {0xff, 0x25, 0, 0, 0, 0};
-	to = (uint64_t)(uintptr_t)find_header;
-	memcpy(jmp + 6, &to, 8);
-	DWORD old;
-	VirtualProtect(target, sizeof(expected), PAGE_EXECUTE_READWRITE, &old);
-	memcpy(target, jmp, sizeof(jmp));
-	target[14] = 0xcc;	// the 15th copied byte is never run: the trampoline resumes at +15
-	VirtualProtect(target, sizeof(expected), old, &old);
-	FlushInstructionCache(GetCurrentProcess(), target, 15);
 	log_printf("localize: DB_FindXAssetHeader hooked for MW2COOP_ strings");
 }
