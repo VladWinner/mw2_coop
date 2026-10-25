@@ -529,7 +529,7 @@ int progress_on_packet(const char *buf, int len)
 }
 
 static cmd_function_t commands[] = {
-	{NULL, "mw2coop_continue", NULL, NULL, continue_f},
+	{NULL, "mw2coop_continue", NULL, NULL, continue_f CMD_NODE_FLAG},
 };
 
 void progress_install(void)
@@ -540,11 +540,8 @@ void progress_install(void)
 	dir[n] = 0;
 	lstrcatA(dir, "mw2coop\\");
 
-	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
-	cmd_function_t **head = (cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
 	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
-		commands[i].next = *head;
-		*head = &commands[i];
+		game_add_command(&commands[i]);
 		log_printf("progress: added console command %s", commands[i].name);
 	}
 }

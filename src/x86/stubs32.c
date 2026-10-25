@@ -7,7 +7,6 @@
 #include "memdump.h"
 #include "menus.h"
 #include "net.h"
-#include "progress.h"
 #include "scrdebug.h"
 #include "shot.h"
 #include "transplant.h"
@@ -69,14 +68,6 @@ void net_log_budget(int packets)
 	(void)packets;
 }
 
-void progress_poll(void)
-{
-}
-
-void progress_save(const char *map, const char *start, const char *spot)
-{
-	log_printf("progress: checkpoint %s %s %s not saved (progress.c is not ported to the 32-bit build yet)", map, start, spot);
-}
 
 // The 32-bit game's Direct3D device is not located yet: a static search finds no call of its methods in the exe, a throwaway
 // device has the Steam overlay's copy of the vtable, and every object of d3d9.dll in the exe's data looks like a device.

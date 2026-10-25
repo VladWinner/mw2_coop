@@ -61,16 +61,16 @@
 #define RVA_CMD_ARGS       0x104c950 // nesting; argc[nesting] at +0x44, argv[nesting] at +0x64
 #define RVA_SV_CMD_ARGS    0
 #define RVA_SV_CMD_DEVMAP  0
-#define RVA_CMD_FUNCTIONS  0
+#define RVA_CMD_FUNCTIONS  0x104c9d8 // cmd_function_t *cmd_functions (list head; Cmd_AddCommand 0x428090 links in front)
 #define RVA_XUID_TABLE     0x15fbf88 // uint64 xuid of local client i at +i*0x68 (read by 0x46f800)
 
 // Co-op party (lobby) state
-#define RVA_PARTY_SKILL          0
+#define RVA_PARTY_SKILL          0x534480 // int: party member n's difficulty at +n*0x38 (0x4141b0 reads it)
 #define RVA_PARTY_LOBBY          0x534450 // lobby object * (its first field is the name "gameSession")
 #define RVA_PARTY_IS_HOST        0x534448 // uint8: set by listen (0x57a860), cleared by a client's join
 #define RVA_PARTY_ACTIVE         0x534449 // uint8, gates the party frame (0x4a4be0); lobby +8 must be set too
 #define RVA_PARTY_LAUNCH         0x53444b // uint8, set by coopLaunch (0x57aa20); the frame (0x57c800) launches with two members
-#define RVA_PARTY_MEMBER_NAMES   0
+#define RVA_PARTY_MEMBER_NAMES   0x534458 // char[32] per member, stride 0x38 (timers at +0x20, difficulty at +0x28)
 #define RVA_PARTY_START_TIME     0x53444c // int32
 #define RVA_LOBBY_SLOT_USED      0
 #define RVA_PARTY_RESET          0x02f0f0 // void Party_Reset(void)
