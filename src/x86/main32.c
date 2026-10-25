@@ -18,6 +18,7 @@
 #include "access.h"
 #include "firewall.h"
 #include "splitscreen.h"
+#include "instance.h"
 #include "localize.h"
 #include "menus.h"
 #include "net.h"
@@ -237,6 +238,7 @@ static DWORD WINAPI identify(LPVOID unused)
 			shot_install();
 			fov_install();
 			splitscreen_install();
+			instance_install();
 			control_start();
 			return 0;
 		}

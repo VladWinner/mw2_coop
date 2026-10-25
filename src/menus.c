@@ -28,6 +28,8 @@
 #include "access.h"
 #include "firewall.h"
 #include "localize.h"
+#include "instance.h"
+#include "splitscreen.h"
 #include "log.h"
 #include "settings.h"
 #include "upnp.h"
@@ -232,6 +234,9 @@ static uint8_t **main_items; // our items array for main_text, NULL until patche
 
 static const char online_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_host_menu\" ; ";
 
+// the split screen button: the same host popup, and the lobby it opens brings the second player (this PC's second process, instance.c)
+static const char split_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_split_menu\" ; ";
+
 static const char join_action[] =
 	"\"play\" \"mouse_click\" ; "
 	"\"exec\" \"xrequirelivesignin\" ; "
@@ -243,6 +248,7 @@ static const struct {
 } main_buttons[] = {
 	{"mw2coop_online", "@MENU_SP_TWO_PLAYER_ONLINE_CAPS", online_action},
 	{"mw2coop_find", "@MW2COOP_JOIN", join_action},
+	{"mw2coop_splitscreen", "@MW2COOP_SPLITSCREEN", split_action},
 };
 #define MAIN_BUTTONS (int)(sizeof(main_buttons) / sizeof(main_buttons[0]))
 
@@ -520,6 +526,8 @@ static void add_lobbies_menu(void)
 static volatile LONG picking; // a new campaign or a mission is being picked for the lobby
 static DWORD picking_seen;    // last tick one of the picking menus was open
 
+static void add_assign_menu(void);
+
 static void add_host_menu(void)
 {
 	if (ui_find_menu("mw2coop_host"))
@@ -535,6 +543,23 @@ static void add_host_menu(void)
 	if (menu) {
 		show_row(menu, "mw2coop_host_4", 0);
 		log_printf("menus: host popup added");
+	}
+	add_assign_menu();
+}
+
+// the split screen lobby asks the second player to press a button on his controller (instance.c takes the first pad that does)
+static void add_assign_menu(void)
+{
+	if (ui_find_menu("mw2coop_assign"))
+		return;
+	static const char *const names[LIST_ROWS] = {"mw2coop_assign_1", "mw2coop_assign_2", "mw2coop_assign_3", "mw2coop_assign_4"};
+	static const char *const texts[LIST_ROWS] = {"@MW2COOP_ASSIGN_PRESS", "", "", ""};
+	static const char *const actions[LIST_ROWS] = {"\"play\" \"mouse_click\" ; \"close\" \"self\" ; ", "", "", ""};
+	uint8_t *menu = rows_popup("mw2coop_assign", "@MW2COOP_ASSIGN_TITLE", names, texts, actions);
+	if (menu) {
+		for (int r = 1; r < LIST_ROWS; r++)
+			show_row(menu, names[r], 0);
+		log_printf("menus: second player popup added");
 	}
 }
 
@@ -557,6 +582,15 @@ static void host_menu_f(void)
 	show_row(menu, "mw2coop_continue", have);
 	show_row(menu, "mw2coop_host_4", have);
 	game_cbuf_addtext("openmenu mw2coop_host\n");
+}
+
+static volatile LONG split_pending; // the lobby being hosted is a split screen one: its second player is started with it
+static DWORD WINAPI split_start_thread(LPVOID unused)
+{
+	(void)unused;
+	game_cbuf_addtext("openmenu mw2coop_assign\n"); // "press a button on your controller" until the pad is known
+	instance_start(-1);
+	return 0;
 }
 
 static int save_picked; // the host picked a save in the menu (the lobby stays on it)
@@ -624,6 +658,14 @@ static void host_lobby(const char *map)
 		 "mw2coop_online %s\nlisten\n",
 		 map ? map : "");
 	game_cbuf_addtext(cmd);
+	if (InterlockedExchange(&split_pending, 0)) // it runs off the game's thread: the links take a moment
+		CreateThread(NULL, 0, split_start_thread, NULL, 0, NULL);
+}
+
+static void split_menu_f(void)
+{
+	InterlockedExchange(&split_pending, 1);
+	host_menu_f();
 }
 
 static void host_go_f(void)
@@ -1035,7 +1077,8 @@ static void start_f(void)
 	progress_begin(continuing, partner_id, partner_xuid, (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38, // slot 1
 		       add_member);
 	log_printf("menus: Start: coopLaunch");
-	game_cbuf_addtext("coopLaunch\n");
+	if (!splitscreen_before_launch())
+		game_cbuf_addtext("coopLaunch\n");
 }
 
 // The popups' questions with the names in them, in the game's language.
@@ -1213,6 +1256,7 @@ static void tick_f(void);
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_split_menu", NULL, NULL, split_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},

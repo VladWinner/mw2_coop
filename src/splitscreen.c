@@ -83,6 +83,8 @@ static volatile LONG get_calls, set_calls;
 static BOOL WINAPI my_get_cursor_pos(POINT *p)
 {
 	InterlockedIncrement(&get_calls);
+	if (pad < 0) // a pad copy until a pad is given to it: the real cursor
+		return GetCursorPos(p);
 	if (!p)
 		return FALSE;
 	p->x = vx;
@@ -93,6 +95,8 @@ static BOOL WINAPI my_get_cursor_pos(POINT *p)
 static BOOL WINAPI my_set_cursor_pos(int x, int y)
 {
 	InterlockedIncrement(&set_calls);
+	if (pad < 0)
+		return SetCursorPos(x, y);
 	vx = x;
 	vy = y;
 	return TRUE;
@@ -100,12 +104,12 @@ static BOOL WINAPI my_set_cursor_pos(int x, int y)
 
 static HWND WINAPI my_get_foreground_window(void)
 {
-	return game_window ? game_window : GetForegroundWindow();
+	return game_window && pad >= 0 ? game_window : GetForegroundWindow();
 }
 
 static HWND WINAPI my_get_active_window(void)
 {
-	return game_window ? game_window : GetActiveWindow();
+	return game_window && pad >= 0 ? game_window : GetActiveWindow();
 }
 
 // ---------------------------------------------------------------- the pad
@@ -413,6 +417,8 @@ static void layout_child(HWND w)
 	}
 }
 
+static void restore_resolution(void);
+
 // called every 100 ms
 static void container_poll(HWND w)
 {
@@ -452,8 +458,10 @@ static void container_poll(HWND w)
 		}
 		SetWindowLongA(w, GWL_STYLE, saved_style);
 		SetWindowPos(w, NULL, saved_rect.left, saved_rect.top, saved_rect.right - saved_rect.left, saved_rect.bottom - saved_rect.top, SWP_NOZORDER | SWP_FRAMECHANGED);
-		if (slot == 0)
+		if (slot == 0) {
 			ShowWindow(container, SW_HIDE);
+			restore_resolution();
+		}
 		joined = 0;
 		log_printf("splitscreen: slot %d leaves the shared window", slot);
 	}
@@ -488,18 +496,81 @@ static HWND find_game_window(int tries)
 }
 
 // the game draws at the size of its half of the shared window: no stretching
-static void set_resolution(void)
+// r_customMode is saved with the player's settings: the first copy puts its own value back when the session ends, and a file keeps it for a
+// crash (the next start puts it back, restore_stale)
+static char orig_mode[64];
+static int orig_saved;
+
+static void state_path(char *out)
+{
+	lstrcpynA(out, ini_path, MAX_PATH);
+	char *slash = strrchr(out, '\\');
+	if (slash)
+		lstrcpynA(slash + 1, "split_state.ini", (int)(MAX_PATH - (slash + 1 - out)));
+}
+
+// returns 1 when the video mode was changed (a restart is queued)
+static int set_resolution(void)
 {
 	int w, h;
 	slot_size(&w, &h);
 	char want[32], cmd[128];
 	snprintf(want, sizeof(want), "%dx%d", w, h);
 	char have[64] = "";
-	if (game_dvar_raw("r_customMode", have, sizeof(have)) && strcmp(have, want) == 0)
-		return;
+	game_dvar_raw("r_customMode", have, sizeof(have));
+	if (strcmp(have, want) == 0)
+		return 0;
+	if (slot == 0 && !orig_saved) {
+		lstrcpynA(orig_mode, have, sizeof(orig_mode));
+		orig_saved = 1;
+		char path[MAX_PATH];
+		state_path(path);
+		WritePrivateProfileStringA("mode", "original", orig_mode, path);
+	}
 	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cvid_restart%c", want, 10, 10);
 	game_cbuf_addtext(cmd);
 	log_printf("splitscreen: video mode %s (was '%s')", want, have);
+	return 1;
+}
+
+static void restore_resolution(void)
+{
+	if (slot != 0 || !orig_saved)
+		return;
+	char cmd[128], path[MAX_PATH];
+	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cvid_restart%c", orig_mode, 10, 10);
+	game_cbuf_addtext(cmd);
+	log_printf("splitscreen: video mode back to '%s'", orig_mode);
+	orig_saved = 0;
+	state_path(path);
+	DeleteFileA(path);
+}
+
+// the first copy's Start button: the picture gets the size of its half first (a video restart), the launch follows
+static volatile LONG launch_pending;
+
+static DWORD WINAPI launch_thread(LPVOID unused)
+{
+	(void)unused;
+	HWND old = game_window;
+	for (int i = 0; i < 150 && old && IsWindow(old); i++)
+		Sleep(100);
+	Sleep(2500); // the new window and its device
+	game_cbuf_addtext("coopLaunch\n");
+	log_printf("splitscreen: the video restart is done, launching");
+	InterlockedExchange(&launch_pending, 0);
+	return 0;
+}
+
+int splitscreen_before_launch(void)
+{
+	if (slot != 0 || launch_pending)
+		return launch_pending ? 1 : 0;
+	if (!set_resolution())
+		return 0;
+	InterlockedExchange(&launch_pending, 1);
+	CreateThread(NULL, 0, launch_thread, NULL, 0, NULL);
+	return 1;
 }
 
 static DWORD WINAPI split_thread(LPVOID unused)
@@ -512,7 +583,7 @@ static DWORD WINAPI split_thread(LPVOID unused)
 	}
 	game_window = w;
 	Sleep(500);
-	if (slot >= 0) {
+	if (slot > 0) { // the second copy is hidden: its picture is made right at the start
 		set_resolution();
 		Sleep(4000);
 	}
@@ -520,7 +591,11 @@ static DWORD WINAPI split_thread(LPVOID unused)
 		place_window(w);
 	if (pad >= 0)
 		log_printf("splitscreen: pad %d drives this copy%s", pad, fakepad ? " (fakepad.txt)" : "");
-	DWORD last_activate = 0, last_poll = 0;
+	DWORD last_activate = 0, last_poll = 0, pad_checked = 0;
+	HANDLE parent = NULL; // the second process quits with the first
+	char pid[16];
+	if (slot > 0 && GetEnvironmentVariableA("MW2COOP_PARENT_PID", pid, sizeof(pid)))
+		parent = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)atoi(pid));
 	for (;;) {
 		Sleep(10);
 		DWORD now = GetTickCount();
@@ -535,6 +610,25 @@ static DWORD WINAPI split_thread(LPVOID unused)
 				}
 			}
 			container_poll(w);
+			if (parent && WaitForSingleObject(parent, 0) == WAIT_OBJECT_0) {
+				log_printf("splitscreen: the first process is gone");
+				ExitProcess(0);
+			}
+		}
+		if (slot > 0 && pad < 0 && now - pad_checked > 500) { // the first copy tells which pad is the second player's
+			pad_checked = now;
+			char file[MAX_PATH];
+			state_path(file);
+			lstrcpynA(strrchr(file, '\\') + 1, "pad.txt", 16);
+			FILE *f = fopen(file, "r");
+			if (f) {
+				int n = -1;
+				if (fscanf(f, "%d", &n) == 1 && n >= 0 && n <= 3) {
+					pad = n;
+					log_printf("splitscreen: pad %d drives this copy", pad);
+				}
+				fclose(f);
+			}
 		}
 		if (pad < 0)
 			continue;
@@ -547,6 +641,73 @@ static DWORD WINAPI split_thread(LPVOID unused)
 		if (read_pad(&s))
 			apply(&s);
 	}
+	return 0;
+}
+
+static int started;
+
+// the first XInput pad with something pressed (for the lobby: whose pad is the second player's); -1 when none
+int splitscreen_poll_any_pad(void)
+{
+	if (!xinput_get) {
+		const char *dlls[] = {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"};
+		for (int i = 0; i < 3 && !xinput_get; i++) {
+			HMODULE h = LoadLibraryA(dlls[i]);
+			if (h)
+				xinput_get = (xinput_get_t)GetProcAddress(h, "XInputGetState");
+		}
+		if (!xinput_get)
+			return -1;
+	}
+	for (int i = 0; i < 4; i++) {
+		struct {
+			DWORD packet;
+			PadState gp;
+		} raw;
+		if (xinput_get((DWORD)i, &raw) != ERROR_SUCCESS)
+			continue;
+		const PadState *g = &raw.gp;
+		if (g->buttons || g->lt > 100 || g->rt > 100 || g->lx > 20000 || g->lx < -20000 || g->ly > 20000 || g->ly < -20000)
+			return i;
+	}
+	return -1;
+}
+
+static void start_threads(void)
+{
+	if (started)
+		return;
+	started = 1;
+	if (slot == 0)
+		CreateThread(NULL, 0, container_thread, NULL, 0, NULL);
+	CreateThread(NULL, 0, split_thread, NULL, 0, NULL);
+}
+
+void splitscreen_host_activate(void)
+{
+	if (slot >= 0)
+		return;
+	slot = 0;
+	log_printf("splitscreen: this copy is the first of a split screen session");
+	start_threads();
+}
+
+// a crash left r_customMode at the half-size picture: put the player's own value back
+static DWORD WINAPI stale_thread(LPVOID unused)
+{
+	(void)unused;
+	char path[MAX_PATH], orig[64];
+	state_path(path);
+	GetPrivateProfileStringA("mode", "original", "", orig, sizeof(orig), path);
+	HWND w = find_game_window(600);
+	if (!w)
+		return 0;
+	Sleep(8000); // the menus are up
+	char cmd[128];
+	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cvid_restart%c", orig, 10, 10);
+	game_cbuf_addtext(cmd);
+	DeleteFileA(path);
+	log_printf("splitscreen: video mode put back to '%s' (left by an earlier session)", orig);
 	return 0;
 }
 
@@ -565,9 +726,15 @@ void splitscreen_install(void)
 	view_degrees = (float)GetPrivateProfileIntA("splitscreen", "view", 90, ini_path);
 	embed = GetPrivateProfileIntA("splitscreen", "embed", 0, ini_path) != 0;
 	stacked = GetPrivateProfileIntA("splitscreen", "stacked", 1, ini_path) != 0;
+	if (slot < 0) {
+		char path[MAX_PATH];
+		state_path(path);
+		if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES)
+			CreateThread(NULL, 0, stale_thread, NULL, 0, NULL);
+	}
 	if (pad < 0 && !window_spec[0] && slot < 0)
 		return;
-	if (pad >= 0 && !fakepad) {
+	if ((pad >= 0 || slot > 0) && !fakepad) {
 		const char *dlls[] = {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"};
 		for (int i = 0; i < 3 && !xinput_get; i++) {
 			HMODULE h = LoadLibraryA(dlls[i]);
@@ -579,14 +746,12 @@ void splitscreen_install(void)
 			pad = -1;
 		}
 	}
-	if (pad >= 0) {
+	if (pad >= 0 || slot > 0) { // the second copy gets its pad later (mw2coop\pad.txt)
 		iat_patch("USER32.dll", "GetCursorPos", my_get_cursor_pos);
 		iat_patch("USER32.dll", "SetCursorPos", my_set_cursor_pos);
 		iat_patch("USER32.dll", "GetForegroundWindow", my_get_foreground_window);
 		iat_patch("USER32.dll", "GetActiveWindow", my_get_active_window);
 	}
 	log_printf("splitscreen: pad %d, window '%s'", pad, window_spec);
-	if (slot == 0)
-		CreateThread(NULL, 0, container_thread, NULL, 0, NULL);
-	CreateThread(NULL, 0, split_thread, NULL, 0, NULL);
+	start_threads();
 }
