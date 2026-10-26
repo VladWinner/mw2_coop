@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "game.h"
 #include "hook.h"
 #include "log.h"
 #include "localize.h"
@@ -31,6 +32,82 @@ static uint8_t *base;
 static char settings_path[MAX_PATH];
 static int mode;
 static int second_pass;
+
+// The journal of the code this file patches: native_deactivate() puts every byte back, so a session that used the split screen can go on with the game's normal modes (the network
+// co-op among them) untouched. Every patch goes through jhook_* or j_save().
+static struct {
+	uint8_t *at;
+	uint8_t orig[32];
+	size_t len;
+	int group;
+} journal[160];
+static int njournal;
+static int jgroup; // 1: the patches that make the game a two local players game (put back when the session ends), 0: the hooks that stay and do nothing while no session runs
+static void j_save(uint8_t *at, size_t len)
+{
+	if (njournal >= (int)(sizeof(journal) / sizeof(journal[0])) || len > sizeof(journal[0].orig))
+		return;
+	for (int i = 0; i < njournal; i++)
+		if (journal[i].at == at && journal[i].len >= len)
+			return; // saved already (the first copy is the game's)
+	journal[njournal].at = at, journal[njournal].len = len, journal[njournal].group = jgroup;
+	memcpy(journal[njournal].orig, at, len);
+	njournal++;
+}
+static void journal_restore(int group)
+{
+	int kept = 0;
+	for (int i = njournal - 1; i >= 0; i--) {
+		if (journal[i].group != group)
+			continue;
+		DWORD old;
+		if (VirtualProtect(journal[i].at, journal[i].len, PAGE_EXECUTE_READWRITE, &old)) {
+			memcpy(journal[i].at, journal[i].orig, journal[i].len);
+			VirtualProtect(journal[i].at, journal[i].len, old, &old);
+			FlushInstructionCache(GetCurrentProcess(), journal[i].at, journal[i].len);
+		}
+		journal[i].at = NULL;
+	}
+	for (int i = 0; i < njournal; i++)
+		if (journal[i].at)
+			journal[kept++] = journal[i];
+	njournal = kept;
+}
+static int jhook_function(uint8_t *target, const uint8_t *expected, size_t len, void *replacement, void **original)
+{
+	j_save(target, len);
+	return hook_function(target, expected, len, replacement, original);
+}
+static int jhook_call(uint8_t *site, void *replacement, void **original)
+{
+	j_save(site, 5);
+	return hook_call(site, replacement, original);
+}
+static void jhook_jump(uint8_t *target, size_t len, const void *replacement, uint8_t filler)
+{
+	j_save(target, len);
+	hook_jump(target, len, replacement, filler);
+}
+
+// The settings of the split screen: settings.ini [native] for the QA runs; a session started from the menu uses the values the feature ships with (from_menu) unless the file says otherwise
+static int native_active;
+static int from_menu;
+static int menu_pad = -1;
+static int cfg(const char *key, int def)
+{
+	static const struct {
+		const char *key;
+		int value;
+	} shipped[] = {{"experiment", 10}, {"players", 2}, {"coopdvar", 1}, {"p1cmd", 1}, {"listplayers", 1}, {"p1yawdeg", 0}, {"p0turn", 0}, {"ctx", 1}};
+	if (from_menu) {
+		if (!lstrcmpA(key, "p1pad") && menu_pad >= 0)
+			return menu_pad;
+		for (size_t i = 0; i < sizeof(shipped) / sizeof(shipped[0]); i++)
+			if (!lstrcmpA(key, shipped[i].key))
+				def = shipped[i].value;
+	}
+	return (int)GetPrivateProfileIntA("native", key, def, settings_path);
+}
 
 static float *subwindow(void)
 {
@@ -235,6 +312,30 @@ static const GUID iid_device9ex = {0xb18b10ce, 0x2649, 0x405a, {0x87, 0x0f, 0x95
 
 // before the picture is shown: the half this frame was drawn into is kept and the other one filled in (once per frame, whichever way the game presents)
 static void trace_present(void);
+static int skip_hud_mask;
+// Diagnostics ([native] skiprot=<seconds>): the HUD part skipped in context 1 changes every <seconds> through the candidates, and a frame is saved ("rot<k>") before the next change
+static void skip_rotation(IDirect3DDevice9 *dev)
+{
+	static int rot = -1;
+	static DWORD t0;
+	static int shot_win = -1;
+	if (rot < 0)
+		rot = cfg("skiprot", 0);
+	if (rot <= 0 || mode < 5)
+		return;
+	DWORD now = GetTickCount();
+	if (!t0)
+		t0 = now;
+	unsigned period = (unsigned)rot * 1000, win = (now - t0) / period;
+	int k = (int)(win % 11);
+	skip_hud_mask = 1 << k;
+	if ((int)win != shot_win && (now - t0) % period > period * 3 / 4 && win < 11) {
+		char name[16];
+		shot_win = (int)win;
+		snprintf(name, sizeof(name), "rot%d", k);
+		shot_save_now(dev, name);
+	}
+}
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
 	trace_present();
@@ -259,7 +360,11 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	InterlockedIncrement(&ring_tail);
 	LONG pops = InterlockedIncrement(&pops_total);
 	compose(dev, half);
-	if (pops >= 3000 && pops < 3012) { // the composed picture about once a second (QA of the experiment: "seq-<pops>.bmp")
+	skip_rotation(dev);
+	static LONG seq_at = -1;
+	if (seq_at < 0)
+		seq_at = cfg("seqat", 3000);
+	if (pops >= seq_at && pops < seq_at + 12) { // the composed picture about once a second (QA of the experiment: "seq-<pops>.bmp")
 		char name[32];
 		snprintf(name, sizeof(name), "seq-%ld", (long)pops);
 		shot_save_now(dev, name);
@@ -632,7 +737,7 @@ static void trace_present(void)
 {
 	static int armed = -1;
 	if (armed < 0)
-		armed = GetPrivateProfileIntA("native", "d3dtrace", 0, settings_path);
+		armed = cfg("d3dtrace", 0);
 	if (!armed || !trace_dev)
 		return;
 	if (trace_on) {
@@ -693,12 +798,12 @@ static void comp_hook(void)
 	the_device = dev;
 	void **vt = *(void ***)dev;
 	patch_slot(&vt[17], (void *)present_hook, (void **)&present_orig);
-	if (GetPrivateProfileIntA("native", "resethook", 1, settings_path))
+	if (cfg("resethook", 1))
 		patch_slot(&vt[16], (void *)reset_hook, (void **)&reset_orig);
 	IDirect3DDevice9Ex *ex = NULL;
 	if (SUCCEEDED(IDirect3DDevice9_QueryInterface(dev, &iid_device9ex, (void **)&ex)) && ex) {
 		patch_slot(&vt[121], (void *)present_ex_hook, (void **)&present_ex_orig); // PresentEx: the slot of the Ex interface
-		if (GetPrivateProfileIntA("native", "resethook", 1, settings_path))
+		if (cfg("resethook", 1))
 			patch_slot(&vt[132], (void *)reset_ex_hook, (void **)&reset_ex_orig);
 		IDirect3DDevice9Ex_Release(ex);
 	}
@@ -719,10 +824,10 @@ static void comp_hook(void)
 			GetModuleFileNameA(m2, n2, sizeof(n2));
 		log_printf("native: device Present in %s, swap chain Present in %s", n1, n2);
 	}
-	if (mode == 10 || GetPrivateProfileIntA("native", "d3dtrace", 0, settings_path))
+	if (mode == 10 || cfg("d3dtrace", 0))
 		trace_install(dev);
 	log_printf("native: Present hooks set (device %p, Ex %s)", (void *)dev, present_ex_orig ? "yes" : "no");
-	if (GetPrivateProfileIntA("native", "watchdog", 1, settings_path))
+	if (cfg("watchdog", 1))
 		CreateThread(NULL, 0, watchdog_thread, NULL, 0, NULL);
 }
 
@@ -751,7 +856,7 @@ static void ctx_after_draw(void);
 static void scan_place(void)
 {
 	static int done;
-	if (done || !GetPrivateProfileIntA("native", "scanplace", 0, settings_path))
+	if (done || !cfg("scanplace", 0))
 		return;
 	done = 1;
 	uint8_t *lo = base, *hi = base + ((IMAGE_NT_HEADERS64 *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew))->OptionalHeader.SizeOfImage;
@@ -1100,6 +1205,7 @@ static void client_n_install(void)
 			continue;
 		int32_t rel = (int32_t)to;
 		DWORD prot;
+		j_save(site, 8);
 		VirtualProtect(site, 8, PAGE_EXECUTE_READWRITE, &prot);
 		memcpy(site + client_n_sites[i].disp, &rel, 4);
 		VirtualProtect(site, 8, prot, &prot);
@@ -1125,6 +1231,7 @@ static void list_players_install(void)
 	*zero = 0;
 	int32_t rel = (int32_t)((uint8_t *)zero - (site + 7));
 	DWORD prot;
+	j_save(site, 8);
 	VirtualProtect(site, 8, PAGE_EXECUTE_READWRITE, &prot);
 	memcpy(site + 3, &rel, 4);
 	VirtualProtect(site, 8, prot, &prot);
@@ -1165,6 +1272,10 @@ static void cg_init_all_hook(void)
 	log_printf("native: cgame init (context 0; context 1 follows after the first frames), dvar ptr 0x52bfc0 = %p", *(void **)(base + 0x52bfc0));
 	cg_init_all_original();
 	cg_init_done = 1;
+	if (native_active) { // a new level: context 1 starts again from this level's cgame
+		ctx1_ready = 0;
+		draws_after_init = 0;
+	}
 	log_printf("native: cgame init done, dvar ptr 0x52bfc0 = %p", *(void **)(base + 0x52bfc0));
 }
 
@@ -1193,7 +1304,7 @@ static void ctx_dump(const char *what)
 static void ctx_jitter_log(void)
 {
 	static unsigned seen;
-	if (ctx_current != 1 || !GetPrivateProfileIntA("native", "jitterlog", 0, settings_path))
+	if (ctx_current != 1 || !cfg("jitterlog", 0))
 		return;
 	seen++;
 	if (seen < 1500 || seen >= 1506)
@@ -1213,7 +1324,7 @@ static void ctx_jitter_log(void)
 static void ctx_entity_log(void)
 {
 	static unsigned seen[2];
-	if (!GetPrivateProfileIntA("native", "entlog", 0, settings_path))
+	if (!cfg("entlog", 0))
 		return;
 	if (++seen[ctx_current] != 600)
 		return;
@@ -1266,17 +1377,17 @@ static void ctx_after_draw(void)
 		return;
 	log_printf("native: starting context 1");
 	ctx_seed_cgame();
-	if (GetPrivateProfileIntA("native", "p1cmd", 0, settings_path)) {
+	if (cfg("p1cmd", 0)) {
 		// player 1's view: the view angle accumulators (pitch 0x533d14, yaw 0x533d18, degrees) of context 1's block; the server turns them into his view with the
 		// angles it set at his spawn, so this is relative to that (player 1 stood at yaw -77 with 0): [native] p1yaw=<degrees>
 		float *acc = (float *)(ctx_store[1][4] + (0x533d14 - 0x533cb8));
 		acc[0] = 0;
-		acc[1] = (float)GetPrivateProfileIntA("native", "p1yawdeg", 60, settings_path);
+		acc[1] = (float)cfg("p1yawdeg", 60);
 	}
-	if (GetPrivateProfileIntA("native", "p1cmd", 0, settings_path)) {
+	if (cfg("p1cmd", 0)) {
 		// and player 0's: turned once by [native] p0turn degrees (default 241: from the spawn yaw -78 to the direction of player 1, 163) through his own view angle accumulator
 		float *acc0 = (float *)(base + 0x533d14);
-		acc0[1] += (float)GetPrivateProfileIntA("native", "p0turn", 241, settings_path);
+		acc0[1] += (float)cfg("p0turn", 241);
 	}
 	ctx_swap(1);
 	// not the whole cgame init (it also resets what is shared: effects, media, the renderer's per-level state): only its two per-client parts, on the copied block
@@ -1285,7 +1396,7 @@ static void ctx_after_draw(void)
 	ctx_swap(0);
 	// the cgame's own idea of its local client number (rva 0x40caa4): the draw hides "my" entity by it and answers per-client visibility masks by it; context 1 runs as local client 0
 	// but is client 1
-	*(int *)(ctx_store[1][0] + (0x40caa4 - ranges[0].rva)) = GetPrivateProfileIntA("native", "ctx1lc", 1, settings_path);
+	*(int *)(ctx_store[1][0] + (0x40caa4 - ranges[0].rva)) = cfg("ctx1lc", 1);
 	ctx1_ready = 1;
 	log_printf("native: context 1 initialised");
 	ctx_dump("after init");
@@ -1583,6 +1694,10 @@ static void (*client_frame_original)(void);
 static void client_frame_hook(void)
 {
 	static unsigned frame;
+	if (!native_active) {
+		client_frame_original();
+		return;
+	}
 	frame_bottom = 0;
 	{ // the scripts' switch: the dvar mw2coop_split_view is "1" once the intro is over
 		uint8_t *d = ((uint8_t * (*)(const char *))(base + 0x26bdf0))("mw2coop_split_view");
@@ -1594,14 +1709,14 @@ static void client_frame_hook(void)
 	}
 	static int nopredict = -1;
 	if (nopredict < 0)
-		nopredict = GetPrivateProfileIntA("native", "nopredict", 0, settings_path);
+		nopredict = cfg("nopredict", 0);
 	uint8_t *np_dvar = *(uint8_t **)(base + 0x51e028); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
 	{ // [native] fov=<degrees>: the cg_fov (rva 0x51e1a8 holds the dvar; the angle across a 4:3 picture, 65 by default) while the picture is split: each half is a band of the full
 	  // view (mode 6), so the field is widened to make up for the half height
 		static int fov = -1;
 		static float fov_saved = -1;
 		if (fov < 0)
-			fov = GetPrivateProfileIntA("native", "fov", (mode >= 8) ? 49 : 85, settings_path); // 85 = the console split screen: cg_fovScale 0.75 (maps/_load.gsc) on a half of 16:9 is about 100 x 38 degrees; a band of half the height cut from a view with cg_fov 85 is the same
+			fov = cfg("fov", (mode >= 8) ? 49 : 85); // 85 = the console split screen: cg_fovScale 0.75 (maps/_load.gsc) on a half of 16:9 is about 100 x 38 degrees; a band of half the height cut from a view with cg_fov 85 is the same
 		uint8_t *d = *(uint8_t **)(base + 0x51e1a8);
 		if (fov > 0 && d) {
 			float *v = (float *)(d + 0x10);
@@ -1617,7 +1732,7 @@ static void client_frame_hook(void)
 	}
 	static int nogun = -1;
 	if (nogun < 0)
-		nogun = GetPrivateProfileIntA("native", "nogun", 0, settings_path);
+		nogun = cfg("nogun", 0);
 	uint8_t *gun_dvar = *(uint8_t **)(base + 0x51e120); // cg_drawGun
 	if (mode >= 5 && ctx1_ready && split_on && (frame++ & 1)) {
 		frame_bottom = 1;
@@ -1723,7 +1838,7 @@ static void usercmd_step_inner(int lc)
 		usercmd_step_original(0);
 		return;
 	}
-	if (!GetPrivateProfileIntA("native", "p1cmd", 0, settings_path))
+	if (!cfg("p1cmd", 0))
 		return;
 	{
 		static unsigned seen;
@@ -1762,7 +1877,7 @@ static void usercmd_step_inner(int lc)
 	*(int *)(cmd + 4) = 0; // no buttons
 	cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0; // no movement
 	if (!logged) {
-		p1_yaw = GetPrivateProfileIntA("native", "p1yaw", 0, settings_path);
+		p1_yaw = cfg("p1yaw", 0);
 		log_printf("native: player 1 cmd from player 0's: serverTime %d, angles %d %d %d, p1yaw %x", *(int *)cmd, *(int *)(cmd + 8), *(int *)(cmd + 12), *(int *)(cmd + 16), p1_yaw);
 		logged = 1;
 	}
@@ -1825,7 +1940,7 @@ static void add_entity_hook(int n)
 		// ([native] swapbits=0 turns it off)
 		static int swapbits = -1;
 		if (swapbits < 0)
-			swapbits = GetPrivateProfileIntA("native", "swapbits", 1, settings_path);
+			swapbits = cfg("swapbits", 1);
 		unsigned *flags = (unsigned *)(base + 0x441070 + (size_t)n * 0x1a8 + 0xec);
 		unsigned saved = *flags;
 		if (swapbits) {
@@ -1850,6 +1965,46 @@ static void hud_c6070_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_ma
 static void hud_c14e0_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 2))) hud_c14e0_original(lc); }
 static void hud_94d70_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 4))) hud_94d70_original(lc); }
 static void hud_c5b70_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 8))) hud_c5b70_original(lc); }
+// more candidates: the calls between and after them in the cgame draw (rva of the call instruction, the callee)
+typedef void (*hud_fn_t)(void *, void *, void *, void *, void *, void *);
+static hud_fn_t hud_x_original[8]; // called with the six argument registers/stack slots as they come (the callees take up to four register arguments and one on the stack)
+#define HUD_X(n, bit) static void hud_x##n##_hook(void *a, void *b, void *c, void *d, void *e, void *f) { if (!(ctx_current == 1 && (skip_hud_mask & (bit)))) hud_x_original[n](a, b, c, d, e, f); }
+HUD_X(0, 0x10)  // 0xbd03b be710
+HUD_X(1, 0x20)  // 0xbd0fb 11f0c0 (4 arguments)
+HUD_X(2, 0x40)  // 0xbd102 1214e0
+HUD_X(3, 0x80)  // 0xbd109 fd010
+HUD_X(4, 0x100) // 0xbd130 23db90
+HUD_X(5, 0x200) // 0xbd1a4 11a0b0
+HUD_X(6, 0x400) // 0xbd206 c8600
+
+// Diagnostics ([native] entcleanlog=1): the cgame's cleanup of removed entities (rva 0xb9320; the flags are the bit set at rva 0x52c300) logs which entities it frees and for which context
+static const uint8_t ent_clean_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20};
+static void (*ent_clean_original)(void);
+static void ent_clean_hook(void)
+{
+	static int logged;
+	if (logged < 60 && cfg("entcleanlog", 0)) {
+		uint32_t *f = (uint32_t *)(base + 0x52c300);
+		char line[400];
+		int n = snprintf(line, sizeof(line), "native: entity cleanup in context %d, flags:", ctx_current);
+		int any = 0;
+		for (int i = 0; i < 64 && n < (int)sizeof(line) - 24; i++)
+			if (f[i]) {
+				n += snprintf(line + n, sizeof(line) - n, " [%d]=%08x", i, f[i]);
+				any = 1;
+			}
+		if (any) {
+			logged++;
+			log_printf("%s", line);
+		}
+	}
+	if (ctx_current == 1) { // both contexts process every snapshot: the cleanup frees the engine's shared per-entity objects (the DObjs), so only context 0 may do it (a second free of the same entity crashed in the pool free)
+		uint32_t *f = (uint32_t *)(base + 0x52c300);
+		memset(f, 0, 64 * sizeof(uint32_t));
+		return;
+	}
+	ent_clean_original();
+}
 
 static void contexts_install(void)
 {
@@ -1869,75 +2024,171 @@ static void contexts_install(void)
 	    {0xbd09a, hud_c14e0_hook, (void **)&hud_c14e0_original},
 	    {0xbd0a1, hud_94d70_hook, (void **)&hud_94d70_original},
 	    {0xbd034, hud_c5b70_hook, (void **)&hud_c5b70_original},
+	    {0xbd03b, hud_x0_hook, (void **)&hud_x_original[0]},
+	    {0xbd0fb, hud_x1_hook, (void **)&hud_x_original[1]},
+	    {0xbd102, hud_x2_hook, (void **)&hud_x_original[2]},
+	    {0xbd109, hud_x3_hook, (void **)&hud_x_original[3]},
+	    {0xbd130, hud_x4_hook, (void **)&hud_x_original[4]},
+	    {0xbd1a4, hud_x5_hook, (void **)&hud_x_original[5]},
+	    {0xbd206, hud_x6_hook, (void **)&hud_x_original[6]},
 	    {0x94039, wait_alpha_hook, (void **)&wait_alpha_original},
 	    {0xcfd23, mouse_read_hook, (void **)&mouse_read_original},
 	    {0xcf8b1, make_cmd_hook, (void **)&make_cmd_original},
 	    {0xb8d50, server_step_hook, (void **)&server_step_original},
 	    {0xd0061, mouse_read2_hook, (void **)&mouse_read2_original},
 	};
-	int enabled = GetPrivateProfileIntA("native", "sites", 0x7fffffff, settings_path);
+	int enabled = cfg("sites", 0x7fffffff);
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
-		if ((enabled & (1 << i)) && !hook_call(base + sites[i].site, sites[i].hook, sites[i].original))
+		if ((enabled & (1 << i)) && !jhook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
-	swap_entities = GetPrivateProfileIntA("native", "swapent", 1, settings_path);
-	skip_entity = GetPrivateProfileIntA("native", "skipent", swap_entities ? -1 : 1, settings_path);
-	log_entities = GetPrivateProfileIntA("native", "entdraw", 0, settings_path);
+	swap_entities = cfg("swapent", 1);
+	skip_entity = cfg("skipent", swap_entities ? -1 : 1);
+	log_entities = cfg("entdraw", 0);
 	{
-		if (!hook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
+		if (!jhook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
 	}
-	p1pad = GetPrivateProfileIntA("native", "p1pad", -1, settings_path);
-	skip_hud_mask = GetPrivateProfileIntA("native", "skiphud", 0, settings_path);
+	p1pad = cfg("p1pad", -1);
+	skip_hud_mask = cfg("skiphud", 0);
+	if (cfg("entclean", 1) &&
+	    !jhook_function(base + 0xb9320, ent_clean_bytes, sizeof(ent_clean_bytes), ent_clean_hook, (void **)&ent_clean_original))
+		log_printf("native: entity cleanup bytes differ");
 	ctx_on = 1;
 	log_printf("native: client contexts on (call sites redirected)");
 }
 
 // The scripts decide "co-op" from the dvar `coop` (rva 0x1905308, a bool whose script-side writes are refused); the engine's own co-op byte (rva 0x52fb5c) stays 0 so that the engine takes its
 // local-players branch. [native] coopdvar=1 keeps the dvar at 1 (written from a thread, every 20 ms) so that the level scripts, the mod's among them, run their two-player code.
+static volatile LONG coopdvar_on; // the thread below writes only while a split session runs
 static DWORD WINAPI coop_dvar_thread(LPVOID unused)
 {
 	(void)unused;
 	for (;;) {
 		uint8_t *dvar = *(uint8_t **)(base + 0x1905308);
-		if (dvar)
+		if (dvar && coopdvar_on)
 			*(int *)(dvar + 0x10) = 1;
 		Sleep(20);
 	}
 	return 0;
 }
 
-static void players_install(int n)
+static int hooks_installed;
+static int hooks_ok;
+
+// What makes the game a two local players game: put back by native_deactivate() (journal group 1)
+static int players_apply(int n)
 {
-	if (n < 1 || n > 4)
-		return;
-	if (n == 1) { // diagnostics: the hooks without the second player
-		if (GetPrivateProfileIntA("native", "ctx", 1, settings_path))
-			contexts_install();
-		return;
-	}
 	uint8_t *at = base + RVA_LOCAL_PLAYERS_STORE;
 	if (at[0] != 0xc7 || at[1] != 0x05 || at[6] != 1 || at[7] || at[8] || at[9]) {
 		log_printf("native: unexpected code at the local players store, players=%d ignored", n);
-		return;
+		return 0;
 	}
 	DWORD old;
+	jgroup = 1;
+	j_save(at + 6, 1);
 	if (!VirtualProtect(at + 6, 1, PAGE_EXECUTE_READWRITE, &old)) {
 		log_printf("native: VirtualProtect failed (%lu)", GetLastError());
-		return;
+		jgroup = 0;
+		return 0;
 	}
 	at[6] = (uint8_t)n;
 	VirtualProtect(at + 6, 1, old, &old);
 	log_printf("native: the number of local players is %d (patched G_InitGame)", n);
-	hook_jump(base + RVA_SV_ADD_COMMAND, 14, sv_add_command, 0xcc);
+	jhook_jump(base + RVA_SV_ADD_COMMAND, 14, sv_add_command, 0xcc);
 	client_n_install();
-	if (GetPrivateProfileIntA("native", "listplayers", 0, settings_path))
+	if (cfg("listplayers", 0))
 		list_players_install();
-	if (GetPrivateProfileIntA("native", "coopdvar", 0, settings_path))
-		CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
-	if (GetPrivateProfileIntA("native", "ctx", 1, settings_path))
-		contexts_install();
+	jgroup = 0;
 	log_printf("native: server commands to client 1 are dropped (no client behind it yet)");
+	return 1;
 }
+
+// The hooks of the client side: installed once, they pass everything through while native_active is 0 (journal group 0)
+static int hooks_apply(void)
+{
+	if (hooks_installed)
+		return hooks_ok;
+	hooks_installed = 1;
+	jgroup = 0;
+	if (cfg("ctx", 1))
+		contexts_install();
+	if (cfg("logcbuf", 0) && !jhook_function(base + 0x1ee890, cbuf_bytes, sizeof(cbuf_bytes), cbuf_hook, (void **)&cbuf_original))
+		log_printf("native: Cbuf_AddText bytes differ");
+	if (!jhook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) ||
+	    !jhook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {
+		log_printf("native: unexpected code at the cgame draw or begin frame, the split screen is off");
+		return 0;
+	}
+	if (*(base + 0x5c5bf) != 0xe8 || !jhook_call(base + 0x5c5bf, (void *)scene2d_hook, (void **)&scene2d_original)) {
+		log_printf("native: unexpected code at the scene's 2D pass, mode 10 is off");
+		return 0;
+	}
+	CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
+	hooks_ok = 1;
+	return 1;
+}
+
+// the client state of a session: context 1 starts again with every level
+static void session_reset(void)
+{
+	if (ctx_current)
+		ctx_swap(0);
+	ctx1_ready = 0;
+	cg_init_done = 0;
+	draws_after_init = 0;
+	split_on = 0;
+	frame_bottom = 0;
+	place_pop();
+	video_pop();
+}
+
+static int activate(int players)
+{
+	if (native_active)
+		return 1;
+	if (players < 2 || players > 4)
+		return 0;
+	mode = cfg("experiment", 10);
+	if (!hooks_apply() || !players_apply(players)) {
+		mode = 0;
+		return 0;
+	}
+	session_reset();
+	ctx_on = 1;
+	InterlockedExchange(&coopdvar_on, cfg("coopdvar", 1));
+	native_active = 1;
+	log_printf("native: split screen session on (%d local players, mode %d%s)", players, mode, from_menu ? ", from the menu" : "");
+	return 1;
+}
+
+// Console commands for the QA bots and for the lobby: mw2coop_native_start [pad], mw2coop_native_stop, mw2coop_native_launch <map> [pad] (session on, then the map)
+static void native_start_f(void)
+{
+	const char *a = game_cmd_argv(1);
+	native_split_start(a[0] ? atoi(a) : -1);
+}
+static void native_stop_f(void)
+{
+	native_split_stop();
+}
+static void native_launch_f(void)
+{
+	char map[64];
+	lstrcpynA(map, game_cmd_argv(1), sizeof(map));
+	const char *a = game_cmd_argv(2);
+	if (!map[0] || strpbrk(map, " \t;\"\n"))
+		return;
+	if (!native_split_start(a[0] ? atoi(a) : -1))
+		return;
+	char text[160];
+	snprintf(text, sizeof(text), "set start \"\"\nset coop_mapName %s\nmap %s\n", map, map);
+	game_cbuf_addtext(text);
+}
+static cmd_function_t native_commands[] = {
+	{NULL, "mw2coop_native_start", NULL, NULL, native_start_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_native_stop", NULL, NULL, native_stop_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_native_launch", NULL, NULL, native_launch_f CMD_NODE_FLAG},
+};
 
 void native_install(void)
 {
@@ -1948,30 +2199,68 @@ void native_install(void)
 	path[n] = 0;
 	lstrcatA(path, "mw2coop\\settings.ini");
 	lstrcpyA(settings_path, path);
-	mode = GetPrivateProfileIntA("native", "experiment", 0, path);
 	base = (uint8_t *)GetModuleHandleA(NULL);
-	players_install(GetPrivateProfileIntA("native", "players", 0, path));
-	if (GetPrivateProfileIntA("native", "logcbuf", 0, path) && !hook_function(base + 0x1ee890, cbuf_bytes, sizeof(cbuf_bytes), cbuf_hook, (void **)&cbuf_original))
-		log_printf("native: Cbuf_AddText bytes differ");
-	if (!mode && !ctx_on)
-		return;
-	if (!hook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) ||
-	    !hook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {
-		log_printf("native: unexpected code at the cgame draw or begin frame, experiment off");
-		mode = 0;
-		return;
-	}
-	if (mode == 10) {
-		if (*(base + 0x5c5bf) != 0xe8 || !hook_call(base + 0x5c5bf, (void *)scene2d_hook, (void **)&scene2d_original)) {
-			log_printf("native: unexpected code at the scene's 2D pass, mode 10 off");
-			mode = 0;
-			return;
-		}
-	}
-	log_printf("native: experiment %d on (the cgame draw runs twice per frame, one begin frame)", mode);
+	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
+		game_add_command(&native_commands[i]);
+	// the QA runs: settings.ini [native] players=2 starts the session at once (the menu's button does it later, native_split_start)
+	int players = cfg("players", 0);
+	if (players >= 2)
+		activate(players);
 }
+
+int native_split_available(void)
+{
+	return base != NULL;
+}
+
+int native_split_active(void)
+{
+	return native_active;
+}
+
+// The Start of a split screen lobby: the game becomes a two local players game; the caller launches the mission. pad: the XInput pad of the second player (-1: none yet)
+int native_split_start(int pad)
+{
+	if (native_active)
+		return 1;
+	from_menu = 1;
+	menu_pad = pad;
+	p1pad = pad;
+	return activate(2);
+}
+
+// The session ends (back in the menus): the patches come out and the game is what it was
+void native_split_stop(void)
+{
+	if (!native_active)
+		return;
+	native_active = 0;
+	mode = 0;
+	ctx_on = 0;
+	InterlockedExchange(&coopdvar_on, 0);
+	session_reset();
+	journal_restore(1);
+	log_printf("native: split screen session over, the game's own player count is back");
+}
+
 #else
 void native_install(void)
+{
+}
+int native_split_available(void)
+{
+	return 0;
+}
+int native_split_active(void)
+{
+	return 0;
+}
+int native_split_start(int pad)
+{
+	(void)pad;
+	return 0;
+}
+void native_split_stop(void)
 {
 }
 #endif

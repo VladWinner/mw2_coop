@@ -76,6 +76,12 @@ main()
 		case "face":
 			face();
 			break;
+		case "gunface":
+			gunface();
+			break;
+		case "hudtest":
+			hudtest();
+			break;
 		case "intro":
 			intro();
 			break;
@@ -320,6 +326,72 @@ face()
 	a SetPlayerAngles( ( 0, a.angles[ 1 ], 0 ) );
 	b SetPlayerAngles( ( 0, a.angles[ 1 ] + 180, 0 ) );
 	report( "face: p1 " + a.origin + " p2 " + b.origin );
+}
+
+// gunface: (native split screen test) face(), and both players hold a rifle
+gunface()
+{
+	wait 100;
+	for ( i = 0; i < 600; i++ )
+	{
+		SetSavedDvar( "cg_drawGun", 1 );
+		level.player GiveWeapon( "m4_grunt" );
+		level.player2 GiveWeapon( "m4_grunt" );
+		level.player EnableWeapons();
+		level.player2 EnableWeapons();
+		level.player SwitchToWeapon( "m4_grunt" );
+		level.player2 SwitchToWeapon( "m4_grunt" );
+		wait 0.5;
+	}
+}
+
+// hudtest: (native split screen test) a global hud element and one per player, to see which of them both halves draw
+hudtest()
+{
+	wait 30;
+	e = NewHudElem();
+	e.x = 0;
+	e.y = 60;
+	e.alignX = "center";
+	e.alignY = "middle";
+	e.horzAlign = "center";
+	e.vertAlign = "top";
+	e.fontScale = 1.6;
+	e.alpha = 1;
+	e.sort = 100;
+	e.foreground = true;
+	e.hidewheninmenu = false;
+	e.color = ( 1, 1, 0 );
+	e SetText( "GLOBAL ELEM" );
+	a = NewClientHudElem( level.player );
+	a.x = -200;
+	a.y = 100;
+	a.alignX = "center";
+	a.alignY = "middle";
+	a.horzAlign = "center";
+	a.vertAlign = "top";
+	a.fontScale = 1.6;
+	a.alpha = 1;
+	a.sort = 100;
+	a.foreground = true;
+	a.hidewheninmenu = false;
+	a.color = ( 1, 1, 0 );
+	a SetText( "PLAYER ONE ELEM" );
+	b = NewClientHudElem( level.player2 );
+	b.x = 200;
+	b.y = 100;
+	b.alignX = "center";
+	b.alignY = "middle";
+	b.horzAlign = "center";
+	b.vertAlign = "top";
+	b.fontScale = 1.6;
+	b.alpha = 1;
+	b.sort = 100;
+	b.foreground = true;
+	b.hidewheninmenu = false;
+	b.color = ( 1, 1, 0 );
+	b SetText( "PLAYER TWO ELEM" );
+	wait 600;
 }
 
 intro()

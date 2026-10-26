@@ -3,6 +3,7 @@
 # Usage: tools/qa_native.sh [seconds in the level after the map command, default 200] [extra [native] lines, ";"-separated, e.g. "p1pad=0;entlog=1"]
 #   MW2COOP_MAP     the map (default trainer)
 #   MW2COOP_PRE     extra console commands before the map, ";"-separated
+#   MW2COOP_MENU=1  the session is started the way the menu does it (console command mw2coop_native_launch), not by settings.ini; MW2COOP_PAD the second player's pad
 # Writes the copy's settings.ini and commands.txt, runs it, prints the native/split/crash lines and puts the composed frame in local/scratch/native-last.png.
 LEVEL_S=${1:-200}
 EXTRA=${2:-}
@@ -18,12 +19,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	echo "port=28960"
 	echo
 	echo "[native]"
-	echo "players=2"
-	echo "coopdvar=1"
-	echo "experiment=${MW2COOP_MODE:-8}"
-	echo "fov=${MW2COOP_FOV:-49}"
-	echo "p1cmd=1"
-	echo "listplayers=1"
+	if [ -z "${MW2COOP_MENU:-}" ]; then
+		echo "players=2"
+		echo "coopdvar=1"
+		echo "experiment=${MW2COOP_MODE:-8}"
+		echo "fov=${MW2COOP_FOV:-49}"
+		echo "p1cmd=1"
+		echo "listplayers=1"
+	fi
 	[ -n "$EXTRA" ] && echo "$EXTRA" | tr ';' '\n'
 } > "$A/mw2coop/settings.ini"
 {
@@ -32,7 +35,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	echo "set r_customMode \"$RES\""
 	[ -n "${MW2COOP_PRE:-}" ] && echo "$MW2COOP_PRE" | tr ';' '\n'
 	echo "!sleep 6000"
-	echo "devmap $MAP"
+	if [ -n "${MW2COOP_MENU:-}" ]; then echo "mw2coop_native_launch $MAP ${MW2COOP_PAD:-}"; else echo "devmap $MAP"; fi
 	if [ -n "${MW2COOP_RAW:-}" ]; then # two raw frames (the game's own, before the compositor) once the picture is split
 		echo "!sleep $((RAW_AT * 1000))"
 		echo "!shot raw1"
