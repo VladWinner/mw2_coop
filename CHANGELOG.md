@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (since v0.5.0-beta)
+
+### New: native split screen (64-bit build, one game window, one process)
+
+The **Split screen** button of the campaign menu no longer starts a second game; both players are in the one game, the
+picture cut top and bottom like the Xbox 360 version: each half has its own view built for its shape (field of view of
+the console's split screen), its own weapon, ammo and compass, and text that keeps its proportions. The second player
+presses any button on his gamepad in the lobby; the first one keeps keyboard and mouse. The mission starts as a normal
+level in this process, the session ends when you are back in the menus. Pause, the objectives, the briefing and the
+console show one full-size picture. Texts that belong to both (the objective, subtitles, the mission title lines)
+appear once, in the top half.
+
+How: the game's own two-player machinery runs with two client states swapped per frame; the scene's 2D is drawn into
+a layer per half and laid over the squeezed view; the game's 2D placement is made for a half. Details and the research:
+`docs/native-splitscreen-plan.md`. Settings under `[native]` in `settings.ini` are for testing (QA only).
+Known gaps: the second player cannot switch weapons by pad yet (use the d-pad slots), one sound listener, no second
+keyboard, the 32-bit build has the two-process split screen only.
+
 ## Unreleased (since v0.4.7-beta)
 
 Everything here is in `main` and tested with bots on two game copies on one PC (host + client); none of it has
