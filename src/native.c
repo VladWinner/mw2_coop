@@ -113,7 +113,7 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	InterlockedIncrement(&ring_tail);
 	LONG pops = InterlockedIncrement(&pops_total);
 	compose(dev, half);
-	if (pops == 600 || pops == 1200) { // the composed picture, for the QA of the experiment
+	if (pops == 2000 || pops == 2600) { // the composed picture, for the QA of the experiment
 		char name[32];
 		snprintf(name, sizeof(name), "native-%ld", (long)pops);
 		shot_save_now(dev, name);
@@ -184,6 +184,9 @@ static void begin_frame_hook(void)
 }
 
 static int ctx_on;
+static int frame_bottom; // mode 5: this client frame is context 1's (the bottom half)
+static int ctx1_ready;
+static void ctx_swap(int to);
 static void ctx_after_draw(void);
 
 static void cg_draw_hook(unsigned local_client, int a, int b)
@@ -197,9 +200,9 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	}
 	float saved[4];
 	memcpy(saved, sw, sizeof(saved));
-	if (mode == 2 || mode == 3) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
+	if (mode == 2 || mode == 3 || mode == 4 || mode == 5) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
 		static unsigned frame;
-		int bottom = (int)(frame++ & 1);
+		int bottom = mode == 5 ? frame_bottom : (int)(frame++ & 1); // mode 5: the client frame (below) says whose frame it is
 		sw[0] = 0, sw[1] = 1, sw[2] = bottom ? 0.5f : 0, sw[3] = bottom ? 1 : 0.5f;
 		comp_hook();
 		if (the_device && ring_head - ring_tail < 6) { // the half this frame is drawn into: the frame's end composes it
@@ -207,8 +210,16 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 			InterlockedIncrement(&ring_head);
 			InterlockedIncrement(&pushes_total);
 		}
-		cg_draw_original(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
+		if (mode == 4 && bottom && ctx1_ready) { // mode 4: the odd frames run the cgame in context 1 (the client statics swapped), as local client 0
+			ctx_swap(1);
+			cg_draw_original(0, a, b);
+			ctx_swap(0);
+		} else {
+			cg_draw_original(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
+		}
 		memcpy(sw, saved, sizeof(saved));
+		if (ctx_on)
+			ctx_after_draw();
 		return;
 	}
 	sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 0.5f; // the top half
@@ -296,6 +307,7 @@ static const range_t ranges[] = {
     {0x533cb8, 0x10},                // cls state
     {0x533d20, 0x540b60 - 0x533d20}, // cl: usercmd ring, cmdNumber, playerstate, packet history
     {0x545844, 0x3218},              // clc: reliable command ring
+    {0x548ce8, 8},                   // the snapshot message's time and flag
 };
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
 static uint8_t *ctx_store[2][NRANGES];
@@ -345,7 +357,17 @@ static void ctx_seed_cgame(void)
 	if (seeded || ctx_current != 0)
 		return;
 	ctx_ensure();
-	memcpy(ctx_store[1][0], base + ranges[0].rva, ranges[0].size);
+	// Context 1 starts as a copy of context 0 as it is now (the cgame registered dvars and media for the whole process, the snapshot pointers point into their own block), except for
+	// the playerstate the server published for client 1, which is its own.
+	for (size_t i = 0; i < NRANGES; i++) {
+		uint8_t *live = base + ranges[i].rva;
+		if (i == 5) { // the cl block: everything but the playerstate at +0x2018
+			memcpy(ctx_store[1][i], live, 0x2018);
+			memcpy(ctx_store[1][i] + 0x2018 + 0xaca4, live + 0x2018 + 0xaca4, ranges[i].size - 0x2018 - 0xaca4);
+		} else {
+			memcpy(ctx_store[1][i], live, ranges[i].size);
+		}
+	}
 	seeded = 1;
 }
 
@@ -424,13 +446,13 @@ static void client_n_install(void)
 static void (*ps_publish_original)(unsigned, const void *);
 static void (*server_cmds_original)(unsigned long long, int *);
 static void (*usercmd_step_original)(int);
+static void (*snapshot_msg_original)(void *, int);
 static void (*cg_init_all_original)(void);
 static void (*snapshot_take_original)(void);
 #define RVA_LOCAL_PLAYERS_N 0x3c3eb0
 
 // A client-side function that loops over the local clients (and calls others that touch the client statics without a client number): run for context 0 and, once context 1
 // exists, for context 1, each time with the number of local players set to 1 so that every loop sees only client 0, which in context 1 is client 1.
-static int ctx1_ready;
 static int cg_init_done;
 static int draws_after_init;
 
@@ -459,16 +481,41 @@ static void snapshot_take_hook(void)
 
 // The cgame registers its dvars and media while it runs the first frames, and the 2D drawing of every thread reads them: context 1 can only start from a cgame block that has them.
 // So its init runs a few frames after context 0's, from its first frame's hook, from a copy of context 0's block.
+static void ctx_dump(const char *what)
+{
+	static const uint32_t probes[] = {0x422434, 0x40caa0, 0x40cad0, 0x40cad8, 0x40cab8, 0x422440};
+	uint8_t *r1_live = base + ranges[0].rva;
+	uint8_t *r1 = ctx_current == 0 && ctx_store[1][0] ? ctx_store[1][0] : r1_live;
+	char line[400];
+	int n = snprintf(line, sizeof(line), "native: %s ctx1:", what);
+	for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++)
+		n += snprintf(line + n, sizeof(line) - n, " %x=%llx", probes[i], *(unsigned long long *)(r1 + probes[i] - ranges[0].rva));
+	n += snprintf(line + n, sizeof(line) - n, " | ctx0:");
+	for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++)
+		n += snprintf(line + n, sizeof(line) - n, " %x=%llx", probes[i], *(unsigned long long *)(r1_live + probes[i] - ranges[0].rva));
+	log_printf("%s", line);
+}
+
 static void ctx_after_draw(void)
 {
+	static unsigned count;
+	if (ctx1_ready && ++count % 240 == 0 && count < 1200)
+		ctx_dump("state");
+	static int logged;
+	if (!logged++)
+		log_printf("native: first draw after the hooks: cg_init_done %d ready %d", cg_init_done, ctx1_ready);
 	if (ctx1_ready || !cg_init_done || ++draws_after_init < 5)
 		return;
+	log_printf("native: starting context 1");
 	ctx_seed_cgame();
 	ctx_swap(1);
-	cg_init_all_original();
+	// not the whole cgame init (it also resets what is shared: effects, media, the renderer's per-level state): only its two per-client parts, on the copied block
+	((void (*)(unsigned long long))(base + 0xb8830))(0);
+	((void (*)(unsigned))(base + 0xb87b0))(0);
 	ctx_swap(0);
 	ctx1_ready = 1;
 	log_printf("native: context 1 initialised");
+	ctx_dump("after init");
 }
 
 // The server's copy of a local player's playerstate into the cl block (rva 0x535d38 is +0x2018 into the block at 0x533d20): for client 1 straight into context 1's copy, so no other thread
@@ -489,6 +536,37 @@ static void server_cmds_hook(unsigned long long lc, int *msg)
 		return server_cmds_original(0, msg); // client 1 gets no server commands yet
 }
 
+// The server's snapshot message (entities, as shared lists) is parsed into the client's snapshot ring: once for each context, the message read again from its start.
+static void snapshot_msg_hook(void *msg, int time)
+{
+	uint8_t copy[0x30];
+	memcpy(copy, msg, sizeof(copy));
+	snapshot_msg_original(msg, time);
+	if (ctx1_ready) {
+		memcpy(msg, copy, sizeof(copy));
+		ctx_swap(1);
+		snapshot_msg_original(msg, time);
+		ctx_swap(0);
+	}
+}
+
+// Mode 5: the engine's whole client frame (rva 0xd5b00, called once per engine frame from the main loop at rva 0x1fc331) runs for context 0 on even frames and for context 1 on odd ones, so
+// everything the client does in a frame (time, snapshot use, usercmds, the cgame draw, the 2D) happens in the right context. One scene per frame, as the renderer needs.
+static void (*client_frame_original)(void);
+static void client_frame_hook(void)
+{
+	static unsigned frame;
+	frame_bottom = 0;
+	if (mode == 5 && ctx1_ready && (frame++ & 1)) {
+		frame_bottom = 1;
+		ctx_swap(1);
+		client_frame_original();
+		ctx_swap(0);
+		return;
+	}
+	client_frame_original();
+}
+
 static void usercmd_step_hook(int lc)
 {
 	if (lc == 0)
@@ -507,8 +585,10 @@ static void contexts_install(void)
 	    {0x2346ca, ps_publish_hook, (void **)&ps_publish_original},
 	    {0x234a02, server_cmds_hook, (void **)&server_cmds_original},
 	    {0x15ce84, usercmd_step_hook, (void **)&usercmd_step_original},
+	    {0x234925, snapshot_msg_hook, (void **)&snapshot_msg_original},
+	    {0x1fc331, client_frame_hook, (void **)&client_frame_original},
 	};
-	int enabled = GetPrivateProfileIntA("native", "sites", 63, settings_path);
+	int enabled = GetPrivateProfileIntA("native", "sites", 255, settings_path);
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
 		if ((enabled & (1 << i)) && !hook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
