@@ -218,6 +218,69 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 		log_printf("native: the first frame was drawn twice (top and bottom half)");
 }
 
+// ---- experiment 4: the engine's own local-players configuration (docs/native-splitscreen-plan.md, "Packet flow")
+// G_InitGame stores the number of local players (rva 0x3c3eb0) as the immediate 1 of `mov dword [rip+x], 1` (c7 05 <rel32> 01 00 00 00 at rva 0x1714a6) when the co-op byte is 0.
+// settings.ini [native] players=2 makes it 2: the server then makes two clients and two player entities, with no network and no co-op session. The client side has one
+// element of each array, so this only shows what the server side does alone.
+#define RVA_LOCAL_PLAYERS_STORE 0x1714a6
+// The server's reliable command to a client (rva 0x232c30, SV_AddServerCommand): client_t +4 write offset, +8 sequence, +0xc acknowledge, text at +0x10 (0x1000 bytes), the
+// offset of command n at +0x1010 + (n & 0x7f) * 4. Client 1 of the server has no client behind it yet (nothing acknowledges), so its buffer overflows within seconds
+// and Com_Error ends the level ("Reliable command buffer overflow"); with players=2 and [native] skip_client1=1 its commands are dropped instead.
+#define RVA_SV_ADD_COMMAND 0x232c30
+#define RVA_COM_ERROR 0x1fb5f0 // void (int code, const char *format, ...)
+#define RVA_SV_CLIENTS 0x19ada98
+#define RVA_COOP_BYTE 0x52fb5c
+#define RVA_LOCAL_PLAYERS 0x3c3eb0
+#define RVA_COOP_SLOTS 0x540bb0 // slot p: type int at +p*0x2650
+static void sv_add_command(uint8_t *cl, const char *text)
+{
+	int idx = (int)((cl - (base + RVA_SV_CLIENTS)) / 0x1678);
+	int in_use = *(base + RVA_COOP_BYTE) ? *(int *)(base + RVA_COOP_SLOTS + idx * 0x2650) == 2 : idx < *(int *)(base + RVA_LOCAL_PLAYERS);
+	if (!in_use || (idx == 1 && !*(base + RVA_COOP_BYTE)))
+		return;
+	void (*com_error)(int, const char *, ...) = (void (*)(int, const char *, ...))(base + RVA_COM_ERROR);
+	int *p = (int *)cl;
+	int seq = p[2];
+	if (seq - p[3] == 0x80) {
+		com_error(1, "Server command overflow");
+		seq = p[2];
+	}
+	p[2] = seq + 1;
+	int len = (int)strlen(text);
+	int off = p[1];
+	if (0x1000 < off + 1 + len) {
+		com_error(1, "Reliable command buffer overflow");
+		off = p[1];
+	}
+	*(int *)(cl + 0x1010 + ((seq + 1) & 0x7f) * 4) = off;
+	char *d = (char *)(cl + 0x10 + p[1]);
+	for (int i = 0; i < len; i++)
+		*d++ = text[i] == '%' ? '.' : text[i];
+	*d = 0;
+	p[1] += len + 1;
+}
+
+static void players_install(int n)
+{
+	if (n < 2 || n > 4)
+		return;
+	uint8_t *at = base + RVA_LOCAL_PLAYERS_STORE;
+	if (at[0] != 0xc7 || at[1] != 0x05 || at[6] != 1 || at[7] || at[8] || at[9]) {
+		log_printf("native: unexpected code at the local players store, players=%d ignored", n);
+		return;
+	}
+	DWORD old;
+	if (!VirtualProtect(at + 6, 1, PAGE_EXECUTE_READWRITE, &old)) {
+		log_printf("native: VirtualProtect failed (%lu)", GetLastError());
+		return;
+	}
+	at[6] = (uint8_t)n;
+	VirtualProtect(at + 6, 1, old, &old);
+	log_printf("native: the number of local players is %d (patched G_InitGame)", n);
+	hook_jump(base + RVA_SV_ADD_COMMAND, 14, sv_add_command, 0xcc);
+	log_printf("native: server commands to client 1 are dropped (no client behind it yet)");
+}
+
 void native_install(void)
 {
 	char path[MAX_PATH];
@@ -227,9 +290,10 @@ void native_install(void)
 	path[n] = 0;
 	lstrcatA(path, "mw2coop\\settings.ini");
 	mode = GetPrivateProfileIntA("native", "experiment", 0, path);
+	base = (uint8_t *)GetModuleHandleA(NULL);
+	players_install(GetPrivateProfileIntA("native", "players", 0, path));
 	if (!mode)
 		return;
-	base = (uint8_t *)GetModuleHandleA(NULL);
 	if (!hook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) ||
 	    !hook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {
 		log_printf("native: unexpected code at the cgame draw or begin frame, experiment off");

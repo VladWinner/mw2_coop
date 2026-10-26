@@ -207,3 +207,15 @@ has. The PC exe folded the arrays to single statics and stubbed `IsSplitScreen()
 
 Next experiment (E4, server side only): Design Y on a test copy: set the immediate to 2 and watch whether the SP server creates two client_t / two player entities and survives (the client arrays of
 index 1 overlap unused memory in non-coop mode, so a crash is a finding too).
+
+## Experiment 4 (2026-10-26): the server with two local players (`[native] players=2`, `src/native.c`)
+
+Patch of the immediate at rva 0x1714ac (1 -> 2), plus a replacement of the server's reliable-command adder (rva 0x232c30) that drops the commands for client 1, then `devmap trainer` on a test copy:
+
+- The patch takes (`DAT_1403c3eb0` = 2) and **the server makes both clients**: `client_t[0]` and `client_t[1]` (rva 0x19ada98 / 0x19af110) both reach state 4; the level loads and `sv_running` is 1.
+- Without the drop the level dies at once with `Com_Error` "Reliable command buffer overflow" (rva 0x232cf8): nothing acknowledges the server's commands to client 1 (its client side does not exist). With the drop it stays up.
+- **The simulation does not advance:** server time stays at 300 ms, `cg.time` at 300 and `cl_paused` stays 1 (forcing `cl_paused 0` changes nothing: time still 300). cls state of client 0 is 6. The engine frame driver
+  (rva 0x233190) only steps the simulation on its normal branch (client connection state test 0xd5820, the party/coop predicates 0x22c340, 0x22ed70, 0x22e470, 0x22e7a0); which of them holds for N=2 is not yet known.
+- So Design Y alone is not enough: the client side of local client 1 (`cl`, `clc`, `cls`, the snapshot take 0xc99c0 -> 0xb8000(lc), the usercmd send 0xd02a0(lc), the snapshot publish 0xd5690 / 0xd5470) writes into memory that
+  belongs to other statics for lc = 1 (stride 0xce9c and 0x3218 arrays of one element). The wrapper-with-context-swap design stands: every engine function that takes a local client number and touches client state
+  runs for client 1 as local client 0 with the client statics swapped to context 1's copy. `tools/rvabytes.py` prints a function's bytes from the exe on disk (for the hook prologue checks).
