@@ -131,6 +131,15 @@ static const GUID iid_device9ex = {0xb18b10ce, 0x2649, 0x405a, {0x87, 0x0f, 0x95
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
 	InterlockedIncrement(&present_hits[via]);
+	{
+		static DWORD last_log;
+		DWORD now = GetTickCount();
+		if (now - last_log > 3000 && present_hits[0] + present_hits[1] + present_hits[2] > 0 && pushes_total > 0) {
+			last_log = now;
+			log_printf("native: present hits %ld/%ld/%ld, via %ld, pushes %ld, ring %ld-%ld", (long)present_hits[0], (long)present_hits[1], (long)present_hits[2], (long)compose_via,
+				   (long)pushes_total, (long)ring_tail, (long)ring_head);
+		}
+	}
 	if (compose_via < 0)
 		compose_via = via;
 	if (compose_via == via && ring_tail == ring_head)
@@ -207,11 +216,13 @@ static void comp_hook(void)
 	the_device = dev;
 	void **vt = *(void ***)dev;
 	patch_slot(&vt[17], (void *)present_hook, (void **)&present_orig);
-	patch_slot(&vt[16], (void *)reset_hook, (void **)&reset_orig);
+	if (GetPrivateProfileIntA("native", "resethook", 1, settings_path))
+		patch_slot(&vt[16], (void *)reset_hook, (void **)&reset_orig);
 	IDirect3DDevice9Ex *ex = NULL;
 	if (SUCCEEDED(IDirect3DDevice9_QueryInterface(dev, &iid_device9ex, (void **)&ex)) && ex) {
 		patch_slot(&vt[121], (void *)present_ex_hook, (void **)&present_ex_orig); // PresentEx: the slot of the Ex interface
-		patch_slot(&vt[132], (void *)reset_ex_hook, (void **)&reset_ex_orig);
+		if (GetPrivateProfileIntA("native", "resethook", 1, settings_path))
+			patch_slot(&vt[132], (void *)reset_ex_hook, (void **)&reset_ex_orig);
 		IDirect3DDevice9Ex_Release(ex);
 	}
 	IDirect3DSwapChain9 *sc = NULL;
@@ -219,6 +230,17 @@ static void comp_hook(void)
 		void **svt = *(void ***)sc;
 		patch_slot(&svt[3], (void *)sc_present_hook, (void **)&sc_present_orig);
 		IDirect3DSwapChain9_Release(sc);
+	}
+	{
+		HMODULE m1 = NULL, m2 = NULL;
+		char n1[MAX_PATH] = "?", n2[MAX_PATH] = "?";
+		GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)present_orig, &m1);
+		GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)sc_present_orig, &m2);
+		if (m1)
+			GetModuleFileNameA(m1, n1, sizeof(n1));
+		if (m2)
+			GetModuleFileNameA(m2, n2, sizeof(n2));
+		log_printf("native: device Present in %s, swap chain Present in %s", n1, n2);
 	}
 	log_printf("native: Present hooks set (device %p, Ex %s)", (void *)dev, present_ex_orig ? "yes" : "no");
 }
@@ -275,6 +297,16 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 			}
 		}
 		comp_hook();
+		{
+			static DWORD last_log;
+			static unsigned draws;
+			draws++;
+			DWORD now = GetTickCount();
+			if (now - last_log > 3000) {
+				last_log = now;
+				log_printf("native: split draws %u, device %p, pushes %ld, ring %ld-%ld, bottom %d", draws, (void *)the_device, (long)pushes_total, (long)ring_tail, (long)ring_head, bottom);
+			}
+		}
 		if (the_device && ring_head - ring_tail < 6) { // the half this frame is drawn into: the frame's end composes it
 			ring[ring_head & 7] = bottom;
 			InterlockedIncrement(&ring_head);
@@ -652,6 +684,12 @@ static void ctx_entity_log(void)
 
 static void ctx_after_draw(void)
 {
+	static int texts_done;
+	if (!texts_done) { // both players are on this machine: the co-op "waiting for the other player" texts have nothing to wait for (an asset lookup: not while the level is loading)
+		texts_done = 1;
+		localize_override("COOP_WAITINGFORPLAYER", " ");
+		localize_override("SPECIAL_OPS_WAITING_OTHER_PLAYER", " ");
+	}
 	ctx_entity_log();
 	ctx_jitter_log();
 	static unsigned count;
@@ -734,6 +772,148 @@ static void snapshot_msg_hook(void *msg, int time)
 		ctx_swap(was);
 }
 
+// ---- player 1's pad ([native] p1pad=<0-3>, -1 none): read in context 1's client frame, with context 1 live.
+// Stick left: movement (analog, into the usercmd by make_cmd_hook), stick right: the view (the view angle accumulators of context 1's block, rva 0x533d14 pitch / 0x533d18 yaw,
+// degrees), the buttons run the game's own key bindings for context 1's kbuttons (rva 0xd1810 name -> index, 0xce450 run it for the local client with a key number no keyboard sends).
+typedef struct {
+	WORD buttons;
+	BYTE lt, rt;
+	SHORT lx, ly, rx, ry;
+} xin_gamepad_t;
+typedef struct {
+	DWORD packet;
+	xin_gamepad_t pad;
+} xin_state_t;
+static DWORD(WINAPI *xinput_get)(DWORD, xin_state_t *);
+static int p1pad = -1;
+static int pad_forward, pad_right; // -127..127, for the usercmd of this frame
+static int pad_active;
+
+static void pad_binding(const char *name, int down)
+{
+	char full[48];
+	snprintf(full, sizeof(full), "%c%s", down ? '+' : '-', name);
+	int index = ((int (*)(const char *))(base + 0xd1810))(full);
+	if (!index) {
+		static int logged[64];
+		static int count;
+		int already = 0;
+		for (int i = 0; i < count; i++)
+			already |= logged[i] == (int)full[1] * 256 + (int)full[2];
+		if (!already && count < 64) {
+			logged[count++] = (int)full[1] * 256 + (int)full[2];
+			log_printf("native: pad: no binding '%s'", full);
+		}
+		return;
+	}
+	((void (*)(int, int, int))(base + 0xce450))(0, index, 0x1ff);
+}
+
+static void pad_frame(void)
+{
+	if (p1pad < 0)
+		return;
+	if (!xinput_get) {
+		HMODULE m = LoadLibraryA("xinput1_4.dll");
+		if (!m)
+			m = LoadLibraryA("xinput1_3.dll");
+		if (m)
+			xinput_get = (DWORD(WINAPI *)(DWORD, xin_state_t *))GetProcAddress(m, "XInputGetState");
+		if (!xinput_get) {
+			log_printf("native: no XInput, player 1 has no pad");
+			p1pad = -1;
+			return;
+		}
+	}
+	xin_state_t st;
+	memset(&st, 0, sizeof(st));
+	static DWORD last_tick;
+	DWORD now = GetTickCount();
+	float dt = last_tick ? (now - last_tick) / 1000.0f : 0.016f;
+	last_tick = now;
+	if (dt > 0.1f)
+		dt = 0.1f;
+	int have = xinput_get((DWORD)p1pad, &st) == 0;
+	{ // QA: mw2coopakepad.txt "lx ly rx ry buttons lt rt" (stick values -32767..32767, buttons as the XInput mask) stands in for a pad
+		static DWORD checked;
+		static int fake_have;
+		static int f[7];
+		if (now - checked > 250) {
+			checked = now;
+			char path[MAX_PATH];
+			lstrcpyA(path, settings_path);
+			char *slash = strrchr(path, '\\');
+			if (slash) {
+				lstrcpyA(slash + 1, "fakepad.txt");
+				FILE *fp = fopen(path, "r");
+				fake_have = 0;
+				if (fp) {
+					fake_have = fscanf(fp, "%d %d %d %d %d %d %d", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6]) == 7;
+					fclose(fp);
+				}
+			}
+		}
+		if (fake_have) {
+			st.pad.lx = (SHORT)f[0], st.pad.ly = (SHORT)f[1], st.pad.rx = (SHORT)f[2], st.pad.ry = (SHORT)f[3];
+			st.pad.buttons = (WORD)f[4], st.pad.lt = (BYTE)f[5], st.pad.rt = (BYTE)f[6];
+			have = 1;
+		}
+	}
+	if (!have) { // no pad: no input
+		pad_forward = pad_right = 0;
+		pad_active = 0;
+		return;
+	}
+	pad_active = 1;
+	const float dead = 0.2f;
+	float lx = st.pad.lx / 32767.0f, ly = st.pad.ly / 32767.0f, rx = st.pad.rx / 32767.0f, ry = st.pad.ry / 32767.0f;
+	if (lx * lx + ly * ly < dead * dead)
+		lx = ly = 0;
+	if (rx * rx + ry * ry < dead * dead)
+		rx = ry = 0;
+	pad_forward = (int)(ly * 127.0f);
+	pad_right = (int)(lx * 127.0f);
+	float *acc = (float *)(base + 0x533d14); // context 1 is live here
+	acc[1] -= rx * 160.0f * dt; // yaw
+	acc[0] -= ry * 110.0f * dt; // pitch (down is positive)
+	if (acc[0] > 80.0f)
+		acc[0] = 80.0f;
+	if (acc[0] < -80.0f)
+		acc[0] = -80.0f;
+	static const struct {
+		WORD mask;
+		const char *binding;
+		const char *second;
+	} map[] = {
+	    {0x1000, "gostand", NULL}, // A
+	    {0x2000, "stance", NULL},  // B
+	    {0x4000, "reload", "activate"}, // X
+	    {0x0100, "smoke", NULL},   // left bumper
+	    {0x0200, "frag", NULL},    // right bumper
+	    {0x0040, "breath_sprint", NULL}, // left stick
+	    {0x0080, "melee", NULL},   // right stick
+	};
+	static WORD held;
+	static int rt_held, lt_held;
+	WORD buttons = st.pad.buttons;
+	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+		int was = (held & map[i].mask) != 0, is = (buttons & map[i].mask) != 0;
+		if (was == is)
+			continue;
+		pad_binding(map[i].binding, is);
+		if (map[i].second)
+			pad_binding(map[i].second, is);
+	}
+	held = buttons;
+	int rt = st.pad.rt > 80, lt = st.pad.lt > 80;
+	if (rt != rt_held)
+		pad_binding("attack", rt);
+	if (lt != lt_held)
+		pad_binding("speed_throw", lt);
+	rt_held = rt;
+	lt_held = lt;
+}
+
 // Mode 5: the engine's whole client frame (rva 0xd5b00, called once per engine frame from the main loop at rva 0x1fc331) runs for context 0 on even frames and for context 1 on odd ones, so
 // everything the client does in a frame (time, snapshot use, usercmds, the cgame draw, the 2D) happens in the right context. One scene per frame, as the renderer needs.
 static void (*client_frame_original)(void);
@@ -748,12 +928,6 @@ static void client_frame_hook(void)
 		if (on != split_on)
 			log_printf("native: split view %s", on ? "on" : "off");
 		split_on = on;
-	}
-	static int texts_done;
-	if (!texts_done && ctx_on) { // both players are on this machine: the co-op "waiting for the other player" texts have nothing to wait for
-		texts_done = 1;
-		localize_override("COOP_WAITINGFORPLAYER", " ");
-		localize_override("SPECIAL_OPS_WAITING_OTHER_PLAYER", " ");
 	}
 	static int nopredict = -1;
 	if (nopredict < 0)
@@ -770,6 +944,7 @@ static void client_frame_hook(void)
 		if (nopredict && np_dvar)
 			*(int *)(np_dvar + 0x10) = 1;
 		ctx_swap(1);
+		pad_frame();
 		client_frame_original();
 		native_unswap_entities();
 		ctx_swap(0);
@@ -825,8 +1000,13 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 {
 	uint8_t *cmd = make_cmd_original(out, a);
 	if (ctx_current == 1 && cmd) {
-		*(int *)(cmd + 4) = 0;
-		cmd[0x1c] = cmd[0x1d] = 0;
+		if (p1pad >= 0 && pad_active) {
+			cmd[0x1a] = (uint8_t)(int8_t)pad_forward; // usercmd_s: forwardmove +0x1a, rightmove +0x1b, upmove +0x1c, downmove +0x1d
+			cmd[0x1b] = (uint8_t)(int8_t)pad_right;
+		} else {
+			*(int *)(cmd + 4) = 0;
+			cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0;
+		}
 	}
 	return cmd;
 }
@@ -892,7 +1072,7 @@ static void usercmd_step_inner(int lc)
 		log_printf("native: player 0's cmd: %s", hex);
 	}
 	*(int *)(cmd + 4) = 0; // no buttons
-	cmd[0x1c] = cmd[0x1d] = 0; // no movement
+	cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0; // no movement
 	if (!logged) {
 		p1_yaw = GetPrivateProfileIntA("native", "p1yaw", 0, settings_path);
 		log_printf("native: player 1 cmd from player 0's: serverTime %d, angles %d %d %d, p1yaw %x", *(int *)cmd, *(int *)(cmd + 8), *(int *)(cmd + 12), *(int *)(cmd + 16), p1_yaw);
@@ -1002,6 +1182,7 @@ static void contexts_install(void)
 		if (!hook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
 	}
+	p1pad = GetPrivateProfileIntA("native", "p1pad", -1, settings_path);
 	ctx_on = 1;
 	log_printf("native: client contexts on (call sites redirected)");
 }

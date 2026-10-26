@@ -45,6 +45,22 @@ if (-not (Get-ItemProperty $ap -ErrorAction SilentlyContinue).ActiveUser) {
         "[$Tag] Steam ActiveProcess ActiveUser set"
     }
 }
+# The test copies run on the discrete GPU (Windows "Graphics settings" preference "High performance" for each test exe; a per-user value that only names these files,
+# HKCU\Software\Microsoft\DirectX\UserGpuPreferences). MW2COOP_TEST_GPU=default leaves the choice to Windows.
+if ($env:MW2COOP_TEST_GPU -ne 'default') {
+    $gk = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'
+    if (-not (Test-Path $gk)) { New-Item -Path $gk -Force | Out-Null }
+    foreach ($Dir in $Dirs) {
+        $full = (Resolve-Path $Dir).Path.TrimEnd('\') + '\'
+        foreach ($n in @('iw4sp.exe', 'iw4x-sp.exe')) {
+            $f = $full + $n
+            if ((Test-Path $f) -and ((Get-ItemProperty $gk -ErrorAction SilentlyContinue).$f -ne 'GpuPreference=2;')) {
+                Set-ItemProperty -Path $gk -Name $f -Value 'GpuPreference=2;'
+                "[$Tag] discrete GPU preference set for $f"
+            }
+        }
+    }
+}
 $root = $TestRoot.TrimEnd('\') + '\'
 $start = Get-Date
 $launched = @()
@@ -65,12 +81,65 @@ foreach ($Dir in $Dirs) {
         }
     }
 }
+# The test windows go to the secondary display (when there is one), so that they do not get in the way on the main one.
+# MW2COOP_TEST_DISPLAY=primary keeps them where the game puts them.
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System; using System.Runtime.InteropServices; using System.Text; using System.Collections.Generic;
+public static class GameWin {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr l);
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int c);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint f);
+  // moves every 'IW4' window of the given process ids that is not on the screen [sx, sx+sw) x [sy, sy+sh) to its top left corner + 40
+  public static int Move(uint[] pids, int sx, int sy, int sw, int sh) {
+    int moved = 0;
+    EnumWindows((h, l) => {
+      uint p; GetWindowThreadProcessId(h, out p);
+      if (Array.IndexOf(pids, p) < 0) return true;
+      var c = new StringBuilder(64); GetClassName(h, c, 64);
+      if (c.ToString() != "IW4") return true;
+      if (IsIconic(h)) ShowWindow(h, 4); // SW_SHOWNOACTIVATE: restore a minimised game window
+      RECT r; GetWindowRect(h, out r);
+      if (r.L >= sx && r.L < sx + sw && r.T >= sy && r.T < sy + sh) return true;
+      SetWindowPos(h, IntPtr.Zero, sx, sy, 0, 0, 0x0001 | 0x0004 | 0x0010); // NOSIZE | NOZORDER | NOACTIVATE
+      moved++;
+      return true;
+    }, IntPtr.Zero);
+    return moved;
+  }
+}
+"@
+# Which display: MW2COOP_TEST_DISPLAY, else the first line of local	est-display.txt (next to the test copies' parent: <workspace>\local), else the first non-primary one.
+# Values: 'primary' (do not move), 'secondary', or a device name such as \.\DISPLAY7.
+$choice = $env:MW2COOP_TEST_DISPLAY
+if (-not $choice) {
+    $cfg = Join-Path (Split-Path -Parent $PSScriptRoot) '..\test-display.txt'
+    if (Test-Path $cfg) { $choice = (Get-Content $cfg -TotalCount 1).Trim() }
+}
+$secondary = $null
+if ($choice -ne 'primary') {
+    $screens = [System.Windows.Forms.Screen]::AllScreens
+    if ($choice -and $choice -ne 'secondary') { $secondary = $screens | Where-Object { $_.DeviceName -eq $choice } | Select-Object -First 1 }
+    if (-not $secondary) { $secondary = $screens | Where-Object { -not $_.Primary } | Select-Object -First 1 }
+}
+$lastMove = Get-Date
 $deadline = $start.AddSeconds($Timeout)
 $seen = @{}
 $idleSince = $null
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 200
     $procs = @(Get-CimInstance Win32_Process -Filter "name='iw4sp.exe' or name='iw4x-sp.exe'" -ErrorAction SilentlyContinue)
+    if ($secondary -and ((Get-Date) - $lastMove).TotalSeconds -ge 1) {
+        $lastMove = Get-Date
+        $b = $secondary.Bounds
+        $null = [GameWin]::Move([uint32[]]@($procs | ForEach-Object { $_.ProcessId }), $b.X, $b.Y, $b.Width, $b.Height)
+    }
     foreach ($q in $procs) {
         if ($q.ExecutablePath -and ($q.ExecutablePath -notlike "$root*")) {
             Stop-Process -Id $q.ProcessId -Force -ErrorAction SilentlyContinue
