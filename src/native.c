@@ -304,7 +304,7 @@ static const range_t ranges[] = {
     {0x51b078, 0x51dcb0 - 0x51b078}, // cl snapshots and their pointers
     {0x52c400, 0x100},               // cleared by the cgame init for each client
     {0x52fbc0, 0x21c},               // input
-    {0x533cb8, 0x10},                // cls state
+    {0x533cb8, 0x68},                // cls state, the mouse state and the view angle accumulators (0x533cc0, 0x533d0c-0x533d18)
     {0x533d20, 0x540b60 - 0x533d20}, // cl: usercmd ring, cmdNumber, playerstate, packet history
     {0x545844, 0x3218},              // clc: reliable command ring
     {0x548ce8, 8},                   // the snapshot message's time and flag
@@ -441,6 +441,29 @@ static void client_n_install(void)
 	}
 	FlushInstructionCache(GetCurrentProcess(), base, 0xe0000);
 	log_printf("native: %d of %d client reads of the local player count point at a copy (1)", done, (int)(sizeof(client_n_sites) / sizeof(client_n_sites[0])));
+}
+
+// The server's entity list for the snapshot leaves out the local players' entities (they are fed through the playerstate); with two local players each context would never see the other
+// one's body. The read of the player count at the start of the publisher (rva 0x23459a, `mov reg, [0x3c3eb0]`, used only for that exclusion) is pointed at a variable that is 0.
+// [native] listplayers=1.
+static void list_players_install(void)
+{
+	uint8_t *site = base + 0x23459a;
+	int32_t old;
+	memcpy(&old, site + 3, 4);
+	int32_t *zero = (int32_t *)hook_page_near(base + RVA_LOCAL_PLAYERS_STORE);
+	if (!zero || (uint8_t *)(site + 7 + old) != base + 0x3c3eb0) {
+		log_printf("native: entity list patch: unexpected code");
+		return;
+	}
+	*zero = 0;
+	int32_t rel = (int32_t)((uint8_t *)zero - (site + 7));
+	DWORD prot;
+	VirtualProtect(site, 8, PAGE_EXECUTE_READWRITE, &prot);
+	memcpy(site + 3, &rel, 4);
+	VirtualProtect(site, 8, prot, &prot);
+	FlushInstructionCache(GetCurrentProcess(), site, 8);
+	log_printf("native: the entity list keeps the local players' entities");
 }
 
 static void (*ps_publish_original)(unsigned, const void *);
@@ -580,10 +603,34 @@ static float wait_alpha_hook(int lc)
 	return a;
 }
 
+// Player 1 (local client 1) has no input device yet: every simulation step he gets the usercmd of player 0 with the buttons and the movement cleared and the view turned by
+// [native] p1yaw (a 16-bit angle, 0x8000 = half a turn), through the engine's own SV_ClientThink analogue (rva 0x22d000, client_t[n] + 0x1630 holds the last cmd).
+#define RVA_SV_CLIENTS_CMD 0x19ada98
+static int p1_yaw;
 static void usercmd_step_hook(int lc)
 {
-	if (lc == 0)
-		return usercmd_step_original(0); // client 1 sends and applies nothing yet
+	if (lc == 0) {
+		usercmd_step_original(0);
+		return;
+	}
+	if (!GetPrivateProfileIntA("native", "p1cmd", 0, settings_path))
+		return;
+	static int logged;
+	uint8_t cmd[0x40];
+	memcpy(cmd, base + RVA_SV_CLIENTS_CMD + 0x1630, sizeof(cmd)); // player 0's last cmd
+	if (!*(int *)cmd) // not set yet
+		return;
+	*(int *)(cmd + 4) = 0; // no buttons
+	cmd[0x1c] = cmd[0x1d] = 0; // no movement
+	if (!logged) {
+		p1_yaw = GetPrivateProfileIntA("native", "p1yaw", 0, settings_path);
+		log_printf("native: player 1 cmd from player 0's: serverTime %d, angles %d %d %d, p1yaw %x", *(int *)cmd, *(int *)(cmd + 8), *(int *)(cmd + 12), *(int *)(cmd + 16), p1_yaw);
+		logged = 1;
+	}
+	*(int *)(cmd + 8) = 0; // a fixed view (pitch 0, yaw p1yaw, roll 0): player 0's mouse must not turn player 1
+	*(int *)(cmd + 12) = p1_yaw;
+	*(int *)(cmd + 16) = 0;
+	((void (*)(int, void *))(base + 0x22d000))(1, cmd);
 }
 
 static void contexts_install(void)
@@ -648,6 +695,8 @@ static void players_install(int n)
 	log_printf("native: the number of local players is %d (patched G_InitGame)", n);
 	hook_jump(base + RVA_SV_ADD_COMMAND, 14, sv_add_command, 0xcc);
 	client_n_install();
+	if (GetPrivateProfileIntA("native", "listplayers", 0, settings_path))
+		list_players_install();
 	if (GetPrivateProfileIntA("native", "coopdvar", 0, settings_path))
 		CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
 	if (GetPrivateProfileIntA("native", "ctx", 1, settings_path))
