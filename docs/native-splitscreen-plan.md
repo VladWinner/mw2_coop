@@ -189,3 +189,21 @@ Reference for the original design: PaulCombal/mw2-recompiled (Xbox 360 recompila
 as per-local-client arrays (client connection state stride 3216, `clientActive_t` array stride 27904, `clientConnection_t` array stride 0x51568, the cgame state array stride 0xFDE00) and a
 `Session_LocalClientNum`; the campaign's co-op frame (host-relayed, per slot: "select client, that client's usercmds, that client's reliable command") is the same frame the PC binary
 has. The PC exe folded the arrays to single statics and stubbed `IsSplitScreen()`. The plan above (second client context, swap of the client statics, alternate frames) stands.
+
+## Packet flow, mapped by three Ghidra readers (2026-10-26; details and rvas in `docs/native-splitscreen-research/coop-*.md`)
+
+- **Server and client share one process and hand data over by direct calls, not over a netchan.** `Netchan_Transmit` (0x203200) has only two callers: the client's usercmd packet (0xcd340, always on the
+  constant slot-0 netchan 0x540ba0) and the host's coop frame send (0x22f400, skips local slots). There is no snapshot over the wire: `0x234540` copies the game client's playerstate into
+  `cl[lc].ps` for every LOCAL slot (type 2), plus shared entity lists. A second local client can get its own snapshot; no second socket is needed.
+- **The slot table is symmetric: type 2 = local player, the slot's port = the local client number, type 4 = remote.** The loops in the coop code and in the game module already iterate both slots that way
+  (0x15ce10, 0x22d040, 0x22e330, 0x22f400, 0x2302d0, ...). The engine is written for two local players; what is missing is only storage: `cl` (stride 0xce9c, from 0x535d38), the reliable ring
+  (0x545844, stride 0x3218), `cls` state (0x533cb8 + 0x10*n), input (0x52fbc0, stride 0x21c) have ONE element (cl[1] would overlap the slot table at 0x540ba0).
+- **Host side, one player = one function: `0x22d000(n, &usercmd)`** (SV_ClientThink analogue: copies the cmd into `client_t[n]+0x1630`, runs `0x15bd80(n)`). In co-op the cmds go through a frame
+  (0x22f830 begin, 0x22f0d0 append a client's packet, 0x22efd0 end + send, 0x2302d0 execute); a one-machine session can skip the frame and call 0x22d000(1, cmd) directly.
+- **The engine has a second configuration with no network at all (coop byte 0, N local players):** only the store in G_InitGame (`DAT_1403c3eb0 = 1`, imm32 at rva 0x1714ac) pins N to 1. That is the
+  console's split screen, left in the PC binary. Design Y = patch that to 2; Design X = keep the coop byte, make slot 1 local (type 2, port 1) and hook `0x22ec30` ("partner 10 frames behind").
+- Missing/hard parts: memory for the client-side arrays of context 1 (swap, as planned), `0x1400cd340` is hard-wired to slot 0's netchan, creating the second party member for Design X
+  (0xd7220 arguments partly unknown), what the mod's C code and scripts assume for `coop == 1`.
+
+Next experiment (E4, server side only): Design Y on a test copy: set the immediate to 2 and watch whether the SP server creates two client_t / two player entities and survives (the client arrays of
+index 1 overlap unused memory in non-coop mode, so a crash is a finding too).
