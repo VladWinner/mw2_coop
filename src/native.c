@@ -27,6 +27,7 @@ static const uint8_t begin_frame_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 
 static void (*cg_draw_original)(unsigned, int, int);
 static void (*begin_frame_original)(void);
 static uint8_t *base;
+static char settings_path[MAX_PATH];
 static int mode;
 static int second_pass;
 
@@ -396,8 +397,6 @@ static void cbuf_hook(int lc, const char *text)
 // The arrays of the client side (cl, clc, cls, the cgame's cg/cgs) have one element, so the loops over the local clients (i < number of local players) would write local client 1's
 // state over unrelated statics. Each call site of such a loop is redirected to a wrapper: for client 1 it swaps the client statics to context 1's copy, calls the function as
 // client 0, and swaps back. The ranges are the first guess (cgame block, snapshots, cl, clc, cls, input); the ones the experiments show missing are added.
-static char settings_path[MAX_PATH];
-
 typedef struct {
 	uint32_t rva, size;
 } range_t;
@@ -933,6 +932,25 @@ static void client_frame_hook(void)
 	if (nopredict < 0)
 		nopredict = GetPrivateProfileIntA("native", "nopredict", 0, settings_path);
 	uint8_t *np_dvar = *(uint8_t **)(base + 0x51e028); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
+	{ // [native] fov=<degrees>: the cg_fov (rva 0x51e1a8 holds the dvar; the angle across a 4:3 picture, 65 by default) while the picture is split: each half is a band of the full
+	  // view (mode 6), so the field is widened to make up for the half height
+		static int fov = -1;
+		static float fov_saved = -1;
+		if (fov < 0)
+			fov = GetPrivateProfileIntA("native", "fov", 0, settings_path);
+		uint8_t *d = *(uint8_t **)(base + 0x51e1a8);
+		if (fov > 0 && d) {
+			float *v = (float *)(d + 0x10);
+			if (split_on) {
+				if (fov_saved < 0)
+					fov_saved = *v;
+				*v = (float)fov;
+			} else if (fov_saved >= 0) {
+				*v = fov_saved;
+				fov_saved = -1;
+			}
+		}
+	}
 	static int nogun = -1;
 	if (nogun < 0)
 		nogun = GetPrivateProfileIntA("native", "nogun", 0, settings_path);

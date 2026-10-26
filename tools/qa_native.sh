@@ -8,6 +8,7 @@ LEVEL_S=${1:-200}
 EXTRA=${2:-}
 MAP=${MW2COOP_MAP:-trainer}
 RES=${MW2COOP_RES:-1920x1080}
+RAW_AT=${MW2COOP_RAW_AT:-115}
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
 A=$ROOT/mw2-64
 HERE=$(cd "$(dirname "$0")" && pwd -W)
@@ -19,7 +20,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	echo "[native]"
 	echo "players=2"
 	echo "coopdvar=1"
-	echo "experiment=7"
+	echo "experiment=${MW2COOP_MODE:-6}"
+	echo "fov=${MW2COOP_FOV:-95}"
 	echo "p1cmd=1"
 	echo "listplayers=1"
 	[ -n "$EXTRA" ] && echo "$EXTRA" | tr ';' '\n'
@@ -31,11 +33,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	[ -n "${MW2COOP_PRE:-}" ] && echo "$MW2COOP_PRE" | tr ';' '\n'
 	echo "!sleep 6000"
 	echo "devmap $MAP"
-	echo "!sleep $((LEVEL_S * 1000))"
+	if [ -n "${MW2COOP_RAW:-}" ]; then # two raw frames (the game's own, before the compositor) once the picture is split
+		echo "!sleep $((RAW_AT * 1000))"
+		echo "!shot raw1"
+		echo "!sleep 1700"
+		echo "!shot raw2"
+		echo "!sleep $(((LEVEL_S - RAW_AT) * 1000))"
+	else
+		echo "!sleep $((LEVEL_S * 1000))"
+	fi
 } > "$A/mw2coop/commands.txt"
 # the window is made 1920x1080 at start: the config of the copy holds it (no vid_restart: it loses the mod's fonts)
 CFG=$A/players/config.cfg
-sed -i 's/^seta r_customMode .*/seta r_customMode "'"$RES"'"/; s/^seta r_fullscreen .*/seta r_fullscreen "0"/; s/^seta vid_xpos .*/seta vid_xpos "'"${MW2COOP_XPOS:-0}"'"/; s/^seta vid_ypos .*/seta vid_ypos "0"/' "$CFG"
+sed -i 's/^seta r_mode .*/seta r_mode "'"$RES"'"/; s/^seta r_customMode .*/seta r_customMode "'"$RES"'"/; s/^seta r_fullscreen .*/seta r_fullscreen "0"/; s/^seta vid_xpos .*/seta vid_xpos "'"${MW2COOP_XPOS:-0}"'"/; s/^seta vid_ypos .*/seta vid_ypos "0"/' "$CFG"
 rm -f "$A/mw2coop/mw2coop.log" "$A/mw2coop"/shots/seq-*.bmp
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/run_test.ps1" -Tag native -Timeout $((LEVEL_S + 50)) -TestRoot "$(cygpath -w "$ROOT")" -Dirs "$(cygpath -w "$A")" | tail -2
 grep -a -E "CRASH: exc|split view|device reset|compositor on" "$A/mw2coop/mw2coop.log" | sed 's/^\([0-9:.]*\) \[[ 0-9]*\] /\1 /' | cut -c1-120
