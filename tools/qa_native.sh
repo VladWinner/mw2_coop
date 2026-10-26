@@ -20,8 +20,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	echo "[native]"
 	echo "players=2"
 	echo "coopdvar=1"
-	echo "experiment=${MW2COOP_MODE:-6}"
-	echo "fov=${MW2COOP_FOV:-95}"
+	echo "experiment=${MW2COOP_MODE:-8}"
+	echo "fov=${MW2COOP_FOV:-49}"
 	echo "p1cmd=1"
 	echo "listplayers=1"
 	[ -n "$EXTRA" ] && echo "$EXTRA" | tr ';' '\n'

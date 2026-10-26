@@ -7,6 +7,7 @@
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,12 +43,19 @@ static float *subwindow(void)
 // copies that half into a texture of its own and fills the other half from the other texture, so the picture always has both views whole.
 #define RVA_D3D_DEVICE 0x410fd20
 static volatile LONG ring[8];
+static volatile DWORD render_tid;
 static volatile LONG ring_head, ring_tail; // frames queued by the main thread, and the halves they were drawn into, in order
 static IDirect3DDevice9 *comp_device;
 static IDirect3DTexture9 *comp_tex[2];
 static IDirect3DSurface9 *comp_surf[2];
 static int comp_have[2];
 static UINT comp_w, comp_h;
+// mode 10: the engine's 2D pass of the scene (rva 0x63680) is drawn into a layer of its own (one per half), cleared to transparent; the compositor lays the top rows of it over the squeezed view
+static IDirect3DTexture9 *lay_tex[2];
+static IDirect3DSurface9 *lay_surf[2];
+static int lay_have[2];
+static IDirect3DStateBlock9 *comp_sb;
+static volatile LONG layer_pass; // the render thread is inside the 2D pass
 
 static void comp_release(void)
 {
@@ -57,7 +65,68 @@ static void comp_release(void)
 		if (comp_tex[i])
 			IDirect3DTexture9_Release(comp_tex[i]);
 		comp_surf[i] = NULL, comp_tex[i] = NULL, comp_have[i] = 0;
+		if (lay_surf[i])
+			IDirect3DSurface9_Release(lay_surf[i]);
+		if (lay_tex[i])
+			IDirect3DTexture9_Release(lay_tex[i]);
+		lay_surf[i] = NULL, lay_tex[i] = NULL, lay_have[i] = 0;
 	}
+	if (comp_sb)
+		IDirect3DStateBlock9_Release(comp_sb);
+	comp_sb = NULL;
+}
+
+// Lays the top half of a 2D layer (premultiplied alpha, see layer_fix) over the half texture with the fixed pipeline. Everything the game had set on the device is kept in a state block
+// and put back, so the engine's own state caching is not fooled.
+static void overlay_layer(IDirect3DDevice9 *dev, int half)
+{
+	IDirect3DSurface9 *old_rt = NULL, *old_ds = NULL;
+	if (!comp_sb && FAILED(IDirect3DDevice9_CreateStateBlock(dev, D3DSBT_ALL, &comp_sb)))
+		return;
+	IDirect3DStateBlock9_Capture(comp_sb);
+	IDirect3DDevice9_GetRenderTarget(dev, 0, &old_rt);
+	IDirect3DDevice9_GetDepthStencilSurface(dev, &old_ds);
+	IDirect3DDevice9_SetRenderTarget(dev, 0, comp_surf[half]);
+	IDirect3DDevice9_SetDepthStencilSurface(dev, NULL);
+	D3DVIEWPORT9 vp = {0, 0, comp_w, comp_h / 2, 0.0f, 1.0f};
+	IDirect3DDevice9_SetViewport(dev, &vp);
+	if (SUCCEEDED(IDirect3DDevice9_BeginScene(dev))) {
+		static const struct {
+			D3DRENDERSTATETYPE s;
+			DWORD v;
+		} rs[] = {{D3DRS_ZENABLE, 0}, {D3DRS_ZWRITEENABLE, 0}, {D3DRS_CULLMODE, D3DCULL_NONE}, {D3DRS_ALPHATESTENABLE, 0}, {D3DRS_ALPHABLENDENABLE, 1},
+			  {D3DRS_SRCBLEND, D3DBLEND_ONE}, {D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA}, {D3DRS_SEPARATEALPHABLENDENABLE, 0}, {D3DRS_BLENDOP, D3DBLENDOP_ADD},
+			  {D3DRS_STENCILENABLE, 0}, {D3DRS_SCISSORTESTENABLE, 0}, {D3DRS_COLORWRITEENABLE, 0xf}, {D3DRS_FOGENABLE, 0}, {D3DRS_LIGHTING, 0}, {D3DRS_SRGBWRITEENABLE, 0}};
+		for (size_t i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
+			IDirect3DDevice9_SetRenderState(dev, rs[i].s, rs[i].v);
+		IDirect3DDevice9_SetVertexShader(dev, NULL);
+		IDirect3DDevice9_SetPixelShader(dev, NULL);
+		IDirect3DDevice9_SetFVF(dev, D3DFVF_XYZRHW | D3DFVF_TEX1);
+		IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)lay_tex[half]);
+		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+		IDirect3DDevice9_SetTextureStageState(dev, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+		IDirect3DDevice9_SetTextureStageState(dev, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_SRGBTEXTURE, 0);
+		float w = (float)comp_w - 0.5f, h = (float)(comp_h / 2) - 0.5f;
+		float q[4][6] = {{-0.5f, -0.5f, 0, 1, 0, 0}, {w, -0.5f, 0, 1, 1, 0}, {-0.5f, h, 0, 1, 0, 0.5f}, {w, h, 0, 1, 1, 0.5f}}; // the top half of the layer
+		IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
+		IDirect3DDevice9_EndScene(dev);
+	}
+	IDirect3DDevice9_SetDepthStencilSurface(dev, old_ds);
+	IDirect3DDevice9_SetRenderTarget(dev, 0, old_rt);
+	IDirect3DStateBlock9_Apply(comp_sb);
+	if (old_rt)
+		IDirect3DSurface9_Release(old_rt);
+	if (old_ds)
+		IDirect3DSurface9_Release(old_ds);
 }
 
 static void compose(IDirect3DDevice9 *dev, int half)
@@ -79,9 +148,45 @@ static void compose(IDirect3DDevice9 *dev, int half)
 				return;
 			}
 		}
+		for (int i = 0; i < 2 && mode == 10; i++) {
+			if (FAILED(IDirect3DDevice9_CreateTexture(dev, d.Width, d.Height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &lay_tex[i], NULL)) ||
+			    FAILED(IDirect3DTexture9_GetSurfaceLevel(lay_tex[i], 0, &lay_surf[i]))) {
+				log_printf("native: cannot make the 2D layers (%ux%u)", d.Width, d.Height);
+				comp_release();
+				IDirect3DSurface9_Release(back);
+				return;
+			}
+		}
 		log_printf("native: compositor on, %ux%u picture, two %ux%u halves", d.Width, d.Height, d.Width, d.Height / 2);
 	}
-	if (mode == 7) { // the whole frame, drawn for the shape of a half, is squeezed into the half texture
+	if (mode == 10) { // the squeezed view, with the top rows of the 2D layer laid over it
+		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, NULL, comp_surf[half], NULL, D3DTEXF_LINEAR)))
+			comp_have[half] = 1;
+		if (lay_have[half] && comp_have[half])
+			overlay_layer(dev, half);
+		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
+		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
+		if (comp_have[0])
+			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
+		if (comp_have[1])
+			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
+		IDirect3DSurface9_Release(back);
+		return;
+	}
+	if (mode == 9) { // the top rows hold the view recorded for a half-height screen: they are copied 1:1 into the half texture
+		RECT rows = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
+		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &rows, comp_surf[half], NULL, D3DTEXF_NONE)))
+			comp_have[half] = 1;
+		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
+		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
+		if (comp_have[0])
+			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
+		if (comp_have[1])
+			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
+		IDirect3DSurface9_Release(back);
+		return;
+	}
+	if (mode == 7 || mode == 8) { // the whole frame, drawn for the shape of a half, is squeezed into the half texture
 		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, NULL, comp_surf[half], NULL, D3DTEXF_LINEAR)))
 			comp_have[half] = 1;
 		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
@@ -129,9 +234,12 @@ static IDirect3DDevice9 *the_device;
 static const GUID iid_device9ex = {0xb18b10ce, 0x2649, 0x405a, {0x87, 0x0f, 0x95, 0xf7, 0x77, 0xd4, 0x31, 0x3a}};
 
 // before the picture is shown: the half this frame was drawn into is kept and the other one filled in (once per frame, whichever way the game presents)
+static void trace_present(void);
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
+	trace_present();
 	InterlockedIncrement(&present_hits[via]);
+	render_tid = GetCurrentThreadId();
 	{
 		static DWORD last_log;
 		DWORD now = GetTickCount();
@@ -179,14 +287,52 @@ static HRESULT STDMETHODCALLTYPE sc_present_hook(IDirect3DSwapChain9 *sc, const 
 	return sc_present_orig(sc, a, b, c, d, e);
 }
 
+// The vtable slots of the D3D9 device and swap chain that this file patches. The Steam overlay (gameoverlayrenderer64.dll) hooks the same functions and puts its hooks back after
+// a device Reset; two hooks on one slot that each saved the other's address call each other until the stack is gone (0xc00000fd inside the overlay). So around a Reset all of
+// ours are taken out first and put back on top of whatever is there afterwards.
+static struct {
+	void **slot;
+	void *hook;
+	void **orig;
+	int in;
+} slots[24];
+static int nslots;
+
 static void patch_slot(void **slot, void *hook, void **orig)
 {
 	DWORD old;
-	if (!VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old))
+	if (nslots >= 24 || !VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old))
 		return;
 	*orig = *slot;
 	*slot = hook;
 	VirtualProtect(slot, sizeof(void *), old, &old);
+	slots[nslots].slot = slot, slots[nslots].hook = hook, slots[nslots].orig = orig, slots[nslots].in = 1;
+	nslots++;
+}
+
+static void slots_take_out(void)
+{
+	for (int i = 0; i < nslots; i++) {
+		DWORD old;
+		if (!slots[i].in || *slots[i].slot != slots[i].hook || !VirtualProtect(slots[i].slot, sizeof(void *), PAGE_READWRITE, &old))
+			continue; // somebody else is on top of ours: left as it is
+		*slots[i].slot = *slots[i].orig;
+		VirtualProtect(slots[i].slot, sizeof(void *), old, &old);
+		slots[i].in = 0;
+	}
+}
+
+static void slots_put_back(void)
+{
+	for (int i = 0; i < nslots; i++) {
+		DWORD old;
+		if (slots[i].in || !VirtualProtect(slots[i].slot, sizeof(void *), PAGE_READWRITE, &old))
+			continue;
+		*slots[i].orig = *slots[i].slot; // whatever is there now is what ours calls
+		*slots[i].slot = slots[i].hook;
+		VirtualProtect(slots[i].slot, sizeof(void *), old, &old);
+		slots[i].in = 1;
+	}
 }
 
 // Reset (vtable 16) fails while default-pool resources of ours are alive: the half textures are let go first (a lost device, a vid_restart, a change of the desktop: "DirectX error")
@@ -194,17 +340,347 @@ typedef HRESULT(STDMETHODCALLTYPE *reset_t)(IDirect3DDevice9 *, void *);
 static reset_t reset_orig;
 static HRESULT STDMETHODCALLTYPE reset_hook(IDirect3DDevice9 *dev, void *params)
 {
-	log_printf("native: device reset: the half textures are released");
+	log_printf("native: device reset: the half textures are released, the hooks taken out for it");
 	comp_release();
-	return reset_orig(dev, params);
+	reset_t call = reset_orig;
+	slots_take_out();
+	HRESULT hr = call(dev, params);
+	slots_put_back();
+	return hr;
 }
 typedef HRESULT(STDMETHODCALLTYPE *reset_ex_t)(IDirect3DDevice9 *, void *, void *);
 static reset_ex_t reset_ex_orig;
 static HRESULT STDMETHODCALLTYPE reset_ex_hook(IDirect3DDevice9 *dev, void *params, void *mode)
 {
-	log_printf("native: device reset (Ex): the half textures are released");
+	log_printf("native: device reset (Ex): the half textures are released, the hooks taken out for it");
 	comp_release();
-	return reset_ex_orig(dev, params, mode);
+	reset_ex_t call = reset_ex_orig;
+	slots_take_out();
+	HRESULT hr = call(dev, params, mode);
+	slots_put_back();
+	return hr;
+}
+
+// Watchdog ([native] watchdog=1, default on): when the swap chain's Present has not been reached for 6 s while the main thread keeps queueing views, the render thread is stuck;
+// its instruction pointer and the return addresses on its stack are logged as module+offset (once), to see what it waits for.
+static DWORD WINAPI watchdog_thread(LPVOID unused)
+{
+	(void)unused;
+	LONG last = -1;
+	int stuck = 0;
+	for (;;) {
+		Sleep(2000);
+		LONG now = present_hits[2] + present_hits[0] + present_hits[1];
+		if (now == last && ring_head - ring_tail >= 5 && render_tid) {
+			if (++stuck == 3) {
+				HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, render_tid);
+				if (th && SuspendThread(th) != (DWORD)-1) {
+					CONTEXT ctx;
+					memset(&ctx, 0, sizeof(ctx));
+					ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+					if (GetThreadContext(th, &ctx)) {
+						char line[1600];
+						int n = 0;
+						const uint64_t *sp = (const uint64_t *)ctx.Rsp;
+						uint64_t addrs[1 + 400];
+						int na = 0;
+						addrs[na++] = ctx.Rip;
+						for (int i = 0; i < 400 && na < 41; i++) {
+							uint64_t v = 0;
+							if (!ReadProcessMemory(GetCurrentProcess(), sp + i, &v, sizeof(v), NULL))
+								break;
+							MEMORY_BASIC_INFORMATION mbi;
+							if (v > 0x10000 && VirtualQuery((void *)v, &mbi, sizeof(mbi)) && mbi.Type == MEM_IMAGE && (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+								addrs[na++] = v;
+						}
+						n += snprintf(line + n, sizeof(line) - n, "native: WATCHDOG render thread %lu stuck, rip + stack:", (unsigned long)render_tid);
+						for (int i = 0; i < na && n < (int)sizeof(line) - 80; i++) {
+							HMODULE m = NULL;
+							char name[MAX_PATH] = "?";
+							if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)(uintptr_t)addrs[i], &m) && m) {
+								GetModuleFileNameA(m, name, sizeof(name));
+								const char *slash = strrchr(name, '\\');
+								n += snprintf(line + n, sizeof(line) - n, " %s+%llx", slash ? slash + 1 : name, (unsigned long long)(addrs[i] - (uintptr_t)m));
+							}
+						}
+						log_printf("%s", line);
+					}
+					ResumeThread(th);
+				}
+				if (th)
+					CloseHandle(th);
+			}
+		} else {
+			stuck = 0;
+		}
+		last = now;
+	}
+	return 0;
+}
+
+// ---- diagnostics ([native] d3dtrace=1): the render thread's calls of one frame (render targets, viewports, clears, stretches, draw counts), to see where the 3D ends and the 2D begins
+static int trace_on;
+static char trace_buf[40000];
+static int trace_len, trace_draws;
+static IDirect3DDevice9 *trace_dev;
+static char trace_key[96], trace_key_last[96], trace_stack[160], trace_stack_last[160];
+static int bb_pass, bb_pass_done, bb_draws;
+static void trace_flush_draws(void)
+{
+	if (trace_draws && trace_len < (int)sizeof(trace_buf) - 160)
+		trace_len += snprintf(trace_buf + trace_len, sizeof(trace_buf) - trace_len, "draw x%d %s  @%s\n", trace_draws, trace_key_last, trace_stack_last);
+	trace_draws = 0;
+}
+// one draw: the shaders and states it uses; a run of draws with the same ones is one line
+static void trace_draw(IDirect3DDevice9 *dev)
+{
+	IDirect3DVertexShader9 *vs = NULL;
+	IDirect3DPixelShader9 *ps = NULL;
+	DWORD z = 0, zw = 0, ab = 0;
+	IDirect3DDevice9_GetVertexShader(dev, &vs);
+	IDirect3DDevice9_GetPixelShader(dev, &ps);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_ZENABLE, &z);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_ZWRITEENABLE, &zw);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &ab);
+	if (bb_pass && !bb_pass_done && bb_draws % 60 == 0 && bb_draws > 0) { // what the picture holds after this many draws of the pass that ends with the screen copy
+		char name[24];
+		trace_on = 0;
+		snprintf(name, sizeof(name), "tr-d%03d", bb_draws);
+		shot_save_now(dev, name);
+		trace_on = 1;
+	}
+	bb_draws++;
+	snprintf(trace_key, sizeof(trace_key), "vs=%p ps=%p z=%lu zw=%lu blend=%lu", (void *)vs, (void *)ps, (unsigned long)z, (unsigned long)zw, (unsigned long)ab);
+	if (vs)
+		IDirect3DVertexShader9_Release(vs);
+	if (ps)
+		IDirect3DPixelShader9_Release(ps);
+	{
+		void *frames[8];
+		USHORT n = CaptureStackBackTrace(2, 8, frames, NULL); // the callers of the engine's draw wrapper, as offsets into the game's image
+		int len = 0;
+		trace_stack[0] = 0;
+		for (USHORT i = 0; i < n && len < (int)sizeof(trace_stack) - 12; i++) {
+			uintptr_t off = (uintptr_t)frames[i] - (uintptr_t)base;
+			if (off < 0x4000000)
+				len += snprintf(trace_stack + len, sizeof(trace_stack) - len, "%lx,", (unsigned long)off);
+		}
+	}
+	if (strcmp(trace_key, trace_key_last) || strcmp(trace_stack, trace_stack_last)) {
+		trace_flush_draws();
+		strcpy(trace_key_last, trace_key);
+		strcpy(trace_stack_last, trace_stack);
+	}
+	trace_draws++;
+}
+static void trace_event(const char *fmt, ...)
+{
+	trace_flush_draws();
+	if (trace_len > (int)sizeof(trace_buf) - 200)
+		return;
+	va_list ap;
+	va_start(ap, fmt);
+	trace_len += vsnprintf(trace_buf + trace_len, sizeof(trace_buf) - trace_len, fmt, ap);
+	va_end(ap);
+	trace_buf[trace_len++] = '\n';
+}
+static const char *trace_surf(IDirect3DDevice9 *dev, IDirect3DSurface9 *s)
+{
+	static char out[64];
+	IDirect3DSurface9 *back = NULL;
+	D3DSURFACE_DESC d = {0};
+	if (s)
+		IDirect3DSurface9_GetDesc(s, &d);
+	if (SUCCEEDED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back)) && back)
+		IDirect3DSurface9_Release(back);
+	snprintf(out, sizeof(out), "%p %ux%u fmt%d%s", (void *)s, d.Width, d.Height, (int)d.Format, s && s == back ? " BACKBUFFER" : "");
+	return out;
+}
+// In the 2D layer the engine's alpha blending (source alpha, inverse source alpha) leaves the colour premultiplied by the alpha and the alpha squared; asking for "source alpha one,
+// inverse source alpha" for the alpha channel alone makes the layer a proper premultiplied picture (blending states 206-208 are ones the engine never sets itself).
+static void layer_fix(IDirect3DDevice9 *dev)
+{
+	DWORD on = 0, src = 0, dst = 0;
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &on);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &src);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &dst);
+	if (on && src == D3DBLEND_SRCALPHA && dst == D3DBLEND_INVSRCALPHA) {
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 1);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLENDALPHA, D3DBLEND_ONE);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLENDALPHA, D3DBLEND_INVSRCALPHA);
+	} else {
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 0);
+	}
+}
+typedef HRESULT(STDMETHODCALLTYPE *set_rt_t)(IDirect3DDevice9 *, DWORD, IDirect3DSurface9 *);
+typedef HRESULT(STDMETHODCALLTYPE *clear_t)(IDirect3DDevice9 *, DWORD, const D3DRECT *, DWORD, D3DCOLOR, float, DWORD);
+typedef HRESULT(STDMETHODCALLTYPE *stretch_t)(IDirect3DDevice9 *, IDirect3DSurface9 *, const RECT *, IDirect3DSurface9 *, const RECT *, D3DTEXTUREFILTERTYPE);
+typedef HRESULT(STDMETHODCALLTYPE *viewport_t)(IDirect3DDevice9 *, const D3DVIEWPORT9 *);
+typedef HRESULT(STDMETHODCALLTYPE *dip_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
+typedef HRESULT(STDMETHODCALLTYPE *dp_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, UINT);
+typedef HRESULT(STDMETHODCALLTYPE *dpup_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, const void *, UINT);
+typedef HRESULT(STDMETHODCALLTYPE *dipup_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void *, D3DFORMAT, const void *, UINT);
+typedef HRESULT(STDMETHODCALLTYPE *scene_t)(IDirect3DDevice9 *);
+static set_rt_t set_rt_orig;
+static clear_t clear_orig;
+static stretch_t stretch_orig;
+static viewport_t viewport_orig;
+static dip_t dip_orig;
+static dp_t dp_orig;
+static dpup_t dpup_orig;
+static dipup_t dipup_orig;
+static scene_t begin_scene_orig, end_scene_orig;
+static HRESULT STDMETHODCALLTYPE t_dpup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT pc, const void *v, UINT st)
+{
+	if (layer_pass)
+		layer_fix(dev);
+	if (trace_on)
+		trace_draw(dev);
+	return dpup_orig(dev, t, pc, v, st);
+}
+static HRESULT STDMETHODCALLTYPE t_dipup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT mi, UINT nv, UINT pc, const void *i, D3DFORMAT f, const void *v, UINT st)
+{
+	if (layer_pass)
+		layer_fix(dev);
+	if (trace_on)
+		trace_draw(dev);
+	return dipup_orig(dev, t, mi, nv, pc, i, f, v, st);
+}
+static HRESULT STDMETHODCALLTYPE t_set_rt(IDirect3DDevice9 *dev, DWORD i, IDirect3DSurface9 *s)
+{
+	if (trace_on && i == 0) {
+		const char *d = trace_surf(dev, s);
+		trace_event("SetRenderTarget %s", d);
+		if (strstr(d, "BACKBUFFER") && !bb_pass_done)
+			bb_pass = 1, bb_draws = 0;
+	}
+	return set_rt_orig(dev, i, s);
+}
+static HRESULT STDMETHODCALLTYPE t_clear(IDirect3DDevice9 *dev, DWORD n, const D3DRECT *r, DWORD f, D3DCOLOR c, float z, DWORD st)
+{
+	if (trace_on)
+		trace_event("Clear flags %lx color %08lx rects %lu", (unsigned long)f, (unsigned long)c, (unsigned long)n);
+	return clear_orig(dev, n, r, f, c, z, st);
+}
+static HRESULT STDMETHODCALLTYPE t_stretch(IDirect3DDevice9 *dev, IDirect3DSurface9 *a, const RECT *ra, IDirect3DSurface9 *b, const RECT *rb, D3DTEXTUREFILTERTYPE f)
+{
+	if (trace_on) {
+		char s1[80];
+		snprintf(s1, sizeof(s1), "%s", trace_surf(dev, a));
+		trace_event("StretchRect %s -> %s", s1, trace_surf(dev, b));
+		if (strstr(s1, "BACKBUFFER") && !strstr(trace_surf(dev, b), "1920x540")) {
+			trace_on = 0;
+			shot_save_now(dev, "tr-copy");
+			trace_on = 1;
+			bb_pass_done = 1;
+			trace_event("(%d draws in the pass before the screen copy)", bb_draws);
+		}
+	}
+	return stretch_orig(dev, a, ra, b, rb, f);
+}
+static HRESULT STDMETHODCALLTYPE t_viewport(IDirect3DDevice9 *dev, const D3DVIEWPORT9 *v)
+{
+	if (trace_on && v)
+		trace_event("SetViewport %lu,%lu %lux%lu", (unsigned long)v->X, (unsigned long)v->Y, (unsigned long)v->Width, (unsigned long)v->Height);
+	return viewport_orig(dev, v);
+}
+static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, INT bv, UINT mi, UINT nv, UINT si, UINT pc)
+{
+	if (layer_pass)
+		layer_fix(dev);
+	if (trace_on)
+		trace_draw(dev);
+	return dip_orig(dev, t, bv, mi, nv, si, pc);
+}
+static HRESULT STDMETHODCALLTYPE t_dp(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT sv, UINT pc)
+{
+	if (layer_pass)
+		layer_fix(dev);
+	if (trace_on)
+		trace_draw(dev);
+	return dp_orig(dev, t, sv, pc);
+}
+static HRESULT STDMETHODCALLTYPE t_begin(IDirect3DDevice9 *dev)
+{
+	if (trace_on)
+		trace_event("BeginScene");
+	return begin_scene_orig(dev);
+}
+static HRESULT STDMETHODCALLTYPE t_end(IDirect3DDevice9 *dev)
+{
+	if (trace_on)
+		trace_event("EndScene");
+	return end_scene_orig(dev);
+}
+static void trace_install(IDirect3DDevice9 *dev)
+{
+	void **vt = *(void ***)dev;
+	patch_slot(&vt[37], (void *)t_set_rt, (void **)&set_rt_orig);
+	patch_slot(&vt[43], (void *)t_clear, (void **)&clear_orig);
+	patch_slot(&vt[34], (void *)t_stretch, (void **)&stretch_orig);
+	patch_slot(&vt[47], (void *)t_viewport, (void **)&viewport_orig);
+	patch_slot(&vt[82], (void *)t_dip, (void **)&dip_orig);
+	patch_slot(&vt[81], (void *)t_dp, (void **)&dp_orig);
+	patch_slot(&vt[83], (void *)t_dpup, (void **)&dpup_orig);
+	patch_slot(&vt[84], (void *)t_dipup, (void **)&dipup_orig);
+	patch_slot(&vt[41], (void *)t_begin, (void **)&begin_scene_orig);
+	patch_slot(&vt[42], (void *)t_end, (void **)&end_scene_orig);
+	trace_dev = dev;
+}
+// called at each Present of the render thread: the frame after the 900th composed one is traced
+static void trace_present(void)
+{
+	static int armed = -1;
+	if (armed < 0)
+		armed = GetPrivateProfileIntA("native", "d3dtrace", 0, settings_path);
+	if (!armed || !trace_dev)
+		return;
+	if (trace_on) {
+		trace_event("Present");
+		shot_save_now(trace_dev, "tr-end");
+		trace_on = 0;
+		{
+			char path[MAX_PATH];
+			snprintf(path, sizeof(path), "%s", settings_path);
+			char *slash = strrchr(path, '\\');
+			if (slash)
+				strcpy(slash + 1, "d3dtrace.txt");
+			FILE *f = fopen(path, "wb");
+			if (f) {
+				fwrite(trace_buf, 1, trace_len, f);
+				fclose(f);
+			}
+			log_printf("native: D3D TRACE of one frame written to %s (%d bytes)", path, trace_len);
+		}
+		armed = 0;
+	} else if (pops_total >= 600) {
+		trace_len = 0, trace_draws = 0, bb_pass = 0, bb_pass_done = 0, bb_draws = 0;
+		trace_on = 1;
+	}
+}
+
+// Mode 10: the scene function's last pass (rva 0x63680, called at 0x5c5bf: the 2D texts and signs) draws into the half's layer instead of the picture, so the picture keeps the view alone
+// (the glow and blur that follow work on it) and the 2D, laid out by the client for a half-height screen, stays whole.
+static void (*scene2d_original)(void *);
+static void scene2d_hook(void *vp)
+{
+	IDirect3DDevice9 *dev = the_device;
+	if (mode != 10 || !dev || ring_tail == ring_head || !lay_surf[0] || !lay_surf[1]) {
+		scene2d_original(vp);
+		return;
+	}
+	int half = (int)ring[ring_tail & 7];
+	IDirect3DSurface9 *old = NULL;
+	IDirect3DDevice9_GetRenderTarget(dev, 0, &old);
+	IDirect3DDevice9_SetRenderTarget(dev, 0, lay_surf[half]);
+	IDirect3DDevice9_Clear(dev, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
+	lay_have[half] = 1;
+	layer_pass = 1;
+	scene2d_original(vp);
+	layer_pass = 0;
+	IDirect3DDevice9_SetRenderTarget(dev, 0, old);
+	if (old)
+		IDirect3DSurface9_Release(old);
 }
 
 static void comp_hook(void)
@@ -243,7 +719,11 @@ static void comp_hook(void)
 			GetModuleFileNameA(m2, n2, sizeof(n2));
 		log_printf("native: device Present in %s, swap chain Present in %s", n1, n2);
 	}
+	if (mode == 10 || GetPrivateProfileIntA("native", "d3dtrace", 0, settings_path))
+		trace_install(dev);
 	log_printf("native: Present hooks set (device %p, Ex %s)", (void *)dev, present_ex_orig ? "yes" : "no");
+	if (GetPrivateProfileIntA("native", "watchdog", 1, settings_path))
+		CreateThread(NULL, 0, watchdog_thread, NULL, 0, NULL);
 }
 
 // the second draw of the frame must not start a new frame: it adds its view to the one the first draw began
@@ -255,6 +735,8 @@ static void begin_frame_hook(void)
 }
 
 static int ctx_on;
+static float cg_aspect_saved;
+static int cg_aspect_have;
 static float asp_saved[2];
 static int asp_have;
 static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the intro is over; before that there is one picture
@@ -264,10 +746,57 @@ static void ctx_swap(int to);
 void native_unswap_entities(void);
 static void ctx_after_draw(void);
 
+// Diagnostics ([native] scanplace=1, once at the first split frame): where the 2D placement keeps the screen scale. The values the placement holds for a 1920x1080 screen are looked for in the
+// game's image: the pair of floats (3.0, 2.25) (real pixels per virtual unit), (1/3, 0.4444), and the int pair (1920, 1080); every hit is logged with the floats around it.
+static void scan_place(void)
+{
+	static int done;
+	if (done || !GetPrivateProfileIntA("native", "scanplace", 0, settings_path))
+		return;
+	done = 1;
+	uint8_t *lo = base, *hi = base + ((IMAGE_NT_HEADERS64 *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew))->OptionalHeader.SizeOfImage;
+	int hits = 0;
+	for (uint8_t *a = lo; a < hi && hits < 60;) {
+		MEMORY_BASIC_INFORMATION mbi;
+		if (!VirtualQuery(a, &mbi, sizeof(mbi)))
+			break;
+		uint8_t *end = (uint8_t *)mbi.BaseAddress + mbi.RegionSize;
+		if (mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)) && !(mbi.Protect & PAGE_GUARD)) {
+			for (uint8_t *q = (uint8_t *)mbi.BaseAddress; q + 8 <= end && hits < 60; q += 4) {
+				float f0 = *(float *)q, f1 = *(float *)(q + 4);
+				int i0 = *(int *)q, i1 = *(int *)(q + 4);
+				const char *kind = NULL;
+				if (f0 == 3.0f && f1 == 2.25f)
+					kind = "scale 3.0 2.25";
+				else if (f0 > 0.33332f && f0 < 0.33334f && f1 > 0.44443f && f1 < 0.44446f)
+					kind = "inverse 1/3 0.4444";
+				else if (i0 == 1920 && i1 == 1080)
+					kind = "ints 1920 1080";
+				if (kind) {
+					hits++;
+					char line[700];
+					int n = snprintf(line, sizeof(line), "native: scanplace %s at rva 0x%llx:", kind, (unsigned long long)(q - base));
+					for (int k = -2; k < 28 && n < (int)sizeof(line) - 24; k++)
+						n += snprintf(line + n, sizeof(line) - n, " %g", (double)*(float *)(q + k * 4));
+					log_printf("%s", line);
+				}
+			}
+		}
+		a = end;
+	}
+	log_printf("native: scanplace done, %d hits", hits);
+}
+
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
 	float *sw = subwindow();
+	if (split_on)
+		scan_place();
 	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
+		if ((mode == 8 || mode == 10) && cg_aspect_have) { // back from the split: the cgame's aspect as it was
+			*(float *)(base + 0x43c640) = cg_aspect_saved;
+			cg_aspect_have = 0;
+		}
 		if (mode == 7 && asp_have) { // back from the split: the video aspect as the game had it
 			memcpy(base + 0x4113738, asp_saved, sizeof(asp_saved));
 			asp_have = 0;
@@ -279,12 +808,44 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	}
 	float saved[4];
 	memcpy(saved, sw, sizeof(saved));
-	if (mode >= 2 && mode <= 7) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
+	if (mode >= 2 && mode <= 10) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
 		static unsigned frame;
 		int bottom = mode >= 5 ? frame_bottom : (int)(frame++ & 1); // modes 5 and 6: the client frame (below) says whose frame it is
 		sw[0] = 0, sw[1] = 1, sw[2] = bottom ? 0.5f : 0, sw[3] = bottom ? 1 : 0.5f;
 		if (mode == 6) // the middle band of the full view in both halves: right proportions, half the vertical field
 			sw[2] = 0.25f, sw[3] = 0.75f;
+		if (mode == 9) // the views are recorded for a half-height screen: the whole viewport, in the top rows
+			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
+		if (mode == 8 || mode == 10) { // the console's way: the whole view, built for the shape of a half with the cgame's own aspect (rva 0x43c640, read by CG_CalcFov), drawn over the full frame and squeezed into the half
+			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
+			if (comp_w && comp_h) {
+				float *aspect = (float *)(base + 0x43c640);
+				if (!cg_aspect_have) {
+					cg_aspect_saved = *aspect;
+					cg_aspect_have = 1;
+				}
+				*aspect = (float)comp_w / ((float)comp_h * 0.5f);
+			}
+			{ // [native] pixelaspect=<f>: the pixel aspect the 2D is laid out with (rva 0x411373c); the squeeze of the frame into its half flattens text 2:1, a factor of 2 or 0.5 here
+			  // pre-stretches it. Kept while the picture is split.
+				static float want = -1;
+				static float saved;
+				static int have;
+				float *pa = (float *)(base + 0x411373c);
+				if (want < 0) {
+					char v[32];
+					GetPrivateProfileStringA("native", "pixelaspect", "0", v, sizeof(v), settings_path);
+					want = (float)atof(v);
+				}
+				if (want > 0) {
+					if (!have) {
+						saved = *pa;
+						have = 1;
+					}
+					*pa = want;
+				}
+			}
+		}
 		if (mode == 7) { // the whole view, built for the shape of a half (wide), drawn over the full frame: the compositor squeezes it into the half (rva 0x4113738: aspect, 0x411373c: pixel aspect)
 			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
 			if (comp_w && comp_h) {
@@ -306,6 +867,10 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 			if (now - last_log > 3000) {
 				last_log = now;
 				log_printf("native: split draws %u, device %p, pushes %ld, ring %ld-%ld, bottom %d", draws, (void *)the_device, (long)pushes_total, (long)ring_tail, (long)ring_head, bottom);
+				if (ring_tail == 0 && draws > 100) { // no frame has ever been composed: are our hooks still in the tables?
+					for (int i = 0; i < nslots; i++)
+						log_printf("native: slot %d (%p): in %d, now %p, hook %p", i, (void *)slots[i].slot, slots[i].in, *slots[i].slot, slots[i].hook);
+				}
 			}
 		}
 		if (the_device && ring_head - ring_tail < 6) { // the half this frame is drawn into: the frame's end composes it
@@ -913,6 +1478,105 @@ static void pad_frame(void)
 	lt_held = lt;
 }
 
+// Mode 9: the engine is told the screen is a half (width x height/2) while the client frame records its views and its 2D: its viewport, the 2D placement and the text are made for the
+// half (nothing is squeezed afterwards), drawn into the top rows of the frame; the compositor copies those rows into the half of the picture. Video globals (rva): 0x4113724 height,
+// 0x411372c and 0x4358e84 the window height again, 0x4113738 aspect, 0x411373c pixel aspect (= height * aspect / width), the cgame's own aspect 0x43c640.
+static float video_saved_f[3];
+static int video_saved_i[3];
+static int video_pushed;
+// Mode 10: the engine's 2D screen placements (rva 0x5e0b80, three of 0x70 bytes: scaleVirtualToReal, scaleVirtualToFull, scaleRealToVirtual, viewport position and size, the viewable and the
+// adjustable rectangles; the console's split screen sets the per-client one to the half it draws into) are given the half: a 1920 x height/2 viewport with the scale of that height, so the
+// client lays its 2D out for a half and the text keeps its shape (the virtual canvas becomes wider, as on a 16:9 screen).
+#define PLACE_RVA 0x5e0b80
+#define PLACE_SIZE 0x70
+static float place_saved[3][28];
+static int place_pushed;
+static void place_push(void)
+{
+	if (!comp_w || !comp_h)
+		return;
+	float w = (float)comp_w, h = (float)(comp_h / 2), s = h / 480.0f, vw = w / s;
+	for (int n = 0; n < 3; n++) {
+		float *p = (float *)(base + PLACE_RVA + n * PLACE_SIZE);
+		if (!place_pushed) {
+			if (p[8] != w || p[9] != (float)comp_h) {
+				log_printf("native: screen placement %d is not the one expected (viewport %g x %g)", n, p[8], p[9]);
+				return;
+			}
+		}
+	}
+	for (int n = 0; n < 3; n++) {
+		float *p = (float *)(base + PLACE_RVA + n * PLACE_SIZE);
+		if (!place_pushed)
+			memcpy(place_saved[n], p, sizeof(place_saved[n]));
+		int safe = place_saved[n][10] > 0; // the two with a safe-area margin keep it (7.5 %)
+		float m = safe ? 0.075f : 0.0f;
+		p[0] = p[1] = s;
+		p[2] = w / 640.0f, p[3] = s;
+		p[4] = p[5] = 1.0f / s;
+		p[6] = p[7] = 0;
+		p[8] = w, p[9] = h;
+		p[10] = m * vw, p[11] = m * 480.0f;
+		p[12] = vw - m * vw, p[13] = 480.0f - m * 480.0f;
+		p[14] = m * w, p[15] = m * h;
+		p[16] = w - m * w, p[17] = h - m * h;
+		p[18] = 0, p[19] = 0, p[20] = vw, p[21] = 480.0f;
+		p[22] = 0, p[23] = 0, p[24] = w, p[25] = h;
+	}
+	if (!place_pushed)
+		log_printf("native: the 2D placements are made for a %gx%g half (scale %g)", w, h, s);
+	place_pushed = 1;
+}
+static void place_pop(void)
+{
+	if (!place_pushed)
+		return;
+	for (int n = 0; n < 3; n++)
+		memcpy(base + PLACE_RVA + n * PLACE_SIZE, place_saved[n], sizeof(place_saved[n]));
+	place_pushed = 0;
+}
+
+static void video_push(void)
+{
+	if (mode == 10) {
+		place_push();
+		return;
+	}
+	if (mode != 9 || !comp_w || !comp_h)
+		return;
+	int *h1 = (int *)(base + 0x4113724), *h2 = (int *)(base + 0x411372c), *h3 = (int *)(base + 0x4358e84);
+	float *a = (float *)(base + 0x4113738), *pa = (float *)(base + 0x411373c), *ca = (float *)(base + 0x43c640);
+	int half = (int)(comp_h / 2);
+	if (!video_pushed) { // the first time: what the engine had, to give back when the picture is not split any more
+		video_saved_i[0] = *h1, video_saved_i[1] = *h2, video_saved_i[2] = *h3;
+		video_saved_f[0] = *a, video_saved_f[1] = *pa, video_saved_f[2] = *ca;
+		video_pushed = 1;
+		log_printf("native: the engine's screen is %ux%d while the picture is split (was %d)", comp_w, half, video_saved_i[0]);
+	}
+	// kept as long as the picture is split, every frame (the render thread reads them later than the client frame ends, and a video restart writes them again)
+	*h1 = *h2 = *h3 = half;
+	*a = (float)comp_w / (float)half;
+	*pa = 1.0f;
+	*ca = *a;
+	if (ctx_current == 0 && ctx_store[1][0]) // context 1's cgame block holds its own copy of the cgame's aspect
+		*(float *)(ctx_store[1][0] + (0x43c640 - ranges[0].rva)) = *a;
+}
+static void video_pop(void)
+{
+	place_pop();
+	if (!video_pushed)
+		return;
+	*(int *)(base + 0x4113724) = video_saved_i[0];
+	*(int *)(base + 0x411372c) = video_saved_i[1];
+	*(int *)(base + 0x4358e84) = video_saved_i[2];
+	*(float *)(base + 0x4113738) = video_saved_f[0];
+	*(float *)(base + 0x411373c) = video_saved_f[1];
+	*(float *)(base + 0x43c640) = video_saved_f[2];
+	if (ctx_store[1][0])
+		*(float *)(ctx_store[1][0] + (0x43c640 - ranges[0].rva)) = video_saved_f[2];
+	video_pushed = 0;
+}
+
 // Mode 5: the engine's whole client frame (rva 0xd5b00, called once per engine frame from the main loop at rva 0x1fc331) runs for context 0 on even frames and for context 1 on odd ones, so
 // everything the client does in a frame (time, snapshot use, usercmds, the cgame draw, the 2D) happens in the right context. One scene per frame, as the renderer needs.
 static void (*client_frame_original)(void);
@@ -937,7 +1601,7 @@ static void client_frame_hook(void)
 		static int fov = -1;
 		static float fov_saved = -1;
 		if (fov < 0)
-			fov = GetPrivateProfileIntA("native", "fov", 0, settings_path);
+			fov = GetPrivateProfileIntA("native", "fov", (mode >= 8) ? 49 : 85, settings_path); // 85 = the console split screen: cg_fovScale 0.75 (maps/_load.gsc) on a half of 16:9 is about 100 x 38 degrees; a band of half the height cut from a view with cg_fov 85 is the same
 		uint8_t *d = *(uint8_t **)(base + 0x51e1a8);
 		if (fov > 0 && d) {
 			float *v = (float *)(d + 0x10);
@@ -963,6 +1627,8 @@ static void client_frame_hook(void)
 			*(int *)(np_dvar + 0x10) = 1;
 		ctx_swap(1);
 		pad_frame();
+		if (split_on)
+			video_push();
 		client_frame_original();
 		native_unswap_entities();
 		ctx_swap(0);
@@ -972,6 +1638,10 @@ static void client_frame_hook(void)
 		*(int *)(np_dvar + 0x10) = 0;
 	if (nogun && gun_dvar)
 		*(int *)(gun_dvar + 0x10) = 1;
+	if (split_on && ctx1_ready)
+		video_push();
+	else if (!split_on)
+		video_pop();
 	client_frame_original();
 }
 
@@ -1169,6 +1839,18 @@ static void add_entity_hook(int n)
 	add_entity_original(n);
 }
 
+// Diagnostics / fix for the 2D texts that both halves draw (the objective text, subtitles, "who stands in front" hints are global): [native] skiphud=<mask> drops, in context 1's
+// frames, the HUD parts called at the end of the cgame draw: bit 0 rva 0xc6070, bit 1 rva 0xc14e0, bit 2 rva 0x94d70, bit 3 rva 0xc5b70.
+static int skip_hud_mask;
+static void (*hud_c6070_original)(unsigned);
+static void (*hud_c14e0_original)(unsigned);
+static void (*hud_94d70_original)(unsigned);
+static void (*hud_c5b70_original)(unsigned);
+static void hud_c6070_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 1))) hud_c6070_original(lc); }
+static void hud_c14e0_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 2))) hud_c14e0_original(lc); }
+static void hud_94d70_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 4))) hud_94d70_original(lc); }
+static void hud_c5b70_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 8))) hud_c5b70_original(lc); }
+
 static void contexts_install(void)
 {
 	static const struct {
@@ -1183,13 +1865,17 @@ static void contexts_install(void)
 	    {0x15ce84, usercmd_step_hook, (void **)&usercmd_step_original},
 	    {0x234925, snapshot_msg_hook, (void **)&snapshot_msg_original},
 	    {0x1fc331, client_frame_hook, (void **)&client_frame_original},
+	    {0xbd093, hud_c6070_hook, (void **)&hud_c6070_original},
+	    {0xbd09a, hud_c14e0_hook, (void **)&hud_c14e0_original},
+	    {0xbd0a1, hud_94d70_hook, (void **)&hud_94d70_original},
+	    {0xbd034, hud_c5b70_hook, (void **)&hud_c5b70_original},
 	    {0x94039, wait_alpha_hook, (void **)&wait_alpha_original},
 	    {0xcfd23, mouse_read_hook, (void **)&mouse_read_original},
 	    {0xcf8b1, make_cmd_hook, (void **)&make_cmd_original},
 	    {0xb8d50, server_step_hook, (void **)&server_step_original},
 	    {0xd0061, mouse_read2_hook, (void **)&mouse_read2_original},
 	};
-	int enabled = GetPrivateProfileIntA("native", "sites", 8191, settings_path);
+	int enabled = GetPrivateProfileIntA("native", "sites", 0x7fffffff, settings_path);
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
 		if ((enabled & (1 << i)) && !hook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
@@ -1201,6 +1887,7 @@ static void contexts_install(void)
 			log_printf("native: add entity bytes differ");
 	}
 	p1pad = GetPrivateProfileIntA("native", "p1pad", -1, settings_path);
+	skip_hud_mask = GetPrivateProfileIntA("native", "skiphud", 0, settings_path);
 	ctx_on = 1;
 	log_printf("native: client contexts on (call sites redirected)");
 }
@@ -1273,6 +1960,13 @@ void native_install(void)
 		log_printf("native: unexpected code at the cgame draw or begin frame, experiment off");
 		mode = 0;
 		return;
+	}
+	if (mode == 10) {
+		if (*(base + 0x5c5bf) != 0xe8 || !hook_call(base + 0x5c5bf, (void *)scene2d_hook, (void **)&scene2d_original)) {
+			log_printf("native: unexpected code at the scene's 2D pass, mode 10 off");
+			mode = 0;
+			return;
+		}
 	}
 	log_printf("native: experiment %d on (the cgame draw runs twice per frame, one begin frame)", mode);
 }
