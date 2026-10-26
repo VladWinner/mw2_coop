@@ -113,7 +113,7 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	InterlockedIncrement(&ring_tail);
 	LONG pops = InterlockedIncrement(&pops_total);
 	compose(dev, half);
-	if (pops == 2400 || pops == 3600) { // the composed picture, for the QA of the experiment
+	if (pops == 600 || pops == 1200) { // the composed picture, for the QA of the experiment
 		char name[32];
 		snprintf(name, sizeof(name), "native-%ld", (long)pops);
 		shot_save_now(dev, name);
@@ -192,7 +192,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	}
 	float saved[4];
 	memcpy(saved, sw, sizeof(saved));
-	if (mode == 2) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
+	if (mode == 2 || mode == 3) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
 		static unsigned frame;
 		int bottom = (int)(frame++ & 1);
 		sw[0] = 0, sw[1] = 1, sw[2] = bottom ? 0.5f : 0, sw[3] = bottom ? 1 : 0.5f;
@@ -202,7 +202,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 			InterlockedIncrement(&ring_head);
 			InterlockedIncrement(&pushes_total);
 		}
-		cg_draw_original(local_client, a, b);
+		cg_draw_original(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
 		memcpy(sw, saved, sizeof(saved));
 		return;
 	}

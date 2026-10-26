@@ -120,3 +120,20 @@ sees one scene per frame, exactly as it does now:
 
 What stays unknown (the plan above, phases 1 and 2): the second connection and the extent of the client state to swap. Phase 3 becomes "the Present compositor and the half-frame 2D", which is
 much smaller than a multi-view renderer.
+
+## Experiments 2 and 3, and more phase 0 facts (2026-10-26, later)
+
+- **Experiment 2 works (alternate frames + compositor).** `[native] experiment=2`: even frames draw the top half, odd frames the bottom half (`r_subwindow`), and a hook on
+  `IDirect3DSwapChain9::Present` (the game presents through the swap chain, once per frame, one view queued per frame; the device's own Present and PresentEx are not used)
+  copies the half just drawn into a texture and fills the other half from the other texture. The owner watched it: the two halves are right and there is no flicker.
+  What it does not do yet: the two halves are the same player; the 2D (HUD, text) is drawn over the whole picture, so each half shows only its part of it.
+- **Experiment 3 fails at once:** `experiment=3` runs the cgame draw for LOCAL CLIENT 1 on the odd frames: the process dies within 0.2 s of the first composed frame (no CRASH line:
+  not caught by the exception logger). Local client 1 is not usable by changing the argument alone.
+- **The 2-slot table at rva 0x540ba0 (stride 0x2650) is the coop session's connection table, used by both roles:** the server side handler of the out-of-band "coopConnect" message
+  (rva 0x22d460) sets up `Netchan_Setup(1 = server socket, slot netchan, address, ...)` for slot `iVar2` taken from the message, marks it with `FUN_1401fe660(slot, 2)` and answers "coopAcceptAck";
+  the client's connect handler (rva 0xd23c0) sets up the same table's slot 0 with socket 0. The server-side frame loop (rva 0x22f400) walks both slots and sends to every slot in use.
+  So the engine's coop code already thinks in two connection slots; what is needed for a local second player is a slot whose netchan is a local one (the loopback).
+- **Some per-client arrays are real 4-entry arrays** (for example the array with stride 0xe80 at rva 0x3cf180, 16 KB = 4 entries, indexed by the local client number in `rva 0x6a570`), while the main
+  cgame state (`cg` at rva 0x422440) is addressed at a constant. A mix: some modules keep the console's MAX_LOCAL_CLIENTS = 4 arrays, the main client state is a single static.
+- The workflow of six research agents (`docs/native-splitscreen-research/`) stopped on the usage limit before it wrote anything (1.47 million tokens spent, no report): the questions it was given
+  (second connection, client state extent, 2D per half, input, server side and mod assumptions, time slicing) are still open and listed above.
