@@ -88,6 +88,12 @@ done:
 		IDirect3DSurface9_Release(back);
 }
 
+// for src/native.c: the frame about to be shown, saved right now (the render thread, at EndScene)
+void shot_save_now(void *dev, const char *name)
+{
+	save((IDirect3DDevice9 *)dev, name);
+}
+
 static HRESULT STDMETHODCALLTYPE end_scene_hook(IDirect3DDevice9 *dev)
 {
 	if (pending[0]) {

@@ -4,13 +4,17 @@
 // rva 0x8150) reads the dvar r_subwindow, a vec4 (left, right, top, bottom: fractions of the picture), and corrects the projection for that rectangle. This
 // hook runs the draw twice per frame, the first with the top half as r_subwindow and the second with the bottom half. settings.ini [native] experiment=1
 // switches it on; with 2 the second view is turned around (yaw + 180) to show that the views are drawn separately. 64-bit only for now.
+#define COBJMACROS
 #include <windows.h>
+#include <d3d9.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "hook.h"
 #include "log.h"
 #include "native.h"
+#include "shot.h"
 
 #ifdef _WIN64
 #define RVA_CG_DRAW 0x0bca00         // void (unsigned local_client, int, int): the cgame's frame; it calls the begin-frame below in the middle
@@ -31,6 +35,146 @@ static float *subwindow(void)
 	return dvar ? (float *)(dvar + 0x10) : NULL;
 }
 
+// ---- the compositor (mode 2): one scene per frame, the two halves kept between frames
+// Each frame the cgame draws one player's view into one half of the picture (r_subwindow). The frame's end (EndScene of the game's device, on the render thread)
+// copies that half into a texture of its own and fills the other half from the other texture, so the picture always has both views whole.
+#define RVA_D3D_DEVICE 0x410fd20
+static volatile LONG ring[8];
+static volatile LONG ring_head, ring_tail; // frames queued by the main thread, and the halves they were drawn into, in order
+static IDirect3DDevice9 *comp_device;
+static IDirect3DTexture9 *comp_tex[2];
+static IDirect3DSurface9 *comp_surf[2];
+static int comp_have[2];
+static UINT comp_w, comp_h;
+
+static void comp_release(void)
+{
+	for (int i = 0; i < 2; i++) {
+		if (comp_surf[i])
+			IDirect3DSurface9_Release(comp_surf[i]);
+		if (comp_tex[i])
+			IDirect3DTexture9_Release(comp_tex[i]);
+		comp_surf[i] = NULL, comp_tex[i] = NULL, comp_have[i] = 0;
+	}
+}
+
+static void compose(IDirect3DDevice9 *dev, int half)
+{
+	IDirect3DSurface9 *back = NULL;
+	D3DSURFACE_DESC d;
+	if (FAILED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back)))
+		return;
+	IDirect3DSurface9_GetDesc(back, &d);
+	if (dev != comp_device || d.Width != comp_w || d.Height != comp_h) {
+		comp_release();
+		comp_device = dev, comp_w = d.Width, comp_h = d.Height;
+		for (int i = 0; i < 2; i++) {
+			if (FAILED(IDirect3DDevice9_CreateTexture(dev, d.Width, d.Height / 2, 1, D3DUSAGE_RENDERTARGET, d.Format, D3DPOOL_DEFAULT, &comp_tex[i], NULL)) ||
+			    FAILED(IDirect3DTexture9_GetSurfaceLevel(comp_tex[i], 0, &comp_surf[i]))) {
+				log_printf("native: cannot make the half textures (%ux%u)", d.Width, d.Height / 2);
+				comp_release();
+				IDirect3DSurface9_Release(back);
+				return;
+			}
+		}
+		log_printf("native: compositor on, %ux%u picture, two %ux%u halves", d.Width, d.Height, d.Width, d.Height / 2);
+	}
+	RECT drawn = {0, half ? (LONG)(d.Height / 2) : 0, (LONG)d.Width, half ? (LONG)d.Height : (LONG)(d.Height / 2)};
+	RECT other = {0, half ? 0 : (LONG)(d.Height / 2), (LONG)d.Width, half ? (LONG)(d.Height / 2) : (LONG)d.Height};
+	if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &drawn, comp_surf[half], NULL, D3DTEXF_NONE)))
+		comp_have[half] = 1;
+	if (comp_have[1 - half])
+		IDirect3DDevice9_StretchRect(dev, comp_surf[1 - half], NULL, back, &other, D3DTEXF_NONE);
+	IDirect3DSurface9_Release(back);
+}
+
+static volatile LONG pops_total, pushes_total;
+static volatile LONG present_hits[3]; // device Present, device PresentEx, swap chain Present: which one the game calls
+static volatile LONG compose_via = -1;
+
+typedef HRESULT(STDMETHODCALLTYPE *present_t)(IDirect3DDevice9 *, const RECT *, const RECT *, HWND, const RGNDATA *);
+typedef HRESULT(STDMETHODCALLTYPE *present_ex_t)(IDirect3DDevice9 *, const RECT *, const RECT *, HWND, const RGNDATA *, DWORD);
+typedef HRESULT(STDMETHODCALLTYPE *sc_present_t)(IDirect3DSwapChain9 *, const RECT *, const RECT *, HWND, const RGNDATA *, DWORD);
+static present_t present_orig;
+static present_ex_t present_ex_orig;
+static sc_present_t sc_present_orig;
+static IDirect3DDevice9 *the_device;
+static const GUID iid_device9ex = {0xb18b10ce, 0x2649, 0x405a, {0x87, 0x0f, 0x95, 0xf7, 0x77, 0xd4, 0x31, 0x3a}};
+
+// before the picture is shown: the half this frame was drawn into is kept and the other one filled in (once per frame, whichever way the game presents)
+static void before_present(int via, IDirect3DDevice9 *dev)
+{
+	InterlockedIncrement(&present_hits[via]);
+	if (compose_via < 0)
+		compose_via = via;
+	if (compose_via != via || ring_tail == ring_head)
+		return;
+	int half = (int)ring[ring_tail & 7];
+	InterlockedIncrement(&ring_tail);
+	LONG pops = InterlockedIncrement(&pops_total);
+	compose(dev, half);
+	if (pops == 2400 || pops == 3600) { // the composed picture, for the QA of the experiment
+		char name[32];
+		snprintf(name, sizeof(name), "native-%ld", (long)pops);
+		shot_save_now(dev, name);
+	}
+	if (pops % 300 == 0)
+		log_printf("native: %ld frames composed via %d, presents %ld/%ld/%ld, %ld views queued, queue %ld", (long)pops, via, (long)present_hits[0],
+			   (long)present_hits[1], (long)present_hits[2], (long)pushes_total, (long)(ring_head - ring_tail));
+}
+
+static HRESULT STDMETHODCALLTYPE present_hook(IDirect3DDevice9 *dev, const RECT *a, const RECT *b, HWND c, const RGNDATA *d)
+{
+	before_present(0, dev);
+	return present_orig(dev, a, b, c, d);
+}
+
+static HRESULT STDMETHODCALLTYPE present_ex_hook(IDirect3DDevice9 *dev, const RECT *a, const RECT *b, HWND c, const RGNDATA *d, DWORD e)
+{
+	before_present(1, dev);
+	return present_ex_orig(dev, a, b, c, d, e);
+}
+
+static HRESULT STDMETHODCALLTYPE sc_present_hook(IDirect3DSwapChain9 *sc, const RECT *a, const RECT *b, HWND c, const RGNDATA *d, DWORD e)
+{
+	before_present(2, the_device);
+	return sc_present_orig(sc, a, b, c, d, e);
+}
+
+static void patch_slot(void **slot, void *hook, void **orig)
+{
+	DWORD old;
+	if (!VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old))
+		return;
+	*orig = *slot;
+	*slot = hook;
+	VirtualProtect(slot, sizeof(void *), old, &old);
+}
+
+static void comp_hook(void)
+{
+	if (the_device)
+		return;
+	IDirect3DDevice9 *dev = *(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE);
+	if (!dev)
+		return;
+	the_device = dev;
+	void **vt = *(void ***)dev;
+	patch_slot(&vt[17], (void *)present_hook, (void **)&present_orig);
+	IDirect3DDevice9Ex *ex = NULL;
+	if (SUCCEEDED(IDirect3DDevice9_QueryInterface(dev, &iid_device9ex, (void **)&ex)) && ex) {
+		patch_slot(&vt[121], (void *)present_ex_hook, (void **)&present_ex_orig); // PresentEx: the slot of the Ex interface
+		IDirect3DDevice9Ex_Release(ex);
+	}
+	IDirect3DSwapChain9 *sc = NULL;
+	if (SUCCEEDED(IDirect3DDevice9_GetSwapChain(dev, 0, &sc)) && sc) {
+		void **svt = *(void ***)sc;
+		patch_slot(&svt[3], (void *)sc_present_hook, (void **)&sc_present_orig);
+		IDirect3DSwapChain9_Release(sc);
+	}
+	log_printf("native: Present hooks set (device %p, Ex %s)", (void *)dev, present_ex_orig ? "yes" : "no");
+}
+
 // the second draw of the frame must not start a new frame: it adds its view to the one the first draw began
 static void begin_frame_hook(void)
 {
@@ -48,6 +192,20 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	}
 	float saved[4];
 	memcpy(saved, sw, sizeof(saved));
+	if (mode == 2) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
+		static unsigned frame;
+		int bottom = (int)(frame++ & 1);
+		sw[0] = 0, sw[1] = 1, sw[2] = bottom ? 0.5f : 0, sw[3] = bottom ? 1 : 0.5f;
+		comp_hook();
+		if (the_device && ring_head - ring_tail < 6) { // the half this frame is drawn into: the frame's end composes it
+			ring[ring_head & 7] = bottom;
+			InterlockedIncrement(&ring_head);
+			InterlockedIncrement(&pushes_total);
+		}
+		cg_draw_original(local_client, a, b);
+		memcpy(sw, saved, sizeof(saved));
+		return;
+	}
 	sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 0.5f; // the top half
 	cg_draw_original(local_client, a, b);
 	sw[2] = 0.5f, sw[3] = 1; // the bottom half
