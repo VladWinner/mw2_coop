@@ -92,3 +92,31 @@ How the engine keeps the client's state:
 What is still unknown and decides phases 1 and 2: the exact extent of the client state (which of the clusters are per client and which are shared), whether pointers
 into those ranges are kept elsewhere (the swap by copying contents is only safe if not), and how the connection state (`cls`, `clc`, the netchan) is laid out for a
 second connection.
+
+## Experiment 1 (2026-10-26): can the renderer take two scenes in one frame? No, not as the engine is used now
+
+`src/native.c` (settings.ini `[native] experiment=1`, 64-bit): hooks the cgame's draw (rva 0xbca00) and runs it twice per frame, the second time with the bottom half
+as `r_subwindow`; the begin-frame (rva 0xc840) is skipped for the second run. Results:
+
+- Calling only the scene submit (rva 0xca4b0, which `rva 0x941b0` reaches at the end of the cgame draw) twice, and calling the whole cgame draw twice with and without the
+  begin-frame skipped: all four variants run for about 30 s (the black intro) and then crash on the worker thread in the renderer's back end, always in
+  the draw loop at rva 0x63f50 / 0x64e80 (`IDirect3DDevice9::DrawIndexedPrimitive` fed from a surface stream whose entries are garbage; `rdi` = 1 or 2, the view index).
+  So the stream the front end makes for a second view in the same frame is not valid for the back end, or is made by something this build does not run for more than
+  one view.
+- What the renderer is: the front end is double buffered (`rva 0xc840` toggles two frame data sets of 0x13d700 bytes at rva 0x458fb00, resets the command buffers and the
+  view count at +0x419e8); a scene is queued by `rva 0x8210` (view info of 0x150 bytes per view, arena allocation of 0x4708 bytes) and drawn on worker threads.
+
+Conclusion: **two scenes per frame needs the renderer's multi-view data understood far better than one session of reading gives, and it is the riskiest part.**
+
+## The design that avoids it: alternate frames, one scene per frame
+
+Draw the player 1's frame on even frames and the player 2's on odd frames (the Oblivion split screen mod does the same, the "alternate" mode), so the renderer only ever
+sees one scene per frame, exactly as it does now:
+
+1. each frame, the context of player `frame & 1` is swapped in (the client-side globals of the plan above) and the normal client frame runs: network receive, usercmd, snapshot, cgame, scene;
+2. `r_subwindow` is set to the top half for context 0 and the bottom half for context 1 (the renderer already corrects the projection for it); the 2D (HUD, menus) goes through the viewport/scissor of that half;
+3. a Direct3D 9 `Present` hook (the 64-bit `shot.c` finds the device) copies the half just drawn into a texture of its own and, before presenting, draws both textures into the back buffer: top and bottom, always complete;
+4. each view runs at half the frame rate (60 fps game: 30 per view); the server's own rate (sv_fps 20) and the client's packet rate (cl_maxpackets 30) are not above that.
+
+What stays unknown (the plan above, phases 1 and 2): the second connection and the extent of the client state to swap. Phase 3 becomes "the Present compositor and the half-frame 2D", which is
+much smaller than a multi-view renderer.
