@@ -149,3 +149,22 @@ much smaller than a multi-view renderer.
 So the engine already has what a second LOCAL client needs on the SERVER side: the server talks to a slot over a netchan whose address can be the loopback. What is missing for a second local client is the CLIENT side of that second loopback connection:
 the client code (cgame, snapshot parse, usercmd send) is written for one connection (the client connect handler uses slot 0 at a constant) and its state is single statics.
 The loopback queue itself (the engine's `NET_` loopback, one client/server pair) would need a second pair or a tag to tell the two clients' packets apart: not examined yet.
+
+## The loopback (phase 1 lead, 2026-10-26)
+
+Found by reading the engine's network layer (64-bit):
+
+- **`NET_SendPacket(sock, length, data, to)` is rva 0x202db0.** For a `to` of type 2 (NA_LOOPBACK) nothing touches a socket: with `sock < 1` (a client sending) the packet goes into **one client-to-server ring** of 64 entries of 0x2008 bytes
+  (rva 0x1391690, write counter rva 0x1411894, tagged with the sender's `sock` at entry+0x2004); with `sock >= 1` (the server sending) it goes into **a ring per destination client, selected by the 16-bit field of the
+  address (its port)**, 12 entries of 0x2008 bytes each, queue stride 0x18068 (rings from rva 0x14118a0, counters rva 0x1429900/0x1429904 + index * 0x18068).
+- **`NET_GetLoopPacket(sock, &from, &msg)` is rva 0x202a60:** `sock == 1` is the server's read (the client-to-server ring; the `from` it gives has the sender's tag as its port, so the server tells loopback clients apart by that port);
+  any other `sock` is a client's read of ITS ring `sock * 0x18068`. In this build the client's socket is 0 and the server's is 1, so a second local client could not read its ring with `sock = 1`: the engine was built with one client, but
+  its loopback is already shaped for several clients addressed by port. Replacing these two functions (hooks) with a loopback of our own that keys the clients by an explicit context number is small.
+- **How the host connects itself over it (the `listen` handler, rva 0xd25e0):** builds the address {type 2, ip 127.0.0.1, port 0}, clears both table slots, marks slot 0 as type 2, calls `Netchan_Setup(0, slot-0 netchan, address, qport 0, buffers 0x1000 x 2)` (rva 0x203190),
+  sets the coop flag rva 0x52fb5c, adds the local party member (rva 0xd7220, local client 0, local flag 1) and sets the client state (rva 0x24ee50, 0xb). The partner's connection is made by the server's "coopConnect" handler (rva 0x22d460) on slot 1.
+  A second local client would be: slot 1 marked type 2, its netchan set up for the address {type 2, port 1}, its party member added with local client 1, and its client side state brought up in its own context.
+- The `listen` handler also runs the console command `nosplitscreen` first; strings `splitscreencontrols`, `nosplitscreen`, `splitscreen` appear in the connect code. Those commands are the console's local split-screen switches: where they are handled is still to be found
+  (the PC has the names, the code may be a stub like `IsSplitScreen()`).
+
+So the engine's server side and its loopback are already built for several local clients; the client side is one static copy. The next steps are the hooks on the two loopback functions (queues keyed by context number), a second `Netchan_Setup` and member add for context 1,
+and a look at what the client's connect state machine (`cls` state, rva 0x24ee50 and the challenge/connect sequence) needs in its own context.
