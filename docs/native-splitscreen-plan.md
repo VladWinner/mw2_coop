@@ -284,3 +284,27 @@ Settings: `players=2`, `coopdvar=1`, `experiment=5`. What it does on top of expe
 - **DirectX error:** the half textures of the compositor are in the default pool; a device reset (lost device, `vid_restart`, a change of the desktop, a remote session) fails while they are alive. The `Reset` / `ResetEx` slots
   now release them first (`reset_hook`). Not yet confirmed by a long run.
 - Open: sound (one listener), the mod's partner logic (net/mirror/party), a second device and the menu/lobby for the mode, the 32-bit build, an HUD laid out for the half instead of a squeezed one.
+
+## Experiment 9 (2026-10-26/27, night): mode 10, the console look, and the lobby
+
+- **Where the 2D is drawn.** A render thread trace (`[native] d3dtrace=1`: render targets, viewports, clears, stretches, draw runs with their callers, written to `<game dir>\mw2coop\d3dtrace.txt`) showed one frame
+  is: shadow maps, the HDR scene target, then ONE pass into the back buffer (opaque, transparent, and at its end the texts and signs), a copy of the back buffer, the blur chain at 480x270, a composite, a few last 2D
+  draws. The pass is `FUN_140062...` called from the scene function at rva 0x5c240; its last call (rva 0x5c5bf, function 0x63680, draw list at +0x868 of the scene struct) draws the 2D (subtitles, objective,
+  names, signs). The glow and blur that follow work on the back buffer.
+- **Mode 10** = mode 8's 3D (the cgame's aspect at rva 0x43c640 is the half's, the view is built over the whole frame and squeezed into the half, right proportions, cg_fov 49 = the console's 0.75 scale) plus:
+  - the scene's 2D call (rva 0x5c5bf) is hooked: the render thread sets the render target to a per-half A8R8G8B8 layer (cleared to transparent) for that call and puts the back buffer back; with the engine's
+    blending left alone the layer would hold the alpha squared, so while the layer is drawn `SEPARATEALPHABLENDENABLE` is set (alpha blend factors one / inverse source alpha for the alpha channel only);
+  - the compositor squeezes the back buffer (the view after the glow) into the half texture and lays the layer's top half over it with the fixed pipeline (a state block saves and restores everything);
+  - the 2D is laid out for a half: the three screen placement structs at rva 0x5e0b80 (stride 0x70: scaleVirtualToReal, scaleVirtualToFull, scaleRealToVirtual, viewport position and size, viewable and
+    adjustable rectangles; found by scanning the image for the pair 3.0 / 2.25) are given a 1920 x height/2 viewport, so the virtual canvas of 480 units is 540 pixels tall and text is not squeezed.
+  Result: normal text (small, as in the console: half the height means half the size), the view-model fully visible in each half, HUD per half.
+- **Crash fixed:** both contexts process every snapshot and both ran the cgame's cleanup of removed entities (rva 0xb9320), which frees the engine's shared per-entity objects; the second free crashed in the pool
+  (Contingency, a few seconds after the intro). Only context 0 does it now (`entclean=0` turns it off).
+- **Session lifecycle** (`native_split_start/stop`, console `mw2coop_native_start [pad]`, `mw2coop_native_stop`, `mw2coop_native_launch <map> [pad]`): every code patch of the file goes through a journal;
+  the patches that make the game a two local players game (player count in G_InitGame, the server command filter, the client's reads of the count, the entity list) are put back when the session ends, the hooks stay
+  and pass everything through while no session runs. The menu's Split screen button now opens the lobby as before (the second player presses a button on his pad); Start no longer launches a second process:
+  the lobby's party is let go, the session starts and `map <mission>` runs (`menus.c: native_launch`). The session ends when the menus are back (`native_session_tick`). Player angles of a session from the menu are
+  the spawn's (the QA runs turn the players to face each other with `p1yawdeg`/`p0turn`).
+- Tools: `tools/sheet.py` (contact sheet of BMP frames, pure python), `tools/crop.py`, `tools/qa_native.sh` with `MW2COOP_MENU=1` (the console launch), `MW2COOP_LOBBY=1` (the lobby's whole path), `MW2COOP_POST`.
+- Open: global texts (objective, subtitles) are drawn in both halves (they belong to client 0 and context 1 draws as client 0); sound listener; a second keyboard; HUD size dvars of the console's split screen;
+  the 32-bit build; long runs; a restart after both players are down.
