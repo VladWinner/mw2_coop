@@ -191,7 +191,13 @@ int instance_start(int pad)
 		log_printf("instance: cannot write the command file");
 		return 0;
 	}
-	fprintf(f, "# the second player of a split screen session\n!sleep 12000\n!xuid_add 1\n!sleep 2000\nmw2coop_join %s\n!sleep 600000\n", addr);
+	fprintf(f, "# the second player of a split screen session\n");
+#ifndef _WIN64
+	fprintf(f, "set arcademode 0\nset solo_play 0\n"); // the 32-bit game's own settings for a lobby
+#endif
+	// the join itself comes from splitscreen.c once the picture has its size (a video restart in the middle of it breaks it)
+	(void)addr;
+	fprintf(f, "!sleep 12000\n!xuid_add 1\n!sleep 600000\n");
 	fclose(f);
 
 	// the game's own checks: started by this process, with its Steam environment

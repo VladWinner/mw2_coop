@@ -24,6 +24,7 @@
 #include "log.h"
 #include "splitscreen.h"
 
+static DWORD started_at; // when the threads were started
 static int pad = -1;
 static int turn_speed = 14;
 static int fakepad;
@@ -290,16 +291,22 @@ static float view_degrees = 90; // the horizontal view of a half: the picture is
 #ifdef _WIN64
 #define RVA_ASPECT_DISPLAY 0x4113738 // float, set by the video init (rva 0x10550)
 #define RVA_ASPECT_PIXEL 0x411373c   // float, aspect * height / width of the window
+#elif !defined(MW2COOP_IW4X)
+#define RVA_ASPECT_DISPLAY 0x188edb4 // the 32-bit game's video init (rva 0x10a4f0): the same two floats
+#define RVA_ASPECT_PIXEL 0x188edb8
 #endif
 
 static void apply_aspect(void)
 {
-#ifdef _WIN64
+#ifdef RVA_ASPECT_DISPLAY
 	int w, h;
 	slot_size(&w, &h);
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
-	*(float *)(base + RVA_ASPECT_DISPLAY) = (float)w / h;
-	*(float *)(base + RVA_ASPECT_PIXEL) = 1.0f;
+	float *display = (float *)(base + RVA_ASPECT_DISPLAY), *pixel = (float *)(base + RVA_ASPECT_PIXEL);
+	if (!(*display > 1.0f && *display < 3.0f) && *display != (float)w / h) // not what a build with these addresses holds (4:3 to 16:9 presets)
+		return;
+	*display = (float)w / h;
+	*pixel = 1.0f;
 #endif
 }
 
@@ -583,9 +590,25 @@ static DWORD WINAPI split_thread(LPVOID unused)
 	}
 	game_window = w;
 	Sleep(500);
-	if (slot > 0) { // the second copy is hidden: its picture is made right at the start
-		set_resolution();
-		Sleep(4000);
+	if (slot > 0) { // the second copy is hidden: its picture is made once the game's console is up
+		for (int i = 0; i < 600 && !game_find_dvar("r_customMode"); i++)
+			Sleep(100);
+		Sleep(3000);
+		if (set_resolution()) { // the video restart makes a new window: wait for it before the join below
+			for (int i = 0; i < 200 && IsWindow(w); i++)
+				Sleep(100);
+			HWND n = find_game_window(100);
+			if (n) {
+				w = game_window = n;
+				log_printf("splitscreen: new game window %p", (void *)n);
+			}
+			Sleep(3000);
+		}
+		// the join comes only now (not from the command file): a video restart in the middle of a join or a level load breaks it
+		while (GetTickCount() - started_at < 20000)
+			Sleep(200);
+		game_cbuf_addtext("mw2coop_join 127.0.0.1\n");
+		log_printf("splitscreen: joining the first process");
 	}
 	if (slot < 0)
 		place_window(w);
@@ -678,6 +701,7 @@ static void start_threads(void)
 	if (started)
 		return;
 	started = 1;
+	started_at = GetTickCount();
 	if (slot == 0)
 		CreateThread(NULL, 0, container_thread, NULL, 0, NULL);
 	CreateThread(NULL, 0, split_thread, NULL, 0, NULL);
