@@ -8,6 +8,7 @@
 //                        bottom; stacked=0: left and right) while a level runs and take it out again in the menus
 //     view    = 60..120  the horizontal view in degrees of a half while the shared window is up (default 90; the very wide halves
 //                        stretch the picture at the edges when the engine widens the standard view to them)
+//     delay   = seconds after a level starts before the windows join the shared window (default 12: the load is over)
 //     speed   = 1..100   the right stick's turn speed in pixels per 10 ms at full tilt (default 14)
 //     fakepad = 1        QA: the pad's state is read from mw2coop\fakepad.txt ("lx ly rx ry buttons lt rt", XInput units)
 // A pad copy has its own virtual cursor (the game's GetCursorPos/SetCursorPos are redirected, the real cursor stays with
@@ -281,6 +282,7 @@ static int stacked = 1; // 1 (default): one above the other, 0: side by side
 static HWND container;
 static int joined;
 static void slot_size(int *w, int *h);
+static DWORD join_delay_ms = 12000; // how long after the level starts the windows join
 static float view_degrees = 90; // the horizontal view of a half: the picture is very wide (3.7:1), the engine widens the view with it and the edges stretch
 
 // cg_fov that gives the half a horizontal view of view_degrees (the engine takes cg_fov for a 4:3 picture and widens it with the aspect);
@@ -402,7 +404,8 @@ static int level_running(void)
 static void layout_child(HWND w)
 {
 	RECT c;
-	GetClientRect(container, &c);
+	if (!GetClientRect(container, &c) || c.right < 100 || c.bottom < 100) // gone or minimised
+		return;
 	int cw = c.right, ch = c.bottom;
 	int x = stacked ? 0 : slot * cw / 2, y = stacked ? slot * ch / 2 : 0;
 	int ww = stacked ? cw : cw / 2, hh = stacked ? ch / 2 : ch;
@@ -438,7 +441,14 @@ static void container_poll(HWND w)
 			ExitProcess(0);
 		}
 	}
-	int want = level_running() && container && IsWindow(container);
+	// the windows go into the shared window only when the level is loaded: two game processes whose windows are tied together stall each other
+	// while one of them is in a long load that does not pump its window messages
+	static DWORD level_since;
+	if (!level_running())
+		level_since = 0;
+	else if (!level_since)
+		level_since = GetTickCount();
+	int want = level_since && GetTickCount() - level_since > join_delay_ms && container && IsWindow(container);
 	if (want && !joined) {
 		GetWindowRect(w, &saved_rect);
 		saved_style = GetWindowLongA(w, GWL_STYLE);
@@ -748,6 +758,7 @@ void splitscreen_install(void)
 	GetPrivateProfileStringA("splitscreen", "window", "", window_spec, sizeof(window_spec), ini_path);
 	slot = GetPrivateProfileIntA("splitscreen", "slot", -1, ini_path);
 	view_degrees = (float)GetPrivateProfileIntA("splitscreen", "view", 90, ini_path);
+	join_delay_ms = (DWORD)GetPrivateProfileIntA("splitscreen", "delay", 12, ini_path) * 1000;
 	embed = GetPrivateProfileIntA("splitscreen", "embed", 0, ini_path) != 0;
 	stacked = GetPrivateProfileIntA("splitscreen", "stacked", 1, ini_path) != 0;
 	if (slot < 0) {
