@@ -79,6 +79,19 @@ static void compose(IDirect3DDevice9 *dev, int half)
 		}
 		log_printf("native: compositor on, %ux%u picture, two %ux%u halves", d.Width, d.Height, d.Width, d.Height / 2);
 	}
+	if (mode == 6) { // the drawn view is the middle band of the picture; it fills the whole half texture, and both halves are put on the picture
+		RECT band = {0, (LONG)(d.Height / 4), (LONG)d.Width, (LONG)(d.Height * 3 / 4)};
+		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &band, comp_surf[half], NULL, D3DTEXF_LINEAR)))
+			comp_have[half] = 1;
+		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
+		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
+		if (comp_have[0])
+			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
+		if (comp_have[1])
+			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
+		IDirect3DSurface9_Release(back);
+		return;
+	}
 	RECT drawn = {0, half ? (LONG)(d.Height / 2) : 0, (LONG)d.Width, half ? (LONG)d.Height : (LONG)(d.Height / 2)};
 	RECT other = {0, half ? 0 : (LONG)(d.Height / 2), (LONG)d.Width, half ? (LONG)(d.Height / 2) : (LONG)d.Height};
 	if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &drawn, comp_surf[half], NULL, D3DTEXF_NONE)))
@@ -200,10 +213,12 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	}
 	float saved[4];
 	memcpy(saved, sw, sizeof(saved));
-	if (mode == 2 || mode == 3 || mode == 4 || mode == 5) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
+	if (mode >= 2 && mode <= 6) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
 		static unsigned frame;
-		int bottom = mode == 5 ? frame_bottom : (int)(frame++ & 1); // mode 5: the client frame (below) says whose frame it is
+		int bottom = mode >= 5 ? frame_bottom : (int)(frame++ & 1); // modes 5 and 6: the client frame (below) says whose frame it is
 		sw[0] = 0, sw[1] = 1, sw[2] = bottom ? 0.5f : 0, sw[3] = bottom ? 1 : 0.5f;
+		if (mode == 6) // the middle band of the full view in both halves: right proportions, half the vertical field
+			sw[2] = 0.25f, sw[3] = 0.75f;
 		comp_hook();
 		if (the_device && ring_head - ring_tail < 6) { // the half this frame is drawn into: the frame's end composes it
 			ring[ring_head & 7] = bottom;
@@ -551,6 +566,13 @@ static void ctx_after_draw(void)
 		return;
 	log_printf("native: starting context 1");
 	ctx_seed_cgame();
+	if (GetPrivateProfileIntA("native", "p1cmd", 0, settings_path)) {
+		// player 1's view: the view angle accumulators (pitch 0x533d14, yaw 0x533d18, degrees) of context 1's block; the server turns them into his view with the
+		// angles it set at his spawn, so this is relative to that (player 1 stood at yaw -77 with 0): [native] p1yaw=<degrees>
+		float *acc = (float *)(ctx_store[1][4] + (0x533d14 - 0x533cb8));
+		acc[0] = 0;
+		acc[1] = (float)GetPrivateProfileIntA("native", "p1yawdeg", 60, settings_path);
+	}
 	ctx_swap(1);
 	// not the whole cgame init (it also resets what is shared: effects, media, the renderer's per-level state): only its two per-client parts, on the copied block
 	((void (*)(unsigned long long))(base + 0xb8830))(0);
@@ -606,7 +628,7 @@ static void client_frame_hook(void)
 	if (nopredict < 0)
 		nopredict = GetPrivateProfileIntA("native", "nopredict", 0, settings_path);
 	uint8_t *np_dvar = *(uint8_t **)(base + 0x51e028); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
-	if (mode == 5 && ctx1_ready && (frame++ & 1)) {
+	if (mode >= 5 && ctx1_ready && (frame++ & 1)) {
 		frame_bottom = 1;
 		if (nopredict && np_dvar)
 			*(int *)(np_dvar + 0x10) = 1;
