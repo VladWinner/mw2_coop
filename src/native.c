@@ -133,6 +133,9 @@ static IDirect3DSurface9 *lay_surf[2];
 static int lay_have[2];
 static IDirect3DStateBlock9 *comp_sb;
 static volatile LONG layer_pass; // the render thread is inside the 2D pass
+static volatile DWORD split_tick; // when the picture was last split (the intro's title lines have random glyphs, which no comparison can match: for the first seconds the bands are cut out whatever the layers hold)
+static IDirect3DPixelShader9 *dedupe_ps;
+static int dedupe_tried;
 
 static void comp_release(void)
 {
@@ -151,6 +154,68 @@ static void comp_release(void)
 	if (comp_sb)
 		IDirect3DStateBlock9_Release(comp_sb);
 	comp_sb = NULL;
+	if (dedupe_ps)
+		IDirect3DPixelShader9_Release(dedupe_ps);
+	dedupe_ps = NULL;
+	dedupe_tried = 0;
+}
+
+// The global texts (the objective, the subtitles, the title lines of an intro) are drawn by both contexts: in the bottom half they are left out where the two layers hold the same picture, in
+// a few bands of the screen where those texts live (a pixel shader compares the layers; the per-player parts of the HUD differ between the layers or lie outside the bands, the crosshair is
+// outside them). The shader is compiled from HLSL by the system's d3dcompiler_47.dll (target ps_2_0); without it the objective's strip is simply cut out.
+static void dedupe_make(IDirect3DDevice9 *dev)
+{
+	if (dedupe_tried)
+		return;
+	dedupe_tried = 1;
+	typedef HRESULT(WINAPI * compile_t)(const void *, SIZE_T, const char *, const void *, void *, const char *, const char *, UINT, UINT, void **, void **);
+	HMODULE m = LoadLibraryA("d3dcompiler_47.dll");
+	compile_t compile = m ? (compile_t)GetProcAddress(m, "D3DCompile") : NULL;
+	if (!compile) {
+		log_printf("native: no d3dcompiler, the global texts are only cut out of the bottom half in the objective's strip");
+		return;
+	}
+	static const char src[] =
+		"sampler2D A : register(s0);\n"
+		"sampler2D B : register(s1);\n"
+		"float4 band1 : register(c0);\n"
+		"float4 band2 : register(c1);\n"
+		"float4 band3 : register(c2);\n"
+		"float4 force : register(c3);\n"
+		"float4 main(float2 uv : TEXCOORD0) : COLOR\n"
+		"{\n"
+		"\tfloat4 a = tex2D(A, uv);\n"
+		"\tfloat4 b = tex2D(B, uv);\n"
+		"\tfloat4 d = abs(a - b);\n"
+		"\tfloat same = max(force.x, step(d.x + d.y + d.z + d.w, 0.2));\n"
+		"\tfloat in1 = step(band1.x, uv.x) * step(uv.x, band1.y) * step(band1.z, uv.y) * step(uv.y, band1.w);\n"
+		"\tfloat in2 = step(band2.x, uv.x) * step(uv.x, band2.y) * step(band2.z, uv.y) * step(uv.y, band2.w);\n"
+		"\tfloat in3 = step(band3.x, uv.x) * step(uv.x, band3.y) * step(band3.z, uv.y) * step(uv.y, band3.w);\n"
+		"\tfloat kill = same * saturate(in1 + in2 + in3);\n"
+		"\treturn a * (1.0 - kill);\n"
+		"}\n";
+	void *code = NULL, *errors = NULL;
+	HRESULT hr = compile(src, sizeof(src) - 1, "dedupe", NULL, NULL, "main", "ps_2_0", 0, 0, &code, &errors);
+	if (FAILED(hr) || !code) {
+		log_printf("native: the de-duplication shader did not compile (%08lx)", (unsigned long)hr);
+		if (errors) {
+			void **vt = *(void ***)errors;
+			log_printf("native: %s", (const char *)((void *(*)(void *))vt[3])(errors));
+			((ULONG(*)(void *))vt[2])(errors);
+		}
+		return;
+	}
+	void **vt = *(void ***)code;
+	const DWORD *bytes = (const DWORD *)((void *(*)(void *))vt[3])(code);
+	if (FAILED(IDirect3DDevice9_CreatePixelShader(dev, bytes, &dedupe_ps)))
+		log_printf("native: the de-duplication shader was refused by the device");
+	else
+		log_printf("native: de-duplication of the global texts on");
+	((ULONG(*)(void *))vt[2])(code);
+	if (errors) {
+		void **ev = *(void ***)errors;
+		((ULONG(*)(void *))ev[2])(errors);
+	}
 }
 
 // Lays the top half of a 2D layer (premultiplied alpha, see layer_fix) over the half texture with the fixed pipeline. Everything the game had set on the device is kept in a state block
@@ -197,7 +262,27 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 		static int dedupe = -1;
 		if (dedupe < 0)
 			dedupe = cfg("dedupe", 1);
-		if (half == 1 && dedupe) {
+		if (half == 1 && dedupe && lay_have[0]) {
+			dedupe_make(dev);
+		}
+		if (half == 1 && dedupe && dedupe_ps && lay_have[0]) {
+			static const float bands[3][4] = {{0.0f, 0.6f, 0.0f, 0.0375f},    // the objective's strip (layer coordinates: the half is the top half of the layer, v up to 0.5)
+							  {0.05f, 0.9f, 0.15f, 0.2375f},  // the subtitles and the intro's lines, above the crosshair
+							  {0.05f, 0.55f, 0.35f, 0.475f}}; // the intro's title lines (bottom left)
+			IDirect3DDevice9_SetPixelShader(dev, dedupe_ps);
+			IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, &bands[0][0], 3);
+			float force[4] = {GetTickCount() - split_tick < 14000 ? 1.0f : 0.0f, 0, 0, 0};
+			IDirect3DDevice9_SetPixelShaderConstantF(dev, 3, force, 1);
+			IDirect3DDevice9_SetTexture(dev, 1, (IDirect3DBaseTexture9 *)lay_tex[0]);
+			for (int i = 0; i < 2; i++) {
+				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+			}
+			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
+		} else if (half == 1 && dedupe) {
 			// The objective text (top left) is global: both contexts draw it, the bottom one is left out. Two quads: the strip's rows without the left part, then the rest.
 			float ry = (float)(comp_h / 2) * 0.075f, rx = (float)comp_w * 0.6f, v = ry / (float)comp_h;
 			float a[4][6] = {{rx - 0.5f, -0.5f, 0, 1, rx / (float)comp_w, 0}, {w, -0.5f, 0, 1, 1, 0}, {rx - 0.5f, ry - 0.5f, 0, 1, rx / (float)comp_w, v}, {w, ry - 0.5f, 0, 1, 1, v}};
@@ -794,6 +879,29 @@ static void scene2d_hook(void *vp)
 	lay_have[half] = 1;
 	layer_pass = 1;
 	scene2d_original(vp);
+	layer_pass = 0;
+	IDirect3DDevice9_SetRenderTarget(dev, 0, old);
+	if (old)
+		IDirect3DSurface9_Release(old);
+}
+
+// The second 2D source: the frame's 2D command list (function 0x5c010, called at rva 0x4545b after the glow and blur): global texts, fades, the intro's title lines. It goes into the same
+// layer (not cleared again).
+static void (*final2d_original)(void *);
+static void final2d_hook(void *vp)
+{
+	IDirect3DDevice9 *dev = the_device;
+	if (mode != 10 || !dev || ring_tail == ring_head || !lay_surf[0] || !lay_surf[1]) {
+		final2d_original(vp);
+		return;
+	}
+	int half = (int)ring[ring_tail & 7];
+	IDirect3DSurface9 *old = NULL;
+	IDirect3DDevice9_GetRenderTarget(dev, 0, &old);
+	IDirect3DDevice9_SetRenderTarget(dev, 0, lay_surf[half]);
+	lay_have[half] = 1;
+	layer_pass = 1;
+	final2d_original(vp);
 	layer_pass = 0;
 	IDirect3DDevice9_SetRenderTarget(dev, 0, old);
 	if (old)
@@ -1721,6 +1829,8 @@ static void client_frame_hook(void)
 		int on = v && v[0] == '1';
 		if (on != split_on)
 			log_printf("native: split view %s", on ? "on" : "off");
+		if (on && !split_on)
+			split_tick = GetTickCount();
 		split_on = on;
 	}
 	static int nopredict = -1;
@@ -2137,6 +2247,10 @@ static int hooks_apply(void)
 	}
 	if (*(base + 0x5c5bf) != 0xe8 || !jhook_call(base + 0x5c5bf, (void *)scene2d_hook, (void **)&scene2d_original)) {
 		log_printf("native: unexpected code at the scene's 2D pass, mode 10 is off");
+		return 0;
+	}
+	if (*(base + 0x4545b) != 0xe8 || !jhook_call(base + 0x4545b, (void *)final2d_hook, (void **)&final2d_original)) {
+		log_printf("native: unexpected code at the frame's 2D command list, mode 10 is off");
 		return 0;
 	}
 	CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);

@@ -61,7 +61,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 CFG=$A/players/config.cfg
 sed -i 's/^seta r_mode .*/seta r_mode "'"$RES"'"/; s/^seta r_customMode .*/seta r_customMode "'"$RES"'"/; s/^seta r_fullscreen .*/seta r_fullscreen "0"/; s/^seta vid_xpos .*/seta vid_xpos "'"${MW2COOP_XPOS:-0}"'"/; s/^seta vid_ypos .*/seta vid_ypos "0"/' "$CFG"
 rm -f "$A/mw2coop/mw2coop.log" "$A/mw2coop"/shots/seq-*.bmp
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/run_test.ps1" -Tag native -Timeout $((LEVEL_S + 50)) -TestRoot "$(cygpath -w "$ROOT")" -Dirs "$(cygpath -w "$A")" | tail -2
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/run_test.ps1" -Tag native -Timeout ${MW2COOP_TIMEOUT:-$((LEVEL_S + 50))} -TestRoot "$(cygpath -w "$ROOT")" -Dirs "$(cygpath -w "$A")" | tail -2
 grep -a -E "CRASH: exc|split view|device reset|compositor on" "$A/mw2coop/mw2coop.log" | sed 's/^\([0-9:.]*\) \[[ 0-9]*\] /\1 /' | cut -c1-120
 LAST=$(ls "$A"/mw2coop/shots/seq-*.bmp 2>/dev/null | tail -1)
 if [ -n "$LAST" ]; then
