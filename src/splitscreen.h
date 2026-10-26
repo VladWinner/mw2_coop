@@ -9,3 +9,5 @@ void splitscreen_host_activate(void);
 int splitscreen_before_launch(void);
 // The first XInput pad with something pressed, or -1.
 int splitscreen_poll_any_pad(void);
+// The buttons of an XInput pad (XINPUT_GAMEPAD wButtons), 0 when it is not there.
+int splitscreen_pad_buttons(int pad);

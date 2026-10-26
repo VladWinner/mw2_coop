@@ -12,12 +12,76 @@
 #include "game.h"
 #include "instance.h"
 #include "log.h"
+#include "menus.h"
 #include "splitscreen.h"
 
 static HANDLE child = NULL;
 static char pad_file[2 * MAX_PATH];
 
-// which pad is the second player's: the second process reads it from <its folder>\mw2coop\pad.txt
+// ---------------------------------------------------------------- the lobby: the second player's device and Ready
+
+static volatile LONG assigned_pad = -1;
+static volatile LONG second_ready;
+static volatile LONG assign_gen;
+
+// the lobby's popup asks the second player to press a button on his device; the first pad that does is his, and from then on his A is his Ready
+static DWORD WINAPI assign_thread(LPVOID gen_arg)
+{
+	LONG gen = (LONG)(LONG_PTR)gen_arg;
+	int pad = -1;
+	for (int i = 0; i < 12000 && gen == assign_gen && pad < 0; i++) { // ten minutes
+		Sleep(50);
+		pad = splitscreen_poll_any_pad();
+	}
+	if (gen != assign_gen)
+		return 0;
+	if (pad < 0)
+		return 0;
+	InterlockedExchange(&assigned_pad, pad);
+	log_printf("instance: pad %d is the second player's", pad);
+	game_cbuf_addtext("closemenu mw2coop_assign\n");
+	menus_split_changed();
+	int a_was = 1; // the press that picked the pad is not a Ready
+	while (gen == assign_gen) {
+		Sleep(30);
+		int a = splitscreen_pad_buttons(pad) & 0x1000;
+		if (a && !a_was) {
+			InterlockedExchange(&second_ready, !second_ready);
+			log_printf("instance: the second player is %s", second_ready ? "ready" : "not ready");
+			menus_split_changed();
+		}
+		a_was = a;
+	}
+	return 0;
+}
+
+void instance_assign_begin(void)
+{
+	LONG gen = InterlockedIncrement(&assign_gen);
+	InterlockedExchange(&assigned_pad, -1);
+	InterlockedExchange(&second_ready, 0);
+	game_cbuf_addtext("openmenu mw2coop_assign\n");
+	CreateThread(NULL, 0, assign_thread, (LPVOID)(LONG_PTR)gen, 0, NULL);
+}
+
+void instance_assign_end(void)
+{
+	InterlockedIncrement(&assign_gen);
+	InterlockedExchange(&assigned_pad, -1);
+	InterlockedExchange(&second_ready, 0);
+}
+
+int instance_pad(void)
+{
+	return (int)assigned_pad;
+}
+
+int instance_second_ready(void)
+{
+	return (int)second_ready;
+}
+
+// a pad's number written for the second process (it reads <its folder>\mw2coop\pad.txt)
 static void write_pad(int pad)
 {
 	FILE *f = fopen(pad_file, "w");
@@ -25,24 +89,7 @@ static void write_pad(int pad)
 		fprintf(f, "%d%c", pad, 10);
 		fclose(f);
 	}
-	log_printf("instance: pad %d is the second player's", pad);
-}
-
-// the lobby's popup asks the second player to press a button on his device; the first pad that does is his
-static DWORD WINAPI assign_thread(LPVOID unused)
-{
-	(void)unused;
-	for (int i = 0; i < 2400; i++) { // two minutes
-		Sleep(50);
-		int pad = splitscreen_poll_any_pad();
-		if (pad >= 0) {
-			write_pad(pad);
-			game_cbuf_addtext("closemenu mw2coop_assign\n");
-			return 0;
-		}
-	}
-	log_printf("instance: no pad was pressed, the second player has none");
-	return 0;
+	log_printf("instance: pad %d goes to the second process", pad);
 }
 
 static void parent_dir(const char *path, char *out)
@@ -225,9 +272,12 @@ int instance_start(int pad)
 	DeleteFileA(pad_file);
 	if (pad >= 0)
 		write_pad(pad);
-	else
-		CreateThread(NULL, 0, assign_thread, NULL, 0, NULL);
 	return 1;
+}
+
+int instance_running(void)
+{
+	return child && WaitForSingleObject(child, 0) == WAIT_TIMEOUT;
 }
 
 void instance_stop(void)
@@ -251,11 +301,30 @@ static void splitlaunch_f(void)
 		game_cbuf_addtext("coopLaunch\n");
 }
 
+// QA: what the second player's button presses do in the lobby
+static void split_pad_f(void)
+{
+	const char *a = game_cmd_argv(1);
+	InterlockedExchange(&assigned_pad, a[0] ? atoi(a) : 0);
+	game_cbuf_addtext("closemenu mw2coop_assign\n");
+	menus_split_changed();
+}
+
+static void split_ready_f(void)
+{
+	InterlockedExchange(&second_ready, !second_ready);
+	menus_split_changed();
+}
+
 static cmd_function_t split_cmd = {NULL, "mw2coop_split", NULL, NULL, split_f CMD_NODE_FLAG};
+static cmd_function_t splitpad_cmd = {NULL, "mw2coop_split_pad", NULL, NULL, split_pad_f CMD_NODE_FLAG};
+static cmd_function_t splitready_cmd = {NULL, "mw2coop_split_ready", NULL, NULL, split_ready_f CMD_NODE_FLAG};
 static cmd_function_t splitlaunch_cmd = {NULL, "mw2coop_splitlaunch", NULL, NULL, splitlaunch_f CMD_NODE_FLAG};
 
 void instance_install(void)
 {
 	game_add_command(&split_cmd);
 	game_add_command(&splitlaunch_cmd);
+	game_add_command(&splitpad_cmd);
+	game_add_command(&splitready_cmd);
 }

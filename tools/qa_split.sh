@@ -3,6 +3,7 @@
 # launches a mission with it. Usage: tools/qa_split.sh <scenario> <seconds in level> [map]
 #   MW2COOP_BITS=32      the 32-bit build
 #   MW2COOP_SPLIT_PAD    0..3: the XInput pad of the second player (default -1: none)
+#   MW2COOP_MENU=1       go through the menu commands (Split screen button, host popup, Start) instead of mw2coop_split
 #   MW2COOP_FAKEPAD      "lx ly rx ry buttons lt rt": a made-up pad for the second player (with MW2COOP_SPLIT_PAD=0)
 # The second process lives in <copy>\mw2coop\p2 (links to the copy's files).
 SCEN=${1:-hold}; LEVEL_S=${2:-60}; MAP=${3:-trainer}
@@ -27,11 +28,28 @@ WAIT=35000
 	echo 'set mw2coop_god "1"'
 	echo "!sleep $WAIT"
 	echo "set coop_mapName $MAP"
-	echo "listen"
-	echo "!sleep 2000"
-	echo "mw2coop_split $PAD"
-	echo "!sleep 45000"
-	echo "mw2coop_splitlaunch"
+	if [ -n "${MW2COOP_MENU:-}" ]; then
+		# the menu path: the Split screen button, the lobby (the second player presses a button on his pad = Ready), Start; the second process
+		# starts with Start, joins by itself and the launch follows
+		echo "mw2coop_split_menu"
+		echo "!sleep 3000"
+		echo "mw2coop_host_go"
+		echo "!sleep 4000"
+		echo "set coop_mapName $MAP"
+		echo 'set start ""'
+		echo "!sleep 2000"
+		echo "mw2coop_split_pad ${PAD#-}"
+		echo "mw2coop_split_ready"
+		echo "mw2coop_ready"
+		echo "!sleep 2000"
+		echo "mw2coop_start"
+	else
+		echo "listen"
+		echo "!sleep 2000"
+		echo "mw2coop_split $PAD"
+		echo "!sleep 45000"
+		echo "mw2coop_splitlaunch"
+	fi
 	echo "!sleep $(( (LEVEL_S + 60) * 1000 ))"
 } > $A/mw2coop/commands.txt
 # a made-up pad goes into the host's settings.ini, which the second process copies

@@ -9,6 +9,7 @@
 //     view    = 60..120  the horizontal view in degrees of a half while the shared window is up (default 90; the very wide halves
 //                        stretch the picture at the edges when the engine widens the standard view to them)
 //     delay   = seconds after a level starts before the windows join the shared window (default 12: the load is over)
+//     fullscreen = 1 (default) | 0   the shared window covers the whole screen (0: 90% of it, with a title bar)
 //     speed   = 1..100   the right stick's turn speed in pixels per 10 ms at full tilt (default 14)
 //     fakepad = 1        QA: the pad's state is read from mw2coop\fakepad.txt ("lx ly rx ry buttons lt rt", XInput units)
 // A pad copy has its own virtual cursor (the game's GetCursorPos/SetCursorPos are redirected, the real cursor stays with
@@ -26,6 +27,7 @@
 #include "splitscreen.h"
 
 static DWORD started_at; // when the threads were started
+static int slot = -1; // 0 first (left or top), 1 second
 static int pad = -1;
 static int turn_speed = 14;
 static int fakepad;
@@ -195,8 +197,19 @@ static void send_slot(int slot, int down)
 	PostMessageA(game_window, down ? WM_KEYDOWN : WM_KEYUP, vk, lp);
 }
 
+static int level_running(void);
+
 static void apply(const PadState *s)
 {
+	// in the lobby (no level yet) the second player's A is the lobby's Ready button: nobody sees this copy's window, the first player's
+	// Ready is pressed on his screen as usual
+	static int a_was;
+	int a_now = !!(s->buttons & BTN_A);
+	if (slot > 0 && !level_running() && a_now && !a_was) {
+		game_cbuf_addtext("mw2coop_ready\n");
+		log_printf("splitscreen: the second player pressed Ready");
+	}
+	a_was = a_now;
 	int want[SLOTS] = {0};
 	want[K_W] = s->ly > 12000;
 	want[K_S] = s->ly < -12000;
@@ -277,7 +290,6 @@ static void place_window(HWND w)
 // slot 0 makes the container window (its own thread and message loop); every slot's game window becomes a child of it
 // while a level runs, and goes back to being a window of its own in the menus
 #define CONTAINER_CLASS "MW2COOPSplit"
-static int slot = -1; // 0 first (left or top), 1 second
 static int stacked = 1; // 1 (default): one above the other, 0: side by side
 static HWND container;
 static int joined;
@@ -339,9 +351,29 @@ static LONG saved_style, saved_exstyle;
 static RECT saved_rect;
 
 // the shared window's client size: 90% of the work area, even numbers; a slot's picture is half of it
+static int fullscreen = 1; // the shared window covers the whole screen (windowed: 90% of the work area, with a title bar)
+
+static void monitor_rect(RECT *r)
+{
+	POINT origin = {0, 0};
+	MONITORINFO mi;
+	memset(&mi, 0, sizeof(mi));
+	mi.cbSize = sizeof(mi);
+	if (GetMonitorInfoA(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi))
+		*r = mi.rcMonitor;
+	else
+		SetRect(r, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+}
+
 static void client_size(int *w, int *h)
 {
 	RECT area;
+	if (fullscreen) {
+		monitor_rect(&area);
+		*w = (area.right - area.left) & ~1;
+		*h = (area.bottom - area.top) & ~3;
+		return;
+	}
 	SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
 	*w = (area.right - area.left) * 9 / 10 & ~1;
 	*h = (area.bottom - area.top) * 9 / 10 & ~3;
@@ -381,11 +413,18 @@ static DWORD WINAPI container_thread(LPVOID unused)
 	SystemParametersInfoA(SPI_GETWORKAREA, 0, &area, 0);
 	int cw, ch;
 	client_size(&cw, &ch);
-	RECT r = {0, 0, cw, ch};
-	AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-	int w = r.right - r.left, h = r.bottom - r.top;
-	HWND c = CreateWindowExA(0, CONTAINER_CLASS, "Modern Warfare 2 - split screen", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, area.left + (area.right - area.left - w) / 2,
-				 area.top + (area.bottom - area.top - h) / 2, w, h, NULL, NULL, wc.hInstance, NULL);
+	HWND c;
+	if (fullscreen) { // no frame, the whole monitor
+		RECT mon;
+		monitor_rect(&mon);
+		c = CreateWindowExA(0, CONTAINER_CLASS, "Modern Warfare 2 - split screen", WS_POPUP | WS_CLIPCHILDREN, mon.left, mon.top, cw, ch, NULL, NULL, wc.hInstance, NULL);
+	} else {
+		RECT r = {0, 0, cw, ch};
+		AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+		int w = r.right - r.left, h = r.bottom - r.top;
+		c = CreateWindowExA(0, CONTAINER_CLASS, "Modern Warfare 2 - split screen", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, area.left + (area.right - area.left - w) / 2,
+				    area.top + (area.bottom - area.top - h) / 2, w, h, NULL, NULL, wc.hInstance, NULL);
+	}
 	container = c;
 	MSG m;
 	while (GetMessageA(&m, NULL, 0, 0) > 0) {
@@ -462,9 +501,10 @@ static void container_poll(HWND w)
 			SetWindowLongA(w, GWL_EXSTYLE, saved_exstyle | WS_EX_TOOLWINDOW);
 			SetWindowLongPtrA(w, GWLP_HWNDPARENT, (LONG_PTR)container);
 		}
-		ShowWindow(w, SW_SHOWNA);
-		ShowWindow(container, SW_SHOW);
+		ShowWindow(container, SW_SHOW); // the shared window first, each game window goes to its half before it is shown: no overlap
 		joined = 1;
+		layout_child(w);
+		ShowWindow(w, SW_SHOWNA);
 		log_printf("splitscreen: slot %d joins the shared window", slot);
 	} else if (!want && joined) {
 		if (embed)
@@ -619,6 +659,9 @@ static DWORD WINAPI split_thread(LPVOID unused)
 			Sleep(200);
 		game_cbuf_addtext("mw2coop_join 127.0.0.1\n");
 		log_printf("splitscreen: joining the first process");
+		Sleep(6000); // nobody sits at this copy: it marks itself ready in the lobby (that also sends its player id for the saves)
+		game_cbuf_addtext("mw2coop_ready\n");
+		log_printf("splitscreen: ready in the lobby");
 	}
 	if (slot < 0)
 		place_window(w);
@@ -680,6 +723,19 @@ static DWORD WINAPI split_thread(LPVOID unused)
 static int started;
 
 // the first XInput pad with something pressed (for the lobby: whose pad is the second player's); -1 when none
+int splitscreen_pad_buttons(int pad)
+{
+	if (!xinput_get || pad < 0 || pad > 3)
+		return 0;
+	struct {
+		DWORD packet;
+		PadState gp;
+	} raw;
+	if (xinput_get((DWORD)pad, &raw) != ERROR_SUCCESS)
+		return 0;
+	return raw.gp.buttons;
+}
+
 int splitscreen_poll_any_pad(void)
 {
 	if (!xinput_get) {
@@ -759,6 +815,7 @@ void splitscreen_install(void)
 	slot = GetPrivateProfileIntA("splitscreen", "slot", -1, ini_path);
 	view_degrees = (float)GetPrivateProfileIntA("splitscreen", "view", 90, ini_path);
 	join_delay_ms = (DWORD)GetPrivateProfileIntA("splitscreen", "delay", 12, ini_path) * 1000;
+	fullscreen = GetPrivateProfileIntA("splitscreen", "fullscreen", 1, ini_path) != 0;
 	embed = GetPrivateProfileIntA("splitscreen", "embed", 0, ini_path) != 0;
 	stacked = GetPrivateProfileIntA("splitscreen", "stacked", 1, ini_path) != 0;
 	if (slot < 0) {

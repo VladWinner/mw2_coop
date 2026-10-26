@@ -563,9 +563,13 @@ static void add_assign_menu(void)
 	}
 }
 
-// mw2coop_host_menu: the campaign menu's button
-static void host_menu_f(void)
+static volatile LONG split_pending; // the lobby about to be hosted is a split screen one
+static volatile LONG split_mode;    // the lobby being hosted is a split screen one (the second player is on this PC, his process starts at Start)
+
+// mw2coop_host_menu: the campaign menu's button (split: the split screen button's, same popup)
+static void host_menu_open(int split)
 {
+	InterlockedExchange(&split_pending, split);
 	uint8_t *menu = ui_find_menu("mw2coop_host");
 	char map[64], start[64];
 	int have = progress_last(map, sizeof(map), start, sizeof(start));
@@ -584,13 +588,9 @@ static void host_menu_f(void)
 	game_cbuf_addtext("openmenu mw2coop_host\n");
 }
 
-static volatile LONG split_pending; // the lobby being hosted is a split screen one: its second player is started with it
-static DWORD WINAPI split_start_thread(LPVOID unused)
+static void host_menu_f(void)
 {
-	(void)unused;
-	game_cbuf_addtext("openmenu mw2coop_assign\n"); // "press a button on your controller" until the pad is known
-	instance_start(-1);
-	return 0;
+	host_menu_open(0);
 }
 
 static int save_picked; // the host picked a save in the menu (the lobby stays on it)
@@ -658,14 +658,18 @@ static void host_lobby(const char *map)
 		 "mw2coop_online %s\nlisten\n",
 		 map ? map : "");
 	game_cbuf_addtext(cmd);
-	if (InterlockedExchange(&split_pending, 0)) // it runs off the game's thread: the links take a moment
-		CreateThread(NULL, 0, split_start_thread, NULL, 0, NULL);
+	if (InterlockedExchange(&split_pending, 0)) { // a split screen lobby: the second player presses a button on his device first
+		InterlockedExchange(&split_mode, 1);
+		instance_assign_begin();
+	} else {
+		InterlockedExchange(&split_mode, 0);
+		instance_assign_end();
+	}
 }
 
 static void split_menu_f(void)
 {
-	InterlockedExchange(&split_pending, 1);
-	host_menu_f();
+	host_menu_open(1);
 }
 
 static void host_go_f(void)
@@ -1026,7 +1030,19 @@ static void update_texts(void)
 	int host = base[RVA_PARTY_IS_HOST];
 	localize_select("MW2COOP_READY", my_ready ? "MW2COOP_READY_UNSET" : "MW2COOP_READY_SET");
 	const char *start;
-	if (!partner_present() || (host && !party_full()))
+	if (split_mode) { // the second player is on this PC: his Ready is his A, his process comes with Start
+		int second = instance_second_ready();
+		if (instance_pad() < 0)
+			start = "MW2COOP_START_NEED_PARTNER";
+		else if (my_ready && second)
+			start = "MW2COOP_START_GO";
+		else if (my_ready)
+			start = "MW2COOP_START_WAIT_PARTNER";
+		else if (second)
+			start = "MW2COOP_START_WAIT_YOU";
+		else
+			start = "MW2COOP_START_WAIT_BOTH";
+	} else if (!partner_present() || (host && !party_full()))
 		start = "MW2COOP_START_NEED_PARTNER";
 	else if (my_ready && partner_ready)
 		start = host ? "MW2COOP_START_GO" : "MW2COOP_START_HOST";
@@ -1049,6 +1065,28 @@ static void ready_f(void)
 }
 
 static void partner_questions(void);
+static void start_launch(void);
+
+// instance.c: the second player's device or Ready changed
+void menus_split_changed(void)
+{
+	update_texts();
+}
+
+// A split screen Start: the second process was started, it joins this lobby by itself and marks itself ready; then the launch goes on as usual
+static DWORD WINAPI split_wait_thread(LPVOID unused)
+{
+	(void)unused;
+	for (int i = 0; i < 2400 && !(party_full() && partner_present() && partner_ready); i++)
+		Sleep(50); // two minutes: the second process boots, joins and marks itself ready
+	if (!(party_full() && partner_present() && partner_ready)) {
+		log_printf("menus: Start: the second process did not join the lobby");
+		return 0;
+	}
+	log_printf("menus: Start: the second process is in the lobby");
+	start_launch();
+	return 0;
+}
 
 // mw2coop_start: the lobby's Start in campaign mode. The party frame launches once both slots
 // are taken and the bandwidth test is done.
@@ -1060,6 +1098,18 @@ static void start_f(void)
 	}
 	if (!access_can_start())
 		return; // password mode without a password: the popup asks for it
+	if (split_mode) {
+		if (instance_running())
+			return; // it is booting: the thread below goes on
+		if (instance_pad() < 0 || !my_ready || !instance_second_ready()) {
+			log_printf("menus: Start: the second player has no device or not everyone is ready (host %ld, second %d)", my_ready, instance_second_ready());
+			return;
+		}
+		log_printf("menus: Start: starting the second game process");
+		if (instance_start(instance_pad()))
+			CreateThread(NULL, 0, split_wait_thread, NULL, 0, NULL);
+		return;
+	}
 	if (!party_full() || !partner_present()) {
 		log_printf("menus: Start: waiting for the second player");
 		return;
@@ -1068,6 +1118,12 @@ static void start_f(void)
 		log_printf("menus: Start: not everyone is ready (host %ld, partner %ld)", my_ready, partner_ready);
 		return;
 	}
+	start_launch();
+}
+
+// the launch itself, once everyone is in and ready (a normal Start, or the split screen one when the second process has joined)
+static void start_launch(void)
+{
 	if (continuing && !partner_confirmed && progress_partner_is_new(partner_id, partner_xuid)) {
 		log_printf("menus: Start: the partner is not a member of this save, asking");
 		partner_questions();
