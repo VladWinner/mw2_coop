@@ -70,6 +70,9 @@ main()
 	maps\_mw2coop::state( "qa running" );	// let start points, regroup and weapon sync run
 	switch ( GetDvar( "mw2coop_qa" ) )
 	{
+		case "angles":
+			angles_log();
+			break;
 		case "face":
 			face();
 			break;
@@ -290,6 +293,20 @@ common_checks()
 	d = Distance( level.player.origin, level.player2.origin );
 	check( d < 160, "player 2 next to player 1 (" + int( d ) + " units)" );
 	report( "start point " + level.start_point + ", p1 weapons: " + weapons_text( level.player ) + "| p2 weapons: " + weapons_text( level.player2 ) );
+}
+
+// angles: (native split screen test) once a second: where each player is, where he looks (view angles) and which way the other one lies
+angles_log()
+{
+	for ( ;; )
+	{
+		wait 1;
+		a = level.player;
+		b = level.player2;
+		to_b = VectorToAngles( b.origin - a.origin );
+		to_a = VectorToAngles( a.origin - b.origin );
+		report( "angles p1 at " + a.origin + " looks " + a GetPlayerAngles() + " | p2 at " + b.origin + " looks " + b GetPlayerAngles() + " | p1 to p2 yaw " + to_b[ 1 ] + ", p2 to p1 yaw " + to_a[ 1 ] );
+	}
 }
 
 // face: (native split screen test) after the briefing, player 2 stands 100 units in front of player 1 and the two look at each other

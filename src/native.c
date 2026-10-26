@@ -497,12 +497,17 @@ static int draws_after_init;
 
 static void run_both(void (*fn)(void))
 {
+	int was = ctx_current;
+	if (was)
+		ctx_swap(0);
 	fn();
 	if (ctx1_ready) {
 		ctx_swap(1);
 		fn();
 		ctx_swap(0);
 	}
+	if (was)
+		ctx_swap(was);
 }
 
 static void cg_init_all_hook(void)
@@ -574,6 +579,11 @@ static void ctx_after_draw(void)
 		acc[0] = 0;
 		acc[1] = (float)GetPrivateProfileIntA("native", "p1yawdeg", 60, settings_path);
 	}
+	if (GetPrivateProfileIntA("native", "p1cmd", 0, settings_path)) {
+		// and player 0's: turned once by [native] p0turn degrees (default 241: from the spawn yaw -78 to the direction of player 1, 163) through his own view angle accumulator
+		float *acc0 = (float *)(base + 0x533d14);
+		acc0[1] += (float)GetPrivateProfileIntA("native", "p0turn", 241, settings_path);
+	}
 	ctx_swap(1);
 	// not the whole cgame init (it also resets what is shared: effects, media, the renderer's per-level state): only its two per-client parts, on the copied block
 	((void (*)(unsigned long long))(base + 0xb8830))(0);
@@ -600,13 +610,22 @@ static void ps_publish_hook(unsigned lc, const void *ps)
 
 static void server_cmds_hook(unsigned long long lc, int *msg)
 {
-	if ((int)lc == 0)
-		return server_cmds_original(0, msg); // client 1 gets no server commands yet
+	if ((int)lc != 0)
+		return; // client 1 gets no server commands yet
+	int was = ctx_current;
+	if (was)
+		ctx_swap(0);
+	server_cmds_original(0, msg);
+	if (was)
+		ctx_swap(was);
 }
 
 // The server's snapshot message (entities, as shared lists) is parsed into the client's snapshot ring: once for each context, the message read again from its start.
 static void snapshot_msg_hook(void *msg, int time)
 {
+	int was = ctx_current;
+	if (was)
+		ctx_swap(0);
 	uint8_t copy[0x30];
 	memcpy(copy, msg, sizeof(copy));
 	snapshot_msg_original(msg, time);
@@ -616,6 +635,8 @@ static void snapshot_msg_hook(void *msg, int time)
 		snapshot_msg_original(msg, time);
 		ctx_swap(0);
 	}
+	if (was)
+		ctx_swap(was);
 }
 
 // Mode 5: the engine's whole client frame (rva 0xd5b00, called once per engine frame from the main loop at rva 0x1fc331) runs for context 0 on even frames and for context 1 on odd ones, so
@@ -716,7 +737,7 @@ static void server_step_hook(void)
 // [native] p1yaw (a 16-bit angle, 0x8000 = half a turn), through the engine's own SV_ClientThink analogue (rva 0x22d000, client_t[n] + 0x1630 holds the last cmd).
 #define RVA_SV_CLIENTS_CMD 0x19ada98
 static int p1_yaw;
-static void usercmd_step_hook(int lc)
+static void usercmd_step_inner(int lc)
 {
 	if (lc == 0) {
 		usercmd_step_original(0);
@@ -724,6 +745,15 @@ static void usercmd_step_hook(int lc)
 	}
 	if (!GetPrivateProfileIntA("native", "p1cmd", 0, settings_path))
 		return;
+	{
+		static unsigned seen;
+		if (++seen % 60 == 0 && seen < 3000) {
+			const uint8_t *c0 = base + RVA_SV_CLIENTS_CMD + 0x1630, *c1 = base + RVA_SV_CLIENTS_CMD + 0x1678 + 0x1630;
+			log_printf("native: step %u ctx %d: client 0 cmd t %d yaw %d pitch %d | client 1 cmd t %d yaw %d pitch %d | ctx1 acc yaw %.1f pitch %.1f", seen, ctx_current, *(int *)c0, *(int *)(c0 + 12),
+				   *(int *)(c0 + 8), *(int *)c1, *(int *)(c1 + 12), *(int *)(c1 + 8), ctx_store[1][4] ? *(float *)(ctx_store[1][4] + 0x60) : -1.0f,
+				   ctx_store[1][4] ? *(float *)(ctx_store[1][4] + 0x5c) : -1.0f);
+		}
+	}
 	if (ctx1_ready && ctx_current == 0 && ctx_store[1][5]) {
 		// context 1's own client frame makes its usercmds in its cl block (ring of 128 x 0x40 at +0, cmdNumber at +0x2000, the number sent at +0x2004): player 1 gets them
 		// through the engine's SV_ClientThink analogue, as player 0 gets his through rva 0xd02a0
@@ -760,6 +790,17 @@ static void usercmd_step_hook(int lc)
 	*(int *)(cmd + 12) = p1_yaw;
 	*(int *)(cmd + 16) = 0;
 	((void (*)(int, void *))(base + 0x22d000))(1, cmd);
+}
+
+// These server-side hand-overs can be reached while context 1 is the live one (they run from inside the client frame): they always run with context 0 live.
+static void usercmd_step_hook(int lc)
+{
+	int was = ctx_current;
+	if (was)
+		ctx_swap(0);
+	usercmd_step_inner(lc);
+	if (was)
+		ctx_swap(was);
 }
 
 static void contexts_install(void)
