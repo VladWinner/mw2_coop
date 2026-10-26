@@ -1134,7 +1134,7 @@ static void native_launch(void)
 static void native_session_tick(void)
 {
 	static int level_seen;
-	if (!native_split_active()) {
+	if (!native_split_active() || !native_started) { // (a session the settings file started is not ours to end)
 		level_seen = 0;
 		return;
 	}
@@ -1145,6 +1145,7 @@ static void native_session_tick(void)
 		level_seen = 1;
 	if ((level_seen && !running) || (!level_seen && GetTickCount() - (DWORD)native_started > 30000)) {
 		level_seen = 0;
+		InterlockedExchange(&native_started, 0);
 		native_split_stop();
 	}
 }

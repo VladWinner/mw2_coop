@@ -45,7 +45,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 		echo "mw2coop_split_pad ${MW2COOP_PAD:-0}"
 		echo "!sleep 1500"
 		echo "mw2coop_start"
-	elif [ -n "${MW2COOP_MENU:-}" ]; then echo "mw2coop_native_launch $MAP ${MW2COOP_PAD:-}"; else echo "devmap $MAP"; fi
+	elif [ -n "${MW2COOP_MENU:-}" ]; then echo "mw2coop_native_launch $MAP ${MW2COOP_PAD:--1} ${MW2COOP_START:-}"; else echo "devmap $MAP"; fi
 	if [ -n "${MW2COOP_RAW:-}" ]; then # two raw frames (the game's own, before the compositor) once the picture is split
 		echo "!sleep $((RAW_AT * 1000))"
 		echo "!shot raw1"

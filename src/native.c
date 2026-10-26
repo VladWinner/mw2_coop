@@ -194,7 +194,19 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_SRGBTEXTURE, 0);
 		float w = (float)comp_w - 0.5f, h = (float)(comp_h / 2) - 0.5f;
 		float q[4][6] = {{-0.5f, -0.5f, 0, 1, 0, 0}, {w, -0.5f, 0, 1, 1, 0}, {-0.5f, h, 0, 1, 0, 0.5f}, {w, h, 0, 1, 1, 0.5f}}; // the top half of the layer
-		IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
+		static int dedupe = -1;
+		if (dedupe < 0)
+			dedupe = cfg("dedupe", 1);
+		if (half == 1 && dedupe) {
+			// The objective text (top left) is global: both contexts draw it, the bottom one is left out. Two quads: the strip's rows without the left part, then the rest.
+			float ry = (float)(comp_h / 2) * 0.075f, rx = (float)comp_w * 0.6f, v = ry / (float)comp_h;
+			float a[4][6] = {{rx - 0.5f, -0.5f, 0, 1, rx / (float)comp_w, 0}, {w, -0.5f, 0, 1, 1, 0}, {rx - 0.5f, ry - 0.5f, 0, 1, rx / (float)comp_w, v}, {w, ry - 0.5f, 0, 1, 1, v}};
+			float b[4][6] = {{-0.5f, ry - 0.5f, 0, 1, 0, v}, {w, ry - 0.5f, 0, 1, 1, v}, {-0.5f, h, 0, 1, 0, 0.5f}, {w, h, 0, 1, 1, 0.5f}};
+			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, a, sizeof(a[0]));
+			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, b, sizeof(b[0]));
+		} else {
+			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
+		}
 		IDirect3DDevice9_EndScene(dev);
 	}
 	IDirect3DDevice9_SetDepthStencilSurface(dev, old_ds);
@@ -1567,6 +1579,10 @@ static void pad_frame(void)
 	    {0x0200, "frag", NULL},    // right bumper
 	    {0x0040, "breath_sprint", NULL}, // left stick
 	    {0x0080, "melee", NULL},   // right stick
+	    {0x0001, "actionslot 1", NULL}, // d-pad
+	    {0x0002, "actionslot 2", NULL},
+	    {0x0004, "actionslot 3", NULL},
+	    {0x0008, "actionslot 4", NULL},
 	};
 	static WORD held;
 	static int rt_held, lt_held;
@@ -2161,7 +2177,7 @@ static int activate(int players)
 	return 1;
 }
 
-// Console commands for the QA bots and for the lobby: mw2coop_native_start [pad], mw2coop_native_stop, mw2coop_native_launch <map> [pad] (session on, then the map)
+// Console commands for the QA bots and for the lobby: mw2coop_native_start [pad], mw2coop_native_stop, mw2coop_native_launch <map> [pad] [start] (session on, then the map)
 static void native_start_f(void)
 {
 	const char *a = game_cmd_argv(1);
@@ -2180,8 +2196,11 @@ static void native_launch_f(void)
 		return;
 	if (!native_split_start(a[0] ? atoi(a) : -1))
 		return;
-	char text[160];
-	snprintf(text, sizeof(text), "set start \"\"\nset coop_mapName %s\nmap %s\n", map, map);
+	char text[200], start[64];
+	lstrcpynA(start, game_cmd_argv(3), sizeof(start));
+	if (strpbrk(start, " \t;\"\n"))
+		start[0] = 0;
+	snprintf(text, sizeof(text), "set start \"%s\"\nset coop_mapName %s\nmap %s\n", start, map, map);
 	game_cbuf_addtext(text);
 }
 static cmd_function_t native_commands[] = {
