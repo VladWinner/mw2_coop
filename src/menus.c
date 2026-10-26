@@ -30,6 +30,7 @@
 #include "localize.h"
 #include "instance.h"
 #include "splitscreen.h"
+#include "native.h"
 #include "log.h"
 #include "settings.h"
 #include "upnp.h"
@@ -1100,10 +1101,62 @@ static DWORD WINAPI split_start_thread(LPVOID unused)
 	return 0;
 }
 
+// The native split screen's Start (src/native.c): the second player is on this PC, in this process. The lobby's party is let go, the game becomes a two local players game and the
+// mission the lobby shows starts as a normal level.
+static volatile LONG native_started; // tick count of the launch, for tick_f's check that the session ends
+static void native_launch(void)
+{
+	if (instance_pad() < 0) {
+		log_printf("menus: Start: the second player has not pressed a button on his device yet");
+		return;
+	}
+	char map[64] = "";
+	game_dvar_raw("coop_mapName", map, sizeof(map));
+	if (!map[0] || strpbrk(map, " \t;\"\n"))
+		lstrcpyA(map, "trainer");
+	// the second player is a member of the save like a partner who joins it
+	progress_begin(continuing, "split-screen", 0x53504c4954ULL, "Player 2", 1);
+	if (!native_split_start(instance_pad())) {
+		log_printf("menus: Start: the split screen could not be started");
+		return;
+	}
+	log_printf("menus: Start: native split screen, mission '%s', pad %d", map, instance_pad());
+	instance_assign_end();
+	InterlockedExchange(&split_mode, 0);
+	((void (*)(void))(base + RVA_PARTY_RESET))();
+	char cmd[160];
+	snprintf(cmd, sizeof(cmd), "stopListening\nset mw2coop_split_view 0\nmap %s\n", map);
+	game_cbuf_addtext(cmd);
+	InterlockedExchange(&native_started, (LONG)GetTickCount() | 1);
+}
+
+// tick_f: the session ends once the game is back in the menus (or when the level never started)
+static void native_session_tick(void)
+{
+	static int level_seen;
+	if (!native_split_active()) {
+		level_seen = 0;
+		return;
+	}
+	char v[16] = "";
+	game_dvar_raw("sv_running", v, sizeof(v));
+	int running = v[0] == '1';
+	if (running)
+		level_seen = 1;
+	if ((level_seen && !running) || (!level_seen && GetTickCount() - (DWORD)native_started > 30000)) {
+		level_seen = 0;
+		native_split_stop();
+	}
+}
+
 // mw2coop_start: the lobby's Start in campaign mode. The party frame launches once both slots
 // are taken and the bandwidth test is done.
 static void start_f(void)
 {
+	if (split_mode && native_split_available()) { // the second player is on this PC: no party, the host check does not apply
+		native_launch();
+		return;
+	}
 	if (!base[RVA_PARTY_IS_HOST]) {
 		log_printf("menus: Start: only the host starts");
 		return;
@@ -1372,6 +1425,7 @@ static void tick_f(void)
 	InterlockedExchange(&tick_queued, 0);
 	if (!base)
 		return;
+	native_session_tick();
 	patch_main_menu();
 	add_lobbies_menu();
 	add_host_menu();

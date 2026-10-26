@@ -3,6 +3,8 @@
 # Usage: tools/qa_native.sh [seconds in the level after the map command, default 200] [extra [native] lines, ";"-separated, e.g. "p1pad=0;entlog=1"]
 #   MW2COOP_MAP     the map (default trainer)
 #   MW2COOP_PRE     extra console commands before the map, ";"-separated
+#   MW2COOP_POST    extra console commands after the level time, ";"-separated (the run is then LEVEL_S + their time long: give the script a bigger first argument)
+#   MW2COOP_LOBBY=1 the whole menu path: the split screen button, Continue, the pad of the second player, Start (the mission is the lobby's, not MW2COOP_MAP)
 #   MW2COOP_MENU=1  the session is started the way the menu does it (console command mw2coop_native_launch), not by settings.ini; MW2COOP_PAD the second player's pad
 # Writes the copy's settings.ini and commands.txt, runs it, prints the native/split/crash lines and puts the composed frame in local/scratch/native-last.png.
 LEVEL_S=${1:-200}
@@ -19,7 +21,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	echo "port=28960"
 	echo
 	echo "[native]"
-	if [ -z "${MW2COOP_MENU:-}" ]; then
+	if [ -z "${MW2COOP_MENU:-}" ] && [ -z "${MW2COOP_LOBBY:-}" ]; then
 		echo "players=2"
 		echo "coopdvar=1"
 		echo "experiment=${MW2COOP_MODE:-8}"
@@ -35,7 +37,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	echo "set r_customMode \"$RES\""
 	[ -n "${MW2COOP_PRE:-}" ] && echo "$MW2COOP_PRE" | tr ';' '\n'
 	echo "!sleep 6000"
-	if [ -n "${MW2COOP_MENU:-}" ]; then echo "mw2coop_native_launch $MAP ${MW2COOP_PAD:-}"; else echo "devmap $MAP"; fi
+	if [ -n "${MW2COOP_LOBBY:-}" ]; then # the lobby's own way: the split screen button, the host popup's Continue, the second player's button, Start
+		echo "mw2coop_split_menu_open"
+		echo "!sleep 2000"
+		echo "mw2coop_host_go"
+		echo "!sleep 4000"
+		echo "mw2coop_split_pad ${MW2COOP_PAD:-0}"
+		echo "!sleep 1500"
+		echo "mw2coop_start"
+	elif [ -n "${MW2COOP_MENU:-}" ]; then echo "mw2coop_native_launch $MAP ${MW2COOP_PAD:-}"; else echo "devmap $MAP"; fi
 	if [ -n "${MW2COOP_RAW:-}" ]; then # two raw frames (the game's own, before the compositor) once the picture is split
 		echo "!sleep $((RAW_AT * 1000))"
 		echo "!shot raw1"
@@ -45,6 +55,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	else
 		echo "!sleep $((LEVEL_S * 1000))"
 	fi
+	[ -n "${MW2COOP_POST:-}" ] && echo "$MW2COOP_POST" | tr ';' '\n'
 } > "$A/mw2coop/commands.txt"
 # the window is made 1920x1080 at start: the config of the copy holds it (no vid_restart: it loses the mod's fonts)
 CFG=$A/players/config.cfg

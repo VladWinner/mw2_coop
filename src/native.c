@@ -2238,6 +2238,12 @@ void native_split_stop(void)
 	mode = 0;
 	ctx_on = 0;
 	InterlockedExchange(&coopdvar_on, 0);
+	Sleep(60); // the forcing thread has written its last value
+	{
+		uint8_t *dvar = *(uint8_t **)(base + 0x1905308); // the scripts' co-op dvar goes back to 0 (the game's own co-op sets it itself)
+		if (dvar)
+			*(int *)(dvar + 0x10) = 0;
+	}
 	session_reset();
 	journal_restore(1);
 	log_printf("native: split screen session over, the game's own player count is back");
