@@ -183,11 +183,16 @@ static void begin_frame_hook(void)
 	begin_frame_original();
 }
 
+static int ctx_on;
+static void ctx_after_draw(void);
+
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
 	float *sw = subwindow();
 	if (!mode || !sw || second_pass) {
 		cg_draw_original(local_client, a, b);
+		if (ctx_on)
+			ctx_after_draw();
 		return;
 	}
 	float saved[4];
@@ -260,10 +265,280 @@ static void sv_add_command(uint8_t *cl, const char *text)
 	p[1] += len + 1;
 }
 
+// Debug aid ([native] logcbuf=1): every text the engine adds to the command buffer, in the log.
+static const uint8_t cbuf_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x8b, 0xf9, 0x48, 0x8b, 0xda};
+static void (*cbuf_original)(int, const char *);
+static void cbuf_hook(int lc, const char *text)
+{
+	char line[200];
+	size_t i = 0;
+	for (; text && text[i] && text[i] != '\n' && i < sizeof(line) - 1; i++)
+		line[i] = text[i];
+	line[i] = 0;
+	log_printf("cbuf(%d): %s", lc, line);
+	cbuf_original(lc, text);
+}
+
+// ---- experiment 5: a second client context (docs/native-splitscreen-plan.md): the engine's client code runs for local client 1 as local client 0, with the client statics swapped
+// The arrays of the client side (cl, clc, cls, the cgame's cg/cgs) have one element, so the loops over the local clients (i < number of local players) would write local client 1's
+// state over unrelated statics. Each call site of such a loop is redirected to a wrapper: for client 1 it swaps the client statics to context 1's copy, calls the function as
+// client 0, and swaps back. The ranges are the first guess (cgame block, snapshots, cl, clc, cls, input); the ones the experiments show missing are added.
+static char settings_path[MAX_PATH];
+
+typedef struct {
+	uint32_t rva, size;
+} range_t;
+static const range_t ranges[] = {
+    {0x404450, 0x44f000 - 0x404450}, // cgs, cg, cg_entities and neighbours
+    {0x51b078, 0x51dcb0 - 0x51b078}, // cl snapshots and their pointers
+    {0x52c400, 0x100},               // cleared by the cgame init for each client
+    {0x52fbc0, 0x21c},               // input
+    {0x533cb8, 0x10},                // cls state
+    {0x533d20, 0x540b60 - 0x533d20}, // cl: usercmd ring, cmdNumber, playerstate, packet history
+    {0x545844, 0x3218},              // clc: reliable command ring
+};
+#define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
+static uint8_t *ctx_store[2][NRANGES];
+static int ctx_current;
+
+static void ctx_ensure(void)
+{
+	if (ctx_store[0][0])
+		return;
+	for (size_t i = 0; i < NRANGES; i++) { // first use: both copies start as what the live memory holds now
+		ctx_store[0][i] = VirtualAlloc(NULL, ranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		ctx_store[1][i] = VirtualAlloc(NULL, ranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		memcpy(ctx_store[1][i], base + ranges[i].rva, ranges[i].size);
+	}
+}
+
+// `mask`: the ranges (bit i = ranges[i]) that are swapped; a function that touches only the cl block need not expose the other threads to a swapped cgame block. A masked swap
+// must be undone with the same mask, and not nest with another.
+#define CTX_ALL ((1u << NRANGES) - 1)
+#define CTX_CL (1u << 5)
+#define CTX_CL_CLC ((1u << 5) | (1u << 6))
+static void ctx_swap_mask(int to, unsigned mask)
+{
+	if (to == ctx_current)
+		return;
+	ctx_ensure();
+	for (size_t i = 0; i < NRANGES; i++) {
+		if (!(mask & (1u << i)))
+			continue;
+		uint8_t *live = base + ranges[i].rva;
+		memcpy(ctx_store[ctx_current][i], live, ranges[i].size);
+		memcpy(live, ctx_store[to][i], ranges[i].size);
+	}
+	ctx_current = to;
+}
+
+static void ctx_swap(int to)
+{
+	ctx_swap_mask(to, CTX_ALL);
+}
+
+// The cgame block holds what the cgame registered for the whole process (the media handles the 2D drawing uses even while the cgame is still being initialised). Context 1 starts
+// from context 0's block after its init, so its own init can draw the loading screen.
+static void ctx_seed_cgame(void)
+{
+	static int seeded;
+	if (seeded || ctx_current != 0)
+		return;
+	ctx_ensure();
+	memcpy(ctx_store[1][0], base + ranges[0].rva, ranges[0].size);
+	seeded = 1;
+}
+
+// The client code reads the number of local players (rva 0x3c3eb0) at these instructions (rva, length, offset of the rip-relative displacement). The server and the game module keep
+// reading the real one (2); the client code is pointed at a copy that stays 1, so its loops over the local clients only ever touch client 0 and nothing of the arrays of one element.
+static const struct {
+	uint32_t rva;
+	uint8_t length, disp;
+} client_n_sites[] = {
+	{0x6bae9, 6, 2},
+	{0x85f44, 6, 2},
+	{0x89e44, 6, 2},
+	{0x93d94, 6, 2},
+	{0xa08c2, 7, 3},
+	{0xa6703, 7, 3},
+	{0xa69cf, 6, 2},
+	{0xa6a76, 6, 2},
+	{0xa6b29, 7, 3},
+	{0xa6c44, 6, 2},
+	{0xa6c8c, 6, 2},
+	{0xa8f25, 6, 2},
+	{0xa905d, 6, 2},
+	{0xa9248, 6, 2},
+	{0xa936b, 6, 2},
+	{0xb2154, 6, 2},
+	{0xb60ec, 7, 3},
+	{0xb629a, 6, 2},
+	{0xb630a, 6, 2},
+	{0xb71df, 6, 2},
+	{0xb8e34, 6, 2},
+	{0xbcb49, 6, 2},
+	{0xc2835, 6, 2},
+	{0xc3e5e, 6, 2},
+	{0xc3eb8, 6, 2},
+	{0xc9667, 6, 2},
+	{0xc96f5, 6, 2},
+	{0xc9754, 6, 2},
+	{0xc9a04, 6, 2},
+	{0xca135, 6, 2},
+	{0xca184, 6, 2},
+	{0xca607, 6, 2},
+	{0xd22ac, 6, 2},
+	{0xd2304, 6, 2},
+	{0xd5595, 6, 2}
+};
+
+static void client_n_install(void)
+{
+	int32_t *n_client = (int32_t *)hook_page_near(base + RVA_LOCAL_PLAYERS_STORE);
+	if (!n_client) {
+		log_printf("native: no page near the image for the client's player count");
+		return;
+	}
+	*n_client = 1;
+	int done = 0;
+	for (size_t i = 0; i < sizeof(client_n_sites) / sizeof(client_n_sites[0]); i++) {
+		uint8_t *site = base + client_n_sites[i].rva;
+		int32_t old;
+		memcpy(&old, site + client_n_sites[i].disp, 4);
+		if ((uint8_t *)(site + client_n_sites[i].length + old) != base + 0x3c3eb0)
+			continue; // not the instruction the build has
+		int64_t to = (int64_t)((uint8_t *)n_client - (site + client_n_sites[i].length));
+		if (to > INT32_MAX || to < INT32_MIN)
+			continue;
+		int32_t rel = (int32_t)to;
+		DWORD prot;
+		VirtualProtect(site, 8, PAGE_EXECUTE_READWRITE, &prot);
+		memcpy(site + client_n_sites[i].disp, &rel, 4);
+		VirtualProtect(site, 8, prot, &prot);
+		done++;
+	}
+	FlushInstructionCache(GetCurrentProcess(), base, 0xe0000);
+	log_printf("native: %d of %d client reads of the local player count point at a copy (1)", done, (int)(sizeof(client_n_sites) / sizeof(client_n_sites[0])));
+}
+
+static void (*ps_publish_original)(unsigned, const void *);
+static void (*server_cmds_original)(unsigned long long, int *);
+static void (*usercmd_step_original)(int);
+static void (*cg_init_all_original)(void);
+static void (*snapshot_take_original)(void);
+#define RVA_LOCAL_PLAYERS_N 0x3c3eb0
+
+// A client-side function that loops over the local clients (and calls others that touch the client statics without a client number): run for context 0 and, once context 1
+// exists, for context 1, each time with the number of local players set to 1 so that every loop sees only client 0, which in context 1 is client 1.
+static int ctx1_ready;
+static int cg_init_done;
+static int draws_after_init;
+
+static void run_both(void (*fn)(void))
+{
+	fn();
+	if (ctx1_ready) {
+		ctx_swap(1);
+		fn();
+		ctx_swap(0);
+	}
+}
+
+static void cg_init_all_hook(void)
+{
+	log_printf("native: cgame init (context 0; context 1 follows after the first frames), dvar ptr 0x52bfc0 = %p", *(void **)(base + 0x52bfc0));
+	cg_init_all_original();
+	cg_init_done = 1;
+	log_printf("native: cgame init done, dvar ptr 0x52bfc0 = %p", *(void **)(base + 0x52bfc0));
+}
+
+static void snapshot_take_hook(void)
+{
+	run_both(snapshot_take_original);
+}
+
+// The cgame registers its dvars and media while it runs the first frames, and the 2D drawing of every thread reads them: context 1 can only start from a cgame block that has them.
+// So its init runs a few frames after context 0's, from its first frame's hook, from a copy of context 0's block.
+static void ctx_after_draw(void)
+{
+	if (ctx1_ready || !cg_init_done || ++draws_after_init < 5)
+		return;
+	ctx_seed_cgame();
+	ctx_swap(1);
+	cg_init_all_original();
+	ctx_swap(0);
+	ctx1_ready = 1;
+	log_printf("native: context 1 initialised");
+}
+
+// The server's copy of a local player's playerstate into the cl block (rva 0x535d38 is +0x2018 into the block at 0x533d20): for client 1 straight into context 1's copy, so no other thread
+// ever sees a swapped block for it.
+#define CL_BLOCK_PS 0x2018
+#define PS_SIZE 0xaca4
+static void ps_publish_hook(unsigned lc, const void *ps)
+{
+	if (lc == 0)
+		return ps_publish_original(0, ps);
+	ctx_ensure();
+	memcpy(ctx_store[1][5] + CL_BLOCK_PS, ps, PS_SIZE);
+}
+
+static void server_cmds_hook(unsigned long long lc, int *msg)
+{
+	if ((int)lc == 0)
+		return server_cmds_original(0, msg); // client 1 gets no server commands yet
+}
+
+static void usercmd_step_hook(int lc)
+{
+	if (lc == 0)
+		return usercmd_step_original(0); // client 1 sends and applies nothing yet
+}
+
+static void contexts_install(void)
+{
+	static const struct {
+		uint32_t site;
+		void *hook;
+		void **original;
+	} sites[] = {
+	    {0x2336c7, cg_init_all_hook, (void **)&cg_init_all_original},
+	    {0x2343b8, snapshot_take_hook, (void **)&snapshot_take_original},
+	    {0x2346ca, ps_publish_hook, (void **)&ps_publish_original},
+	    {0x234a02, server_cmds_hook, (void **)&server_cmds_original},
+	    {0x15ce84, usercmd_step_hook, (void **)&usercmd_step_original},
+	};
+	int enabled = GetPrivateProfileIntA("native", "sites", 63, settings_path);
+	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
+		if ((enabled & (1 << i)) && !hook_call(base + sites[i].site, sites[i].hook, sites[i].original))
+			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
+	ctx_on = 1;
+	log_printf("native: client contexts on (call sites redirected)");
+}
+
+// The scripts decide "co-op" from the dvar `coop` (rva 0x1905308, a bool whose script-side writes are refused); the engine's own co-op byte (rva 0x52fb5c) stays 0 so that the engine takes its
+// local-players branch. [native] coopdvar=1 keeps the dvar at 1 (written from a thread, every 20 ms) so that the level scripts, the mod's among them, run their two-player code.
+static DWORD WINAPI coop_dvar_thread(LPVOID unused)
+{
+	(void)unused;
+	for (;;) {
+		uint8_t *dvar = *(uint8_t **)(base + 0x1905308);
+		if (dvar)
+			*(int *)(dvar + 0x10) = 1;
+		Sleep(20);
+	}
+	return 0;
+}
+
 static void players_install(int n)
 {
-	if (n < 2 || n > 4)
+	if (n < 1 || n > 4)
 		return;
+	if (n == 1) { // diagnostics: the hooks without the second player
+		if (GetPrivateProfileIntA("native", "ctx", 1, settings_path))
+			contexts_install();
+		return;
+	}
 	uint8_t *at = base + RVA_LOCAL_PLAYERS_STORE;
 	if (at[0] != 0xc7 || at[1] != 0x05 || at[6] != 1 || at[7] || at[8] || at[9]) {
 		log_printf("native: unexpected code at the local players store, players=%d ignored", n);
@@ -278,6 +553,11 @@ static void players_install(int n)
 	VirtualProtect(at + 6, 1, old, &old);
 	log_printf("native: the number of local players is %d (patched G_InitGame)", n);
 	hook_jump(base + RVA_SV_ADD_COMMAND, 14, sv_add_command, 0xcc);
+	client_n_install();
+	if (GetPrivateProfileIntA("native", "coopdvar", 0, settings_path))
+		CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
+	if (GetPrivateProfileIntA("native", "ctx", 1, settings_path))
+		contexts_install();
 	log_printf("native: server commands to client 1 are dropped (no client behind it yet)");
 }
 
@@ -289,10 +569,13 @@ void native_install(void)
 		n--;
 	path[n] = 0;
 	lstrcatA(path, "mw2coop\\settings.ini");
+	lstrcpyA(settings_path, path);
 	mode = GetPrivateProfileIntA("native", "experiment", 0, path);
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	players_install(GetPrivateProfileIntA("native", "players", 0, path));
-	if (!mode)
+	if (GetPrivateProfileIntA("native", "logcbuf", 0, path) && !hook_function(base + 0x1ee890, cbuf_bytes, sizeof(cbuf_bytes), cbuf_hook, (void **)&cbuf_original))
+		log_printf("native: Cbuf_AddText bytes differ");
+	if (!mode && !ctx_on)
 		return;
 	if (!hook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) ||
 	    !hook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {

@@ -2,6 +2,7 @@
 // build, 5 bytes relative in the 32-bit one, where every address is within reach), and a trampoline that runs
 // the function's own first bytes and then goes on with the rest of it.
 #include <windows.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "hook.h"
@@ -95,3 +96,44 @@ int hook_function(uint8_t *target, const uint8_t *expected, size_t len, void *re
 	hook_jump(target, len, replacement, 0xcc); // never run: the jump leaves, the trampoline resumes after them
 	return 1;
 }
+
+#ifdef _WIN64
+// A page within +-2 GB of `where`, read-write, or NULL.
+uint8_t *hook_page_near(const uint8_t *where)
+{
+	uintptr_t center = (uintptr_t)where & ~(uintptr_t)0xffff;
+	for (uintptr_t d = 0x10000; d < 0x70000000; d += 0x10000) {
+		uint8_t *p = VirtualAlloc((void *)(center - d), 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		if (!p)
+			p = VirtualAlloc((void *)(center + d), 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		if (p)
+			return p;
+	}
+	return NULL;
+}
+
+int hook_call(uint8_t *site, void *replacement, void **original)
+{
+	if (site[0] != 0xe8)
+		return 0;
+	int32_t rel;
+	memcpy(&rel, site + 1, 4);
+	uint8_t *page = hook_page_near(site);
+	if (!page)
+		return 0;
+	hook_jump_bytes(page, replacement);
+	DWORD old;
+	if (!VirtualProtect(page, 0x1000, PAGE_EXECUTE_READ, &old))
+		return 0;
+	int64_t to_stub = (int64_t)(page - (site + 5));
+	if (to_stub > INT32_MAX || to_stub < INT32_MIN)
+		return 0;
+	*original = site + 5 + rel;
+	int32_t new_rel = (int32_t)to_stub;
+	VirtualProtect(site, 5, PAGE_EXECUTE_READWRITE, &old);
+	memcpy(site + 1, &new_rel, 4);
+	VirtualProtect(site, 5, old, &old);
+	FlushInstructionCache(GetCurrentProcess(), site, 5);
+	return 1;
+}
+#endif

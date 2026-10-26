@@ -219,3 +219,22 @@ Patch of the immediate at rva 0x1714ac (1 -> 2), plus a replacement of the serve
 - So Design Y alone is not enough: the client side of local client 1 (`cl`, `clc`, `cls`, the snapshot take 0xc99c0 -> 0xb8000(lc), the usercmd send 0xd02a0(lc), the snapshot publish 0xd5690 / 0xd5470) writes into memory that
   belongs to other statics for lc = 1 (stride 0xce9c and 0x3218 arrays of one element). The wrapper-with-context-swap design stands: every engine function that takes a local client number and touches client state
   runs for client 1 as local client 0 with the client statics swapped to context 1's copy. `tools/rvabytes.py` prints a function's bytes from the exe on disk (for the hook prologue checks).
+
+## Experiment 5 (2026-10-26): a level with TWO players in ONE process, no network (`[native] players=2`, `coopdvar=1`, `src/native.c`)
+
+**Correction to experiment 4:** the "simulation stalls at 300 ms" was a wrong probe: the addresses read (0xd96ec8, 0x19c3868) are not the game clock, and the plain baseline (one player, same commands) shows
+the same values. The level does run (the trainer's intro cinematic plays with subtitles in baseline and in every run below). The real problems of experiment 4 were the client loops over local client 1 writing into
+other statics (the playerstate copy of client 1 into `cl[1]` = rva 0x542bd4.. overwrote the renderer flags at 0x548ba4/0x548bac with zeros: black screen; and a null cgame dvar pointer read by the render thread).
+
+What works now (64-bit, test copy, `devmap trainer`, nothing else):
+1. `players=2`: the immediate in G_InitGame is 2 and the server's reliable commands to client 1 are dropped (no client behind it yet): both `client_t` are active.
+2. **35 reads of the player count in the client code (rva 0x5000-0xe0000) are pointed at a copy that stays 1** (`client_n_sites` in native.c, found with `tools/ghidra/RipRefs.java`: instruction address, length,
+   offset of the rip-relative displacement, patched at run time). The server and the game module (rva 0x120000-0x240000) keep reading the real 2. So the client side only ever sees local client 0 and never touches the arrays of one element.
+3. `ps_publish` for client 1 (the server's copy of its playerstate, call site 0x2346ca) goes straight into context 1's copy of the cl block, not into the live memory behind `cl[1]`.
+4. `coopdvar=1`: the scripts decide co-op from the dvar `coop` (script-side writes are refused), so a thread keeps it at 1 while the engine's co-op byte (rva 0x52fb5c) stays 0 (the engine takes its local-players branch).
+   Result: the mod's recorder reports **`rec: 300 level trainer start '' players 2`** (level.players has two players) and the mod's script shows "waiting for the other player" (its partner handshake never completes: no partner exists yet).
+   No crash; the intro plays.
+
+Open: the mod's partner handshake (scripts wait for the other player; net.c/party.c assume a remote partner), player 1's usercmds (`0xd02a0(1)` is skipped: player 1 stands still), context 1 for the cgame
+(`ctx_swap`, `run_both`, wrappers are in place but only context 0 is exercised: context 1's init is deferred to `ctx_after_draw`), the second view, HUD, input, sound listener.
+`[native] players=1` installs only the hooks, for comparison runs. Test setup that works: `players=2` + `coopdvar=1` in the copy's `mw2coop\settings.ini`, commands `devmap trainer`, `!shot`, `!rva`, `!watch`.
