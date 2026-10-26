@@ -91,7 +91,7 @@ public class XrefStrings extends GhidraScript {
 					DecompileResults res = di.decompileFunction(f, 60, monitor);
 					if (res.decompileCompleted()) {
 						String c = res.getDecompiledFunction().getC();
-						println(c.length() > 8000 ? c.substring(0, 8000) + "\n  ...[cut]" : c);
+						println(c.length() > 600000 ? c.substring(0, 600000) + "\n  ...[cut]" : c);
 					}
 				}
 				continue;
@@ -134,7 +134,7 @@ public class XrefStrings extends GhidraScript {
 						DecompileResults res = di.decompileFunction(f, 60, monitor);
 						if (res.decompileCompleted()) {
 							String c = res.getDecompiledFunction().getC();
-							println(c.length() > 6000 ? c.substring(0, 6000) + "\n  ...[cut]" : c);
+							println(c.length() > 600000 ? c.substring(0, 600000) + "\n  ...[cut]" : c);
 						}
 					}
 				}

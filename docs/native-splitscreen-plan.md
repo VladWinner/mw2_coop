@@ -68,3 +68,27 @@ renderer take two views in one frame). If one fails the plan is redone or droppe
 ## Rules
 
 The owner's installed game and saves are never touched; test copies live in `D:\coop-test`; nothing is pushed or published without the owner's word.
+
+## Phase 0 results so far (64-bit official build, Ghidra; 2026-10-26)
+
+How the engine keeps the client's state:
+
+- **The code still passes a local client number everywhere** (`CG_CalcFov`, rva 0xbc1e0, takes it; the frame calls the cgame with a literal 0), **but the arrays
+  behind it were folded to one element**: the client globals are read at constant addresses (the cgame's `cg` is at rva 0x422440, e.g. `cg+0x14` flags, `cg+0xac`).
+  So nothing can be had by "growing an array": the swap of whole memory ranges in the plan above is the way.
+- **There is a 2-player table:** `CG_CalcFov` picks `cg_playerFovScale0` or `cg_playerFovScale1` (rva 0x51e1c0 / 0x51e1c8) by looking the local client up in
+  a table at rva 0x540bb8 (stride 0x2650 bytes, a type field of 2 and a client id): the Special Ops two-player mode keeps a slot per player.
+- **The frame, top down:** the main loop (rva 0x2913a0) -> rva 0x1fbd40 -> rva 0x1fbde0 (the frame's housekeeping, writes config.cfg on demand) -> rva 0xd5b00
+  (the client frame, rate limited: `cls` state at rva 0x533cb8, 0 to 7, 6 is active) -> rva 0xd5890 (one client frame: update, the state switch, **rva 0xbca00 =
+  the cgame's draw-active-frame for local client 0**, then the 2D and the screen update) -> rva 0xbe710 (the view values) -> rva 0xbc1e0 (the field of view).
+  The renderer's view setup with `r_subwindow` (rva 0x7e40) is reached from rva 0x8150 and 0x8210.
+- **How much one client frame touches:** the cgame draw and everything it calls (about 4000 functions) read or write about 5800 distinct writable globals, in
+  roughly 190 clusters over the whole image. Most of it is the engine at large (renderer, dvars, sound), not per-client state. The client-state candidates are
+  the clusters at rva 0x404450-0x44f000 (the cgame's `cgs` at rva 0x40c1a8 and `cg` at rva 0x422440 and their neighbours, about 260 KB), 0x51dca8-0x51e364 (the
+  cgame's dvar pointers: shared, not state), 0x533cb0 (`cls` state), 0x540bb8 (the player slots), 0x547e84-0x548d07 and others to be sorted out.
+- Tools made for this: `tools/ghidra/CallChain.java` (callers level by level), `tools/ghidra/GlobalsOf.java` (the writable globals a function and its callees touch,
+  in address clusters); both run through `GHIDRA_SCRIPT=<name> sh tools/ghidra/run.sh <rva> ...`.
+
+What is still unknown and decides phases 1 and 2: the exact extent of the client state (which of the clusters are per client and which are shared), whether pointers
+into those ranges are kept elsewhere (the swap by copying contents is only safe if not), and how the connection state (`cls`, `clc`, the netchan) is laid out for a
+second connection.
