@@ -168,3 +168,11 @@ Found by reading the engine's network layer (64-bit):
 
 So the engine's server side and its loopback are already built for several local clients; the client side is one static copy. The next steps are the hooks on the two loopback functions (queues keyed by context number), a second `Netchan_Setup` and member add for context 1,
 and a look at what the client's connect state machine (`cls` state, rva 0x24ee50 and the challenge/connect sequence) needs in its own context.
+
+## Client-state extent (2026-10-26)
+
+`tools/ghidra/MemsetScan.java` (LEA of a global followed by `MOV R8D,size` and a CALL, i.e. "memset this global") finds **no** such clears of the big client
+statics in rva 0x3f0000-0x560000 (1211 LEAs into the range, none of that shape): the engine clears them another way (inline stores / `rep stos`, or never). So the
+struct sizes cannot be read from clear calls. Working assumption instead: the whole cluster rva 0x404450-0x44f000 (about 300 KB, `cgs` + `cg` + neighbours) is
+swapped as one block per frame (a 300 KB copy costs microseconds), plus the small clusters listed above; anything shared in that block must be identical in both
+contexts, which the first experiment with a second context will show (a difference after a swap round trip = shared state that must be excluded).
