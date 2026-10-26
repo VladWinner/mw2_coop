@@ -271,3 +271,16 @@ Settings: `players=2`, `coopdvar=1`, `experiment=5`. What it does on top of expe
   was never reached, the text comes from the localized string).
 - Open: HUD/2D per half (the 2D is drawn for the whole frame, the band crop cuts what is at the screen edges), sound (one listener), the mod's partner logic (net/mirror/party for a local partner), a second device
   for player 1 and the menu/lobby flow, the 32-bit build.
+
+## Experiment 8 (2026-10-26, evening): what the owner asked for, one by one
+
+- **Mode 7** (`experiment=7`): each view is built for the shape of a half (the video aspect floats at rva 0x4113738 / 0x411373c are set to the half's aspect: wide field, no cropping), drawn over the full frame, and the compositor squeezes it into its half
+  (`StretchRect`, linear): the field is as wide as in the reference screenshots, proportions are right, the 2D (subtitles, HUD) is drawn inside each half.
+- **Split only after the intro:** the mod's script sets the dvar `mw2coop_split_view` to 1 when the level's `introscreen_complete` flag is set (`_mw2coop.gsc: split_view_gate`); until then one picture
+  (briefing, title card). The C side reads it every client frame and restores the video aspect when the split is off.
+- **The other player in the bottom view:** the cgame hides "my" entity by the entity NUMBER equal to the local client (0). Context 1 is local client 0 but player 1, so it hid player 0 and drew itself (the big dark
+  head over the camera). Fix: in context 1's draw the data of entities 0 and 1 trade places (`swap_entities`, swapped back after the frame); player 1's own body is then the "mine" entity and player 0's body is drawn.
+  (`ctx1lc`, `skipent`, `swapbits`, `entdraw`, `entlog`, `nogun`, `nopredict` are diagnostics.)
+- **DirectX error:** the half textures of the compositor are in the default pool; a device reset (lost device, `vid_restart`, a change of the desktop, a remote session) fails while they are alive. The `Reset` / `ResetEx` slots
+  now release them first (`reset_hook`). Not yet confirmed by a long run.
+- Open: sound (one listener), the mod's partner logic (net/mirror/party), a second device and the menu/lobby for the mode, the 32-bit build, an HUD laid out for the half instead of a squeezed one.

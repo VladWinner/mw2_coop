@@ -179,6 +179,24 @@ static void patch_slot(void **slot, void *hook, void **orig)
 	VirtualProtect(slot, sizeof(void *), old, &old);
 }
 
+// Reset (vtable 16) fails while default-pool resources of ours are alive: the half textures are let go first (a lost device, a vid_restart, a change of the desktop: "DirectX error")
+typedef HRESULT(STDMETHODCALLTYPE *reset_t)(IDirect3DDevice9 *, void *);
+static reset_t reset_orig;
+static HRESULT STDMETHODCALLTYPE reset_hook(IDirect3DDevice9 *dev, void *params)
+{
+	log_printf("native: device reset: the half textures are released");
+	comp_release();
+	return reset_orig(dev, params);
+}
+typedef HRESULT(STDMETHODCALLTYPE *reset_ex_t)(IDirect3DDevice9 *, void *, void *);
+static reset_ex_t reset_ex_orig;
+static HRESULT STDMETHODCALLTYPE reset_ex_hook(IDirect3DDevice9 *dev, void *params, void *mode)
+{
+	log_printf("native: device reset (Ex): the half textures are released");
+	comp_release();
+	return reset_ex_orig(dev, params, mode);
+}
+
 static void comp_hook(void)
 {
 	if (the_device)
@@ -189,9 +207,11 @@ static void comp_hook(void)
 	the_device = dev;
 	void **vt = *(void ***)dev;
 	patch_slot(&vt[17], (void *)present_hook, (void **)&present_orig);
+	patch_slot(&vt[16], (void *)reset_hook, (void **)&reset_orig);
 	IDirect3DDevice9Ex *ex = NULL;
 	if (SUCCEEDED(IDirect3DDevice9_QueryInterface(dev, &iid_device9ex, (void **)&ex)) && ex) {
 		patch_slot(&vt[121], (void *)present_ex_hook, (void **)&present_ex_orig); // PresentEx: the slot of the Ex interface
+		patch_slot(&vt[132], (void *)reset_ex_hook, (void **)&reset_ex_orig);
 		IDirect3DDevice9Ex_Release(ex);
 	}
 	IDirect3DSwapChain9 *sc = NULL;
@@ -218,6 +238,7 @@ static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the
 static int frame_bottom; // mode 5: this client frame is context 1's (the bottom half)
 static int ctx1_ready;
 static void ctx_swap(int to);
+void native_unswap_entities(void);
 static void ctx_after_draw(void);
 
 static void cg_draw_hook(unsigned local_client, int a, int b)
@@ -600,6 +621,24 @@ static void ctx_entity_log(void)
 		return;
 	if (++seen[ctx_current] != 600)
 		return;
+	{
+		const float *f = (const float *)(base + 0x422440);
+		char line[1500];
+		int n = snprintf(line, sizeof(line), "native: ctx %d cg ps floats:", ctx_current);
+		for (int i = 0; i < 100; i++)
+			if (f[i] > -400.0f && f[i] < 400.0f && (f[i] > 0.01f || f[i] < -0.01f))
+				n += snprintf(line + n, sizeof(line) - n, " %x=%.1f", i * 4, f[i]);
+		log_printf("%s", line);
+	}
+	{
+		const float *f = (const float *)(base + 0x43c200);
+		char line[1500];
+		int n = snprintf(line, sizeof(line), "native: ctx %d refdef-ish floats @43c200:", ctx_current);
+		for (int i = 0; i < 90; i++)
+			if (f[i] > -1000000.0f && f[i] < 1000000.0f && (f[i] > 0.001f || f[i] < -0.001f))
+				n += snprintf(line + n, sizeof(line) - n, " %x=%.2f", i * 4, f[i]);
+		log_printf("%s", line);
+	}
 	const float *cam = (const float *)(base + 0x42245c);
 	log_printf("native: ctx %d camera %.0f %.0f %.0f, clientNum %d", ctx_current, cam[0], cam[1], cam[2], *(int *)(base + 0x40caa0));
 	for (int i = 0; i < 1024; i++) {
@@ -607,7 +646,7 @@ static void ctx_entity_log(void)
 		const float *o = (const float *)(e + 0x18);
 		float dx = o[0] - cam[0], dy = o[1] - cam[1], dz = o[2] - cam[2];
 		if (dx * dx + dy * dy + dz * dz < 200.0f * 200.0f && e[0xe0] != 0)
-			log_printf("native:   ent %d type %d clientNum %d at %.0f %.0f %.0f", i, e[0xe0], *(unsigned short *)(e + 0x160), o[0], o[1], o[2]);
+			log_printf("native:   ent %d type %d flags %08x clientNum %d at %.0f %.0f %.0f", i, e[0xe0], *(unsigned *)(e + 0xec), *(unsigned short *)(e + 0x160), o[0], o[1], o[2]);
 	}
 }
 
@@ -644,7 +683,7 @@ static void ctx_after_draw(void)
 	ctx_swap(0);
 	// the cgame's own idea of its local client number (rva 0x40caa4): the draw hides "my" entity by it and answers per-client visibility masks by it; context 1 runs as local client 0
 	// but is client 1
-	*(int *)(ctx_store[1][0] + (0x40caa4 - ranges[0].rva)) = 1;
+	*(int *)(ctx_store[1][0] + (0x40caa4 - ranges[0].rva)) = GetPrivateProfileIntA("native", "ctx1lc", 1, settings_path);
 	ctx1_ready = 1;
 	log_printf("native: context 1 initialised");
 	ctx_dump("after init");
@@ -732,6 +771,7 @@ static void client_frame_hook(void)
 			*(int *)(np_dvar + 0x10) = 1;
 		ctx_swap(1);
 		client_frame_original();
+		native_unswap_entities();
 		ctx_swap(0);
 		return;
 	}
@@ -880,19 +920,53 @@ static const uint8_t add_entity_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0
 static void (*add_entity_original)(int);
 static int skip_entity = 1; // context 1 is player 1: his own entity is not drawn (the cgame hides "my" entity by the local client number, which is 0 in context 1)
 static int log_entities;
+static int swap_entities = 1;
+static int entities_swapped;
+void native_unswap_entities(void)
+{
+	if (!entities_swapped)
+		return;
+	uint8_t *e0 = base + 0x441070, *e1 = e0 + 0x1a8, t[0x1a8];
+	memcpy(t, e0, sizeof(t));
+	memcpy(e0, e1, sizeof(t));
+	memcpy(e1, t, sizeof(t));
+	entities_swapped = 0;
+}
 static void add_entity_hook(int n)
 {
 	static unsigned frames;
 	static int logging;
 	if (ctx_current == 1) {
+		if (swap_entities && n == 0 && !entities_swapped) {
+			// the cgame hides the entity numbered like the local client (0) as "mine"; context 1 is local client 0 but player 1: his entity and player 0's trade places for the draw
+			uint8_t *e0 = base + 0x441070, *e1 = e0 + 0x1a8, t[0x1a8];
+			memcpy(t, e0, sizeof(t));
+			memcpy(e0, e1, sizeof(t));
+			memcpy(e1, t, sizeof(t));
+			entities_swapped = 1;
+		}
 		if (log_entities && n == 0 && logging == 0 && ++frames == 700)
 			logging = 1;
 		if (logging == 1) {
 			const uint8_t *e = base + 0x441070 + (size_t)n * 0x1a8;
-			log_printf("native: ctx1 adds entity %d type %d", n, e[0xe0]);
+			log_printf("native: ctx1 adds entity %d type %d flags %08x", n, e[0xe0], *(unsigned *)(e + 0xec));
 		}
 		if (n == skip_entity)
 			return;
+		// the per-client "hide from" bits of an entity (flags & 0x3f0, bit 4 + local client) are made for local client numbers: context 1 is local client 0 but is client 1
+		// ([native] swapbits=0 turns it off)
+		static int swapbits = -1;
+		if (swapbits < 0)
+			swapbits = GetPrivateProfileIntA("native", "swapbits", 1, settings_path);
+		unsigned *flags = (unsigned *)(base + 0x441070 + (size_t)n * 0x1a8 + 0xec);
+		unsigned saved = *flags;
+		if (swapbits) {
+			unsigned b0 = saved & 0x10, b1 = saved & 0x20;
+			*flags = (saved & ~0x30u) | (b0 ? 0x20 : 0) | (b1 ? 0x10 : 0);
+		}
+		add_entity_original(n);
+		*flags = saved;
+		return;
 	}
 	add_entity_original(n);
 }
@@ -921,7 +995,8 @@ static void contexts_install(void)
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
 		if ((enabled & (1 << i)) && !hook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
-	skip_entity = GetPrivateProfileIntA("native", "skipent", 1, settings_path);
+	swap_entities = GetPrivateProfileIntA("native", "swapent", 1, settings_path);
+	skip_entity = GetPrivateProfileIntA("native", "skipent", swap_entities ? -1 : 1, settings_path);
 	log_entities = GetPrivateProfileIntA("native", "entdraw", 0, settings_path);
 	{
 		if (!hook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
