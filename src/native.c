@@ -268,7 +268,7 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 		if (half == 1 && dedupe && dedupe_ps && lay_have[0]) {
 			static const float bands[3][4] = {{0.0f, 0.6f, 0.0f, 0.0375f},    // the objective's strip (layer coordinates: the half is the top half of the layer, v up to 0.5)
 							  {0.05f, 0.9f, 0.15f, 0.2375f},  // the subtitles and the intro's lines, above the crosshair
-							  {0.05f, 0.55f, 0.35f, 0.475f}}; // the intro's title lines (bottom left)
+							  {0.05f, 0.80f, 0.35f, 0.475f}}; // the intro's title lines (bottom left) and the subtitles (bottom centre); the ammo counter (bottom right) is outside
 			IDirect3DDevice9_SetPixelShader(dev, dedupe_ps);
 			IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, &bands[0][0], 3);
 			float force[4] = {GetTickCount() - split_tick < 14000 ? 1.0f : 0.0f, 0, 0, 0};
@@ -1827,6 +1827,8 @@ static void client_frame_hook(void)
 		uint8_t *d = ((uint8_t * (*)(const char *))(base + 0x26bdf0))("mw2coop_split_view");
 		const char *v = d ? *(const char **)(d + 0x10) : NULL;
 		int on = v && v[0] == '1';
+		if (*(unsigned *)(base + 0x533cb0) & 0x11) // key catchers of client 0 (rva 0x533cb0, set by 0xd1c10): a menu (pause, objectives, end of game) or the console has the keys: one picture
+			on = 0;
 		if (on != split_on)
 			log_printf("native: split view %s", on ? "on" : "off");
 		if (on && !split_on)

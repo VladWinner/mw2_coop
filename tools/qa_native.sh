@@ -52,6 +52,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 		echo "!sleep 1700"
 		echo "!shot raw2"
 		echo "!sleep $(((LEVEL_S - RAW_AT) * 1000))"
+	elif [ -n "${MW2COOP_MID:-}" ]; then # console commands MW2COOP_MIDAT seconds into the level (";"-separated)
+		echo "!sleep $((${MW2COOP_MIDAT:-100} * 1000))"
+		echo "$MW2COOP_MID" | tr ';' '\n'
+		echo "!sleep $(((LEVEL_S - ${MW2COOP_MIDAT:-100}) * 1000))"
 	else
 		echo "!sleep $((LEVEL_S * 1000))"
 	fi

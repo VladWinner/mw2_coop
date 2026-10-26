@@ -36,6 +36,18 @@
 
 #define MAX_WATCH 24
 
+static BOOL CALLBACK qa_find_window(HWND h, LPARAM data)
+{
+	DWORD pid;
+	char cls[32];
+	GetWindowThreadProcessId(h, &pid);
+	if (pid == GetCurrentProcessId() && GetClassNameA(h, cls, sizeof(cls)) && lstrcmpA(cls, "IW4") == 0) {
+		*(*(HWND **)data) = h;
+		return FALSE;
+	}
+	return TRUE;
+}
+
 static char watch_names[MAX_WATCH][64];
 static char watch_last[MAX_WATCH][256];
 static int watch_count;
@@ -334,6 +346,24 @@ static void run_line(char *line)
 		char menu[64] = "", item[64] = "";
 		if (sscanf(line + 12, "%63s %63s", menu, item) == 2)
 			menus_log_action(menu, item);
+		return;
+	}
+	if (strncmp(line, "!key ", 5) == 0) { // QA: a key press posted to the game window ("!key 1b" is Escape; virtual key code in hex)
+		unsigned vk = 0;
+		if (sscanf(line + 5, "%x", &vk) == 1) {
+			HWND game = NULL;
+			struct find_data {
+				HWND *out;
+			} fd = {&game};
+			EnumWindows(qa_find_window, (LPARAM)&fd);
+			if (game) {
+				UINT scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+				PostMessageA(game, WM_KEYDOWN, vk, 1 | (scan << 16));
+				Sleep(80);
+				PostMessageA(game, WM_KEYUP, vk, 1 | (scan << 16) | (3u << 30));
+				log_printf("control: key %02x posted to the game window", vk);
+			}
+		}
 		return;
 	}
 	if (strncmp(line, "!shot ", 6) == 0) {
