@@ -177,21 +177,15 @@ struct sizes cannot be read from clear calls. Working assumption instead: the wh
 swapped as one block per frame (a 300 KB copy costs microseconds), plus the small clusters listed above; anything shared in that block must be identical in both
 contexts, which the first experiment with a second context will show (a difference after a swap round trip = shared state that must be excluded).
 
-## Finding that changes the plan (2026-10-26): the partner is not a second client, anywhere
+## Correction (2026-10-26, same day): the partner IS a second real player, the earlier "puppet" finding was wrong
 
-Read together with the mod's design (each machine runs its own copy of the level; the partner is a scripted body, `coop_body_*`, driven by the net layer; `src/party.c`,
-`src/transplant.c`, `src/mirror.c`) and the two handlers decompiled today (client `coopConnect` sender rva 0xd23c0, server handler rva 0x22d460):
+The section that stood here claimed the SP server has one real client and the partner is a script puppet. That is wrong. The mod's own notes (`games/modern-warfare-2/NOTES.md`):
+the engine's Spec Ops co-op is **lockstep**: both PCs run the whole simulation with **two real player entities** (`level.players.size == 2`, `level.player2` defined on both, usercmds
+of both slots relayed per frame, `coop_maxFramesClientCanBeBehind`, `coop_fastForwardThreshold`). The stock scripts take `is_coop()` as `IsSplitScreen() || coop == 1`: split screen and
+co-op are the same code path in the level scripts. So the server side of a second local player exists; it was always the CLIENT side (one static `cg`/`cl`/`clc`) that is single.
+That is also why experiment 3 died: the cgame was run for local client 1 against client statics that only exist once.
 
-- The engine's coop session (the 2-slot table at rva 0x540ba0) is a party/lobby channel between two machines. The level itself is started by `map` on each machine; the SP server has
-  **one real client (player 0)**. The second player in a level is a script puppet. So "a second local client over the loopback" has no server counterpart: the loopback is multi-client
-  capable (hooking only `NET_SendPacket` for a client socket 2 would be enough, the read side already works per socket), but there is no second player entity with a playerstate and
-  snapshots behind it. Experiment 3 (local client 1 in the cgame) died for that reason, too.
-- So the choices for a native, one-process split screen are:
-  1. **Second camera on the puppet** (one sim, one real client): the odd frames draw the same world from the partner body's eyes (origin/angles/fov overridden in the refdef), HUD
-     for the second player drawn by us. Costs: the first-person weapon/arms (the cgame draws them only for the local playerstate), the partner's movement (his body must be moved by
-     pad 2 input through a movement/collision step of our own or the engine's Pmove on a puppet playerstate), his weapons/firing/damage through scripts.
-  2. **A real second player in the SP server** (the Special Ops way: `sv_maxclients` 2, entity 1 as a client with a playerstate and snapshots, plus the client context swap of this
-     document). Costs: the SP server and the level scripts were built for one player in this build; unknown how much of the Special Ops two-player path (`level.players`, `_coop` scripts) is
-     still in the PC binary and the stock scripts.
-  3. The two-process version (done, owner does not want it).
-- Everything else of this document (alternate frames, the compositor, the aspect fix) is common to 1 and 2.
+Reference for the original design: PaulCombal/mw2-recompiled (Xbox 360 recompilation, native 1-4 player split screen). Its `runtime/title.h` shows the 360 build keeps the client state
+as per-local-client arrays (client connection state stride 3216, `clientActive_t` array stride 27904, `clientConnection_t` array stride 0x51568, the cgame state array stride 0xFDE00) and a
+`Session_LocalClientNum`; the campaign's co-op frame (host-relayed, per slot: "select client, that client's usercmds, that client's reliable command") is the same frame the PC binary
+has. The PC exe folded the arrays to single statics and stubbed `IsSplitScreen()`. The plan above (second client context, swap of the client statics, alternate frames) stands.
