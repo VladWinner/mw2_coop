@@ -113,9 +113,9 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	InterlockedIncrement(&ring_tail);
 	LONG pops = InterlockedIncrement(&pops_total);
 	compose(dev, half);
-	if (pops == 2000 || pops == 2600) { // the composed picture, for the QA of the experiment
+	if (pops >= 3000 && pops < 3012) { // the composed picture about once a second (QA of the experiment: "seq-<pops>.bmp")
 		char name[32];
-		snprintf(name, sizeof(name), "native-%ld", (long)pops);
+		snprintf(name, sizeof(name), "seq-%ld", (long)pops);
 		shot_save_now(dev, name);
 	}
 	if (pops % 300 == 0)
@@ -519,8 +519,28 @@ static void ctx_dump(const char *what)
 	log_printf("%s", line);
 }
 
+static void ctx_jitter_log(void)
+{
+	static unsigned seen;
+	if (ctx_current != 1 || !GetPrivateProfileIntA("native", "jitterlog", 0, settings_path))
+		return;
+	seen++;
+	if (seen < 1500 || seen >= 1506)
+		return;
+	char line[1200];
+	int n = snprintf(line, sizeof(line), "native: ctx1 ps frame %u:", seen);
+	const float *f = (const float *)(base + 0x422440);
+	for (int i = 0; i < 70; i++) {
+		float v = f[i];
+		if (v > -100000.0f && v < 100000.0f && (v > 0.0001f || v < -0.0001f))
+			n += snprintf(line + n, sizeof(line) - n, " %x=%.1f", i * 4, v);
+	}
+	log_printf("%s", line);
+}
+
 static void ctx_after_draw(void)
 {
+	ctx_jitter_log();
 	static unsigned count;
 	if (ctx1_ready && ++count % 240 == 0 && count < 1200)
 		ctx_dump("state");
@@ -547,10 +567,12 @@ static void ctx_after_draw(void)
 #define PS_SIZE 0xaca4
 static void ps_publish_hook(unsigned lc, const void *ps)
 {
-	if (lc == 0)
+	if (lc == 0 && ctx_current == 0)
 		return ps_publish_original(0, ps);
 	ctx_ensure();
-	memcpy(ctx_store[1][5] + CL_BLOCK_PS, ps, PS_SIZE);
+	// the playerstate of client lc belongs to context lc: into the live block when that context is the live one, else into its stored copy
+	uint8_t *dest = (int)lc == ctx_current ? base + 0x535d38 : ctx_store[lc][5] + CL_BLOCK_PS;
+	memcpy(dest, ps, PS_SIZE);
 }
 
 static void server_cmds_hook(unsigned long long lc, int *msg)
@@ -580,13 +602,21 @@ static void client_frame_hook(void)
 {
 	static unsigned frame;
 	frame_bottom = 0;
+	static int nopredict = -1;
+	if (nopredict < 0)
+		nopredict = GetPrivateProfileIntA("native", "nopredict", 0, settings_path);
+	uint8_t *np_dvar = *(uint8_t **)(base + 0x51e028); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
 	if (mode == 5 && ctx1_ready && (frame++ & 1)) {
 		frame_bottom = 1;
+		if (nopredict && np_dvar)
+			*(int *)(np_dvar + 0x10) = 1;
 		ctx_swap(1);
 		client_frame_original();
 		ctx_swap(0);
 		return;
 	}
+	if (nopredict && np_dvar)
+		*(int *)(np_dvar + 0x10) = 0;
 	client_frame_original();
 }
 
@@ -603,6 +633,56 @@ static float wait_alpha_hook(int lc)
 	return a;
 }
 
+// Context 1 has no mouse (its player has no device yet): the engine's mouse and joystick reads (rva 0xcf4b0, called at 0xcfd23 and 0xd0061) return no movement for it, so the
+// real cursor only turns player 0.
+static void (*mouse_read_original)(long long, float *, float *);
+static void mouse_read_hook(long long state, float *x, float *y)
+{
+	if (ctx_current == 1) {
+		*x = 0;
+		*y = 0;
+		return;
+	}
+	mouse_read_original(state, x, y);
+}
+static void (*mouse_read2_original)(long long, float *, float *);
+static void mouse_read2_hook(long long state, float *x, float *y)
+{
+	if (ctx_current == 1) {
+		*x = 0;
+		*y = 0;
+		return;
+	}
+	mouse_read2_original(state, x, y);
+}
+
+// The keyboard and the pad reach context 1 too (the keys are read by the same input code): its usercmd, made by 0xd03a0 (called at 0xcf8b1), loses its buttons and movement,
+// so that the player who has no device stands still and his prediction agrees with the server.
+static uint8_t *(*make_cmd_original)(uint8_t *, int);
+static uint8_t *make_cmd_hook(uint8_t *out, int a)
+{
+	uint8_t *cmd = make_cmd_original(out, a);
+	if (ctx_current == 1 && cmd) {
+		*(int *)(cmd + 4) = 0;
+		cmd[0x1c] = cmd[0x1d] = 0;
+	}
+	return cmd;
+}
+
+// The simulation step and the hand-over of its results (rva 0x2343a0) run from inside the client frame (called at 0xb8d50): in context 1's frame they would write context 0's data
+// into the live (context 1's) client block. They run with context 0 live; the hand-over hooks above put each client's data where its context keeps it.
+static void (*server_step_original)(void);
+static void server_step_hook(void)
+{
+	if (ctx_current == 1) {
+		ctx_swap(0);
+		server_step_original();
+		ctx_swap(1);
+		return;
+	}
+	server_step_original();
+}
+
 // Player 1 (local client 1) has no input device yet: every simulation step he gets the usercmd of player 0 with the buttons and the movement cleared and the view turned by
 // [native] p1yaw (a 16-bit angle, 0x8000 = half a turn), through the engine's own SV_ClientThink analogue (rva 0x22d000, client_t[n] + 0x1630 holds the last cmd).
 #define RVA_SV_CLIENTS_CMD 0x19ada98
@@ -615,11 +695,31 @@ static void usercmd_step_hook(int lc)
 	}
 	if (!GetPrivateProfileIntA("native", "p1cmd", 0, settings_path))
 		return;
+	if (ctx1_ready && ctx_current == 0 && ctx_store[1][5]) {
+		// context 1's own client frame makes its usercmds in its cl block (ring of 128 x 0x40 at +0, cmdNumber at +0x2000, the number sent at +0x2004): player 1 gets them
+		// through the engine's SV_ClientThink analogue, as player 0 gets his through rva 0xd02a0
+		uint8_t *cl = ctx_store[1][5];
+		int number = *(int *)(cl + 0x2000);
+		int *sent = (int *)(cl + 0x2004);
+		if (number - *sent > 32)
+			*sent = number - 32;
+		for (int n = *sent + 1; n <= number; n++)
+			((void (*)(int, void *))(base + 0x22d000))(1, cl + (n & 127) * 0x40);
+		*sent = number;
+		return;
+	}
 	static int logged;
 	uint8_t cmd[0x40];
 	memcpy(cmd, base + RVA_SV_CLIENTS_CMD + 0x1630, sizeof(cmd)); // player 0's last cmd
 	if (!*(int *)cmd) // not set yet
 		return;
+	static unsigned steps;
+	if (++steps % 400 == 0 && steps < 6000) {
+		char hex[0x40 * 3 + 1];
+		for (int i = 0; i < 0x40; i++)
+			snprintf(hex + i * 3, 4, "%02x ", cmd[i]);
+		log_printf("native: player 0's cmd: %s", hex);
+	}
 	*(int *)(cmd + 4) = 0; // no buttons
 	cmd[0x1c] = cmd[0x1d] = 0; // no movement
 	if (!logged) {
@@ -648,8 +748,12 @@ static void contexts_install(void)
 	    {0x234925, snapshot_msg_hook, (void **)&snapshot_msg_original},
 	    {0x1fc331, client_frame_hook, (void **)&client_frame_original},
 	    {0x94039, wait_alpha_hook, (void **)&wait_alpha_original},
+	    {0xcfd23, mouse_read_hook, (void **)&mouse_read_original},
+	    {0xcf8b1, make_cmd_hook, (void **)&make_cmd_original},
+	    {0xb8d50, server_step_hook, (void **)&server_step_original},
+	    {0xd0061, mouse_read2_hook, (void **)&mouse_read2_original},
 	};
-	int enabled = GetPrivateProfileIntA("native", "sites", 511, settings_path);
+	int enabled = GetPrivateProfileIntA("native", "sites", 8191, settings_path);
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
 		if ((enabled & (1 << i)) && !hook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
