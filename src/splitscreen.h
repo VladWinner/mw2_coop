@@ -7,6 +7,10 @@ void splitscreen_install(void);
 void splitscreen_host_activate(void);
 // The first copy's Start: returns 1 when it took the launch over (the half-size picture comes first, then it sends coopLaunch itself).
 int splitscreen_before_launch(void);
+// Blocking (a thread of its own): the first copy becomes a window of the size of the screen before the second process is started.
+void splitscreen_prepare_windowed(void);
+// The shared window as a black cover over the whole screen (the game changes its video mode behind it), or taken away.
+void splitscreen_cover(int on);
 // The first XInput pad with something pressed, or -1.
 int splitscreen_poll_any_pad(void);
 // The buttons of an XInput pad (XINPUT_GAMEPAD wButtons), 0 when it is not there.

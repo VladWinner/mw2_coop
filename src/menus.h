@@ -20,3 +20,5 @@ void menus_log_items(const char *menu_name);
 void menus_log_names(void);
 // instance.c: the second player of a split screen lobby pressed a button or Ready (the lobby texts follow)
 void menus_split_changed(void);
+// splitscreen.c: the game restarted its video: the lobby picture has to be set again
+void menus_video_restarted(void);

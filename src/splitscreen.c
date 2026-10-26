@@ -23,7 +23,9 @@
 #include <string.h>
 
 #include "game.h"
+#include "localize.h"
 #include "log.h"
+#include "menus.h"
 #include "splitscreen.h"
 
 static DWORD started_at; // when the threads were started
@@ -109,6 +111,28 @@ static BOOL WINAPI my_set_cursor_pos(int x, int y)
 static HWND WINAPI my_get_foreground_window(void)
 {
 	return game_window && pad >= 0 ? game_window : GetForegroundWindow();
+}
+
+static int joined_flag(void);
+
+static BOOL WINAPI my_show_window(HWND h, int cmd)
+{
+	if (slot > 0 && !joined_flag() && cmd != SW_HIDE) // the second copy stays hidden until the shared window (its splash screen too)
+		return FALSE;
+	return ShowWindow(h, cmd);
+}
+
+// every window of the second copy is made hidden, out of the way and without a taskbar button: its splash screen and its game window come up
+// while the first copy's window is on the screen
+static HWND WINAPI my_create_window_ex(DWORD ex, LPCSTR cls, LPCSTR name, DWORD style, int x, int y, int w, int h, HWND parent, HMENU menu, HINSTANCE inst,
+				       LPVOID param)
+{
+	if (slot > 0 && !joined_flag() && !parent) {
+		style &= ~WS_VISIBLE;
+		ex = (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW;
+		x = y = -32000;
+	}
+	return CreateWindowExA(ex, cls, name, style, x, y, w, h, parent, menu, inst, param);
 }
 
 static HWND WINAPI my_get_active_window(void)
@@ -244,7 +268,7 @@ static BOOL CALLBACK find_window(HWND h, LPARAM out)
 {
 	DWORD pid;
 	GetWindowThreadProcessId(h, &pid);
-	if (pid != GetCurrentProcessId() || !IsWindowVisible(h) || GetWindow(h, GW_OWNER))
+	if (pid != GetCurrentProcessId() || (!IsWindowVisible(h) && slot <= 0) || GetWindow(h, GW_OWNER)) // the second copy keeps its windows hidden
 		return TRUE;
 	char cls[64] = "";
 	GetClassNameA(h, cls, sizeof(cls));
@@ -363,6 +387,15 @@ static void monitor_rect(RECT *r)
 		*r = mi.rcMonitor;
 	else
 		SetRect(r, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+	// A full screen game changes the screen's mode (the game's own 640x480, say) and the monitor reports that: the desktop's own size is what the
+	// shared window needs
+	DEVMODEA dm;
+	memset(&dm, 0, sizeof(dm));
+	dm.dmSize = sizeof(dm);
+	if (EnumDisplaySettingsA(NULL, ENUM_REGISTRY_SETTINGS, &dm) && dm.dmPelsWidth >= 640 && dm.dmPelsHeight >= 480) {
+		r->right = r->left + (LONG)dm.dmPelsWidth;
+		r->bottom = r->top + (LONG)dm.dmPelsHeight;
+	}
 }
 
 static void client_size(int *w, int *h)
@@ -396,6 +429,24 @@ static LRESULT CALLBACK container_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 	}
 	if (msg == WM_ERASEBKGND)
 		return 1;
+	if (msg == WM_PAINT) { // black, with a word on it: this window covers the screen while the game changes its video mode behind it
+		PAINTSTRUCT ps;
+		HDC dc = BeginPaint(h, &ps);
+		RECT r;
+		GetClientRect(h, &r);
+		FillRect(dc, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+		HFONT font = CreateFontA(-r.bottom / 24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+					 ANTIALIASED_QUALITY, DEFAULT_PITCH, "Segoe UI");
+		HGDIOBJ old = SelectObject(dc, font);
+		SetBkMode(dc, TRANSPARENT);
+		SetTextColor(dc, RGB(150, 150, 150));
+		const char *text = localize_is_russian() ? "\xc7\xe0\xe3\xf0\xf3\xe7\xea\xe0..." : "Loading...";
+		DrawTextA(dc, text, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+		SelectObject(dc, old);
+		DeleteObject(font);
+		EndPaint(h, &ps);
+		return 0;
+	}
 	return DefWindowProcA(h, msg, w, l);
 }
 
@@ -417,7 +468,7 @@ static DWORD WINAPI container_thread(LPVOID unused)
 	if (fullscreen) { // no frame, the whole monitor
 		RECT mon;
 		monitor_rect(&mon);
-		c = CreateWindowExA(0, CONTAINER_CLASS, "Modern Warfare 2 - split screen", WS_POPUP | WS_CLIPCHILDREN, mon.left, mon.top, cw, ch, NULL, NULL, wc.hInstance, NULL);
+		c = CreateWindowExA(WS_EX_TOPMOST, CONTAINER_CLASS, "Modern Warfare 2 - split screen", WS_POPUP | WS_CLIPCHILDREN, mon.left, mon.top, cw, ch, NULL, NULL, wc.hInstance, NULL);
 	} else {
 		RECT r = {0, 0, cw, ch};
 		AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
@@ -432,6 +483,11 @@ static DWORD WINAPI container_thread(LPVOID unused)
 		DispatchMessageA(&m);
 	}
 	return 0;
+}
+
+static int joined_flag(void)
+{
+	return joined;
 }
 
 static int level_running(void)
@@ -467,6 +523,39 @@ static void layout_child(HWND w)
 }
 
 static void restore_resolution(void);
+
+// The second copy has no window of its own before the shared window: no taskbar button, nothing on the screen (not even for a moment: the game shows
+// its window again on a video restart and when a level has loaded, so this runs every 10 ms and the game's ShowWindow is held back too).
+static volatile LONG showed_itself;
+
+static void hide_second(HWND w)
+{
+	if (joined || slot <= 0 || !w)
+		return;
+	LONG ex = GetWindowLongA(w, GWL_EXSTYLE);
+	if (!(ex & WS_EX_TOOLWINDOW) || (ex & WS_EX_APPWINDOW))
+		SetWindowLongA(w, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
+	if (IsWindowVisible(w)) {
+		ShowWindow(w, SW_HIDE);
+		InterlockedIncrement(&showed_itself);
+	}
+	RECT r;
+	if (GetWindowRect(w, &r) && r.left > -20000) // out of the way as well
+		SetWindowPos(w, NULL, -32000, -32000, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// the end of a split screen mission: the video mode goes back behind the covering window, which goes when the game's own window is back
+static DWORD WINAPI uncover_thread(LPVOID unused)
+{
+	(void)unused;
+	HWND old = game_window;
+	restore_resolution();
+	for (int i = 0; i < 150 && old && IsWindow(old); i++)
+		Sleep(100);
+	Sleep(2500);
+	ShowWindow(container, SW_HIDE);
+	return 0;
+}
 
 // called every 100 ms
 static void container_poll(HWND w)
@@ -505,7 +594,7 @@ static void container_poll(HWND w)
 		joined = 1;
 		layout_child(w);
 		ShowWindow(w, SW_SHOWNA);
-		log_printf("splitscreen: slot %d joins the shared window", slot);
+		log_printf("splitscreen: slot %d joins the shared window (its window showed itself %ld times before)", slot, showed_itself);
 	} else if (!want && joined) {
 		if (embed)
 			SetParent(w, NULL);
@@ -515,21 +604,12 @@ static void container_poll(HWND w)
 		}
 		SetWindowLongA(w, GWL_STYLE, saved_style);
 		SetWindowPos(w, NULL, saved_rect.left, saved_rect.top, saved_rect.right - saved_rect.left, saved_rect.bottom - saved_rect.top, SWP_NOZORDER | SWP_FRAMECHANGED);
-		if (slot == 0) {
-			ShowWindow(container, SW_HIDE);
-			restore_resolution();
-		}
 		joined = 0;
+		if (slot == 0) // the screen stays covered while the game puts its video mode back
+			CreateThread(NULL, 0, uncover_thread, NULL, 0, NULL);
 		log_printf("splitscreen: slot %d leaves the shared window", slot);
 	}
-	if (!joined && slot > 0) {
-		// the second copy has no window of its own in the menus: no taskbar button, nothing on the screen
-		LONG ex = GetWindowLongA(w, GWL_EXSTYLE);
-		if (!(ex & WS_EX_TOOLWINDOW) || (ex & WS_EX_APPWINDOW))
-			SetWindowLongA(w, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
-		if (IsWindowVisible(w))
-			ShowWindow(w, SW_HIDE);
-	}
+	hide_second(w);
 	if (joined) {
 		layout_child(w);
 		static DWORD fov_at;
@@ -556,6 +636,7 @@ static HWND find_game_window(int tries)
 // r_customMode is saved with the player's settings: the first copy puts its own value back when the session ends, and a file keeps it for a
 // crash (the next start puts it back, restore_stale)
 static char orig_mode[64];
+static char orig_fullscreen[8], orig_dm[8];
 static int orig_saved;
 
 static void state_path(char *out)
@@ -566,27 +647,46 @@ static void state_path(char *out)
 		lstrcpynA(slash + 1, "split_state.ini", (int)(MAX_PATH - (slash + 1 - out)));
 }
 
+static const char *dm_name(const char *index)
+{
+	return index[0] == '0' ? "fullscreen" : index[0] == '1' ? "windowed (no border)" : "windowed";
+}
+
 // returns 1 when the video mode was changed (a restart is queued)
-static int set_resolution(void)
+static int set_resolution(int half)
 {
 	int w, h;
-	slot_size(&w, &h);
+	if (half)
+		slot_size(&w, &h);
+	else
+		client_size(&w, &h); // the whole screen
 	char want[32], cmd[128];
 	snprintf(want, sizeof(want), "%dx%d", w, h);
-	char have[64] = "";
+	char have[64] = "", fs[16] = "", dm[16] = "";
 	game_dvar_raw("r_customMode", have, sizeof(have));
-	if (strcmp(have, want) == 0)
+	game_dvar_raw("r_fullscreen", fs, sizeof(fs));
+	game_dvar_raw("r_displayMode", dm, sizeof(dm)); // the 64-bit game: 0 fullscreen, 1 windowed (no border), 2 windowed; the 32-bit one has r_fullscreen only
+	// the game runs full screen as a rule: for a split screen both windows are windows (borderless, side by side over the whole screen)
+	int full = dm[0] ? dm[0] == '0' : fs[0] == '1';
+	if (strcmp(have, want) == 0 && !full)
 		return 0;
 	if (slot == 0 && !orig_saved) {
 		lstrcpynA(orig_mode, have, sizeof(orig_mode));
+		lstrcpynA(orig_fullscreen, fs, sizeof(orig_fullscreen));
+		lstrcpynA(orig_dm, dm, sizeof(orig_dm));
 		orig_saved = 1;
 		char path[MAX_PATH];
 		state_path(path);
 		WritePrivateProfileStringA("mode", "original", orig_mode, path);
+		WritePrivateProfileStringA("mode", "fullscreen", orig_fullscreen, path);
+		WritePrivateProfileStringA("mode", "displaymode", orig_dm, path);
 	}
-	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cvid_restart%c", want, 10, 10);
+	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cset r_fullscreen 0%c", want, 10, 10);
 	game_cbuf_addtext(cmd);
-	log_printf("splitscreen: video mode %s (was '%s')", want, have);
+	if (dm[0])
+		game_cbuf_addtext("set r_displayMode \"windowed (no border)\"\n");
+	game_cbuf_addtext("vid_restart\n");
+	log_printf("splitscreen: video mode %s, windowed (was '%s', full screen '%s', display mode '%s')", want, have, fs, dm);
 	return 1;
 }
 
@@ -594,10 +694,15 @@ static void restore_resolution(void)
 {
 	if (slot != 0 || !orig_saved)
 		return;
-	char cmd[128], path[MAX_PATH];
-	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cvid_restart%c", orig_mode, 10, 10);
+	char cmd[160], path[MAX_PATH];
+	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cset r_fullscreen %s%c", orig_mode, 10, orig_fullscreen[0] ? orig_fullscreen : "0", 10);
 	game_cbuf_addtext(cmd);
-	log_printf("splitscreen: video mode back to '%s'", orig_mode);
+	if (orig_dm[0]) {
+		snprintf(cmd, sizeof(cmd), "set r_displayMode \"%s\"%c", dm_name(orig_dm), 10);
+		game_cbuf_addtext(cmd);
+	}
+	game_cbuf_addtext("vid_restart\n");
+	log_printf("splitscreen: video mode back to '%s', full screen '%s'", orig_mode, orig_fullscreen);
 	orig_saved = 0;
 	state_path(path);
 	DeleteFileA(path);
@@ -619,21 +724,68 @@ static DWORD WINAPI launch_thread(LPVOID unused)
 	return 0;
 }
 
+// Blocking, from a thread of its own: the first copy becomes a borderless window the size of the screen (it looks like full screen) before the second process is
+// started: a full screen game closes as soon as another program takes the focus.
+void splitscreen_prepare_windowed(void)
+{
+	splitscreen_host_activate();
+	for (int i = 0; i < 100 && !game_window; i++)
+		Sleep(100);
+	HWND old = game_window;
+	if (!set_resolution(0))
+		return;
+	for (int i = 0; i < 150 && old && IsWindow(old); i++)
+		Sleep(100);
+	Sleep(2500);
+	// the new window: no frame, at the corner of the screen (the 32-bit game has no borderless mode of its own)
+	HWND w = game_window;
+	if (w && IsWindow(w)) {
+		RECT mon;
+		monitor_rect(&mon);
+		SetWindowLongA(w, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+		SetWindowPos(w, NULL, mon.left, mon.top, mon.right - mon.left, mon.bottom - mon.top, SWP_NOZORDER | SWP_FRAMECHANGED);
+	}
+	menus_video_restarted();
+	log_printf("splitscreen: the first copy is a window of the size of the screen now");
+}
+
 int splitscreen_before_launch(void)
 {
 	if (slot != 0 || launch_pending)
 		return launch_pending ? 1 : 0;
-	if (!set_resolution())
+	if (!set_resolution(1))
 		return 0;
 	InterlockedExchange(&launch_pending, 1);
 	CreateThread(NULL, 0, launch_thread, NULL, 0, NULL);
 	return 1;
 }
 
+// the second copy: every window it has, the splash screen first, is hidden and out of the way at once
+static BOOL CALLBACK hide_all_cb(HWND h, LPARAM unused)
+{
+	(void)unused;
+	DWORD pid;
+	GetWindowThreadProcessId(h, &pid);
+	if (pid == GetCurrentProcessId() && IsWindowVisible(h)) {
+		ShowWindow(h, SW_HIDE);
+		SetWindowPos(h, NULL, -32000, -32000, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+	}
+	return TRUE;
+}
+
 static DWORD WINAPI split_thread(LPVOID unused)
 {
 	(void)unused;
-	HWND w = find_game_window(600); // up to a minute: the 32-bit game opens its window late
+	HWND w = NULL;
+	if (slot > 0) {
+		for (int i = 0; i < 6000 && !w; i++) { // while the game starts: nothing of it may show
+			EnumWindows(hide_all_cb, 0);
+			EnumWindows(find_window, (LPARAM)&w);
+			if (!w)
+				Sleep(10);
+		}
+	} else
+		w = find_game_window(600); // up to a minute: the 32-bit game opens its window late
 	if (!w) {
 		log_printf("splitscreen: no game window found");
 		return 0;
@@ -644,7 +796,7 @@ static DWORD WINAPI split_thread(LPVOID unused)
 		for (int i = 0; i < 600 && !game_find_dvar("r_customMode"); i++)
 			Sleep(100);
 		Sleep(3000);
-		if (set_resolution()) { // the video restart makes a new window: wait for it before the join below
+		if (set_resolution(1)) { // the video restart makes a new window: wait for it before the join below
 			for (int i = 0; i < 200 && IsWindow(w); i++)
 				Sleep(100);
 			HWND n = find_game_window(100);
@@ -675,6 +827,7 @@ static DWORD WINAPI split_thread(LPVOID unused)
 	for (;;) {
 		Sleep(10);
 		DWORD now = GetTickCount();
+		hide_second(w);
 		if (now - last_poll > (joined ? 16u : 100u)) {
 			last_poll = now;
 			if (!IsWindow(w)) { // a video restart makes a new window
@@ -683,6 +836,7 @@ static DWORD WINAPI split_thread(LPVOID unused)
 					log_printf("splitscreen: new game window %p", (void *)n);
 					w = game_window = n;
 					joined = 0;
+					menus_video_restarted();
 				}
 			}
 			container_poll(w);
@@ -773,6 +927,17 @@ static void start_threads(void)
 	CreateThread(NULL, 0, split_thread, NULL, 0, NULL);
 }
 
+void splitscreen_cover(int on)
+{
+	if (!container)
+		return;
+	if (on) {
+		SetWindowPos(container, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+		InvalidateRect(container, NULL, TRUE);
+	} else
+		ShowWindow(container, SW_HIDE);
+}
+
 void splitscreen_host_activate(void)
 {
 	if (slot >= 0)
@@ -786,16 +951,23 @@ void splitscreen_host_activate(void)
 static DWORD WINAPI stale_thread(LPVOID unused)
 {
 	(void)unused;
-	char path[MAX_PATH], orig[64];
+	char path[MAX_PATH], orig[64], fs[8], dm[8];
 	state_path(path);
 	GetPrivateProfileStringA("mode", "original", "", orig, sizeof(orig), path);
+	GetPrivateProfileStringA("mode", "fullscreen", "0", fs, sizeof(fs), path);
+	GetPrivateProfileStringA("mode", "displaymode", "", dm, sizeof(dm), path);
 	HWND w = find_game_window(600);
 	if (!w)
 		return 0;
 	Sleep(8000); // the menus are up
-	char cmd[128];
-	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cvid_restart%c", orig, 10, 10);
+	char cmd[160];
+	snprintf(cmd, sizeof(cmd), "set r_customMode \"%s\"%cset r_fullscreen %s%c", orig, 10, fs, 10);
 	game_cbuf_addtext(cmd);
+	if (dm[0]) {
+		snprintf(cmd, sizeof(cmd), "set r_displayMode \"%s\"%c", dm_name(dm), 10);
+		game_cbuf_addtext(cmd);
+	}
+	game_cbuf_addtext("vid_restart\n");
 	DeleteFileA(path);
 	log_printf("splitscreen: video mode put back to '%s' (left by an earlier session)", orig);
 	return 0;
@@ -843,6 +1015,10 @@ void splitscreen_install(void)
 		iat_patch("USER32.dll", "SetCursorPos", my_set_cursor_pos);
 		iat_patch("USER32.dll", "GetForegroundWindow", my_get_foreground_window);
 		iat_patch("USER32.dll", "GetActiveWindow", my_get_active_window);
+	}
+	if (slot > 0) {
+		iat_patch("USER32.dll", "ShowWindow", my_show_window);
+		iat_patch("USER32.dll", "CreateWindowExA", my_create_window_ex);
 	}
 	log_printf("splitscreen: pad %d, window '%s'", pad, window_spec);
 	start_threads();

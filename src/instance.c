@@ -24,7 +24,7 @@ static volatile LONG assigned_pad = -1;
 static volatile LONG second_ready;
 static volatile LONG assign_gen;
 
-// the lobby's popup asks the second player to press a button on his device; the first pad that does is his, and from then on his A is his Ready
+// the lobby shows a hint (no popup): the second player presses a button on his device; the first pad that does is his
 static DWORD WINAPI assign_thread(LPVOID gen_arg)
 {
 	LONG gen = (LONG)(LONG_PTR)gen_arg;
@@ -39,19 +39,7 @@ static DWORD WINAPI assign_thread(LPVOID gen_arg)
 		return 0;
 	InterlockedExchange(&assigned_pad, pad);
 	log_printf("instance: pad %d is the second player's", pad);
-	game_cbuf_addtext("closemenu mw2coop_assign\n");
 	menus_split_changed();
-	int a_was = 1; // the press that picked the pad is not a Ready
-	while (gen == assign_gen) {
-		Sleep(30);
-		int a = splitscreen_pad_buttons(pad) & 0x1000;
-		if (a && !a_was) {
-			InterlockedExchange(&second_ready, !second_ready);
-			log_printf("instance: the second player is %s", second_ready ? "ready" : "not ready");
-			menus_split_changed();
-		}
-		a_was = a;
-	}
 	return 0;
 }
 
@@ -60,7 +48,6 @@ void instance_assign_begin(void)
 	LONG gen = InterlockedIncrement(&assign_gen);
 	InterlockedExchange(&assigned_pad, -1);
 	InterlockedExchange(&second_ready, 0);
-	game_cbuf_addtext("openmenu mw2coop_assign\n");
 	CreateThread(NULL, 0, assign_thread, (LPVOID)(LONG_PTR)gen, 0, NULL);
 }
 
@@ -90,6 +77,58 @@ static void write_pad(int pad)
 		fclose(f);
 	}
 	log_printf("instance: pad %d goes to the second process", pad);
+}
+
+// The player's game runs full screen as a rule; the second process is made as a window that is hidden, and a full screen device of its own would take
+// the screen over while it starts: its copy of the settings file says windowed (the player's own file is not touched).
+static char *replace_first(char *text, long *size, const char *from, const char *to)
+{
+	char *at = strstr(text, from);
+	if (!at)
+		return text;
+	size_t before = (size_t)(at - text), flen = strlen(from), tlen = strlen(to);
+	char *out = malloc((size_t)*size + tlen + 1);
+	if (!out)
+		return text;
+	memcpy(out, text, before);
+	memcpy(out + before, to, tlen);
+	memcpy(out + before + tlen, at + flen, (size_t)*size - before - flen);
+	*size = (long)((size_t)*size - flen + tlen);
+	out[*size] = 0;
+	free(text);
+	return out;
+}
+
+static void patch_windowed(const char *path)
+{
+	size_t n = strlen(path);
+	if (n < 4 || lstrcmpiA(path + n - 4, ".cfg") != 0)
+		return;
+	FILE *f = fopen(path, "rb");
+	if (!f)
+		return;
+	fseek(f, 0, SEEK_END);
+	long size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	char *text = size > 0 && size < (1 << 22) ? malloc((size_t)size + 1) : NULL;
+	if (!text || fread(text, 1, (size_t)size, f) != (size_t)size) {
+		free(text);
+		fclose(f);
+		return;
+	}
+	fclose(f);
+	text[size] = 0;
+	long before = size;
+	text = replace_first(text, &size, "r_fullscreen \"1\"", "r_fullscreen \"0\"");
+	text = replace_first(text, &size, "r_displayMode \"fullscreen\"", "r_displayMode \"windowed\"");
+	if (size != before || memcmp(text, text, 0) != 0) {
+		f = fopen(path, "wb");
+		if (f) {
+			fwrite(text, 1, (size_t)size, f);
+			fclose(f);
+		}
+	}
+	free(text);
 }
 
 static void parent_dir(const char *path, char *out)
@@ -200,6 +239,7 @@ int instance_start(int pad)
 			snprintf(src, sizeof(src), "%splayers\\%s", game, fd.cFileName);
 			snprintf(path, sizeof(path), "%splayers\\%s", p2, fd.cFileName);
 			CopyFileA(src, path, FALSE);
+			patch_windowed(path);
 		} while (FindNextFileA(h, &fd));
 		FindClose(h);
 	}
@@ -306,7 +346,6 @@ static void split_pad_f(void)
 {
 	const char *a = game_cmd_argv(1);
 	InterlockedExchange(&assigned_pad, a[0] ? atoi(a) : 0);
-	game_cbuf_addtext("closemenu mw2coop_assign\n");
 	menus_split_changed();
 }
 

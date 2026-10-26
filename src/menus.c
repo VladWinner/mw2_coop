@@ -526,8 +526,6 @@ static void add_lobbies_menu(void)
 static volatile LONG picking; // a new campaign or a mission is being picked for the lobby
 static DWORD picking_seen;    // last tick one of the picking menus was open
 
-static void add_assign_menu(void);
-
 static void add_host_menu(void)
 {
 	if (ui_find_menu("mw2coop_host"))
@@ -543,23 +541,6 @@ static void add_host_menu(void)
 	if (menu) {
 		show_row(menu, "mw2coop_host_4", 0);
 		log_printf("menus: host popup added");
-	}
-	add_assign_menu();
-}
-
-// the split screen lobby asks the second player to press a button on his controller (instance.c takes the first pad that does)
-static void add_assign_menu(void)
-{
-	if (ui_find_menu("mw2coop_assign"))
-		return;
-	static const char *const names[LIST_ROWS] = {"mw2coop_assign_1", "mw2coop_assign_2", "mw2coop_assign_3", "mw2coop_assign_4"};
-	static const char *const texts[LIST_ROWS] = {"@MW2COOP_ASSIGN_PRESS", "", "", ""};
-	static const char *const actions[LIST_ROWS] = {"\"play\" \"mouse_click\" ; \"close\" \"self\" ; ", "", "", ""};
-	uint8_t *menu = rows_popup("mw2coop_assign", "@MW2COOP_ASSIGN_TITLE", names, texts, actions);
-	if (menu) {
-		for (int r = 1; r < LIST_ROWS; r++)
-			show_row(menu, names[r], 0);
-		log_printf("menus: second player popup added");
 	}
 }
 
@@ -667,7 +648,22 @@ static void host_lobby(const char *map)
 	}
 }
 
+// the Split screen button: the game goes from full screen to a borderless window of the screen's size once (the only change the player may see: it is
+// the moment he chose the mode), then the host popup opens; from here on nothing changes on the screen until the mission is on
+static DWORD WINAPI split_prepare_thread(LPVOID unused)
+{
+	(void)unused;
+	splitscreen_prepare_windowed();
+	game_cbuf_addtext("mw2coop_split_menu_open\n");
+	return 0;
+}
+
 static void split_menu_f(void)
+{
+	CreateThread(NULL, 0, split_prepare_thread, NULL, 0, NULL);
+}
+
+static void split_menu_open_f(void)
 {
 	host_menu_open(1);
 }
@@ -825,6 +821,12 @@ static uint8_t *pic_item, *name_item;
 static void *pic_native_material, *pic_native_exp, *name_native_exp;
 static const char *name_native_text;
 static char shown_map[64];
+
+// splitscreen.c: after a video restart the lobby's mission picture is a check pattern until it is set again
+void menus_video_restarted(void)
+{
+	shown_map[0] = 0;
+}
 
 static void find_mission_items(uint8_t *menu)
 {
@@ -1028,21 +1030,16 @@ int menus_on_packet(const char *buf, int len)
 static void update_texts(void)
 {
 	int host = base[RVA_PARTY_IS_HOST];
-	localize_select("MW2COOP_READY", my_ready ? "MW2COOP_READY_UNSET" : "MW2COOP_READY_SET");
+	// a split screen lobby has no Ready button: the second player is on this PC, his device is all that is needed, his process comes with Start
+	if (split_mode)
+		localize_set_text("MW2COOP_READY", "");
+	else
+		localize_select("MW2COOP_READY", my_ready ? "MW2COOP_READY_UNSET" : "MW2COOP_READY_SET");
+	show_row(ui_find_menu("coop_lobby"), "dont_selectdiff", !split_mode);
 	const char *start;
-	if (split_mode) { // the second player is on this PC: his Ready is his A, his process comes with Start
-		int second = instance_second_ready();
-		if (instance_pad() < 0)
-			start = "MW2COOP_START_NEED_PARTNER";
-		else if (my_ready && second)
-			start = "MW2COOP_START_GO";
-		else if (my_ready)
-			start = "MW2COOP_START_WAIT_PARTNER";
-		else if (second)
-			start = "MW2COOP_START_WAIT_YOU";
-		else
-			start = "MW2COOP_START_WAIT_BOTH";
-	} else if (!partner_present() || (host && !party_full()))
+	if (split_mode)
+		start = instance_pad() < 0 ? "MW2COOP_START_NEED_PARTNER" : "MW2COOP_START_GO";
+	else if (!partner_present() || (host && !party_full()))
 		start = "MW2COOP_START_NEED_PARTNER";
 	else if (my_ready && partner_ready)
 		start = host ? "MW2COOP_START_GO" : "MW2COOP_START_HOST";
@@ -1058,6 +1055,8 @@ static void update_texts(void)
 // mw2coop_ready: the lobby's ready button (both PCs)
 static void ready_f(void)
 {
+	if (split_mode)
+		return; // no Ready button in a split screen lobby
 	InterlockedExchange(&my_ready, !my_ready);
 	log_printf("menus: %s", my_ready ? "ready" : "not ready");
 	send_ready();
@@ -1066,6 +1065,7 @@ static void ready_f(void)
 
 static void partner_questions(void);
 static void start_launch(void);
+static volatile LONG split_starting; // a split screen Start is on its way (the screen change, the second process, its join)
 
 // instance.c: the second player's device or Ready changed
 void menus_split_changed(void)
@@ -1088,6 +1088,18 @@ static DWORD WINAPI split_wait_thread(LPVOID unused)
 	return 0;
 }
 
+// A split screen Start, first part: the screen is made ready (a window as big as the screen: a full screen game would close when the second process takes
+// the focus), then the second process is started
+static DWORD WINAPI split_start_thread(LPVOID unused)
+{
+	(void)unused;
+	splitscreen_cover(1); // black over the screen: the second process starts and the video mode changes behind it
+	if (instance_start(instance_pad()))
+		split_wait_thread(NULL);
+	InterlockedExchange(&split_starting, 0);
+	return 0;
+}
+
 // mw2coop_start: the lobby's Start in campaign mode. The party frame launches once both slots
 // are taken and the bandwidth test is done.
 static void start_f(void)
@@ -1099,15 +1111,15 @@ static void start_f(void)
 	if (!access_can_start())
 		return; // password mode without a password: the popup asks for it
 	if (split_mode) {
-		if (instance_running())
-			return; // it is booting: the thread below goes on
-		if (instance_pad() < 0 || !my_ready || !instance_second_ready()) {
-			log_printf("menus: Start: the second player has no device or not everyone is ready (host %ld, second %d)", my_ready, instance_second_ready());
+		if (split_starting)
+			return; // it is on its way: the threads go on
+		if (instance_pad() < 0) {
+			log_printf("menus: Start: the second player has not pressed a button on his device yet");
 			return;
 		}
 		log_printf("menus: Start: starting the second game process");
-		if (instance_start(instance_pad()))
-			CreateThread(NULL, 0, split_wait_thread, NULL, 0, NULL);
+		InterlockedExchange(&split_starting, 1);
+		CreateThread(NULL, 0, split_start_thread, NULL, 0, NULL);
 		return;
 	}
 	if (!party_full() || !partner_present()) {
@@ -1313,6 +1325,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_menu", NULL, NULL, split_menu_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_split_menu_open", NULL, NULL, split_menu_open_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},
@@ -1369,7 +1382,7 @@ static void tick_f(void)
 	int campaign = campaign_lobby();
 	patch_lobby(campaign);
 	access_tick(campaign, base[RVA_PARTY_IS_HOST]);
-	firewall_tick(campaign && base[RVA_PARTY_IS_HOST]);
+	firewall_tick(campaign && base[RVA_PARTY_IS_HOST] && !split_mode); // the second player is on this PC: nothing to let in
 	if (!campaign) {
 		InterlockedExchange(&my_ready, 0);
 		InterlockedExchange(&partner_ready, 0);
@@ -1394,6 +1407,19 @@ static void tick_f(void)
 			log_printf("menus: no save with this partner yet");
 	}
 	update_texts();
+	// a split screen lobby: until the second player has pressed a button on his device, the lobby's own hint line (bottom right, where the game says
+	// "double-click a friend's name for voice chat") tells him what to do
+	static int hint_shown;
+	if (split_mode && instance_pad() < 0) {
+		const char *hint = localize_text("MW2COOP_SPLIT_HINT");
+		if (hint) {
+			localize_override("MENU_SP_STEAM_CHAT_HINT", hint);
+			hint_shown = 1;
+		}
+	} else if (hint_shown) {
+		localize_override("MENU_SP_STEAM_CHAT_HINT", NULL);
+		hint_shown = 0;
+	}
 }
 
 void menus_install(void)

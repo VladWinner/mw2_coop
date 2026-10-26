@@ -130,12 +130,9 @@ static const ModString strings[] = {
 	// СПЛИТСКРИН
 	{"MW2COOP_SPLITSCREEN", "\xd1\xcf\xcb\xc8\xd2\xd1\xca\xd0\xc8\xcd",
 	 "SPLIT SCREEN"},
-	// ВТОРОЙ ИГРОК
-	{"MW2COOP_ASSIGN_TITLE", "\xc2\xd2\xce\xd0\xce\xc9\x20\xc8\xc3\xd0\xce\xca",
-	 "SECOND PLAYER"},
-	// Нажмите любую кнопку на геймпаде
-	{"MW2COOP_ASSIGN_PRESS", "\xcd\xe0\xe6\xec\xe8\xf2\xe5\x20\xeb\xfe\xe1\xf3\xfe\x20\xea\xed\xee\xef\xea\xf3\x20\xed\xe0\x20\xe3\xe5\xe9\xec\xef\xe0\xe4\xe5",
-	 "Press any button on your controller"},
+	// Второй игрок: нажмите любую кнопку на своём устройстве (the lobby's hint line)
+	{"MW2COOP_SPLIT_HINT", "\xc2\xf2\xee\xf0\xee\xe9\x20\xe8\xe3\xf0\xee\xea\x3a\x20\xed\xe0\xe6\xec\xe8\xf2\xe5\x20\xeb\xfe\xe1\xf3\xfe\x20\xea\xed\xee\xef\xea\xf3\x20\xed\xe0\x20\xf1\xe2\xee\xb8\xec\x20\xf3\xf1\xf2\xf0\xee\xe9\xf1\xf2\xe2\xe5",
+	 "Second player: press any button on your device"},
 	// КАМПАНИЯ
 	{"MW2COOP_CAMPAIGN", "\xca\xc0\xcc\xcf\xc0\xcd\xc8\xdf",
 	 "CAMPAIGN"},
@@ -303,6 +300,29 @@ void localize_set_text(const char *alias, const char *text)
 			continue;
 		InterlockedExchange(&aliases[a].shown, -1);
 		lstrcpynA(aliases[a].text, text, sizeof(aliases[a].text));
+	}
+}
+
+// Another text for one of the game's own strings (NULL puts the game's text back). Main thread only.
+static LocalizeEntry *override_entry;
+static const char *override_orig;
+static char override_text[256];
+
+void localize_override(const char *name, const char *text)
+{
+	LocalizeEntry *e = find_header(ASSET_TYPE_LOCALIZE_ENTRY, name);
+	if (!e || !e->value || !e->name || strcmp(e->name, name) != 0)
+		return;
+	if (text) {
+		if (e != override_entry) {
+			override_entry = e;
+			override_orig = e->value;
+		}
+		lstrcpynA(override_text, text, sizeof(override_text));
+		e->value = override_text;
+	} else if (override_entry == e) {
+		e->value = override_orig;
+		override_entry = NULL;
 	}
 }
 

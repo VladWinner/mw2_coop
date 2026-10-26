@@ -13,3 +13,6 @@ void localize_set_text(const char *alias, const char *text);
 
 // The game's own localized string <name> (no '@'), or NULL. Main thread only: it is an asset lookup.
 const char *localize_text(const char *name);
+
+// Another text for one of the game's own strings while it is shown (NULL puts the game's text back). Main thread only.
+void localize_override(const char *name, const char *text);

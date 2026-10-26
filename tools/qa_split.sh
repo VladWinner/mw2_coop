@@ -32,7 +32,7 @@ WAIT=35000
 		# the menu path: the Split screen button, the lobby (the second player presses a button on his pad = Ready), Start; the second process
 		# starts with Start, joins by itself and the launch follows
 		echo "mw2coop_split_menu"
-		echo "!sleep 3000"
+		echo "!sleep 12000"
 		echo "mw2coop_host_go"
 		echo "!sleep 4000"
 		echo "set coop_mapName $MAP"
