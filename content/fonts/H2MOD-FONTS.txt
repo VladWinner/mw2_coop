@@ -25,8 +25,8 @@ Made from: + Play 2.200 (modified)
 + IBM Plex Sans Arabic SmBld 1.004 95%
 Licence stated in the file: This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL
 
-Note: the licence line in the files says SIL OFL 1.1 for the whole font. Some of the fonts they were made from are not OFL fonts (the file default.otf names WenQuanYi Micro Hei, which is
-Apache 2.0 or GPLv3 with a font exception). This was not verified; the author was not asked yet.
+The licence statement is in each font file itself (its name table: licence description and licence URL), as quoted above, and in the h2-mod project that made the fonts.
+The fonts are used here as they are in the h2-mod repository (the three files, unchanged).
 
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 -----------------------------------------------------------
