@@ -176,3 +176,22 @@ statics in rva 0x3f0000-0x560000 (1211 LEAs into the range, none of that shape):
 struct sizes cannot be read from clear calls. Working assumption instead: the whole cluster rva 0x404450-0x44f000 (about 300 KB, `cgs` + `cg` + neighbours) is
 swapped as one block per frame (a 300 KB copy costs microseconds), plus the small clusters listed above; anything shared in that block must be identical in both
 contexts, which the first experiment with a second context will show (a difference after a swap round trip = shared state that must be excluded).
+
+## Finding that changes the plan (2026-10-26): the partner is not a second client, anywhere
+
+Read together with the mod's design (each machine runs its own copy of the level; the partner is a scripted body, `coop_body_*`, driven by the net layer; `src/party.c`,
+`src/transplant.c`, `src/mirror.c`) and the two handlers decompiled today (client `coopConnect` sender rva 0xd23c0, server handler rva 0x22d460):
+
+- The engine's coop session (the 2-slot table at rva 0x540ba0) is a party/lobby channel between two machines. The level itself is started by `map` on each machine; the SP server has
+  **one real client (player 0)**. The second player in a level is a script puppet. So "a second local client over the loopback" has no server counterpart: the loopback is multi-client
+  capable (hooking only `NET_SendPacket` for a client socket 2 would be enough, the read side already works per socket), but there is no second player entity with a playerstate and
+  snapshots behind it. Experiment 3 (local client 1 in the cgame) died for that reason, too.
+- So the choices for a native, one-process split screen are:
+  1. **Second camera on the puppet** (one sim, one real client): the odd frames draw the same world from the partner body's eyes (origin/angles/fov overridden in the refdef), HUD
+     for the second player drawn by us. Costs: the first-person weapon/arms (the cgame draws them only for the local playerstate), the partner's movement (his body must be moved by
+     pad 2 input through a movement/collision step of our own or the engine's Pmove on a puppet playerstate), his weapons/firing/damage through scripts.
+  2. **A real second player in the SP server** (the Special Ops way: `sv_maxclients` 2, entity 1 as a client with a playerstate and snapshots, plus the client context swap of this
+     document). Costs: the SP server and the level scripts were built for one player in this build; unknown how much of the Special Ops two-player path (`level.players`, `_coop` scripts) is
+     still in the PC binary and the stock scripts.
+  3. The two-process version (done, owner does not want it).
+- Everything else of this document (alternate frames, the compositor, the aspect fix) is common to 1 and 2.
