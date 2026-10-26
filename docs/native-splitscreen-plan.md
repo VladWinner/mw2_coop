@@ -256,3 +256,18 @@ Settings: `players=2`, `coopdvar=1`, `experiment=5`. What it does on top of expe
   (the server leaves local players' entities out and feeds them through the playerstate; the cgame of each context has to build the other one), sound listener, the mod's own script/net layer for local partners,
   and the briefing cinematic shows the text "waiting for the other player" (source not found: the engine's COOP_WAITINGFORPLAYER draw at rva 0x93ac0 is gated by the engine's co-op byte, which is 0 here and the draw
   is never reached; probably a menu of the cinematic skip, which needs both players).
+
+## Experiment 7 (2026-10-26, evening): the bottom camera, proportions, the waiting text
+
+- **Why the bottom camera jerked:** the simulation step and the hand-over of its results (rva 0x2343a0) run INSIDE the client frame (called at 0xb8d50). During context 1's frame player 0's playerstate was written into
+  the live (context 1's) cl block, and player 1's into the stored copy, so the bottom view alternated between the two players' eyes (about 76 units apart). Fix: the step runs with context 0 live (`server_step_hook`),
+  `ps_publish_hook` writes client n's playerstate into the live block if context n is live, else into its stored copy. A series of 12 consecutive composed frames (`seq-<n>.bmp`) is stable now.
+- Also: the mouse state and the view-angle accumulators (0x533cb8-0x533d20) belong to the contexts (a jerk of the mouse made player 0 spin: the accumulators were shared); context 1 reads no mouse (0xcf4b0 at 0xcfd23 and
+  0xd0061), its usercmds lose buttons and movement (0xd03a0 at 0xcf8b1) and go to the server through 0x22d000(1, cmd) from its own ring.
+- **Proportions (mode 6, `experiment=6`):** the old modes drew the top or bottom half of the normal view into each half (so each player saw only the upper or lower half of his view, which looked like a "camera inside
+  the floor"). Now both views are drawn as the middle band of the full picture (`r_subwindow` = 0.25-0.75) and each band is stretched into its half: right proportions, half the vertical field, no squeeze.
+- Player 1's view: the angle accumulators of context 1's block (`p1yawdeg`, default 60) turn him; the entity list keeps both bodies with `listplayers=1` (works with the corrected setup, no DirectX error).
+- The co-op "waiting for the other player" text of the briefing is blanked while both players are local (`localize_override` of COOP_WAITINGFORPLAYER and SPECIAL_OPS_WAITING_OTHER_PLAYER; the engine draw at 0x93ac0
+  was never reached, the text comes from the localized string).
+- Open: HUD/2D per half (the 2D is drawn for the whole frame, the band crop cuts what is at the screen edges), sound (one listener), the mod's partner logic (net/mirror/party for a local partner), a second device
+  for player 1 and the menu/lobby flow, the 32-bit build.

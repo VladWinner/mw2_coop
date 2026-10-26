@@ -13,6 +13,7 @@
 
 #include "hook.h"
 #include "log.h"
+#include "localize.h"
 #include "native.h"
 #include "shot.h"
 
@@ -624,6 +625,12 @@ static void client_frame_hook(void)
 {
 	static unsigned frame;
 	frame_bottom = 0;
+	static int texts_done;
+	if (!texts_done && ctx_on) { // both players are on this machine: the co-op "waiting for the other player" texts have nothing to wait for
+		texts_done = 1;
+		localize_override("COOP_WAITINGFORPLAYER", " ");
+		localize_override("SPECIAL_OPS_WAITING_OTHER_PLAYER", " ");
+	}
 	static int nopredict = -1;
 	if (nopredict < 0)
 		nopredict = GetPrivateProfileIntA("native", "nopredict", 0, settings_path);
