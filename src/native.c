@@ -80,6 +80,18 @@ static void compose(IDirect3DDevice9 *dev, int half)
 		}
 		log_printf("native: compositor on, %ux%u picture, two %ux%u halves", d.Width, d.Height, d.Width, d.Height / 2);
 	}
+	if (mode == 7) { // the whole frame, drawn for the shape of a half, is squeezed into the half texture
+		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, NULL, comp_surf[half], NULL, D3DTEXF_LINEAR)))
+			comp_have[half] = 1;
+		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
+		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
+		if (comp_have[0])
+			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
+		if (comp_have[1])
+			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
+		IDirect3DSurface9_Release(back);
+		return;
+	}
 	if (mode == 6) { // the drawn view is the middle band of the picture; it fills the whole half texture, and both halves are put on the picture
 		RECT band = {0, (LONG)(d.Height / 4), (LONG)d.Width, (LONG)(d.Height * 3 / 4)};
 		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &band, comp_surf[half], NULL, D3DTEXF_LINEAR)))
@@ -121,6 +133,8 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	InterlockedIncrement(&present_hits[via]);
 	if (compose_via < 0)
 		compose_via = via;
+	if (compose_via == via && ring_tail == ring_head)
+		comp_have[0] = comp_have[1] = 0; // not a split frame: the halves of before are stale
 	if (compose_via != via || ring_tail == ring_head)
 		return;
 	int half = (int)ring[ring_tail & 7];
@@ -198,6 +212,9 @@ static void begin_frame_hook(void)
 }
 
 static int ctx_on;
+static float asp_saved[2];
+static int asp_have;
+static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the intro is over; before that there is one picture
 static int frame_bottom; // mode 5: this client frame is context 1's (the bottom half)
 static int ctx1_ready;
 static void ctx_swap(int to);
@@ -206,7 +223,11 @@ static void ctx_after_draw(void);
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
 	float *sw = subwindow();
-	if (!mode || !sw || second_pass) {
+	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
+		if (mode == 7 && asp_have) { // back from the split: the video aspect as the game had it
+			memcpy(base + 0x4113738, asp_saved, sizeof(asp_saved));
+			asp_have = 0;
+		}
 		cg_draw_original(local_client, a, b);
 		if (ctx_on)
 			ctx_after_draw();
@@ -214,12 +235,24 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	}
 	float saved[4];
 	memcpy(saved, sw, sizeof(saved));
-	if (mode >= 2 && mode <= 6) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
+	if (mode >= 2 && mode <= 7) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
 		static unsigned frame;
 		int bottom = mode >= 5 ? frame_bottom : (int)(frame++ & 1); // modes 5 and 6: the client frame (below) says whose frame it is
 		sw[0] = 0, sw[1] = 1, sw[2] = bottom ? 0.5f : 0, sw[3] = bottom ? 1 : 0.5f;
 		if (mode == 6) // the middle band of the full view in both halves: right proportions, half the vertical field
 			sw[2] = 0.25f, sw[3] = 0.75f;
+		if (mode == 7) { // the whole view, built for the shape of a half (wide), drawn over the full frame: the compositor squeezes it into the half (rva 0x4113738: aspect, 0x411373c: pixel aspect)
+			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
+			if (comp_w && comp_h) {
+				float *aspect = (float *)(base + 0x4113738);
+				if (!asp_have) {
+					memcpy(asp_saved, aspect, sizeof(asp_saved));
+					asp_have = 1;
+				}
+				aspect[0] = (float)comp_w / ((float)comp_h * 0.5f);
+				aspect[1] = 1.0f;
+			}
+		}
 		comp_hook();
 		if (the_device && ring_head - ring_tail < 6) { // the half this frame is drawn into: the frame's end composes it
 			ring[ring_head & 7] = bottom;
@@ -559,8 +592,28 @@ static void ctx_jitter_log(void)
 	log_printf("%s", line);
 }
 
+// Diagnostics ([native] entlog=1): the entities of the live cgame near the camera (cg_entities at rva 0x441070, 0x1a8 bytes each: eType +0xe0, origin +0x18, clientNum +0x160)
+static void ctx_entity_log(void)
+{
+	static unsigned seen[2];
+	if (!GetPrivateProfileIntA("native", "entlog", 0, settings_path))
+		return;
+	if (++seen[ctx_current] != 600)
+		return;
+	const float *cam = (const float *)(base + 0x42245c);
+	log_printf("native: ctx %d camera %.0f %.0f %.0f, clientNum %d", ctx_current, cam[0], cam[1], cam[2], *(int *)(base + 0x40caa0));
+	for (int i = 0; i < 1024; i++) {
+		const uint8_t *e = base + 0x441070 + (size_t)i * 0x1a8;
+		const float *o = (const float *)(e + 0x18);
+		float dx = o[0] - cam[0], dy = o[1] - cam[1], dz = o[2] - cam[2];
+		if (dx * dx + dy * dy + dz * dz < 200.0f * 200.0f && e[0xe0] != 0)
+			log_printf("native:   ent %d type %d clientNum %d at %.0f %.0f %.0f", i, e[0xe0], *(unsigned short *)(e + 0x160), o[0], o[1], o[2]);
+	}
+}
+
 static void ctx_after_draw(void)
 {
+	ctx_entity_log();
 	ctx_jitter_log();
 	static unsigned count;
 	if (ctx1_ready && ++count % 240 == 0 && count < 1200)
@@ -589,6 +642,9 @@ static void ctx_after_draw(void)
 	((void (*)(unsigned long long))(base + 0xb8830))(0);
 	((void (*)(unsigned))(base + 0xb87b0))(0);
 	ctx_swap(0);
+	// the cgame's own idea of its local client number (rva 0x40caa4): the draw hides "my" entity by it and answers per-client visibility masks by it; context 1 runs as local client 0
+	// but is client 1
+	*(int *)(ctx_store[1][0] + (0x40caa4 - ranges[0].rva)) = 1;
 	ctx1_ready = 1;
 	log_printf("native: context 1 initialised");
 	ctx_dump("after init");
@@ -646,6 +702,14 @@ static void client_frame_hook(void)
 {
 	static unsigned frame;
 	frame_bottom = 0;
+	{ // the scripts' switch: the dvar mw2coop_split_view is "1" once the intro is over
+		uint8_t *d = ((uint8_t * (*)(const char *))(base + 0x26bdf0))("mw2coop_split_view");
+		const char *v = d ? *(const char **)(d + 0x10) : NULL;
+		int on = v && v[0] == '1';
+		if (on != split_on)
+			log_printf("native: split view %s", on ? "on" : "off");
+		split_on = on;
+	}
 	static int texts_done;
 	if (!texts_done && ctx_on) { // both players are on this machine: the co-op "waiting for the other player" texts have nothing to wait for
 		texts_done = 1;
@@ -656,8 +720,14 @@ static void client_frame_hook(void)
 	if (nopredict < 0)
 		nopredict = GetPrivateProfileIntA("native", "nopredict", 0, settings_path);
 	uint8_t *np_dvar = *(uint8_t **)(base + 0x51e028); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
-	if (mode >= 5 && ctx1_ready && (frame++ & 1)) {
+	static int nogun = -1;
+	if (nogun < 0)
+		nogun = GetPrivateProfileIntA("native", "nogun", 0, settings_path);
+	uint8_t *gun_dvar = *(uint8_t **)(base + 0x51e120); // cg_drawGun
+	if (mode >= 5 && ctx1_ready && split_on && (frame++ & 1)) {
 		frame_bottom = 1;
+		if (nogun && gun_dvar)
+			*(int *)(gun_dvar + 0x10) = 0; // test: context 1 without the view model
 		if (nopredict && np_dvar)
 			*(int *)(np_dvar + 0x10) = 1;
 		ctx_swap(1);
@@ -667,6 +737,8 @@ static void client_frame_hook(void)
 	}
 	if (nopredict && np_dvar)
 		*(int *)(np_dvar + 0x10) = 0;
+	if (nogun && gun_dvar)
+		*(int *)(gun_dvar + 0x10) = 1;
 	client_frame_original();
 }
 
@@ -803,6 +875,28 @@ static void usercmd_step_hook(int lc)
 		ctx_swap(was);
 }
 
+// Diagnostics ([native] entdraw=1, skipent=<n>): the entities the cgame adds to the scene (rva 0x9c960), logged for one frame of context 1; skipent drops one of them.
+static const uint8_t add_entity_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x10, 0x48, 0x89, 0x68, 0x18, 0x48, 0x89, 0x70, 0x20, 0x57, 0x48, 0x81, 0xec, 0x90, 0x00, 0x00, 0x00};
+static void (*add_entity_original)(int);
+static int skip_entity = 1; // context 1 is player 1: his own entity is not drawn (the cgame hides "my" entity by the local client number, which is 0 in context 1)
+static int log_entities;
+static void add_entity_hook(int n)
+{
+	static unsigned frames;
+	static int logging;
+	if (ctx_current == 1) {
+		if (log_entities && n == 0 && logging == 0 && ++frames == 700)
+			logging = 1;
+		if (logging == 1) {
+			const uint8_t *e = base + 0x441070 + (size_t)n * 0x1a8;
+			log_printf("native: ctx1 adds entity %d type %d", n, e[0xe0]);
+		}
+		if (n == skip_entity)
+			return;
+	}
+	add_entity_original(n);
+}
+
 static void contexts_install(void)
 {
 	static const struct {
@@ -827,6 +921,12 @@ static void contexts_install(void)
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
 		if ((enabled & (1 << i)) && !hook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
+	skip_entity = GetPrivateProfileIntA("native", "skipent", 1, settings_path);
+	log_entities = GetPrivateProfileIntA("native", "entdraw", 0, settings_path);
+	{
+		if (!hook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
+			log_printf("native: add entity bytes differ");
+	}
 	ctx_on = 1;
 	log_printf("native: client contexts on (call sites redirected)");
 }

@@ -36,6 +36,16 @@ add_checkpoint( flag_name, start_name )
 	level.mw2coop_checkpoints[ level.mw2coop_checkpoints.size ] = cp;
 }
 
+split_view_gate()
+{
+	for ( i = 0; i < 100 && !flag_exist( "introscreen_complete" ); i++ )
+		wait 0.05;
+	if ( flag_exist( "introscreen_complete" ) )
+		flag_wait( "introscreen_complete" );
+	wait 0.5;
+	SetDvar( "mw2coop_split_view", "1" );
+}
+
 // Called from maps\_load::main() right after maps\_coop::main().
 main()
 {
@@ -45,6 +55,10 @@ main()
 
 	// a scene hid the partner's name (maps\_mw2coop_knife::lead_decided()): show it again
 	SetDvar( "mw2coop_hide_names", "" );
+
+	// native split screen (src/native.c): both views are shown only once the mission's intro is over; before that (briefing, title card) there is one picture
+	SetDvar( "mw2coop_split_view", "0" );
+	thread split_view_gate();
 
 	if ( !is_campaign_coop() )
 		return;
