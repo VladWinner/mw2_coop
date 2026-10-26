@@ -567,6 +567,19 @@ static void client_frame_hook(void)
 	client_frame_original();
 }
 
+// Diagnostics: the alpha of the co-op "waiting for the other player" text (rva 0x22eb70, called from the cgame's 2D at 0x94039).
+static float (*wait_alpha_original)(int);
+static float wait_alpha_hook(int lc)
+{
+	float a = wait_alpha_original(lc);
+	static int logged;
+	if ((a != 0.0f || !logged) && logged < 5) {
+		logged++;
+		log_printf("native: waiting alpha for lc %d = %f (coop byte %d, cls %d)", lc, a, *(base + 0x52fb5c), *(int *)(base + 0x533cb8));
+	}
+	return a;
+}
+
 static void usercmd_step_hook(int lc)
 {
 	if (lc == 0)
@@ -587,8 +600,9 @@ static void contexts_install(void)
 	    {0x15ce84, usercmd_step_hook, (void **)&usercmd_step_original},
 	    {0x234925, snapshot_msg_hook, (void **)&snapshot_msg_original},
 	    {0x1fc331, client_frame_hook, (void **)&client_frame_original},
+	    {0x94039, wait_alpha_hook, (void **)&wait_alpha_original},
 	};
-	int enabled = GetPrivateProfileIntA("native", "sites", 255, settings_path);
+	int enabled = GetPrivateProfileIntA("native", "sites", 511, settings_path);
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
 		if ((enabled & (1 << i)) && !hook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);

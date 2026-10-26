@@ -238,3 +238,21 @@ What works now (64-bit, test copy, `devmap trainer`, nothing else):
 Open: the mod's partner handshake (scripts wait for the other player; net.c/party.c assume a remote partner), player 1's usercmds (`0xd02a0(1)` is skipped: player 1 stands still), context 1 for the cgame
 (`ctx_swap`, `run_both`, wrappers are in place but only context 0 is exercised: context 1's init is deferred to `ctx_after_draw`), the second view, HUD, input, sound listener.
 `[native] players=1` installs only the hooks, for comparison runs. Test setup that works: `players=2` + `coopdvar=1` in the copy's `mw2coop\settings.ini`, commands `devmap trainer`, `!shot`, `!rva`, `!watch`.
+
+## Experiment 6 (2026-10-26, night): two independent views of two players in one process (`[native] experiment=5`)
+
+Settings: `players=2`, `coopdvar=1`, `experiment=5`. What it does on top of experiment 5:
+- **Mode 5: the engine's whole client frame (rva 0xd5b00, called at 0x1fc331 once per engine frame) runs for context 0 on even frames and for context 1 on odd frames**, with the client statics
+  swapped (`ctx_swap`, ranges in native.c: cgame block 0x404450-0x44f000, cl snapshots 0x51b078-0x51dcb0, 0x52c400, input 0x52fbc0, cls state, cl block 0x533d20-0x540b60 (playerstate at +0x2018),
+  clc ring 0x545844, snapshot message time 0x548ce8). Everything the client does in a frame (time, snapshot use, usercmds, cgame draw, 2D) so happens in the right context; the renderer still gets one scene
+  per frame. `r_subwindow`: top half on even, bottom on odd frames; the swap-chain Present hook composes both halves (mode 2's compositor).
+- Context 1 is started a few frames after the first cgame draw (the cgame registers dvars and media while it runs the first frames and every thread's 2D reads them): its block is a copy of context 0's,
+  except the playerstate the server published for client 1; then only the two per-client init parts run (`0xb8830(0)`, `0xb87b0(0)`), not the whole cgame init (that resets shared effects and media: black screen).
+- The server's per-frame hand-over is done for both contexts: playerstate of client 1 into context 1's copy (call site 0x2346ca), the snapshot message parsed twice, the message read again from its start
+  (call site 0x234925: 48-byte msg_t copy), the snapshot take 0xc99c0 run for both.
+- **Result (composed frame at frame 2600 of the run): the top half shows player 0's view (the camo net he looks up at), the bottom half a DIFFERENT view (looking down at the floor, an ammo crate, a soldier's legs): player 1's own
+  first-person camera, `cg.clientNum` = 1 in context 1, `cg.time` advancing in both.** No crash.
+- Not done: player 1's input (he stands still), aspect/FOV per half (both halves are stretched), HUD and 2D per half, the other player's body is missing from the entity list
+  (the server leaves local players' entities out and feeds them through the playerstate; the cgame of each context has to build the other one), sound listener, the mod's own script/net layer for local partners,
+  and the briefing cinematic shows the text "waiting for the other player" (source not found: the engine's COOP_WAITINGFORPLAYER draw at rva 0x93ac0 is gated by the engine's co-op byte, which is 0 here and the draw
+  is never reached; probably a menu of the cinematic skip, which needs both players).
