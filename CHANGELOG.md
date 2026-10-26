@@ -1,17 +1,18 @@
 # Changelog
 
-## v0.5.0-beta (2026-10-25)
+## Unreleased (since v0.4.7-beta)
 
-Everything here was tested with bots on two game copies on one PC (host + client); none of it has been played through
-by two people yet.
+Everything here is in `main` and tested with bots on two game copies on one PC (host + client); none of it has
+been played through by two people yet.
 
 ### New: fonts closer to the English original (Russian game)
 
 The Russian game draws every text in one generic condensed sans, while the English original uses Bank Gothic (headings,
 HUD numbers), ITC Conduit (running text) and T26 Carbon (mission intro screens), none of which has Cyrillic. The mod now
-renders the game's own font tables again from free fonts with Cyrillic and puts them into the game's memory: **Tektur**
-for the headings, the HUD and the mission intro text, **Fira Sans Condensed** for descriptions and subtitles (SIL OFL,
-shipped in `mw2coop\fonts`). Works in the 64-bit and the 32-bit build. `fonts=0` under `[display]` in `settings.ini`
+renders the game's own font tables again from free fonts with Cyrillic and puts them into the game's memory: the **H\*-Mod
+fonts** (made by Vlad Loktionov for h2-mod): a Bank Gothic like face for the headings and the HUD, a Conduit like one for
+descriptions and subtitles, a bold one for the mission intro text and subheadings, with smaller glyphs (SIL OFL,
+shipped in `mw2cooponts`). Works in the 64-bit and the 32-bit build. `fonts=0` under `[display]` in `settings.ini`
 keeps the game's own font; the English game is never touched.
 
 ### New: scenes that only the first player had are now for both
@@ -48,15 +49,6 @@ rig of his own where the animation needs one.
 - **Team Player**: either player can start the seat swap; the passenger starts looking ahead; nobody hurts the
   other during the ride.
 - **Lobby**: the password mode has its own Password row, and Start is refused until a password is set.
-
-### The 32-bit build (experimental archive)
-
-The code now also builds for the older 32-bit MW2 (`sh build.sh x86`, the official Steam copy of the old depots), and
-the release has a second, experimental archive for it: `mw2coop-v0.5.0-beta-x86.zip`. Two copies play a co-op session
-on trainer (joining by address), the script patches apply and give the same patched scripts as the 64-bit build, and a
-64-bit host with a 32-bit client was checked on trainer. Not ported or not checked: playing over the internet on the
-32-bit game, Steam invites and the Steam relay, the screenshot helper; the whole campaign was not played there. See
-`docs/32bit-plan.md`.
 
 ### Fixes in the engine side
 

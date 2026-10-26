@@ -34,24 +34,22 @@
 - 🧭 **Hosting and joining in the game's menus**: Campaign → co-op lobby, mission select, open / Steam friends only / password, a list of games on the network, join by address or Steam invite.
 - 🌐 **Online made easy**: an in-game Windows Firewall prompt and automatic UPnP port forwarding for the host.
 - 💾 **Saves for each playthrough, kept by the host**: each save remembers who played it. "Continue" picks up your partner's playthrough, "Pick a save" lists them (mission and players); playing on with someone new asks first: add them to the playthrough, or start a new game from the beginning. Both move on to the next mission together, and each player's own campaign records (missions unlocked, difficulty, achievements) are written as in single player.
-- 🔤 **Fonts closer to the English original (Russian game)**: the Russian build draws everything in one generic sans; the mod swaps in Tektur for the headings and the mission intro text and Fira Sans Condensed for the running text (both free, SIL OFL; `mw2coop\fonts`). Off with `fonts=0` in `settings.ini`; the English game is not touched.
+- 🔤 **Fonts closer to the English original (Russian game)**: the Russian build draws everything in one generic sans; the mod swaps in the H*-Mod fonts (a Bank Gothic like face for the headings, a Conduit like one for the running text, a bold one for the mission intro text; SIL OFL; `mw2cooponts`). Off with `fonts=0` in `settings.ini`; the English game is not touched.
 - 🧩 **Nothing of the game replaced**: one `winmm.dll` and a `mw2coop` folder; scripts are patched in memory when they load.
 
 ## 🎮 Missions
 
 | Mission | Reworked for two |
 |---|---|
-| S.S.D.D. | both start in the range's sandbag bay; each takes his own rifle, pistol and frags; the course gates close once both are through, either player's sprint counts |
-| Team Player | Shepherd's opening for both; first to the glowing seat is the gunner, the other rides along; **hold Use to swap**; ride end and crash for both; either player can start the swap, no damage between you on the ride |
-| Cliffhanger | side-by-side ice climb with your own icepicks, the big jump (Soap catches each of you), a snowmobile each, the helicopter waits for both; both get the level's stealth, the partner sees your snowmobile and you in the saddle, and on the wall your body climbing (ice picks upright in your hands) |
+| S.S.D.D. | both start in the range's sandbag bay; each takes his own rifle, pistol and frags |
+| Team Player | Shepherd's opening for both; first to the glowing seat is the gunner, the other rides along; **hold Use to swap**; ride end and crash for both |
+| Cliffhanger | side-by-side ice climb with your own icepicks, the big jump (Soap catches each of you), a snowmobile each, the helicopter waits for both |
 | No Russian | both in Makarov's crew look; own place in the elevator; the cover and the line of fire count for either player; the ending shoots both |
 | Takedown | both ride the opening car; each ducks on his own key |
 | Wolverines! | player 2 rides in the opening and closing Humvees |
 | The Hornet's Nest, Exodus | both start together; Exodus' laser designator goes to one random player |
-| Just Like Old Times | the opening rappel: whoever hooks up first rappels and kills the guard, the second rappels after him |
-| The Only Easy Day... | an SDV each, both surface; whoever strikes first does the stealth kill; the escape little bird takes both, side by side |
-| The Gulag | both fly in on the helicopter's door; the cellblock rope (both rappel, one after the other) and the evacuation rope to the Pavelow (each clips on himself) |
-| Escape from Favela | the big jump over the gap (both jump, Soap reaches for both) and the chopper's rope ladder: the first to leap starts it, the other catches the same rope |
+| The Only Easy Day... | an SDV each, both surface; whoever strikes first does the stealth kill |
+| The Gulag | both fly in on the helicopter's door |
 | Of Their Own Accord / Second Sun | Blackhawk ride for both, both wake up in the crash, side by side at the ISS, a falling helicopter chases each of you |
 | Whiskey Hotel | a flare for each player on the roof |
 | The Enemy of My Enemy | player 2 rides the UAZ's back seat into the C-130 |
@@ -65,7 +63,7 @@ All mission intros hold both players; the title plays only on a mission's first 
 
 > You both need **Call of Duty: Modern Warfare 2 (2009) on Steam**, the current **64-bit build**, and **the same mw2coop version**.
 
-1. Download `mw2coop-<version>.zip` from [Releases](https://github.com/stxlvn/mw2_coop/releases/latest). (For the older **32-bit** game: the experimental `mw2coop-<version>-x86.zip` next to it; see its `INSTALL.txt` for what was checked.)
+1. Download `mw2coop-<version>.zip` from [Releases](https://github.com/stxlvn/mw2_coop/releases/latest).
 2. Steam → Library → Modern Warfare 2 → ⚙ Manage → **Browse local files** (the folder with `iw4sp.exe`).
 3. Copy `winmm.dll` and the `mw2coop` folder there. No game file is replaced.
 4. **Host:** Campaign → co-op. Pick the mission and access in the lobby.
@@ -88,7 +86,6 @@ Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 - No Russian's far ending (nobody at the van door) logs one script error (`_anim::anim_loop_packet`); the scene plays on.
 - Museum (the epilogue after the credits): in the bot tour player 2 could not walk or ended up far from player 1 at the exhibit start points; not fixed yet. Its civilians also spam script errors and some stand in a T-pose, in single player too.
 - Nobody has played the whole campaign through together yet: tell us how far you got.
-- The newest scenes (the rope and rappel scenes, the Cliffhanger snowmobile and climb views) were checked by bots on two copies only: no two people have played them yet, so look closely at them and report what looks wrong.
 
 ## 🧪 How it's tested
 
@@ -107,7 +104,6 @@ Two copies of the game on one PC (host + client), driven by in-game bots: each c
 - In a co-op session GSC `getdvar` only returns dvars with certain flags; the DLL flags `start` and the QA dvars, and every dvar a level script sets itself, so levels that read back their own dvars behave as in single player.
 - Difficulty: the lobby's popup only latches `g_gameskill`; the DLL hooks `profile_difficultySave` for the host's pick and sends it to the client with `coopLaunch`.
 - Diagnostics in `mw2coop\mw2coop.log`: GSC errors with the script call stack (repeats logged at 1, 2, 3, 10, 100, 1000... hits), crashes with the faulting RVA and stack, `!trace <rva>` logs every call of a builtin method.
-- A 32-bit build of the mod (`sh build.sh x86`, `docs/32bit-plan.md`) ships as the separate experimental archive `mw2coop-<version>-x86.zip` of each release.
 
 </details>
 
@@ -140,7 +136,7 @@ Needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and a POSIX shell (Gi
 ```
 LLVM_MINGW=/path/to/llvm-mingw-ucrt-x86_64 ./build.sh release
 ```
-`tools/make_release.sh <version> [x86]` builds the release DLL (checked for local paths) and packs `dist/mw2coop-<version>.zip` with the scripts, patches and `content/release` (`INSTALL.txt`, `settings.ini`, the firewall helper), plus its SHA-256. `tools/gen_winmm_proxy.py` regenerates the export stubs from the system `winmm.dll`.
+`tools/make_release.sh <version>` builds the release DLL (checked for local paths) and packs `dist/mw2coop-<version>.zip` with the scripts, patches and `content/release` (`INSTALL.txt`, `settings.ini`, the firewall helper), plus its SHA-256. `tools/gen_winmm_proxy.py` regenerates the export stubs from the system `winmm.dll`.
 
 Testers: use a **copy** of the game folder, not your Steam install, and start it with `SteamAppId=10180` and `SteamGameId=10180` set (without them the Steam DRM wrapper exits and Steam starts your **real** install instead); `tools/run_test.ps1` does this and kills any `iw4sp.exe` outside the test folder.
 
@@ -169,7 +165,7 @@ A scenario can press a player's buttons for real: `press( player, "activate", ms
 mw2coop is our own code, but it stands on other people's work:
 
 - **COD-MOD** and its campaign co-op pack (`x_coop`, author unknown): the first MW2 campaign co-op, for the old 32-bit build. We checked how it handled each mission (where the players stand, the Whiskey Hotel flare) before building ours. The COD-MOD client is by momo5502 and contributors ([FreeTheTech101/cod-mod](https://github.com/FreeTheTech101/cod-mod)).
-- **Tektur** (Tektur Project Authors) and **Fira Sans Condensed** (Mozilla Foundation, Telefónica S.A.): the fonts of the Russian game's new look, SIL Open Font License 1.1 (the license texts are in `mw2coop\fonts`).
+- **H\*-Mod fonts** (Vlad Loktionov, made for [h2-mod](https://github.com/alicealys/h2-mod); suggested in issue 1): the fonts of the Russian game's new look, SIL Open Font License 1.1 as stated in the files (the notes and the license text are in `mw2cooponts`).
 - **[iw4x-sp](https://git.alterware.dev/alterware/iw4x-sp)** by AlterWare: read for how the engine handles player input and asset pools (reference only; no code taken).
 - **Infinity Ward**: the game's own Spec Ops co-op, which mw2coop turns into a campaign mode.
 - **[Co-op Anything](https://github.com/cranebeaker/coop-anything)**: the playbook and test tools this mod was built with.

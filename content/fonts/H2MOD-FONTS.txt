@@ -1,11 +1,33 @@
-Copyright 2023 The Tektur Project Authors (https://www.github.com/hyvyys/Tektur)
+The fonts in this folder: bank.ttf, default.otf and defaultBold.otf
+Made by Vlad Loktionov for h2-mod (https://github.com/alicealys/h2-mod, data/zonetool/fonts, taken at commit ff5e6b1c83813feb9290285b6d6f309d74cf199e,
+suggested for this mod in https://github.com/stxlvn/mw2_coop/issues/1). The mod draws the Russian game's menus, subtitles and briefings with them (src/fonts.c).
 
-This Font Software is licensed under the SIL Open Font License, Version 1.1.
-This license is copied below, and is also available with a FAQ at:
-https://scripts.sil.org/OFL
+== bank.ttf: H*-Mod Mix Gothic Regular
+Made from: + Science Gothic 1.06 (modified)
++ IBM Plex Sans Arabic Medium 1.1 = height 82/90%
+Licence stated in the file: This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL
 
+== default.otf: H*-Mod Mix Medium
+Made from: + PT Root UI 2.000G (modified)
++ Mplus 1p 1.061
++ Vazirmatn 32.102
++ Gothic A1 2.50
++ WenQuanYi Micro Hei 0.2.0
+Licence stated in the file: This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL
 
------------------------------------------------------------
+== defaultBold.otf: H*-Mod Mix Open Bold
+Made from: + Play 2.200 (modified)
++ IBM Plex Sans SmBld 3.3 95%
++ Noto Sans SC Medium 2.002 92%
++ Noto Sans TC Medium 2.002 92%
++ IBM Plex Sans JP SmBld 1.001 90%
++ IBM Plex Sans KR SmBld 1.002 95%
++ IBM Plex Sans Arabic SmBld 1.004 95%
+Licence stated in the file: This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL
+
+Note: the licence line in the files says SIL OFL 1.1 for the whole font. Some of the fonts they were made from are not OFL fonts (the file default.otf names WenQuanYi Micro Hei, which is
+Apache 2.0 or GPLv3 with a font exception). This was not verified; the author was not asked yet.
+
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
 -----------------------------------------------------------
 

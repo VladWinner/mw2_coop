@@ -2,8 +2,8 @@
 //
 // The original game draws its menus in Bank Gothic and ITC Conduit and its briefing screens in T26 Carbon. Those fonts have no
 // Cyrillic, so the Russian build draws everything in one generic condensed sans. The mod replaces the glyphs of the game's
-// font assets in memory with glyphs rendered (Windows GDI) from free fonts with Cyrillic that look like the originals: Tektur for
-// the headings and the briefing, Fira Sans Condensed for the running text (both SIL OFL, shipped in <game dir>\mw2coop\fonts).
+// font assets in memory with glyphs rendered (Windows GDI) from free fonts with Cyrillic that look like the originals: the H*-Mod fonts
+// (bank.ttf for the headings, default.otf for the running text, defaultBold.otf for the briefing; SIL OFL, shipped in <game dir>\mw2coop\fonts).
 //
 // How the game's fonts work (mapped with "!font <name>", memdump.c):
 //   Font_s (asset type 24): name, pixelHeight (int), glyphCount (int), Material *material, Material *glowMaterial, Glyph *glyphs.
@@ -51,19 +51,22 @@
 #define DEF_IMAGE 8
 #define GLYPH_SIZE 24
 
-enum { FACE_TEKTUR, FACE_FIRA };
+// The faces are the H*-Mod fonts (SIL OFL, shipped in <game dir>\mw2cooponts): a Bank Gothic like face for the headings, a Conduit like one for the
+// running text and a bold one for the briefing and the subheadings (T26 Carbon in the English game).
+enum { FACE_BANK, FACE_TEXT, FACE_BOLD, FACE_COUNT };
 
-// The font assets that live on the shared atlas, and the face of each. The heading fonts (Bank Gothic in the English game) and the
-// briefing text get Tektur; the running text (Conduit) gets Fira Sans Condensed.
+// The font assets that live on the shared atlas, and the face of each.
 static const struct {
 	const char *name;
 	int face;
 	int bold;
 } plan[] = {
-	{"fonts/bigfont", FACE_TEKTUR, 0},      {"fonts/extrabigfont", FACE_TEKTUR, 0}, {"fonts/objectivefont", FACE_TEKTUR, 0},
-	{"fonts/hudbigfont", FACE_TEKTUR, 0},   {"fonts/hudsmallfont", FACE_TEKTUR, 0}, {"fonts/normalfont", FACE_FIRA, 0},
-	{"fonts/smallfont", FACE_FIRA, 0},      {"fonts/boldfont", FACE_FIRA, 1},       {"fonts/consolefont", FACE_FIRA, 0},
+	{"fonts/bigfont", FACE_BANK, 0},      {"fonts/extrabigfont", FACE_BANK, 0}, {"fonts/objectivefont", FACE_BOLD, 0},
+	{"fonts/hudbigfont", FACE_BANK, 0},   {"fonts/hudsmallfont", FACE_BOLD, 0}, {"fonts/normalfont", FACE_TEXT, 0},
+	{"fonts/smallfont", FACE_TEXT, 0},    {"fonts/boldfont", FACE_TEXT, 1},     {"fonts/consolefont", FACE_TEXT, 0},
 };
+// the height of a capital letter, as a part of the font asset's pixel height (the English game's own letters are smaller than the first try's 0.65)
+#define CAP_FACTOR 0.56
 #define PLAN_COUNT (int)(sizeof(plan) / sizeof(plan[0]))
 
 typedef struct {
@@ -103,21 +106,79 @@ static uint8_t *material_image(const uint8_t *material)
 static char font_dir[MAX_PATH];
 static HDC dc;
 
+static wchar_t family[FACE_COUNT][64];
+
+static unsigned be16(const uint8_t *p)
+{
+	return (unsigned)p[0] << 8 | p[1];
+}
+
+static unsigned be32(const uint8_t *p)
+{
+	return (unsigned)p[0] << 24 | (unsigned)p[1] << 16 | (unsigned)p[2] << 8 | p[3];
+}
+
+// The family name inside a font file (its name table: 16, else 1), so the font is asked for by the name the FILE has: a player who replaces the file
+// with another font under the same file name still gets his own font, and an installed font of the same family name never takes its place.
+static int read_family(const char *path, wchar_t *out, int size)
+{
+	FILE *f = fopen(path, "rb");
+	if (!f)
+		return 0;
+	uint8_t head[12];
+	int ok = 0;
+	if (fread(head, 1, 12, f) == 12) {
+		unsigned tables = be16(head + 4);
+		uint8_t dir[16 * 64];
+		if (tables <= 64 && fread(dir, 16, tables, f) == tables) {
+			for (unsigned i = 0; i < tables && !ok; i++) {
+				if (memcmp(dir + i * 16, "name", 4) != 0)
+					continue;
+				unsigned off = be32(dir + i * 16 + 8), len = be32(dir + i * 16 + 12);
+				uint8_t *name = len < (1u << 20) ? malloc(len) : NULL;
+				if (name && fseek(f, (long)off, SEEK_SET) == 0 && fread(name, 1, len, f) == len && len >= 6) {
+					unsigned count = be16(name + 2), strings = be16(name + 4);
+					unsigned best = 0;
+					for (unsigned k = 0; k < count && 6 + (k + 1) * 12 <= len; k++) {
+						const uint8_t *r = name + 6 + k * 12;
+						unsigned pid = be16(r), nid = be16(r + 6), slen = be16(r + 8), soff = be16(r + 10);
+						if (pid != 3 || (nid != 1 && nid != 16) || strings + soff + slen > len)
+							continue;
+						unsigned rank = nid == 16 ? 2 : 1;
+						if (rank <= best)
+							continue;
+						int n = (int)(slen / 2) < size - 1 ? (int)(slen / 2) : size - 1;
+						for (int c = 0; c < n; c++)
+							out[c] = (wchar_t)be16(name + strings + soff + c * 2);
+						out[n] = 0;
+						best = rank;
+						ok = 1;
+					}
+				}
+				free(name);
+			}
+		}
+	}
+	fclose(f);
+	return ok;
+}
+
 static int load_faces(void)
 {
-	static const char *const files[] = {"Tektur.ttf", "FiraSansCondensed-Regular.ttf"};
+	static const char *const files[FACE_COUNT] = {"bank.ttf", "default.otf", "defaultBold.otf"};
 	DWORD n = GetModuleFileNameA(NULL, font_dir, MAX_PATH);
 	while (n > 0 && font_dir[n - 1] != '\\')
 		n--;
 	font_dir[n] = 0;
 	lstrcatA(font_dir, "mw2coop\\fonts\\");
 	int ok = 1;
-	for (int i = 0; i < 2; i++) {
+	for (int i = 0; i < FACE_COUNT; i++) {
 		char path[MAX_PATH];
 		snprintf(path, sizeof(path), "%s%s", font_dir, files[i]);
 		int added = AddFontResourceExA(path, FR_PRIVATE, NULL);
-		log_printf("fonts: %s: %s", path, added ? "loaded" : "NOT FOUND");
-		ok &= added > 0;
+		int named = added > 0 && read_family(path, family[i], 64);
+		log_printf("fonts: %s: %s%s", path, added ? "loaded" : "NOT FOUND", named ? "" : " (no family name)");
+		ok &= named;
 	}
 	dc = CreateCompatibleDC(NULL);
 	return ok && dc;
@@ -125,8 +186,9 @@ static int load_faces(void)
 
 static HFONT make_font(int face, int bold, int px)
 {
-	return CreateFontA(-px, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_ONLY_PRECIS, CLIP_DEFAULT_PRECIS,
-			   ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, face == FACE_TEKTUR ? "Tektur" : "Fira Sans Condensed");
+	// the bold face is a bold style of its family; the others are regular
+	return CreateFontW(-px, 0, 0, 0, (bold || face == FACE_BOLD) ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_ONLY_PRECIS,
+			   CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, family[face]);
 }
 
 // cap height / em of a face, from "H" at a big size
@@ -302,7 +364,9 @@ static void patch_all(void *(*find)(int, const char *), const uint8_t *atlas_mat
 		log_printf("fonts: the font files are missing, the game keeps its own fonts");
 		return;
 	}
-	double ratio[2] = {cap_ratio(FACE_TEKTUR), cap_ratio(FACE_FIRA)};
+	double ratio[FACE_COUNT];
+	for (int i = 0; i < FACE_COUNT; i++)
+		ratio[i] = cap_ratio(i);
 	FontJob jobs[16];
 	int njobs = 0;
 	for (int p = 0; p < PLAN_COUNT && njobs < 16; p++) {
@@ -315,9 +379,9 @@ static void patch_all(void *(*find)(int, const char *), const uint8_t *atlas_mat
 		j->pixel_height = *(const int *)(f + FONT_HEIGHT);
 		j->bitmap_of = malloc((size_t)j->count * sizeof(int));
 		const uint8_t *glyphs = *(const uint8_t *const *)(f + FONT_GLYPHS);
-		int other = plan[p].face == FACE_TEKTUR ? FACE_FIRA : FACE_TEKTUR;
-		HFONT font = make_font(plan[p].face, plan[p].bold, (int)(j->pixel_height * 0.65 / ratio[plan[p].face] + 0.5));
-		HFONT fallback = make_font(other, 0, (int)(j->pixel_height * 0.65 / ratio[other] + 0.5));
+		int other = plan[p].face == FACE_TEXT ? FACE_BANK : FACE_TEXT;
+		HFONT font = make_font(plan[p].face, plan[p].bold, (int)(j->pixel_height * CAP_FACTOR / ratio[plan[p].face] + 0.5));
+		HFONT fallback = make_font(other, 0, (int)(j->pixel_height * CAP_FACTOR / ratio[other] + 0.5));
 		for (int i = 0; i < j->count; i++) {
 			unsigned letter = *(const uint16_t *)(glyphs + (size_t)i * GLYPH_SIZE);
 			wchar_t ch = unicode_of(letter);
@@ -425,7 +489,7 @@ static void patch_all(void *(*find)(int, const char *), const uint8_t *atlas_mat
 	*(uint16_t *)(image + IMAGE_DIMS + 2) = (uint16_t)atlas_h;
 	*(uint32_t *)(image + IMAGE_DATALEN) = ATLAS_W * atlas_h;
 	*(uint32_t *)(image + IMAGE_DATALEN + 4) = ATLAS_W * atlas_h;
-	log_printf("fonts: %d fonts now use the mod's glyphs (Tektur and Fira Sans Condensed)", njobs);
+	log_printf("fonts: %d fonts now use the mod's glyphs (H*-Mod: bank, default, defaultBold)", njobs);
 	for (int i = 0; i < bitmap_count; i++)
 		free(bitmaps[i].alpha);
 	free(bitmaps);
