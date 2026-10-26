@@ -137,3 +137,15 @@ much smaller than a multi-view renderer.
   cgame state (`cg` at rva 0x422440) is addressed at a constant. A mix: some modules keep the console's MAX_LOCAL_CLIENTS = 4 arrays, the main client state is a single static.
 - The workflow of six research agents (`docs/native-splitscreen-research/`) stopped on the usage limit before it wrote anything (1.47 million tokens spent, no report): the questions it was given
   (second connection, client state extent, 2D per half, input, server side and mod assumptions, time slicing) are still open and listed above.
+
+## Runtime look at the coop slot table (host, trainer, two copies, 2026-10-26)
+
+`!rva 540ba0 192` and `!rva 5431f0 192` on the host (the two slots), taken 45 s after `coopLaunch` with the partner in:
+
+- **Slot 0 (rva 0x540ba0): the host's own client over the LOOPBACK.** At +0x10 the address: type 2 (NA_LOOPBACK), ip 127.0.0.1; the netchan carries two 0x1000 byte fragment buffers (pointers at +0x30 and +0x48, sizes 0x1000).
+- **Slot 1 (rva 0x5431f0): the remote partner by IP.** Address type 4 (NA_IP), the PC's LAN address (192.168.100.4 here: the QA copies join the PC's own address) and its port; its own buffers; a field with value 2 at +0x20.
+- `rva 0x52fb5c` (the coop session flag) = 1, `cls` state (rva 0x533cb8) = 6 (active).
+
+So the engine already has what a second LOCAL client needs on the SERVER side: the server talks to a slot over a netchan whose address can be the loopback. What is missing for a second local client is the CLIENT side of that second loopback connection:
+the client code (cgame, snapshot parse, usercmd send) is written for one connection (the client connect handler uses slot 0 at a constant) and its state is single statics.
+The loopback queue itself (the engine's `NET_` loopback, one client/server pair) would need a second pair or a tag to tell the two clients' packets apart: not examined yet.
