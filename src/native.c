@@ -122,6 +122,31 @@ static float *subwindow(void)
 static volatile LONG ring[8];
 static volatile DWORD render_tid;
 static volatile LONG ring_head, ring_tail; // frames queued by the main thread, and the halves they were drawn into, in order
+// Mode 10 tells a frame's half on the render thread from the frame itself, not from a queue (a queue is off by one for good when a frame submitted before the split is still in flight
+// as the split starts: the halves swapped for the whole session): the scene struct holds the cgame's time of its frame at +0x180; the main thread notes (time, half) of every split frame
+// it draws, the render thread looks its frame's time up (the two contexts' times differ by a few ms and never match).
+static struct {
+	volatile int time;
+	volatile int half;
+} half_tbl[64];
+static volatile LONG half_tbl_head;
+static volatile int render_half = -1; // render thread only: the half of the frame being drawn, -1 when it is not a split frame
+static void half_note(int time, int half)
+{
+	LONG i = InterlockedIncrement(&half_tbl_head) & 63;
+	half_tbl[i].half = half;
+	half_tbl[i].time = time;
+}
+static int half_find(int time)
+{
+	LONG head = half_tbl_head;
+	for (int k = 0; k < 64; k++) {
+		int i = (int)((head - k) & 63);
+		if (half_tbl[i].time == time)
+			return half_tbl[i].half;
+	}
+	return -1;
+}
 static IDirect3DDevice9 *comp_device;
 static IDirect3DTexture9 *comp_tex[2];
 static IDirect3DSurface9 *comp_surf[2];
@@ -133,6 +158,8 @@ static IDirect3DSurface9 *lay_surf[2];
 static int lay_have[2];
 static IDirect3DStateBlock9 *comp_sb;
 static volatile LONG layer_pass; // the render thread is inside the 2D pass
+static volatile DWORD scope_tick[2]; // per half: when a scope's lens rectangle was last seen
+static volatile int frame_scope; // render thread: a lens rectangle was set in the frame being drawn
 static volatile DWORD split_tick; // when the picture was last split (the intro's title lines have random glyphs, which no comparison can match: for the first seconds the bands are cut out whatever the layers hold)
 static IDirect3DPixelShader9 *dedupe_ps;
 static int dedupe_tried;
@@ -182,20 +209,53 @@ static void dedupe_make(IDirect3DDevice9 *dev)
 		"float4 band2 : register(c1);\n"
 		"float4 band3 : register(c2);\n"
 		"float4 force : register(c3);\n"
+		"float4 fill : register(c4);\n"
+		"float core(float2 uv)\n"
+		"{\n"
+		"\tfloat4 t = tex2D(B, uv);\n"
+		"\treturn step(0.5, t.a) * step(0.4, max(t.r, max(t.g, t.b)));\n"
+		"}\n"
 		"float4 main(float2 uv : TEXCOORD0) : COLOR\n"
 		"{\n"
 		"\tfloat4 a = tex2D(A, uv);\n"
 		"\tfloat4 b = tex2D(B, uv);\n"
+		"\tfloat2 px = float2(1.0 / 1920.0, 1.0 / 1080.0);\n"
+		"\tfloat near = core(uv);\n"
+		"\tnear = max(near, core(uv + px * float2(-2, 0)));\n"
+		"\tnear = max(near, core(uv + px * float2(-1, 0)));\n"
+		"\tnear = max(near, core(uv + px * float2(1, 0)));\n"
+		"\tnear = max(near, core(uv + px * float2(2, 0)));\n"
+		"\tnear = max(near, core(uv + px * float2(0, -2)));\n"
+		"\tnear = max(near, core(uv + px * float2(0, -1)));\n"
+		"\tnear = max(near, core(uv + px * float2(0, 1)));\n"
+		"\tnear = max(near, core(uv + px * float2(0, 2)));\n"
+		"\tnear = max(near, core(uv + px * float2(-1, -1)));\n"
+		"\tnear = max(near, core(uv + px * float2(1, -1)));\n"
+		"\tnear = max(near, core(uv + px * float2(-1, 1)));\n"
+		"\tnear = max(near, core(uv + px * float2(1, 1)));\n"
+		"\tnear = max(near, core(uv + px * float2(-3, 0)));\n"
+		"\tnear = max(near, core(uv + px * float2(3, 0)));\n"
 		"\tfloat4 d = abs(a - b);\n"
-		"\tfloat same = max(force.x, step(d.x + d.y + d.z + d.w, 0.2));\n"
+		"\tfloat equal = step(d.x + d.y + d.z + d.w, 0.06) * step(0.03, a.a) * step(0.03, b.a);\n"
+		"\tfloat solid = step(0.25, a.a);\n"
+		"\tfloat same = max(force.x * step(0.02, a.a), max(near * solid, equal));\n"
 		"\tfloat in1 = step(band1.x, uv.x) * step(uv.x, band1.y) * step(band1.z, uv.y) * step(uv.y, band1.w);\n"
 		"\tfloat in2 = step(band2.x, uv.x) * step(uv.x, band2.y) * step(band2.z, uv.y) * step(uv.y, band2.w);\n"
 		"\tfloat in3 = step(band3.x, uv.x) * step(uv.x, band3.y) * step(band3.z, uv.y) * step(uv.y, band3.w);\n"
-		"\tfloat kill = same * saturate(in1 + in2 + in3);\n"
-		"\treturn a * (1.0 - kill);\n"
+		"\tfloat kill = same * saturate(in1 + in2 + in3) * step(0.02, a.a);\n"
+		"\treturn a * (1.0 - kill) + float4(0, 0, 0, 1) * (kill * fill.x);\n"
 		"}\n";
 	void *code = NULL, *errors = NULL;
-	HRESULT hr = compile(src, sizeof(src) - 1, "dedupe", NULL, NULL, "main", "ps_2_0", 0, 0, &code, &errors);
+	HRESULT hr = E_FAIL;
+	static const char *const targets[] = {"ps_2_b", "ps_2_a", "ps_2_0"};
+	for (int t = 0; t < 3 && (FAILED(hr) || !code); t++) {
+		hr = compile(src, sizeof(src) - 1, "dedupe", NULL, NULL, "main", targets[t], 0, 0, &code, &errors);
+		if (SUCCEEDED(hr) && code && FAILED(IDirect3DDevice9_CreatePixelShader(dev, (const DWORD *)((void *(*)(void *))(*(void ***)code)[3])(code), &dedupe_ps))) {
+			((ULONG(*)(void *))(*(void ***)code)[2])(code); // this device does not take that target: the next one
+			code = NULL;
+			hr = E_FAIL;
+		}
+	}
 	if (FAILED(hr) || !code) {
 		log_printf("native: the de-duplication shader did not compile (%08lx)", (unsigned long)hr);
 		if (errors) {
@@ -206,10 +266,12 @@ static void dedupe_make(IDirect3DDevice9 *dev)
 		return;
 	}
 	void **vt = *(void ***)code;
-	const DWORD *bytes = (const DWORD *)((void *(*)(void *))vt[3])(code);
-	if (FAILED(IDirect3DDevice9_CreatePixelShader(dev, bytes, &dedupe_ps)))
-		log_printf("native: the de-duplication shader was refused by the device");
-	else
+	if (!dedupe_ps) {
+		const DWORD *bytes = (const DWORD *)((void *(*)(void *))vt[3])(code);
+		if (FAILED(IDirect3DDevice9_CreatePixelShader(dev, bytes, &dedupe_ps)))
+			log_printf("native: the de-duplication shader was refused by the device");
+	}
+	if (dedupe_ps)
 		log_printf("native: de-duplication of the global texts on");
 	((ULONG(*)(void *))vt[2])(code);
 	if (errors) {
@@ -220,6 +282,7 @@ static void dedupe_make(IDirect3DDevice9 *dev)
 
 // Lays the top half of a 2D layer (premultiplied alpha, see layer_fix) over the half texture with the fixed pipeline. Everything the game had set on the device is kept in a state block
 // and put back, so the engine's own state caching is not fooled.
+static int layer_full;
 static void overlay_layer(IDirect3DDevice9 *dev, int half)
 {
 	IDirect3DSurface9 *old_rt = NULL, *old_ds = NULL;
@@ -258,13 +321,16 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_SRGBTEXTURE, 0);
 		float w = (float)comp_w - 0.5f, h = (float)(comp_h / 2) - 0.5f;
-		float q[4][6] = {{-0.5f, -0.5f, 0, 1, 0, 0}, {w, -0.5f, 0, 1, 1, 0}, {-0.5f, h, 0, 1, 0, 0.5f}, {w, h, 0, 1, 1, 0.5f}}; // the top half of the layer
+		float q[4][6] = {{-0.5f, -0.5f, 0, 1, 0, 0}, {w, -0.5f, 0, 1, 1, 0}, {-0.5f, h, 0, 1, 0, layer_full ? 1.0f : 0.5f}, {w, h, 0, 1, 1, layer_full ? 1.0f : 0.5f}}; // the top half of the layer (layerdebug=3: all of it)
 		static int dedupe = -1;
 		if (dedupe < 0)
 			dedupe = cfg("dedupe", 1);
-		if (dedupe && lay_have[1 - half])
+		DWORD now = GetTickCount();
+		int scoped = 0; // (a scope's black overlay is opaque behind the texts: what is cut out of such a layer is filled with black, not left transparent)
+		int one_scoped = now - scope_tick[0] < 400 || now - scope_tick[1] < 400; // somebody looks through a scope: the intro's title lines cannot be on screen, no forced cut-out
+		if (dedupe && !scoped && lay_have[1 - half])
 			dedupe_make(dev);
-		if (dedupe && dedupe_ps && lay_have[1 - half]) {
+		if (dedupe && !scoped && dedupe_ps && lay_have[1 - half]) {
 			// The global texts are drawn by both contexts and kept once: the objective (top left) in the top half, the subtitles and the intro's title lines (lower part of the screen) in the bottom half.
 			// Each half drops, inside its bands, the pixels its layer holds the same as the other half's layer.
 			static const float none[4] = {1.0f, 0.0f, 1.0f, 0.0f}; // an empty band
@@ -273,12 +339,15 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 			static const float lower[4] = {0.05f, 0.80f, 0.35f, 0.475f};         // intro lines (bottom left) and subtitles (bottom centre); the ammo counter (bottom right) is outside
 			float bands[3][4];
 			memcpy(bands[0], half == 1 ? objective : none, sizeof(bands[0]));
-			memcpy(bands[1], half == 0 ? subtitles : none, sizeof(bands[1]));
+			memcpy(bands[1], none, sizeof(bands[1])); // (no known text lives above the crosshair: that band cut the scope lens)
+			(void)subtitles;
 			memcpy(bands[2], half == 0 ? lower : none, sizeof(bands[2]));
 			IDirect3DDevice9_SetPixelShader(dev, dedupe_ps);
 			IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, &bands[0][0], 3);
-			float force[4] = {GetTickCount() - split_tick < 14000 ? 1.0f : 0.0f, 0, 0, 0};
+			float force[4] = {GetTickCount() - split_tick < 14000 && !one_scoped ? 1.0f : 0.0f, 0, 0, 0};
 			IDirect3DDevice9_SetPixelShaderConstantF(dev, 3, force, 1);
+			float fill[4] = {now - scope_tick[half] < 400 ? 1.0f : 0.0f, 0, 0, 0};
+			IDirect3DDevice9_SetPixelShaderConstantF(dev, 4, fill, 1);
 			IDirect3DDevice9_SetTexture(dev, 1, (IDirect3DBaseTexture9 *)lay_tex[1 - half]);
 			for (int i = 0; i < 2; i++) {
 				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MINFILTER, D3DTEXF_POINT);
@@ -288,7 +357,7 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 			}
 			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
-		} else if (half == 1 && dedupe) {
+		} else if (half == 1 && dedupe && !scoped) {
 			// The objective text (top left) is global: both contexts draw it, the bottom one is left out. Two quads: the strip's rows without the left part, then the rest.
 			float ry = (float)(comp_h / 2) * 0.075f, rx = (float)comp_w * 0.6f, v = ry / (float)comp_h;
 			float a[4][6] = {{rx - 0.5f, -0.5f, 0, 1, rx / (float)comp_w, 0}, {w, -0.5f, 0, 1, 1, 0}, {rx - 0.5f, ry - 0.5f, 0, 1, rx / (float)comp_w, v}, {w, ry - 0.5f, 0, 1, 1, v}};
@@ -342,8 +411,19 @@ static void compose(IDirect3DDevice9 *dev, int half)
 	if (mode == 10) { // the squeezed view, with the top rows of the 2D layer laid over it
 		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, NULL, comp_surf[half], NULL, D3DTEXF_LINEAR)))
 			comp_have[half] = 1;
-		if (lay_have[half] && comp_have[half])
-			overlay_layer(dev, half);
+		{
+			static int dbg = -1; // [native] layerdebug=1: the 3D alone, 2: the 2D layer alone on black
+			if (dbg < 0)
+				dbg = cfg("layerdebug", 0);
+			layer_full = dbg == 3;
+			if (dbg == 2 || dbg == 3) {
+				D3DRECT all = {0, 0, (LONG)comp_w, (LONG)(comp_h / 2)};
+				IDirect3DDevice9_ColorFill(dev, comp_surf[half], NULL, 0xff000000);
+				(void)all;
+			}
+			if (lay_have[half] && comp_have[half] && dbg != 1)
+				overlay_layer(dev, half);
+		}
 		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
 		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
 		if (comp_have[0])
@@ -419,6 +499,7 @@ static int skip_hud_mask;
 static int skip_ctx = 1; // [native] skipctx=<0|1>: the context whose HUD parts skiphud / skiprot drop
 // Diagnostics ([native] skiprot=<seconds>): the HUD part skipped in context 1 changes every <seconds> through the candidates, and a frame is saved ("rot<k>") before the next change
 static int split_on;
+static int qa_ctx1_buttons;
 static void skip_rotation(IDirect3DDevice9 *dev)
 {
 	static int rot = -1;
@@ -434,10 +515,10 @@ static void skip_rotation(IDirect3DDevice9 *dev)
 	unsigned period = (unsigned)rot * 1000, win = (now - t0) / period;
 	int k = (int)(win % 11);
 	skip_hud_mask = 1 << k;
-	if ((int)win != shot_win && (now - t0) % period > period * 3 / 4 && win < 11) {
+	if ((int)win != shot_win && (now - t0) % period > period * 3 / 4 && win < 33) {
 		char name[16];
 		shot_win = (int)win;
-		snprintf(name, sizeof(name), "rot%d", k);
+		snprintf(name, sizeof(name), "rot%02d_%d", (int)win, k);
 		shot_save_now(dev, name);
 	}
 }
@@ -457,12 +538,26 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	}
 	if (compose_via < 0)
 		compose_via = via;
-	if (compose_via == via && ring_tail == ring_head)
-		comp_have[0] = comp_have[1] = 0; // not a split frame: the halves of before are stale
-	if (compose_via != via || ring_tail == ring_head)
-		return;
-	int half = (int)ring[ring_tail & 7];
-	InterlockedIncrement(&ring_tail);
+	int half;
+	if (mode == 10) { // the frame knows its own half (see half_note)
+		if (compose_via != via)
+			return;
+		half = render_half;
+		render_half = -1;
+		if (half < 0) {
+			comp_have[0] = comp_have[1] = 0; // not a split frame: the halves of before are stale
+			lay_have[0] = lay_have[1] = 0;
+			return;
+		}
+		InterlockedExchange(&ring_tail, ring_head); // (the queue of the other modes is not used)
+	} else {
+		if (compose_via == via && ring_tail == ring_head)
+			comp_have[0] = comp_have[1] = 0; // not a split frame: the halves of before are stale
+		if (compose_via != via || ring_tail == ring_head)
+			return;
+		half = (int)ring[ring_tail & 7];
+		InterlockedIncrement(&ring_tail);
+	}
 	LONG pops = InterlockedIncrement(&pops_total);
 	compose(dev, half);
 	skip_rotation(dev);
@@ -737,6 +832,7 @@ typedef HRESULT(STDMETHODCALLTYPE *dip_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, 
 typedef HRESULT(STDMETHODCALLTYPE *dp_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, UINT);
 typedef HRESULT(STDMETHODCALLTYPE *dpup_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, const void *, UINT);
 typedef HRESULT(STDMETHODCALLTYPE *dipup_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void *, D3DFORMAT, const void *, UINT);
+typedef HRESULT(STDMETHODCALLTYPE *scissor_t)(IDirect3DDevice9 *, const RECT *);
 typedef HRESULT(STDMETHODCALLTYPE *scene_t)(IDirect3DDevice9 *);
 static set_rt_t set_rt_orig;
 static clear_t clear_orig;
@@ -744,6 +840,26 @@ static stretch_t stretch_orig;
 static viewport_t viewport_orig;
 static dip_t dip_orig;
 static dp_t dp_orig;
+static scissor_t scissor_orig;
+// Mode 10, the scope: the engine clips the lens' 3D with a scissor rectangle worked out from the 2D placement (made for a half: a square of half the picture's height, centred in the half);
+// the 3D itself is drawn over the whole picture and squeezed 2:1 into the half, so the rows of that rectangle are doubled for every full-size target but the 2D layer's (whose own
+// pixels are the half's), and the lens comes out as the square it is in the half. A lens rectangle is recognised as one that lies in the upper half of a full-size target.
+static volatile LONG rt_full; // the current render target (stage 0) is as big as the picture
+static HRESULT STDMETHODCALLTYPE t_scissor(IDirect3DDevice9 *dev, const RECT *r)
+{
+	RECT fixed;
+	if (r && mode == 10 && native_active && split_on && !layer_pass && rt_full && comp_h && r->bottom <= (LONG)(comp_h / 2) && r->right - r->left > 64) {
+		if (r->right - r->left < (LONG)(comp_w / 2))
+			frame_scope = 1; // a lens rectangle: the frame being drawn looks through a scope (its half is known once the scene's 2D pass is reached)
+		fixed = *r;
+		fixed.top *= 2;
+		fixed.bottom *= 2;
+		r = &fixed;
+	}
+	if (trace_on && r)
+		trace_event("SetScissorRect %ld,%ld %ld,%ld", (long)r->left, (long)r->top, (long)r->right, (long)r->bottom);
+	return scissor_orig(dev, r);
+}
 static dpup_t dpup_orig;
 static dipup_t dipup_orig;
 static scene_t begin_scene_orig, end_scene_orig;
@@ -765,6 +881,10 @@ static HRESULT STDMETHODCALLTYPE t_dipup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE
 }
 static HRESULT STDMETHODCALLTYPE t_set_rt(IDirect3DDevice9 *dev, DWORD i, IDirect3DSurface9 *s)
 {
+	if (i == 0) {
+		D3DSURFACE_DESC d;
+		InterlockedExchange(&rt_full, s && comp_w && SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) && d.Width == comp_w && d.Height == comp_h);
+	}
 	if (trace_on && i == 0) {
 		const char *d = trace_surf(dev, s);
 		trace_event("SetRenderTarget %s", d);
@@ -840,6 +960,7 @@ static void trace_install(IDirect3DDevice9 *dev)
 	patch_slot(&vt[81], (void *)t_dp, (void **)&dp_orig);
 	patch_slot(&vt[83], (void *)t_dpup, (void **)&dpup_orig);
 	patch_slot(&vt[84], (void *)t_dipup, (void **)&dipup_orig);
+	patch_slot(&vt[75], (void *)t_scissor, (void **)&scissor_orig);
 	patch_slot(&vt[41], (void *)t_begin, (void **)&begin_scene_orig);
 	patch_slot(&vt[42], (void *)t_end, (void **)&end_scene_orig);
 	trace_dev = dev;
@@ -870,7 +991,7 @@ static void trace_present(void)
 			log_printf("native: D3D TRACE of one frame written to %s (%d bytes)", path, trace_len);
 		}
 		armed = 0;
-	} else if (pops_total >= 600) {
+	} else if (pops_total >= cfg("tracepops", 600) && (mode == 10 ? render_half >= 0 && 1 - render_half == cfg("tracehalf", 0) : ring_head - ring_tail >= 2 && (int)ring[(ring_tail + 1) & 7] == cfg("tracehalf", 0))) { // the frame after this one is the wanted half's (the halves alternate)
 		trace_len = 0, trace_draws = 0, bb_pass = 0, bb_pass_done = 0, bb_draws = 0;
 		trace_on = 1;
 	}
@@ -881,12 +1002,43 @@ static void trace_present(void)
 static void (*scene2d_original)(void *);
 static void scene2d_hook(void *vp)
 {
+	{ // diagnostics ([native] scenescan=1): which dwords of the scene struct look like the cgame's time (rva 0x422434), to find a per-frame identity the render thread can read
+		static int armed = -1, n;
+		if (armed < 0)
+			armed = cfg("scenescan", 0);
+		if (armed && split_on && ++n >= 200 && n < 206) {
+			int t = *(int *)(base + 0x422434);
+			char line[900];
+			int len = snprintf(line, sizeof(line), "native: scenescan %p t=%d half %d:", vp, t, ring_head != ring_tail ? (int)ring[ring_tail & 7] : -1);
+			const int *d = (const int *)vp;
+			for (int i = 0; i < 0x800 && len < (int)sizeof(line) - 30; i++)
+				if (d[i] > t - 400 && d[i] < t + 400)
+					len += snprintf(line + len, sizeof(line) - len, " +%x=%d", i * 4, d[i] - t);
+			log_printf("%s", line);
+		}
+	}
 	IDirect3DDevice9 *dev = the_device;
-	if (mode != 10 || !dev || ring_tail == ring_head || !lay_surf[0] || !lay_surf[1]) {
+	render_half = mode == 10 && native_active ? half_find(*(int *)((uint8_t *)vp + 0x180)) : -1;
+	if (render_half >= 0 && frame_scope)
+		scope_tick[render_half & 1] = GetTickCount();
+	frame_scope = 0;
+	if (mode == 10 && native_active && split_on) { // how often a split frame's half is not found (the notes are late, or the frame has another time)
+		static LONG seen, lost;
+		static DWORD last;
+		seen++;
+		if (render_half < 0)
+			lost++;
+		DWORD now = GetTickCount();
+		if (now - last > 10000) {
+			last = now;
+			log_printf("native: frames whose half was not found: %ld of %ld", (long)lost, (long)seen);
+		}
+	}
+	if (mode != 10 || !dev || render_half < 0 || !lay_surf[0] || !lay_surf[1]) {
 		scene2d_original(vp);
 		return;
 	}
-	int half = (int)ring[ring_tail & 7];
+	int half = render_half;
 	IDirect3DSurface9 *old = NULL;
 	IDirect3DDevice9_GetRenderTarget(dev, 0, &old);
 	IDirect3DDevice9_SetRenderTarget(dev, 0, lay_surf[half]);
@@ -906,11 +1058,11 @@ static void (*final2d_original)(void *);
 static void final2d_hook(void *vp)
 {
 	IDirect3DDevice9 *dev = the_device;
-	if (mode != 10 || !dev || ring_tail == ring_head || !lay_surf[0] || !lay_surf[1]) {
+	if (mode != 10 || !dev || render_half < 0 || !lay_surf[0] || !lay_surf[1]) {
 		final2d_original(vp);
 		return;
 	}
-	int half = (int)ring[ring_tail & 7];
+	int half = render_half;
 	IDirect3DSurface9 *old = NULL;
 	IDirect3DDevice9_GetRenderTarget(dev, 0, &old);
 	IDirect3DDevice9_SetRenderTarget(dev, 0, lay_surf[half]);
@@ -1125,6 +1277,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 		} else {
 			cg_draw_original(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
 		}
+		half_note(*(int *)(base + 0x422434), bottom);
 		memcpy(sw, saved, sizeof(saved));
 		if (ctx_on)
 			ctx_after_draw();
@@ -1869,6 +2022,25 @@ static void client_frame_hook(void)
 			split_tick = GetTickCount();
 		split_on = on;
 	}
+	{ // QA: [native] qa_ads=<ms>: player 0 aims down the sights that long after the picture was split (and [native] qa_ads_off=<ms>: lets go), so that a frame series can be taken in the scope
+		static int ads_at = -2, ads_off = -2, ads_state;
+		if (ads_at == -2) {
+			ads_at = cfg("qa_ads", -1);
+			ads_off = cfg("qa_ads_off", -1);
+		}
+		if (split_on && ctx_current == 0 && ads_at >= 0) {
+			DWORD since = GetTickCount() - split_tick;
+			if (!ads_state && since >= (DWORD)ads_at) {
+				pad_binding("speed_throw", 1);
+				ads_state = 1;
+				log_printf("native: qa: aiming down the sights");
+			} else if (ads_state == 1 && ads_off >= 0 && since >= (DWORD)ads_off) {
+				pad_binding("speed_throw", 0);
+				ads_state = 2;
+				log_printf("native: qa: sights released");
+			}
+		}
+	}
 	static int nopredict = -1;
 	if (nopredict < 0)
 		nopredict = cfg("nopredict", 0);
@@ -1903,6 +2075,17 @@ static void client_frame_hook(void)
 		if (nopredict && np_dvar)
 			*(int *)(np_dvar + 0x10) = 1;
 		ctx_swap(1);
+		{ // QA: [native] qa_ads1=<ms>: player 1 (the bottom half) aims down the sights that long after the split
+			static int ads1_at = -2, ads1_state;
+			if (ads1_at == -2)
+				ads1_at = cfg("qa_ads1", -1);
+			if (ads1_at >= 0 && !ads1_state && GetTickCount() - split_tick >= (DWORD)ads1_at) {
+				pad_binding("speed_throw", 1);
+				qa_ctx1_buttons = 1;
+				ads1_state = 1;
+				log_printf("native: qa: player 1 aims down the sights");
+			}
+		}
 		pad_frame();
 		if (split_on)
 			video_push();
@@ -1961,11 +2144,20 @@ static void mouse_read2_hook(long long state, float *x, float *y)
 // The keyboard and the pad reach context 1 too (the keys are read by the same input code): its usercmd, made by 0xd03a0 (called at 0xcf8b1), loses its buttons and movement,
 // so that the player who has no device stands still and his prediction agrees with the server.
 static uint8_t *(*make_cmd_original)(uint8_t *, int);
+static volatile int qa_c0_fwd, qa_c0_fire; // QA (console mw2coop_qa_move <forward 0|1> <fire 0|1>): player 0's movement and trigger set straight in his usercmds
 static uint8_t *make_cmd_hook(uint8_t *out, int a)
 {
 	uint8_t *cmd = make_cmd_original(out, a);
+	if (ctx_current == 0 && cmd && (qa_c0_fwd || qa_c0_fire)) {
+		if (qa_c0_fwd)
+			cmd[0x1a] = 127;
+		if (qa_c0_fire)
+			*(int *)(cmd + 4) |= 1;
+	}
 	if (ctx_current == 1 && cmd) {
-		if (p1pad >= 0 && pad_active) {
+		if (qa_ctx1_buttons) { // QA ([native] qa_ads1): the buttons the QA pressed for player 1 reach the server although he has no pad
+			cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0;
+		} else if (p1pad >= 0 && pad_active) {
 			cmd[0x1a] = (uint8_t)(int8_t)pad_forward; // usercmd_s: forwardmove +0x1a, rightmove +0x1b, upmove +0x1c, downmove +0x1d
 			cmd[0x1b] = (uint8_t)(int8_t)pad_right;
 		} else {
@@ -2389,7 +2581,25 @@ static void native_launch_f(void)
 	snprintf(text, sizeof(text), "set start \"%s\"\nset coop_mapName %s\nmap %s\n", start, map, map);
 	game_cbuf_addtext(text);
 }
+// QA: mw2coop_press <binding> <1|0> presses or releases a game button ("speed_throw", "forward", "attack") for player 0 through the engine's key handler, as the pad code does for player 1
+// (console "+forward" does not move a player without a key number)
+static void native_press_f(void)
+{
+	char name[40];
+	lstrcpynA(name, game_cmd_argv(1), sizeof(name));
+	log_printf("native: press %s %s (context %d live)", name, game_cmd_argv(2), ctx_current);
+	if (!name[0] || ctx_current != 0)
+		return;
+	pad_binding(name, game_cmd_argv(2)[0] != '0');
+}
+static void native_qa_move_f(void)
+{
+	qa_c0_fwd = game_cmd_argv(1)[0] == '1';
+	qa_c0_fire = game_cmd_argv(2)[0] == '1';
+}
 static cmd_function_t native_commands[] = {
+	{NULL, "mw2coop_qa_move", NULL, NULL, native_qa_move_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_press", NULL, NULL, native_press_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_native_start", NULL, NULL, native_start_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_native_stop", NULL, NULL, native_stop_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_native_launch", NULL, NULL, native_launch_f CMD_NODE_FLAG},

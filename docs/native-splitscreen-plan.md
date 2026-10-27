@@ -324,3 +324,45 @@ Settings: `players=2`, `coopdvar=1`, `experiment=5`. What it does on top of expe
 - **Checked:** the lobby path and the console path start a session; Pause/Escape and resume; a second session in the same process after `mw2coop_native_stop`; trainer -> roadkill; the restart after both players
   are down; 5+ minutes without a hang; a pad walking and turning player 2 (fakepad.txt, `p1pad`). Not solved: player 2's weapon switch by pad (the game has no bindable button for it that we could find; the
   client's usercmd overrides a script's SwitchToWeapon for him), sound, a second keyboard.
+
+## Status when paused (2026-10-27, morning)
+
+Mode 10 is the split screen (see experiment 9). It runs from the menu: Split screen button -> lobby (the second player presses a button on his XInput pad) -> Start. Tested with bots and
+screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played by two people yet; owner's play tests of 2026-10-27 gave the list below.
+
+### Done since experiment 9 (owner's feedback fixed)
+- Black box behind green text (speaker names): additive/other blend states no longer add coverage to the 2D layer (`layer_fix`).
+- Subtitles once, in the bottom half; objective once, in the top half (pixel shader that compares the two layers inside bands, `dedupe_make`, shader targets ps_2_b/2_a/2_0).
+- The scope: the engine clips the lens with a scissor rectangle worked out from the half-height 2D placement; the rows of that rectangle are doubled for full-size 3D targets (`t_scissor`), the lens is round
+  in its half again, in both halves. The scope marks which half is scoped (`scope_tick`), the cut-outs of the shader then fill with black instead of making holes in the scope's overlay.
+- Which half a frame belongs to is read from the frame (the scene struct holds the cgame time at +0x180, `half_note` / `half_find`), not from a queue (a queue stayed off by one for a whole session after one early frame).
+- One picture while the pause menu, the briefing, the console have the keys (key catchers at rva 0x533cb0); the split starts when the mission title's black screen is gone (`intro_black` in the
+  `_introscreen` patch), with a 45 s timeout for intros that never set the flag.
+- Crash fixes: the removed-entity cleanup freed the same objects from both contexts; the first-person weapon's DObjs shared handles (now context 1 uses local client 1's).
+- Sound listener: only context 0 sets it (hook at rva 0xbd2c5).
+
+### Open (owner's list, 2026-10-27)
+1. Subtitles must be switched off in the top half completely, always (not only in the scope): the layer comparison still leaves a faint ghost in fades and in shadows. Idea: force-kill a band
+   of the bottom 20% of the top layer always (not "same as the other half"); or find the game message window draw (the console channel "subtitle", windows `con_gameMsgWindow%d*`) and skip it in
+   context 0. The 11 HUD parts hooked so far (`skiphud` bits) are not it.
+2. In the scope the compass and the ammo counter must be hidden behind the scope's black overlay (they show over it when moving or firing, with a dark backing). Check the draw order in the layer
+   (the scene's 2D pass 0x63680 and the final list 0x5c010 are drawn into the same layer in that order) and the original game's behaviour (plain game: `MW2COOP_PLAIN=1`, aim, walk, `!shot`).
+3. The "Follow" waypoint hint of the objective must show in both halves (only the top one has it; the bottom context does not draw it).
+4. The helicopters of the mission before the Gulag move jerkily back and forth: not investigated; suspects: moving state outside the swapped ranges stepped by both contexts, or the entity cleanup.
+5. The second player joins too late: he must appear right after the loading and the black title screen (the context 1 starts ~5 frames after the first cgame draw, but the split switches on after the intro, and in
+   Contingency the first minute shows one picture: check what is slow).
+6. Weapon switch for the second player by pad: no bindable "weapnext" found; a script `SwitchToWeapon` is overridden by his usercmd.
+7. Sound (one listener), a second keyboard, the 32-bit build, console HUD sizes.
+8. The Steam overlay (`gameoverlayrenderer64.dll`) sometimes overflows its stack when the game window is closed at the end of a run (not seen in play).
+
+### The Nexus gamepad mod (MW2 Native Gamepad 1.2.1, nexusmods codmw2/mods/83), read for ideas, nothing run
+An ASI plugin (loaded through an ASI loader renamed winmm.dll: it clashes with this mod's own winmm.dll proxy): XInput polling at 250 Hz, then SendInput / mouse_event and hooks of
+GetAsyncKeyState / GetKeyState / GetKeyboardState, a radial dead zone with a look curve, ADS toggled by pulsing the right mouse button on LT press and release (MW2 PC has toggle ADS),
+"View tap = Use" in the campaign, weapon cycling on the key "1". Useful for the second player's pad: the same mapping idea, but through the engine's key handler (`pad_binding`) per context.
+Ghidra project of its binary (import only): `local/ghidra-proj-gp` (not in the repo).
+
+### Tools of this stage
+`tools/qa_native.sh` options: `MW2COOP_LOBBY=1` (whole menu path), `MW2COOP_MENU=1` (console launch), `MW2COOP_PLAIN=1` (no split), `MW2COOP_MID`/`MW2COOP_MIDAT` (commands during the level), `MW2COOP_POST`,
+`MW2COOP_TIMEOUT`; settings `[native]`: `qa_ads=<ms>`, `qa_ads1=<ms>` (scope for player 0 / 1), `layerdebug=1|2|3`, `d3dtrace=1` (`tracepops`, `tracehalf`), `skiphud`, `skiprot`, `skipctx`, `scenescan`,
+`entcleanlog`, `timelog`, `dedupe=0`; console `mw2coop_press <binding> <1|0>`, `mw2coop_qa_move <fwd> <fire>`, `mw2coop_native_start|stop|launch`; `tools/sheet.py`, `tools/crop.py`, `tools/leascan.py`.
+A sleeping display stops Present (the picture freezes): keep the display awake while tests run when the owner is away.

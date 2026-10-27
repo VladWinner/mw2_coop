@@ -4,6 +4,7 @@
 // handlers or Windows still decide what happens).
 #include <windows.h>
 #include <stdint.h>
+#include <string.h>
 #include <tlhelp32.h>
 
 #include "crash.h"
@@ -68,6 +69,33 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 		}
 	}
 	log_printf("%s", line);
+	{ // the same, for code outside the exe (a graphics driver, the Steam overlay, d3d9): module + offset of the faulting instruction and of the return addresses on the stack
+		char mods[900];
+		int m = 0, shown = 0;
+		uintptr_t list[17];
+		int nl = 0;
+		list[nl++] = rip;
+		for (int i = 0; i < 4096 && nl < 17; i++) {
+			MEMORY_BASIC_INFORMATION mbi;
+			if (i % 64 == 0 && (!VirtualQuery(sp + i, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT))
+				break;
+			uintptr_t v = sp[i];
+			if (v > 0x10000 && VirtualQuery((void *)v, &mbi, sizeof(mbi)) && mbi.Type == MEM_IMAGE && (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+				list[nl++] = v;
+		}
+		m += wsprintfA(mods, "CRASH: modules:");
+		for (int i = 0; i < nl && m < (int)sizeof(mods) - 80; i++) {
+			HMODULE mod = NULL;
+			char name[MAX_PATH] = "?";
+			if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)list[i], &mod) && mod) {
+				GetModuleFileNameA(mod, name, sizeof(name));
+				const char *slash = strrchr(name, '\\');
+				m += wsprintfA(mods + m, " %s+%lx", slash ? slash + 1 : name, (unsigned long)(list[i] - (uintptr_t)mod));
+				shown++;
+			}
+		}
+		log_printf("%s", mods);
+	}
 #ifdef _WIN64
 	log_printf("CRASH: native split screen: %s", native_crash_state());
 #endif
