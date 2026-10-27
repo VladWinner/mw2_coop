@@ -109,3 +109,29 @@ maps\_mw2coop::players_enable_weapons()
 		return;
 	}
 @@@ end
+
+3. The black screen of a mission's title is told to the native split screen (maps\_mw2coop::intro_black), which shows one picture until it has gone.
+@@@ subst introscreen_generic_fade_in
+introblack.foreground = true;
+@@@ to
+introblack.foreground = true;
+	maps\_mw2coop::intro_black( true );
+@@@ end
+@@@ subst introscreen_generic_fade_in
+wait fade_out_time;
+@@@ to
+wait fade_out_time;
+	maps\_mw2coop::intro_black( false );
+@@@ end
+@@@ subst introscreen_delay
+level.introblack.foreground = true;
+@@@ to
+level.introblack.foreground = true;
+	maps\_mw2coop::intro_black( true );
+@@@ end
+@@@ subst introscreen_delay
+level.introblack.alpha = 0;
+@@@ to
+level.introblack.alpha = 0;
+	thread maps\_mw2coop::intro_black_off_after( 1.5 );
+@@@ end

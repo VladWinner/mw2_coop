@@ -1106,6 +1106,8 @@ static DWORD WINAPI split_start_thread(LPVOID unused)
 static volatile LONG native_started; // tick count of the launch, for tick_f's check that the session ends
 static void native_launch(void)
 {
+	if (native_split_active()) // a second press of Start while the mission loads
+		return;
 	if (instance_pad() < 0) {
 		log_printf("menus: Start: the second player has not pressed a button on his device yet");
 		return;

@@ -262,18 +262,24 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 		static int dedupe = -1;
 		if (dedupe < 0)
 			dedupe = cfg("dedupe", 1);
-		if (half == 1 && dedupe && lay_have[0]) {
+		if (dedupe && lay_have[1 - half])
 			dedupe_make(dev);
-		}
-		if (half == 1 && dedupe && dedupe_ps && lay_have[0]) {
-			static const float bands[3][4] = {{0.0f, 0.6f, 0.0f, 0.0375f},    // the objective's strip (layer coordinates: the half is the top half of the layer, v up to 0.5)
-							  {0.05f, 0.9f, 0.15f, 0.2375f},  // the subtitles and the intro's lines, above the crosshair
-							  {0.05f, 0.80f, 0.35f, 0.475f}}; // the intro's title lines (bottom left) and the subtitles (bottom centre); the ammo counter (bottom right) is outside
+		if (dedupe && dedupe_ps && lay_have[1 - half]) {
+			// The global texts are drawn by both contexts and kept once: the objective (top left) in the top half, the subtitles and the intro's title lines (lower part of the screen) in the bottom half.
+			// Each half drops, inside its bands, the pixels its layer holds the same as the other half's layer.
+			static const float none[4] = {1.0f, 0.0f, 1.0f, 0.0f}; // an empty band
+			static const float objective[4] = {0.0f, 0.6f, 0.0f, 0.0375f};       // layer coordinates: a half is the top half of its layer, v up to 0.5
+			static const float subtitles[4] = {0.05f, 0.9f, 0.15f, 0.2375f};     // above the crosshair
+			static const float lower[4] = {0.05f, 0.80f, 0.35f, 0.475f};         // intro lines (bottom left) and subtitles (bottom centre); the ammo counter (bottom right) is outside
+			float bands[3][4];
+			memcpy(bands[0], half == 1 ? objective : none, sizeof(bands[0]));
+			memcpy(bands[1], half == 0 ? subtitles : none, sizeof(bands[1]));
+			memcpy(bands[2], half == 0 ? lower : none, sizeof(bands[2]));
 			IDirect3DDevice9_SetPixelShader(dev, dedupe_ps);
 			IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, &bands[0][0], 3);
 			float force[4] = {GetTickCount() - split_tick < 14000 ? 1.0f : 0.0f, 0, 0, 0};
 			IDirect3DDevice9_SetPixelShaderConstantF(dev, 3, force, 1);
-			IDirect3DDevice9_SetTexture(dev, 1, (IDirect3DBaseTexture9 *)lay_tex[0]);
+			IDirect3DDevice9_SetTexture(dev, 1, (IDirect3DBaseTexture9 *)lay_tex[1 - half]);
 			for (int i = 0; i < 2; i++) {
 				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MINFILTER, D3DTEXF_POINT);
 				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
@@ -410,7 +416,9 @@ static const GUID iid_device9ex = {0xb18b10ce, 0x2649, 0x405a, {0x87, 0x0f, 0x95
 // before the picture is shown: the half this frame was drawn into is kept and the other one filled in (once per frame, whichever way the game presents)
 static void trace_present(void);
 static int skip_hud_mask;
+static int skip_ctx = 1; // [native] skipctx=<0|1>: the context whose HUD parts skiphud / skiprot drop
 // Diagnostics ([native] skiprot=<seconds>): the HUD part skipped in context 1 changes every <seconds> through the candidates, and a frame is saved ("rot<k>") before the next change
+static int split_on;
 static void skip_rotation(IDirect3DDevice9 *dev)
 {
 	static int rot = -1;
@@ -418,7 +426,7 @@ static void skip_rotation(IDirect3DDevice9 *dev)
 	static int shot_win = -1;
 	if (rot < 0)
 		rot = cfg("skiprot", 0);
-	if (rot <= 0 || mode < 5)
+	if (rot <= 0 || mode < 5 || !split_on)
 		return;
 	DWORD now = GetTickCount();
 	if (!t0)
@@ -461,7 +469,10 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	static LONG seq_at = -1;
 	if (seq_at < 0)
 		seq_at = cfg("seqat", 3000);
-	if (pops >= seq_at && pops < seq_at + 12) { // the composed picture about once a second (QA of the experiment: "seq-<pops>.bmp")
+	static LONG seq_step = -1;
+	if (seq_step < 0)
+		seq_step = cfg("seqstep", 1);
+	if (pops >= seq_at && (pops - seq_at) % seq_step == 0 && (pops - seq_at) / seq_step < 12) { // the composed picture about once a second (QA of the experiment: "seq-<pops>.bmp")
 		char name[32];
 		snprintf(name, sizeof(name), "seq-%ld", (long)pops);
 		shot_save_now(dev, name);
@@ -706,12 +717,16 @@ static void layer_fix(IDirect3DDevice9 *dev)
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &on);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &src);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &dst);
-	if (on && src == D3DBLEND_SRCALPHA && dst == D3DBLEND_INVSRCALPHA) {
+	if (!on) {
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 0);
+	} else if (dst == D3DBLEND_INVSRCALPHA && (src == D3DBLEND_SRCALPHA || src == D3DBLEND_ONE)) { // "over": the alpha of the layer accumulates as coverage
 		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 1);
 		IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLENDALPHA, D3DBLEND_ONE);
 		IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLENDALPHA, D3DBLEND_INVSRCALPHA);
-	} else {
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 0);
+	} else { // additive glows, multiplies and the like add or change colour only: they must not make the layer opaque (that was a black box behind the speaker's name)
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 1);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLENDALPHA, D3DBLEND_ZERO);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLENDALPHA, D3DBLEND_ONE);
 	}
 }
 typedef HRESULT(STDMETHODCALLTYPE *set_rt_t)(IDirect3DDevice9 *, DWORD, IDirect3DSurface9 *);
@@ -1477,9 +1492,27 @@ static void ctx_entity_log(void)
 	}
 }
 
+// Diagnostics ([native] timelog=1): the cgame's time (rva 0x422434) at the end of each context's draw, a few dozen frames in a row
+static void time_log(void)
+{
+	static int armed = -1, n;
+	static char line[900];
+	static int len;
+	if (armed < 0)
+		armed = cfg("timelog", 0);
+	if (!armed || !split_on || !ctx1_ready)
+		return;
+	if (++n < 3000 || n >= 3040)
+		return;
+	len += snprintf(line + len, sizeof(line) - len, " %d:%d", ctx_current, *(int *)(base + 0x422434));
+	if (n == 3039)
+		log_printf("native: cg.time per drawn frame (context:time):%s", line);
+}
+
 static void ctx_after_draw(void)
 {
 	static int texts_done;
+	time_log();
 	if (!texts_done) { // both players are on this machine: the co-op "waiting for the other player" texts have nothing to wait for (an asset lookup: not while the level is loading)
 		texts_done = 1;
 		localize_override("COOP_WAITINGFORPLAYER", " ");
@@ -2085,19 +2118,18 @@ static void add_entity_hook(int n)
 
 // Diagnostics / fix for the 2D texts that both halves draw (the objective text, subtitles, "who stands in front" hints are global): [native] skiphud=<mask> drops, in context 1's
 // frames, the HUD parts called at the end of the cgame draw: bit 0 rva 0xc6070, bit 1 rva 0xc14e0, bit 2 rva 0x94d70, bit 3 rva 0xc5b70.
-static int skip_hud_mask;
 static void (*hud_c6070_original)(unsigned);
 static void (*hud_c14e0_original)(unsigned);
 static void (*hud_94d70_original)(unsigned);
 static void (*hud_c5b70_original)(unsigned);
-static void hud_c6070_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 1))) hud_c6070_original(lc); }
-static void hud_c14e0_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 2))) hud_c14e0_original(lc); }
-static void hud_94d70_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 4))) hud_94d70_original(lc); }
-static void hud_c5b70_hook(unsigned lc) { if (!(ctx_current == 1 && (skip_hud_mask & 8))) hud_c5b70_original(lc); }
+static void hud_c6070_hook(unsigned lc) { if (!(ctx_current == skip_ctx && (skip_hud_mask & 1))) hud_c6070_original(lc); }
+static void hud_c14e0_hook(unsigned lc) { if (!(ctx_current == skip_ctx && (skip_hud_mask & 2))) hud_c14e0_original(lc); }
+static void hud_94d70_hook(unsigned lc) { if (!(ctx_current == skip_ctx && (skip_hud_mask & 4))) hud_94d70_original(lc); }
+static void hud_c5b70_hook(unsigned lc) { if (!(ctx_current == skip_ctx && (skip_hud_mask & 8))) hud_c5b70_original(lc); }
 // more candidates: the calls between and after them in the cgame draw (rva of the call instruction, the callee)
 typedef void (*hud_fn_t)(void *, void *, void *, void *, void *, void *);
 static hud_fn_t hud_x_original[8]; // called with the six argument registers/stack slots as they come (the callees take up to four register arguments and one on the stack)
-#define HUD_X(n, bit) static void hud_x##n##_hook(void *a, void *b, void *c, void *d, void *e, void *f) { if (!(ctx_current == 1 && (skip_hud_mask & (bit)))) hud_x_original[n](a, b, c, d, e, f); }
+#define HUD_X(n, bit) static void hud_x##n##_hook(void *a, void *b, void *c, void *d, void *e, void *f) { if (!(ctx_current == skip_ctx && (skip_hud_mask & (bit)))) hud_x_original[n](a, b, c, d, e, f); }
 HUD_X(0, 0x10)  // 0xbd03b be710
 HUD_X(1, 0x20)  // 0xbd0fb 11f0c0 (4 arguments)
 HUD_X(2, 0x40)  // 0xbd102 1214e0
@@ -2154,6 +2186,16 @@ static void viewmodel_setup_hook(int lc, void *a, unsigned weapon, void *b, char
 	viewmodel_setup_original(native_active && ctx_current == 1 ? 1 : lc, a, weapon, b, c, d);
 }
 
+// The sound listener (rva 0x6a570, called at 0xbd2c5 near the end of the cgame draw) takes the camera's position and axes of local client 0: both contexts would set it, the hearing would jump between
+// the players every frame. Only context 0's player is heard.
+static void (*listener_original)(int, void *, void *, void *, unsigned, float);
+static void listener_hook(int lc, void *origin, void *forward, void *up, unsigned a, float b)
+{
+	if (native_active && ctx_current == 1)
+		return;
+	listener_original(lc, origin, forward, up, a, b);
+}
+
 static void contexts_install(void)
 {
 	static const struct {
@@ -2178,6 +2220,7 @@ static void contexts_install(void)
 	    {0xc594a, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
 	    {0xc5dfb, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
 	    {0xc6033, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
+	    {0xbd2c5, listener_hook, (void **)&listener_original},
 	    {0xbd03b, hud_x0_hook, (void **)&hud_x_original[0]},
 	    {0xbd0fb, hud_x1_hook, (void **)&hud_x_original[1]},
 	    {0xbd102, hud_x2_hook, (void **)&hud_x_original[2]},
@@ -2204,6 +2247,7 @@ static void contexts_install(void)
 	}
 	p1pad = cfg("p1pad", -1);
 	skip_hud_mask = cfg("skiphud", 0);
+	skip_ctx = cfg("skipctx", 1);
 	if (cfg("entclean", 1) &&
 	    !jhook_function(base + 0xb9320, ent_clean_bytes, sizeof(ent_clean_bytes), ent_clean_hook, (void **)&ent_clean_original))
 		log_printf("native: entity cleanup bytes differ");

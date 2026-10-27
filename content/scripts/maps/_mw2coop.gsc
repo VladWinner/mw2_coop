@@ -38,12 +38,27 @@ add_checkpoint( flag_name, start_name )
 
 split_view_gate()
 {
-	for ( i = 0; i < 100 && !flag_exist( "introscreen_complete" ); i++ )
-		wait 0.05;
-	if ( flag_exist( "introscreen_complete" ) )
-		flag_wait( "introscreen_complete" );
+	// one picture until the mission's title is over: its black screen has faded out (maps\_introscreen patch: intro_black) and the intro's flag is set; intros that only notify
+	// (the flag never comes) and missions that start with a long scene are not waited for longer than 45 s
 	wait 0.5;
+	if ( flag_exist( "introscreen_complete" ) && !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 45 );
+	for ( t = 0; t < 15 && isdefined( level.mw2coop_intro_black ) && level.mw2coop_intro_black; t += 0.1 )
+		wait 0.1;
+	wait 0.3;
 	SetDvar( "mw2coop_split_view", "1" );
+}
+
+// maps\_introscreen patch: the mission title's black screen is up (true) or gone (false)
+intro_black( on )
+{
+	level.mw2coop_intro_black = on;
+}
+
+intro_black_off_after( time )
+{
+	wait time;
+	level.mw2coop_intro_black = false;
 }
 
 // Called from maps\_load::main() right after maps\_coop::main().
