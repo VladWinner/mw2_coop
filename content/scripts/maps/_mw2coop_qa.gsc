@@ -82,6 +82,9 @@ main()
 		case "hudtest":
 			hudtest();
 			break;
+		case "weapsw":
+			weapsw();
+			break;
 		case "intro":
 			intro();
 			break;
@@ -342,6 +345,18 @@ gunface()
 		level.player SwitchToWeapon( "m4_grunt" );
 		level.player2 SwitchToWeapon( "m4_grunt" );
 		wait 0.5;
+	}
+}
+
+// weapsw: (native split screen test) player 2's current weapon is logged every second: the pad's Y (fakepad.txt) must move it to the next of his list
+weapsw()
+{
+	wait 100;
+	level.player SwitchToWeapon( "usp_silencer" );
+	for ( i = 0; i < 20; i++ )
+	{
+		report( "weapsw: p1 holds " + level.player GetCurrentWeapon() + ", p2 holds " + level.player2 GetCurrentWeapon() );
+		wait 1;
 	}
 }
 

@@ -1497,6 +1497,7 @@ static void ctx_after_draw(void)
 		return;
 	log_printf("native: starting context 1");
 	ctx_seed_cgame();
+	memset(ctx_store[1][0] + (0x440730 - ranges[0].rva), 0, 0x40); // context 1 makes its own view model (see viewmodel_setup_hook)
 	if (cfg("p1cmd", 0)) {
 		// player 1's view: the view angle accumulators (pitch 0x533d14, yaw 0x533d18, degrees) of context 1's block; the server turns them into his view with the
 		// angles it set at his spawn, so this is relative to that (player 1 stood at yaw -77 with 0): [native] p1yaw=<degrees>
@@ -2134,6 +2135,25 @@ static void ent_clean_hook(void)
 	ent_clean_original();
 }
 
+// The first-person weapon's animation blend (rva 0xc6ee0, called at 0xc7499 from the HUD's weapon part): its tree sits behind a pointer of the cgame block (rva 0x440730 + 0x20 * client) that is
+// null while a context has no view model yet (right after a weapon change in context 1: a read at null + 8, the crash of the first test of a script's SwitchToWeapon); the blend waits a frame then.
+static void (*viewmodel_blend_original)(float, void *, int);
+static void viewmodel_blend_hook(float a, void *tree, int which)
+{
+	if (native_active && (!tree || !*(void **)tree))
+		return;
+	viewmodel_blend_original(a, tree, which);
+}
+
+// The first-person weapon's setup (rva 0xc6480, called at 0xc41b1, 0xc58ed, 0xc594a, 0xc5dfb, 0xc6033) makes its DObjs under the handles 0x800 + 2 * local client + hand, a pool both contexts
+// would share (context 1 runs as local client 0): a weapon change in one freed what the other still pointed to (the crash at the first change of a weapon). Context 1's calls are made for
+// local client 1 (handles 0x802 and 0x803: the table has room for four local clients), and its copy of the cgame's pointers to the view model is cleared when it starts (ctx_after_draw).
+static void (*viewmodel_setup_original)(int, void *, unsigned, void *, char, char);
+static void viewmodel_setup_hook(int lc, void *a, unsigned weapon, void *b, char c, char d)
+{
+	viewmodel_setup_original(native_active && ctx_current == 1 ? 1 : lc, a, weapon, b, c, d);
+}
+
 static void contexts_install(void)
 {
 	static const struct {
@@ -2152,6 +2172,12 @@ static void contexts_install(void)
 	    {0xbd09a, hud_c14e0_hook, (void **)&hud_c14e0_original},
 	    {0xbd0a1, hud_94d70_hook, (void **)&hud_94d70_original},
 	    {0xbd034, hud_c5b70_hook, (void **)&hud_c5b70_original},
+	    {0xc7499, viewmodel_blend_hook, (void **)&viewmodel_blend_original},
+	    {0xc41b1, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
+	    {0xc58ed, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
+	    {0xc594a, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
+	    {0xc5dfb, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
+	    {0xc6033, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
 	    {0xbd03b, hud_x0_hook, (void **)&hud_x_original[0]},
 	    {0xbd0fb, hud_x1_hook, (void **)&hud_x_original[1]},
 	    {0xbd102, hud_x2_hook, (void **)&hud_x_original[2]},
@@ -2343,6 +2369,13 @@ void native_install(void)
 		activate(players);
 }
 
+const char *native_crash_state(void)
+{
+	static char text[96];
+	snprintf(text, sizeof(text), "session %d, context %d live, context 1 ready %d, split %d, frame_bottom %d", native_active, ctx_current, ctx1_ready, split_on, frame_bottom);
+	return text;
+}
+
 int native_split_available(void)
 {
 	return base != NULL;
@@ -2400,6 +2433,10 @@ int native_split_start(int pad)
 {
 	(void)pad;
 	return 0;
+}
+const char *native_crash_state(void)
+{
+	return "none";
 }
 void native_split_stop(void)
 {

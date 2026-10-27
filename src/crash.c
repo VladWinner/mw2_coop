@@ -7,6 +7,7 @@
 #include <tlhelp32.h>
 
 #include "crash.h"
+#include "native.h"
 #include "log.h"
 
 // the registers of the exception context: 64 bits Rip/Rsp..., 32 bits Eip/Esp...
@@ -67,6 +68,9 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 		}
 	}
 	log_printf("%s", line);
+#ifdef _WIN64
+	log_printf("CRASH: native split screen: %s", native_crash_state());
+#endif
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 

@@ -12,3 +12,5 @@ int native_split_active(void);
 int native_split_start(int pad);
 // The session ends (the game is back in the menus): the game's own player count comes back
 void native_split_stop(void);
+// For the crash log: which client context was live, the session state
+const char *native_crash_state(void);
