@@ -308,3 +308,19 @@ Settings: `players=2`, `coopdvar=1`, `experiment=5`. What it does on top of expe
 - Tools: `tools/sheet.py` (contact sheet of BMP frames, pure python), `tools/crop.py`, `tools/qa_native.sh` with `MW2COOP_MENU=1` (the console launch), `MW2COOP_LOBBY=1` (the lobby's whole path), `MW2COOP_POST`.
 - Open: global texts (objective, subtitles) are drawn in both halves (they belong to client 0 and context 1 draws as client 0); sound listener; a second keyboard; HUD size dvars of the console's split screen;
   the 32-bit build; long runs; a restart after both players are down.
+
+### Experiment 9, later the same night
+
+- **A second 2D source.** The frame's 2D command list (rva 0x5c010, called at 0x4545b after the glow and blur) holds texts the scene's 2D pass does not: the intro's title lines, fades, menus. It is drawn into the
+  same per-half layer (not cleared again), so these texts get the half's scale too.
+- **Global texts once.** The objective, the subtitles and the intro lines are drawn by both contexts (they belong to the game's client 0, and context 1 draws as client 0). When the bottom half's layer is laid
+  over its half, a pixel shader (HLSL compiled at run time by the system's `d3dcompiler_47.dll`, target ps_2_0) compares it with the top half's layer inside three bands (the objective's strip, the subtitles' band
+  above the crosshair, the bottom-left/bottom-centre band of the intro lines) and drops the bottom pixels that are the same; for the first 14 s of a split the bands are cut out whatever the layers hold (the intro lines
+  are random glyphs that settle one by one, no comparison matches them). Per-player parts (ammo, compass, signs over heads) are outside the bands or differ.
+- **One picture while a menu or the console has the keys:** the key catchers of client 0 (rva 0x533cb0, bits 0x11) switch the split off (pause menu, objectives, end of game, console), so those screens are not drawn twice.
+- **The view model is per context.** The first-person weapon's DObjs are made under the handles 0x800 + 2 * local client + hand; both contexts ran as local client 0 and shared them, so a weapon change in one
+  freed what the other pointed to (crash on the first weapon change by either player: null tree behind rva 0x440730). The five calls of the setup function (rva 0xc6480, at 0xc41b1, 0xc58ed, 0xc594a, 0xc5dfb,
+  0xc6033) are made for local client 1 in context 1 (handles 0x802/0x803), its copy of the cgame's view model pointers is cleared when it starts, and the blend (0xc6ee0, at 0xc7499) waits while its tree is null.
+- **Checked:** the lobby path and the console path start a session; Pause/Escape and resume; a second session in the same process after `mw2coop_native_stop`; trainer -> roadkill; the restart after both players
+  are down; 5+ minutes without a hang; a pad walking and turning player 2 (fakepad.txt, `p1pad`). Not solved: player 2's weapon switch by pad (the game has no bindable button for it that we could find; the
+  client's usercmd overrides a script's SwitchToWeapon for him), sound, a second keyboard.
