@@ -12,7 +12,7 @@ HUD numbers), ITC Conduit (running text) and T26 Carbon (mission intro screens),
 renders the game's own font tables again from free fonts with Cyrillic and puts them into the game's memory: the **H\*-Mod
 fonts** (made by Vlad Loktionov for h2-mod): a Bank Gothic like face for the headings and the HUD, a Conduit like one for
 descriptions and subtitles, a bold one for the mission intro text and subheadings, with smaller glyphs (SIL OFL,
-shipped in `mw2cooponts`). Works in the 64-bit and the 32-bit build. `fonts=0` under `[display]` in `settings.ini`
+shipped in `mw2coop\fonts`). Works in the 64-bit and the 32-bit build. `fonts=0` under `[display]` in `settings.ini`
 keeps the game's own font; the English game is never touched.
 
 ### New: scenes that only the first player had are now for both
