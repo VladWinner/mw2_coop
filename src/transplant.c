@@ -641,6 +641,68 @@ static const uint8_t is_default_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0
 static const uint8_t is_default_bytes[] = {0x53, 0x8b, 0x5c, 0x24, 0x0c, 0x56, 0x57, 0x8b, 0x7c, 0x24, 0x10};
 #endif
 
+
+// The leak itself (all names, not only the two above): on a name the database does not have, DB_IsXAssetDefault returns 1
+// from the end of its lookup loop without the "lock dec" of the reader count that the found path does, so the count grows
+// by one for every such lookup and a writer of the database (a zone load, the next playsound) waits for no readers
+// for ever: the intermittent hang of both copies a moment after a level start (32-bit contingency, 2026-10-28).
+// The not-found exit jumps to a small cave that does the decrement first.
+#ifdef _WIN64
+#define LEAK_EXIT_RVA 0xf00c3
+#define LEAK_COUNT_RVA 0xa8a830
+#define LEAK_RESUME_RVA 0xf00c8 // the epilogue the found path also ends in
+static const uint8_t leak_exit_bytes[] = {0xb8, 0x01, 0x00, 0x00, 0x00}; // mov eax,1
+#else
+#define LEAK_EXIT_RVA 0xc332d
+#define LEAK_COUNT_RVA 0x8fc8b4
+static const uint8_t leak_exit_bytes[] = {0x5f, 0x5e, 0xb8, 0x01, 0x00, 0x00, 0x00, 0x5b, 0xc3}; // pop edi; pop esi; mov eax,1; pop ebx; ret
+#endif
+
+static void fix_reader_leak(void)
+{
+	uint8_t *exit_at = base + LEAK_EXIT_RVA;
+	if (memcmp(exit_at, leak_exit_bytes, sizeof(leak_exit_bytes)) != 0) {
+		log_printf("transplant: unexpected bytes at the not-found exit of DB_IsXAssetDefault, the reader count leak is not fixed");
+		return;
+	}
+	uint8_t *cave = NULL;
+#ifdef _WIN64
+	for (uintptr_t at = (uintptr_t)base - 0x10000000; at < (uintptr_t)base + 0x10000000 && !cave; at += 0x10000)
+		cave = VirtualAlloc((void *)at, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+#else
+	cave = VirtualAlloc(NULL, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+#endif
+	if (!cave) {
+		log_printf("transplant: no memory for the reader count fix");
+		return;
+	}
+	uint8_t *c = cave;
+	*c++ = 0xf0; // lock dec dword ptr [count]
+	*c++ = 0xff;
+	*c++ = 0x0d;
+#ifdef _WIN64
+	*(int32_t *)c = (int32_t)((base + LEAK_COUNT_RVA) - (c + 4));
+	c += 4;
+	memcpy(c, leak_exit_bytes, sizeof(leak_exit_bytes)); // mov eax,1
+	c += sizeof(leak_exit_bytes);
+	*c++ = 0xe9; // jmp the epilogue
+	*(int32_t *)c = (int32_t)((base + LEAK_RESUME_RVA) - (c + 4));
+	c += 4;
+#else
+	*(uint32_t *)c = (uint32_t)(uintptr_t)(base + LEAK_COUNT_RVA);
+	c += 4;
+	memcpy(c, leak_exit_bytes, sizeof(leak_exit_bytes)); // the original exit, including its ret
+	c += sizeof(leak_exit_bytes);
+#endif
+	DWORD old;
+	VirtualProtect(exit_at, 5, PAGE_EXECUTE_READWRITE, &old);
+	exit_at[0] = 0xe9;
+	*(int32_t *)(exit_at + 1) = (int32_t)(cave - (exit_at + 5));
+	VirtualProtect(exit_at, 5, old, &old);
+	FlushInstructionCache(GetCurrentProcess(), exit_at, 5);
+	log_printf("transplant: DB_IsXAssetDefault gives the reader count back on a name it does not have (cave %p)", (void *)cave);
+}
+
 static void hook_is_default(void)
 {
 	uint8_t *target = base + RVA_DB_IS_DEFAULT;
@@ -656,6 +718,7 @@ void transplant_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	hook_is_default();
+	fix_reader_leak();
 	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
 		game_add_command(&commands[i]);
 }
