@@ -2275,6 +2275,11 @@ void native_unswap_entities(void)
 // the yaw accumulators (block +0x60) of both contexts are kept for a moment, the fixed offset between a context's accumulator and its entity's yaw is tracked by
 // pairing the entity's (late) yaw with the accumulator of 125 ms before, and the entity's yaw fields (floats 10, 42 and 73: current state, next state, lerp) are
 // replaced for the draw and put back after it.
+// Context 1's own entity table holds player 2's data in both slots 0 and 1 (swaplog), so player 1's body was never drawn in the bottom half and player 2's own body
+// was (from inside, late behind the camera). Context 0's entity 0 is player 1's valid data: it is copied here at the start of context 0's draw and put into slot 1
+// for context 1's draw ([native] p0copy=0 turns it off).
+static uint8_t p0_ent[0x1a8];
+static int p0_ent_ok;
 #define LAG_HIST 128
 static struct { double t; float acc[2]; } lag_hist[LAG_HIST];
 static unsigned lag_hist_n;
@@ -2325,19 +2330,28 @@ static void lag_record(void)
 	lag_hist[at].acc[1] = lag_acc_of(1);
 	lag_hist_n++;
 }
-// the entity of the OTHER player (index 1 in both contexts: context 1's list has the two traded); k is the player whose body it is
-static void lag_fix_yaw(int n, int k, float saved[3], int *applied)
+// the entity of the OTHER player (index 1 in both contexts: context 1's list has the two traded); k is the player whose body it is.
+// Yaw: replaced by the owner's own view yaw of this moment (offset tracked). Position: the interpolated origin (floats 63..65, and its copies 6..8 and 32..34)
+// is pushed forward by its velocity over the measured delay (a window of the last ~0.2 s), the Unlagged / CPMA way of drawing a remote player.
+#define LAG_POS_N 16
+static struct { double t; float p[3]; } lag_pos[2][LAG_POS_N];
+static unsigned lag_pos_n[2];
+#define LAG_SAVED 12
+static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 {
 	*applied = 0;
-	static int on = -1;
-	if (on < 0)
+	static int on = -1, pos_on = -1;
+	if (on < 0) {
 		on = cfg("lagfix", 1);
+		pos_on = cfg("lagpos", 1);
+	}
 	if (!on || n != 1 || lag_hist_n < 8)
 		return;
 	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
-	const int idx[3] = {10, 42, 73};
+	const int yidx[3] = {10, 42, 73}, pidx[3] = {6, 32, 63};
+	double now = lag_now();
 	float seen = e[73];
-	float measured = lag_wrap(seen - lag_acc_at(k, lag_now() - 0.125));
+	float measured = lag_wrap(seen - lag_acc_at(k, now - 0.125));
 	if (!lag_offset_set[k]) {
 		lag_offset[k] = measured;
 		lag_offset_set[k] = 1;
@@ -2345,20 +2359,66 @@ static void lag_fix_yaw(int n, int k, float saved[3], int *applied)
 		lag_offset[k] += 0.05f * lag_wrap(measured - lag_offset[k]);
 	}
 	float fresh = lag_wrap(lag_acc_of(k) + lag_offset[k] + (float)cfg("lagtest", 0)); // lagtest: a QA turn to see that the draw uses these fields
+	float ex[3] = {0, 0, 0};
+	if (pos_on) {
+		unsigned at = lag_pos_n[k] % LAG_POS_N;
+		float *lp = &e[63];
+		// a jump (teleport, level change) starts the window again
+		if (lag_pos_n[k] && (fabsf(lp[0] - lag_pos[k][(lag_pos_n[k] - 1) % LAG_POS_N].p[0]) > 150.0f || fabsf(lp[1] - lag_pos[k][(lag_pos_n[k] - 1) % LAG_POS_N].p[1]) > 150.0f))
+			lag_pos_n[k] = at = 0;
+		lag_pos[k][at].t = now;
+		lag_pos[k][at].p[0] = lp[0];
+		lag_pos[k][at].p[1] = lp[1];
+		lag_pos[k][at].p[2] = lp[2];
+		lag_pos_n[k]++;
+		unsigned have = lag_pos_n[k] < LAG_POS_N ? lag_pos_n[k] : LAG_POS_N, old = 0;
+		for (unsigned i = 1; i < have; i++) { // the oldest sample not older than 0.25 s
+			unsigned idx = (lag_pos_n[k] - 1 - i) % LAG_POS_N;
+			if (now - lag_pos[k][idx].t <= 0.25)
+				old = i;
+		}
+		if (old > 0) {
+			unsigned oi = (lag_pos_n[k] - 1 - old) % LAG_POS_N;
+			double dt = now - lag_pos[k][oi].t;
+			if (dt > 0.03) {
+				float len = 0;
+				for (int i = 0; i < 3; i++) {
+					ex[i] = (float)((lp[i] - lag_pos[k][oi].p[i]) / dt * 0.125);
+					len += ex[i] * ex[i];
+				}
+				len = sqrtf(len);
+				if (len > 70.0f)
+					for (int i = 0; i < 3; i++)
+						ex[i] *= 70.0f / len;
+			}
+		}
+	}
+	if (cfg("laglog", 0)) {
+		static unsigned fx;
+		if (++fx % 4 == 0 && fx < 3000)
+			log_printf("native: lagfix player %d seen %.1f %.1f extra %.1f %.1f yaw seen %.1f fresh %.1f", k, e[63], e[64], ex[0], ex[1], seen, fresh);
+	}
 	for (int i = 0; i < 3; i++) {
-		saved[i] = e[idx[i]];
-		e[idx[i]] = fresh;
+		saved[i] = e[yidx[i]];
+		e[yidx[i]] = fresh;
+		for (int c = 0; c < 3; c++) {
+			saved[3 + i * 3 + c] = e[pidx[i] + c];
+			e[pidx[i] + c] += ex[c];
+		}
 	}
 	*applied = 1;
 }
-static void lag_unfix_yaw(int n, float saved[3], int applied)
+static void lag_unfix_yaw(int n, float saved[LAG_SAVED], int applied)
 {
 	if (!applied)
 		return;
 	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
-	const int idx[3] = {10, 42, 73};
-	for (int i = 0; i < 3; i++)
-		e[idx[i]] = saved[i];
+	const int yidx[3] = {10, 42, 73}, pidx[3] = {6, 32, 63};
+	for (int i = 0; i < 3; i++) {
+		e[yidx[i]] = saved[i];
+		for (int c = 0; c < 3; c++)
+			e[pidx[i] + c] = saved[3 + i * 3 + c];
+	}
 }
 
 static void add_entity_hook(int n)
@@ -2391,7 +2451,13 @@ static void add_entity_hook(int n)
 			logging = 1;
 		if (logging == 1) {
 			const uint8_t *e = base + 0x441070 + (size_t)n * 0x1a8;
-			log_printf("native: ctx1 adds entity %d type %d flags %08x", n, e[0xe0], *(unsigned *)(e + 0xec));
+			log_printf("native: ctx1 adds entity %d type %d flags %08x pos %.1f %.1f %.1f yaw %.1f", n, e[0xe0], *(unsigned *)(e + 0xec), ((const float *)e)[63], ((const float *)e)[64], ((const float *)e)[65], ((const float *)e)[73]);
+		}
+		if (cfg("swaplog", 0) && n <= 1) {
+			static unsigned sl;
+			const float *q0 = (const float *)(base + 0x441070), *q1 = (const float *)(base + 0x441070 + 0x1a8);
+			if (++sl % 40 == 0 && sl < 1600)
+				log_printf("native: swaplog ctx1 n %d swapped %d slot0 pos %.1f %.1f type %d | slot1 pos %.1f %.1f type %d", n, entities_swapped, q0[63], q0[64], ((const uint8_t *)q0)[0xe0], q1[63], q1[64], ((const uint8_t *)q1)[0xe0]);
 		}
 		if (n == skip_entity)
 			return;
@@ -2407,22 +2473,33 @@ static void add_entity_hook(int n)
 			*flags = (saved & ~0x30u) | (b0 ? 0x20 : 0) | (b1 ? 0x10 : 0);
 		}
 		{
-			float sv[3];
+			float sv[LAG_SAVED];
 			int ap;
+			uint8_t slot1_saved[0x1a8];
+			int p0copy = n == 1 && p0_ent_ok && cfg("p0copy", 1);
+			if (p0copy) {
+				memcpy(slot1_saved, base + 0x441070 + 0x1a8, sizeof(slot1_saved));
+				memcpy(base + 0x441070 + 0x1a8, p0_ent, sizeof(p0_ent));
+			}
 			if (n == 0)
 				lag_record();
 			lag_fix_yaw(n, 0, sv, &ap); // player 0's body in context 1's picture (his entity sits at index 1 after the swap)
 			add_entity_original(n);
 			lag_unfix_yaw(n, sv, ap);
+			if (p0copy)
+				memcpy(base + 0x441070 + 0x1a8, slot1_saved, sizeof(slot1_saved));
 		}
 		*flags = saved;
 		return;
 	}
 	{
-		float sv[3];
+		float sv[LAG_SAVED];
 		int ap;
-		if (n == 0)
+		if (n == 0) {
+			memcpy(p0_ent, base + 0x441070, sizeof(p0_ent));
+			p0_ent_ok = 1;
 			lag_record();
+		}
 		lag_fix_yaw(n, 1, sv, &ap); // player 1's body in context 0's picture
 		add_entity_original(n);
 		lag_unfix_yaw(n, sv, ap);
