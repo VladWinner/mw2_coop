@@ -2345,7 +2345,8 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 		on = cfg("lagfix", 1);
 		pos_on = cfg("lagpos", 1);
 	}
-	if (!on || n != (ctx_current == 0 ? 1 : 0) || lag_hist_n < 8)
+	// only while a split screen session runs: the hooks stay in place afterwards and must not touch a normal game's entities (review 2026-10-28)
+	if (!on || !native_active || n != (ctx_current == 0 ? 1 : 0) || lag_hist_n < 8)
 		return;
 	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
 	const int yidx[3] = {10, 42, 73}, pidx[3] = {6, 32, 63};
@@ -2450,6 +2451,20 @@ static unsigned local_slot_hook(unsigned lc)
 
 // The cgame's second per-entity pass (rva 0xb0680) draws every entity that is not "mine". In context 1, with ownfix, the other player is entity 0, whose slot holds a copy
 // of player 2's own data there (it is filled from the player state): for the call it gets player 1's entity as context 0 holds it.
+// Player 1's entity data for context 1's slot 0: origin and angles of the pose (+0x18..0x30) and the entity states (+0x60..0x170, and +0x178 on) from context 0,
+// while the slot keeps its own pose bookkeeping (local client number, lighting and ragdoll handles: +0..0x18, +0x30..0x60) and its own animation tree pointer
+// (+0x170): a whole copy took context 0's "mine" bookkeeping along and the body was drawn as a stretched mesh ([native] p0full=1 copies everything as before).
+static void p0_put(uint8_t *slot)
+{
+	if (cfg("p0full", 0)) {
+		memcpy(slot, p0_ent, sizeof(p0_ent));
+		return;
+	}
+	memcpy(slot + 0x18, p0_ent + 0x18, 0x30 - 0x18);
+	memcpy(slot + 0x60, p0_ent + 0x60, 0x170 - 0x60);
+	memcpy(slot + 0x178, p0_ent + 0x178, sizeof(p0_ent) - 0x178);
+}
+
 static void (*pass2_original)(unsigned);
 static const uint8_t pass2_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x68, 0x18, 0x56, 0x57, 0x41, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00};
 static void pass2_hook(unsigned lc)
@@ -2460,7 +2475,7 @@ static void pass2_hook(unsigned lc)
 	if (on && ctx_current == 1 && p0_ent_ok) {
 		uint8_t saved[0x1a8];
 		memcpy(saved, base + 0x441070, sizeof(saved));
-		memcpy(base + 0x441070, p0_ent, sizeof(p0_ent));
+		p0_put(base + 0x441070);
 		pass2_original(lc);
 		memcpy(base + 0x441070, saved, sizeof(saved));
 		return;
@@ -2564,7 +2579,7 @@ static void add_entity_hook(int n)
 			int p0copy = n == 0 && p0_ent_ok && cfg("p0copy", 1);
 			if (p0copy) {
 				memcpy(slot1_saved, base + 0x441070, sizeof(slot1_saved));
-				memcpy(base + 0x441070, p0_ent, sizeof(p0_ent));
+				p0_put(base + 0x441070);
 			}
 			if (n == 0)
 				lag_record();
