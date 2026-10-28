@@ -8,6 +8,7 @@
 #include <tlhelp32.h>
 
 #include "crash.h"
+#include "hook.h"
 #include "native.h"
 #include "log.h"
 
@@ -199,6 +200,31 @@ static void dump_db_state(HANDLE out)
 }
 #endif
 
+#ifdef _WIN64
+// The game's CRT abort() (rva 0x303a64) ends in __fastfail (int 0x29, code 0xc0000409), which no exception handler sees: the native split screen runs of
+// 2026-10-28 ended that way with nothing in the log. The replacement logs who called it and the stack, then ends the game the way abort() does (exit code 3).
+static void abort_hook(void)
+{
+	uintptr_t from = (uintptr_t)__builtin_return_address(0);
+	log_printf("CRASH: abort() called from %s %llx", in_image(from) ? "rva" : "address", (unsigned long long)(in_image(from) ? from - image_base : from));
+	const uintptr_t *sp = (const uintptr_t *)__builtin_frame_address(0);
+	char line[512];
+	int n = wsprintfA(line, "CRASH: stack rvas:"), found = 0;
+	for (int i = 0; i < 1024 && found < 24; i++) {
+		MEMORY_BASIC_INFORMATION mbi;
+		if (i % 64 == 0 && (!VirtualQuery(sp + i, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT))
+			break;
+		if (in_image(sp[i]) && n < (int)sizeof(line) - 20) {
+			n += wsprintfA(line + n, " %lx", (unsigned long)(sp[i] - image_base));
+			found++;
+		}
+	}
+	log_printf("%s", line);
+	log_printf("CRASH: native split screen: %s", native_crash_state());
+	TerminateProcess(GetCurrentProcess(), 3);
+}
+#endif
+
 static char flag_path[MAX_PATH], out_path[MAX_PATH];
 
 static DWORD WINAPI watchdog(LPVOID arg)
@@ -231,6 +257,14 @@ void crash_install(void)
 	image_base = (uintptr_t)exe;
 	image_end = image_base + nt->OptionalHeader.SizeOfImage;
 	AddVectoredExceptionHandler(1, on_exception);
+#ifdef _WIN64
+	{ // sub rsp,28h; call; test rax,rax; jz short: 14 bytes, the jump's size (the retail exe only)
+		uint8_t *ab = (uint8_t *)image_base + 0x303a64;
+		static const uint8_t head[] = {0x48, 0x83, 0xec, 0x28, 0xe8};
+		if (image_end - image_base > 0x303a80 && !memcmp(ab, head, sizeof(head)) && ab[9] == 0x48 && ab[10] == 0x85 && ab[11] == 0xc0 && ab[12] == 0x74)
+			hook_jump(ab, 14, abort_hook, 0xcc);
+	}
+#endif
 	DWORD n = GetModuleFileNameA(NULL, flag_path, MAX_PATH);
 	while (n > 0 && flag_path[n - 1] != '\\')
 		n--;

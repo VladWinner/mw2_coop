@@ -109,6 +109,9 @@ static int cfg(const char *key, int def)
 	}
 	return (int)GetPrivateProfileIntA("native", key, def, settings_path);
 }
+// cfg() reads settings.ini from the disk on every call; the per-frame paths read a key once per session with CFG_ONCE (a session start bumps cfg_gen)
+static unsigned cfg_gen = 1;
+#define CFG_ONCE(key, def) __extension__({ static unsigned g_; static int v_; if (g_ != cfg_gen) { v_ = cfg(key, def); g_ = cfg_gen; } v_; })
 
 static float *subwindow(void)
 {
@@ -1593,7 +1596,7 @@ static void ctx_dump(const char *what)
 static void ctx_jitter_log(void)
 {
 	static unsigned seen;
-	if (ctx_current != 1 || !cfg("jitterlog", 0))
+	if (ctx_current != 1 || !CFG_ONCE("jitterlog", 0))
 		return;
 	seen++;
 	if (seen < 1500 || seen >= 1506)
@@ -1613,7 +1616,7 @@ static void ctx_jitter_log(void)
 static void ctx_entity_log(void)
 {
 	static unsigned seen[2];
-	if (!cfg("entlog", 0))
+	if (!CFG_ONCE("entlog", 0))
 		return;
 	if (++seen[ctx_current] != 600)
 		return;
@@ -2193,7 +2196,7 @@ static void usercmd_step_inner(int lc)
 		usercmd_step_original(0);
 		return;
 	}
-	if (!cfg("p1cmd", 0))
+	if (!CFG_ONCE("p1cmd", 0))
 		return;
 	{
 		static unsigned seen;
@@ -2343,7 +2346,7 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 	static int on = -1, pos_on = -1;
 	if (on < 0) {
 		on = cfg("lagfix", 1);
-		pos_on = cfg("lagpos", 1);
+		pos_on = cfg("lagpos", 0); // not verified yet (players did not walk in the tests)
 	}
 	// only while a split screen session runs: the hooks stay in place afterwards and must not touch a normal game's entities (review 2026-10-28)
 	if (!on || !native_active || n != (ctx_current == 0 ? 1 : 0) || lag_hist_n < 8)
@@ -2359,7 +2362,16 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 	} else {
 		lag_offset[k] += 0.05f * lag_wrap(measured - lag_offset[k]);
 	}
-	float fresh = lag_wrap(lag_acc_of(k) + lag_offset[k] + (float)cfg("lagtest", 0)); // lagtest: a QA turn to see that the draw uses these fields
+	// the yaw the player himself looks along: his own playerState's view yaw (+0x10c; pitch +0x108, roll +0x110) in the other context's client block. The entity
+	// state of a player keeps the yaw it spawned with here, so the body faced another way than its camera (Vlad's report); the old fix (view accumulator +
+	// a tracked offset to that frozen yaw) kept the error ([native] psyaw=0 goes back to it)
+	float fresh = lag_wrap(lag_acc_of(k) + lag_offset[k]);
+	if (CFG_ONCE("psyaw", 1)) {
+		const uint8_t *ps = ctx_current == k ? base + 0x535d38 : (ctx_store[k][5] ? ctx_store[k][5] + CL_BLOCK_PS : NULL);
+		if (ps)
+			fresh = *(const float *)(ps + 0x10c);
+	}
+	fresh = lag_wrap(fresh + (float)CFG_ONCE("lagtest", 0)); // lagtest: a QA turn to see that the draw uses these fields
 	float ex[3] = {0, 0, 0};
 	if (pos_on) {
 		unsigned at = lag_pos_n[k] % LAG_POS_N;
@@ -2394,7 +2406,7 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 			}
 		}
 	}
-	if (cfg("laglog", 0)) {
+	if (CFG_ONCE("laglog", 0)) {
 		static unsigned fx;
 		if (++fx % 4 == 0 && fx < 3000)
 			log_printf("native: lagfix player %d seen %.1f %.1f extra %.1f %.1f yaw seen %.1f fresh %.1f", k, e[63], e[64], ex[0], ex[1], seen, fresh);
@@ -2409,14 +2421,21 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 	}
 	*applied = 1;
 }
+// The bodies are drawn by the cgame's second per-entity pass (rva 0xb0680) and posed between the two passes: a yaw put back after the first pass was never seen
+// on a body, which kept its spawn yaw while its camera turned (owner 2026-10-28: "the bottom camera looks left while the body looks straight"). The yaw now stays
+// for the whole frame; the next snapshot and the next frame's lerp write the fields again anyway ([native] yawkeep=0 puts it back as before).
 static void lag_unfix_yaw(int n, float saved[LAG_SAVED], int applied)
 {
 	if (!applied)
 		return;
+	static int keep = -1;
+	if (keep < 0)
+		keep = cfg("yawkeep", 1);
 	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
 	const int yidx[3] = {10, 42, 73}, pidx[3] = {6, 32, 63};
 	for (int i = 0; i < 3; i++) {
-		e[yidx[i]] = saved[i];
+		if (!keep)
+			e[yidx[i]] = saved[i];
 		for (int c = 0; c < 3; c++)
 			e[pidx[i] + c] = saved[3 + i * 3 + c];
 	}
@@ -2456,13 +2475,32 @@ static unsigned local_slot_hook(unsigned lc)
 // (+0x170): a whole copy took context 0's "mine" bookkeeping along and the body was drawn as a stretched mesh ([native] p0full=1 copies everything as before).
 static void p0_put(uint8_t *slot)
 {
-	if (cfg("p0full", 0)) {
-		memcpy(slot, p0_ent, sizeof(p0_ent));
-		return;
+	// [native] p0keep: bit 0 keeps the slot's own +0..0x18 (pose header), bit 1 its +0x30..0x60 (rest of the pose), bit 2 its +0x170..0x178 (animation tree
+	// pointer); bit 3 clears the per-client hide bits (0x30) of the copied eFlags (+0xec): context 0's own entity has them, the second pass needs them clear.
+	static int keep = -1;
+	if (keep < 0)
+		keep = cfg("p0keep", 8 | 4 | 1);
+	uint8_t saved[0x1a8];
+	memcpy(saved, slot, sizeof(saved));
+	memcpy(slot, p0_ent, sizeof(p0_ent));
+	if (keep & 1)
+		memcpy(slot, saved, 0x18);
+	if (keep & 2)
+		memcpy(slot + 0x30, saved + 0x30, 0x30);
+	if (keep & 4)
+		memcpy(slot + 0x170, saved + 0x170, 8);
+	if (keep & 8)
+		*(uint32_t *)(slot + 0xec) &= ~0x30u;
+	// player 1's yaw as he looks now (his playerState in context 0's block), in the pose and in both entity states: the copy is put back into the slot several
+	// times a frame (own_write_hook, the passes), and each time it carried the yaw the entity states froze at ([native] yawkeep=0 off)
+	static int yaw_on = -1;
+	if (yaw_on < 0)
+		yaw_on = cfg("yawkeep", 1) && cfg("psyaw", 1);
+	if (yaw_on && ctx_store[0][5]) {
+		float y = *(const float *)(ctx_store[0][5] + CL_BLOCK_PS + 0x10c);
+		float *f = (float *)slot;
+		f[10] = f[42] = f[73] = y;
 	}
-	memcpy(slot + 0x18, p0_ent + 0x18, 0x30 - 0x18);
-	memcpy(slot + 0x60, p0_ent + 0x60, 0x170 - 0x60);
-	memcpy(slot + 0x178, p0_ent + 0x178, sizeof(p0_ent) - 0x178);
 }
 
 static void (*pass2_original)(unsigned);
@@ -2502,7 +2540,70 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 		}
 		(void)frame;
 	}
+	{ // [native] dobjcount=1: counts only (no per-call lines, they change the timing): context 1's adds of entities 0 and 1, by where they are drawn
+		static int cnt_on = -1;
+		static unsigned at_p0[2], at_p2[2], other[2], calls;
+		if (cnt_on < 0)
+			cnt_on = cfg("dobjcount", 0);
+		if (cnt_on && ctx_current == 1 && (c & 0xffff) < 2 && e) {
+			const float *pp = (const float *)e;
+			unsigned k = c & 0xffff;
+			float d0 = (pp[0] + 2515.2f) * (pp[0] + 2515.2f) + (pp[1] - 5190.2f) * (pp[1] - 5190.2f);
+			float d2 = (pp[0] + 2588.0f) * (pp[0] + 2588.0f) + (pp[1] - 5212.0f) * (pp[1] - 5212.0f);
+			if (d0 < 400.0f)
+				at_p0[k]++;
+			else if (d2 < 400.0f)
+				at_p2[k]++;
+			else
+				other[k]++;
+			if (++calls % 300 == 0)
+				log_printf("native: dobjcount ctx1: ent0 at p1 %u at p2 %u other %u | ent1 at p1 %u at p2 %u other %u", at_p0[0], at_p2[0], other[0], at_p0[1], at_p2[1], other[1]);
+		}
+	}
 	return dobj_add_original(a, b, c, d, e, f, g, h);
+}
+
+// The local player's own origin and angles are written into cg_entities by rva 0xb28b0(lc) (after the snapshot's entity states), into the slot that the lc -> slot rule
+// gives (inline at 0xb28d2, the same rule as 0xa5ec0: lc itself without the coop table). Context 1 runs with lc 0, so player 2's position went into slot 0 every frame and
+// player 1's body was drawn in player 2's camera (dobjlog). In context 1 the write is moved to slot 1 and slot 0 keeps what it had ([native] ownpos=0 off).
+static void (*own_write_original)(unsigned);
+static const uint8_t own_write_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x10, 0x48, 0x89, 0x70, 0x18};
+static void own_write_hook(unsigned lc)
+{
+	static int on = -1;
+	if (on < 0)
+		on = cfg("ownpos", 1);
+	if (ctx_current == 1 && CFG_ONCE("pslog", 0)) {
+		static unsigned seen;
+		if (++seen % 60 == 1 && seen < 4000) {
+			const uint8_t *nps = *(const uint8_t **)(base + 0x40cad8), *pps = *(const uint8_t **)(base + 0x40cad0);
+			const float *f0 = (const float *)(base + 0x441070), *f1 = (const float *)(base + 0x441070 + 0x1a8);
+			{
+				const float *q1 = (const float *)(base + 0x535d38), *q0 = ctx_store[0][5] ? (const float *)(ctx_store[0][5] + CL_BLOCK_PS) : NULL;
+				log_printf("native: ps1(live) +0x100..: %d %.1f %.1f %.1f %.1f %.1f %.1f | ps0(store) %d %.1f %.1f %.1f %.1f %.1f %.1f | acc1 %.1f", *(const int *)(q1 + 64), q1[65], q1[66], q1[67], q1[68], q1[69], q1[70],
+					   q0 ? *(const int *)(q0 + 64) : -9, q0 ? q0[65] : 0, q0 ? q0[66] : 0, q0 ? q0[67] : 0, q0 ? q0[68] : 0, q0 ? q0[69] : 0, q0 ? q0[70] : 0, *(const float *)(base + 0x533d18));
+			}
+			log_printf("native: ctx1 b28b0 lc %u: nextPs clientNum %d prevPs clientNum %d | slot0 %.1f %.1f valid %x | slot1 %.1f %.1f valid %x", lc, nps ? *(const int *)(nps + 0x100) : -9,
+				   pps ? *(const int *)(pps + 0x100) : -9, f0[6], f0[7], *(const uint32_t *)((const uint8_t *)f0 + 0x18c), f1[6], f1[7], *(const uint32_t *)((const uint8_t *)f1 + 0x18c));
+		}
+	}
+	if (on && ctx_current == 1 && lc == 0) {
+		uint8_t *s0 = base + 0x441070, *s1 = s0 + 0x1a8;
+		uint8_t keep0[0x18];
+		memcpy(keep0, s0 + 0x18, sizeof(keep0));
+		own_write_original(lc);
+		memcpy(s1 + 0x18, s0 + 0x18, sizeof(keep0));
+		memcpy(s0 + 0x18, keep0, sizeof(keep0));
+		// player 1's entity for the whole of context 1's frame, not only for the draws: the skeleton and controllers (rva 0xb0860 between the two passes) are
+		// computed from this slot too, and with player 2's leftover position in it the body was posed in player 2's camera, depending on timing ([native] p0frame=0 off)
+		static int whole = -1;
+		if (whole < 0)
+			whole = cfg("p0frame", 1);
+		if (whole && p0_ent_ok && CFG_ONCE("p0copy", 1))
+			p0_put(s0);
+		return;
+	}
+	own_write_original(lc);
 }
 
 static void add_entity_hook(int n)
@@ -2519,7 +2620,7 @@ static void add_entity_hook(int n)
 
 	// Lag measurement ([native] laglog=1): while context 0 draws, the floats of player 1's entity as the cgame holds them, next to context 1's own view yaw
 	// (its accumulator), both stamped by the log's own clock: the field that follows the yaw and its delay behind the accumulator show where the time goes.
-	if (ctx_current == 0 && n == 1 && cfg("laglog", 0)) {
+	if (ctx_current == 0 && n == 1 && CFG_ONCE("laglog", 0)) {
 		static unsigned lag_frames;
 		if (++lag_frames % 2 == 0 && lag_frames < 6000 && ctx_store[1][4]) {
 			const float *f = (const float *)(base + 0x441070 + (size_t)n * 0x1a8);
@@ -2545,7 +2646,7 @@ static void add_entity_hook(int n)
 			const uint8_t *e = base + 0x441070 + (size_t)n * 0x1a8;
 			log_printf("native: ctx1 adds entity %d type %d flags %08x pos %.1f %.1f %.1f yaw %.1f", n, e[0xe0], *(unsigned *)(e + 0xec), ((const float *)e)[63], ((const float *)e)[64], ((const float *)e)[65], ((const float *)e)[73]);
 		}
-		if (cfg("swaplog", 0) && n <= 1) {
+		if (CFG_ONCE("swaplog", 0) && n <= 1) {
 			static unsigned sl;
 			const float *q0 = (const float *)(base + 0x441070), *q1 = (const float *)(base + 0x441070 + 0x1a8);
 			if (++sl % 40 == 0 && sl < 1600)
@@ -2576,7 +2677,7 @@ static void add_entity_hook(int n)
 			float sv[LAG_SAVED];
 			int ap;
 			uint8_t slot1_saved[0x1a8];
-			int p0copy = n == 0 && p0_ent_ok && cfg("p0copy", 1);
+			int p0copy = n == 0 && p0_ent_ok && CFG_ONCE("p0copy", 1);
 			if (p0copy) {
 				memcpy(slot1_saved, base + 0x441070, sizeof(slot1_saved));
 				p0_put(base + 0x441070);
@@ -2634,7 +2735,7 @@ static void (*ent_clean_original)(void);
 static void ent_clean_hook(void)
 {
 	static int logged;
-	if (logged < 60 && cfg("entcleanlog", 0)) {
+	if (logged < 60 && CFG_ONCE("entcleanlog", 0)) {
 		uint32_t *f = (uint32_t *)(base + 0x52c300);
 		char line[400];
 		int n = snprintf(line, sizeof(line), "native: entity cleanup in context %d, flags:", ctx_current);
@@ -2738,6 +2839,8 @@ static void contexts_install(void)
 			log_printf("native: second entity pass bytes differ");
 		if (!jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 			log_printf("native: dobj add bytes differ");
+		if (!jhook_function(base + 0xb28b0, own_write_bytes, sizeof(own_write_bytes), own_write_hook, (void **)&own_write_original))
+			log_printf("native: own entity write bytes differ");
 		if (!jhook_function(base + 0xa5ec0, slot_bytes, sizeof(slot_bytes), local_slot_hook, (void **)&slot_original))
 			log_printf("native: local slot function bytes differ");
 	}
@@ -2846,6 +2949,7 @@ static int activate(int players)
 		return 1;
 	if (players < 2 || players > 4)
 		return 0;
+	cfg_gen++;
 	mode = cfg("experiment", 10);
 	if (!hooks_apply() || !players_apply(players)) {
 		mode = 0;

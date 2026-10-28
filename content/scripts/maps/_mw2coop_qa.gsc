@@ -70,6 +70,16 @@ main()
 	maps\_mw2coop::state( "qa running" );	// let start points, regroup and weapon sync run
 	switch ( GetDvar( "mw2coop_qa" ) )
 	{
+		case "hidep2":
+			wait 5;
+			level.player2 Hide();
+			angles_log();
+			break;
+		case "hidep1":
+			wait 5;
+			level.player Hide();
+			angles_log();
+			break;
 		case "angles":
 			angles_log();
 			break;
