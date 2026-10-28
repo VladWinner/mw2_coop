@@ -2459,6 +2459,14 @@ static void add_entity_hook(int n)
 			if (++sl % 40 == 0 && sl < 1600)
 				log_printf("native: swaplog ctx1 n %d swapped %d slot0 pos %.1f %.1f type %d | slot1 pos %.1f %.1f type %d", n, entities_swapped, q0[63], q0[64], ((const uint8_t *)q0)[0xe0], q1[63], q1[64], ((const uint8_t *)q1)[0xe0]);
 		}
+		{ // diagnostics: [native] skiptypes=<mask> drops, in context 1's draw, every entity whose type (byte 0xe0) has its bit set (bisect for the garbled mesh)
+			static int skiptypes = -1;
+			if (skiptypes < 0)
+				skiptypes = cfg("skiptypes", 0);
+			unsigned type = ((const uint8_t *)(base + 0x441070 + (size_t)n * 0x1a8))[0xe0];
+			if (type < 31 && (skiptypes & (1 << type)))
+				return;
+		}
 		if (n == skip_entity)
 			return;
 		// the per-client "hide from" bits of an entity (flags & 0x3f0, bit 4 + local client) are made for local client numbers: context 1 is local client 0 but is client 1
