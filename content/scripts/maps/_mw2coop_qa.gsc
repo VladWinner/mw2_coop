@@ -309,12 +309,12 @@ angles_log()
 {
 	for ( ;; )
 	{
-		wait 1;
+		wait 0.2;
 		a = level.player;
 		b = level.player2;
 		to_b = VectorToAngles( b.origin - a.origin );
 		to_a = VectorToAngles( a.origin - b.origin );
-		report( "angles p1 at " + a.origin + " looks " + a GetPlayerAngles() + " | p2 at " + b.origin + " looks " + b GetPlayerAngles() + " | p1 to p2 yaw " + to_b[ 1 ] + ", p2 to p1 yaw " + to_a[ 1 ] );
+		report( "angles t " + GetTime() + " p1 at " + a.origin + " looks " + a GetPlayerAngles() + " | p2 at " + b.origin + " looks " + b GetPlayerAngles() + " | p1 to p2 yaw " + to_b[ 1 ] + ", p2 to p1 yaw " + to_a[ 1 ] );
 	}
 }
 

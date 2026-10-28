@@ -6,6 +6,7 @@
 // switches it on; with 2 the second view is turned around (yaw + 180) to show that the views are drawn separately. 64-bit only for now.
 #define COBJMACROS
 #include <windows.h>
+#include <math.h>
 #include <d3d9.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -2196,7 +2197,7 @@ static void usercmd_step_inner(int lc)
 		return;
 	{
 		static unsigned seen;
-		if (++seen % 60 == 0 && seen < 3000) {
+		if (++seen % 10 == 0 && seen < 3000) {
 			const uint8_t *c0 = base + RVA_SV_CLIENTS_CMD + 0x1630, *c1 = base + RVA_SV_CLIENTS_CMD + 0x1678 + 0x1630;
 			log_printf("native: step %u ctx %d: client 0 cmd t %d yaw %d pitch %d | client 1 cmd t %d yaw %d pitch %d | ctx1 acc yaw %.1f pitch %.1f", seen, ctx_current, *(int *)c0, *(int *)(c0 + 12),
 				   *(int *)(c0 + 8), *(int *)c1, *(int *)(c1 + 12), *(int *)(c1 + 8), ctx_store[1][4] ? *(float *)(ctx_store[1][4] + 0x60) : -1.0f,
@@ -2269,10 +2270,114 @@ void native_unswap_entities(void)
 	memcpy(e1, t, sizeof(t));
 	entities_swapped = 0;
 }
+// Lag fix ([native] lagfix=1, default 1): the other local player's body is drawn from the cgame's entity, which comes through the server's snapshot and its
+// interpolation (measured ~125 ms behind the player's own view). Both players are on this PC, so his body is turned to his own view yaw of this very moment:
+// the yaw accumulators (block +0x60) of both contexts are kept for a moment, the fixed offset between a context's accumulator and its entity's yaw is tracked by
+// pairing the entity's (late) yaw with the accumulator of 125 ms before, and the entity's yaw fields (floats 10, 42 and 73: current state, next state, lerp) are
+// replaced for the draw and put back after it.
+#define LAG_HIST 128
+static struct { double t; float acc[2]; } lag_hist[LAG_HIST];
+static unsigned lag_hist_n;
+static float lag_offset[2];
+static int lag_offset_set[2];
+static double lag_now(void)
+{
+	LARGE_INTEGER f, c;
+	QueryPerformanceFrequency(&f);
+	QueryPerformanceCounter(&c);
+	return (double)c.QuadPart / (double)f.QuadPart;
+}
+static float lag_acc_of(int k)
+{
+	if (ctx_current == k)
+		return *(float *)(base + 0x533d18);
+	return ctx_store[k][4] ? *(float *)(ctx_store[k][4] + 0x60) : 0.0f;
+}
+static float lag_wrap(float d)
+{
+	while (d > 180.0f)
+		d -= 360.0f;
+	while (d < -180.0f)
+		d += 360.0f;
+	return d;
+}
+static float lag_acc_at(int k, double t)
+{
+	for (unsigned i = 0; i < LAG_HIST - 1 && i < lag_hist_n; i++) {
+		unsigned a = (lag_hist_n - 1 - i) % LAG_HIST, b = (lag_hist_n - 2 - i) % LAG_HIST;
+		if (lag_hist_n < 2 + i)
+			break;
+		if (lag_hist[b].t <= t && t <= lag_hist[a].t) {
+			double span = lag_hist[a].t - lag_hist[b].t;
+			double w = span > 0 ? (t - lag_hist[b].t) / span : 1.0;
+			return lag_hist[b].acc[k] + (float)w * (lag_hist[a].acc[k] - lag_hist[b].acc[k]);
+		}
+	}
+	return lag_hist[(lag_hist_n - 1) % LAG_HIST].acc[k];
+}
+static void lag_record(void)
+{
+	if (lag_hist_n && fabs(lag_hist[(lag_hist_n - 1) % LAG_HIST].t - lag_now()) < 0.0005)
+		return;
+	unsigned at = lag_hist_n % LAG_HIST;
+	lag_hist[at].t = lag_now();
+	lag_hist[at].acc[0] = lag_acc_of(0);
+	lag_hist[at].acc[1] = lag_acc_of(1);
+	lag_hist_n++;
+}
+// the entity of the OTHER player (index 1 in both contexts: context 1's list has the two traded); k is the player whose body it is
+static void lag_fix_yaw(int n, int k, float saved[3], int *applied)
+{
+	*applied = 0;
+	static int on = -1;
+	if (on < 0)
+		on = cfg("lagfix", 1);
+	if (!on || n != 1 || lag_hist_n < 8)
+		return;
+	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
+	const int idx[3] = {10, 42, 73};
+	float seen = e[73];
+	float measured = lag_wrap(seen - lag_acc_at(k, lag_now() - 0.125));
+	if (!lag_offset_set[k]) {
+		lag_offset[k] = measured;
+		lag_offset_set[k] = 1;
+	} else {
+		lag_offset[k] += 0.05f * lag_wrap(measured - lag_offset[k]);
+	}
+	float fresh = lag_wrap(lag_acc_of(k) + lag_offset[k] + (float)cfg("lagtest", 0)); // lagtest: a QA turn to see that the draw uses these fields
+	for (int i = 0; i < 3; i++) {
+		saved[i] = e[idx[i]];
+		e[idx[i]] = fresh;
+	}
+	*applied = 1;
+}
+static void lag_unfix_yaw(int n, float saved[3], int applied)
+{
+	if (!applied)
+		return;
+	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
+	const int idx[3] = {10, 42, 73};
+	for (int i = 0; i < 3; i++)
+		e[idx[i]] = saved[i];
+}
+
 static void add_entity_hook(int n)
 {
 	static unsigned frames;
 	static int logging;
+	// Lag measurement ([native] laglog=1): while context 0 draws, the floats of player 1's entity as the cgame holds them, next to context 1's own view yaw
+	// (its accumulator), both stamped by the log's own clock: the field that follows the yaw and its delay behind the accumulator show where the time goes.
+	if (ctx_current == 0 && n == 1 && cfg("laglog", 0)) {
+		static unsigned lag_frames;
+		if (++lag_frames % 2 == 0 && lag_frames < 6000 && ctx_store[1][4]) {
+			const float *f = (const float *)(base + 0x441070 + (size_t)n * 0x1a8);
+			char line[1400];
+			int len = snprintf(line, sizeof(line), "native: lag acc %.2f f:", *(float *)(ctx_store[1][4] + 0x60));
+			for (int i = 0; i < 0x1a8 / 4 && len < (int)sizeof(line) - 12; i++)
+				len += snprintf(line + len, sizeof(line) - len, " %.1f", f[i]);
+			log_printf("%s", line);
+		}
+	}
 	if (ctx_current == 1) {
 		if (swap_entities && n == 0 && !entities_swapped) {
 			// the cgame hides the entity numbered like the local client (0) as "mine"; context 1 is local client 0 but player 1: his entity and player 0's trade places for the draw
@@ -2301,11 +2406,27 @@ static void add_entity_hook(int n)
 			unsigned b0 = saved & 0x10, b1 = saved & 0x20;
 			*flags = (saved & ~0x30u) | (b0 ? 0x20 : 0) | (b1 ? 0x10 : 0);
 		}
-		add_entity_original(n);
+		{
+			float sv[3];
+			int ap;
+			if (n == 0)
+				lag_record();
+			lag_fix_yaw(n, 0, sv, &ap); // player 0's body in context 1's picture (his entity sits at index 1 after the swap)
+			add_entity_original(n);
+			lag_unfix_yaw(n, sv, ap);
+		}
 		*flags = saved;
 		return;
 	}
-	add_entity_original(n);
+	{
+		float sv[3];
+		int ap;
+		if (n == 0)
+			lag_record();
+		lag_fix_yaw(n, 1, sv, &ap); // player 1's body in context 0's picture
+		add_entity_original(n);
+		lag_unfix_yaw(n, sv, ap);
+	}
 }
 
 // Diagnostics / fix for the 2D texts that both halves draw (the objective text, subtitles, "who stands in front" hints are global): [native] skiphud=<mask> drops, in context 1's
