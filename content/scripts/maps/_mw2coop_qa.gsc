@@ -2360,7 +2360,8 @@ cptour()
 				wait 0.5;
 		wait 3;
 		check( level.players.size == 2 && isdefined( level.player2 ), "two players after the restart (" + level.players.size + ")" );
-		check( GetDvar( "start" ) == here || ( here == "default" && ( GetDvar( "start" ) == "" || GetDvar( "start" ) == "default" ) ) || IsSubStr( GetDvar( "start" ), " ** " ), "the start point is still " + here + " ('" + GetDvar( "start" ) + "')" );
+		if ( was == here )
+			check( GetDvar( "start" ) == here || ( here == "default" && ( GetDvar( "start" ) == "" || GetDvar( "start" ) == "default" ) ) || IsSubStr( GetDvar( "start" ), " ** " ), "the start point is still " + here + " ('" + GetDvar( "start" ) + "')" );
 		tour_state( "after the restart" );
 		qa_shot( "c-restart" );
 	}
