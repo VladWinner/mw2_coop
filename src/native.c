@@ -2345,7 +2345,7 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 		on = cfg("lagfix", 1);
 		pos_on = cfg("lagpos", 1);
 	}
-	if (!on || n != 1 || lag_hist_n < 8)
+	if (!on || n != (ctx_current == 0 ? 1 : 0) || lag_hist_n < 8)
 		return;
 	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
 	const int yidx[3] = {10, 42, 73}, pidx[3] = {6, 32, 63};
@@ -2421,10 +2421,65 @@ static void lag_unfix_yaw(int n, float saved[LAG_SAVED], int applied)
 	}
 }
 
+// "Mine" for the cgame is rva 0xa5ec0 (localClientNum -> the entity/slot number of that local client): with the coop connection table filled (flag byte at rva
+// 0x52fb5c) it is the slot of the table (rva 0x540ba0, stride 0x2650, int type at +0x10 == 2 for a local client, its local client number as a ushort at +0x18),
+// otherwise the number itself. Context 1 is local client 0 as far as the engine can tell, so it answered "player 0": the cgame's second per-entity pass (rva 0xb0680,
+// one call per frame) then drew player 2's OWN entity from the inside (the head at the camera, late behind it; found with Hide() on the server entity) and player 1 counted
+// as "mine" and was never drawn. The replacement below is the original function with one change: in context 1 local client 0 is player 2, entity 1 ([native] ownfix=0 off).
+static const uint8_t slot_bytes[] = {0x80, 0x3d, 0x95, 0x9c, 0x48, 0x00, 0x00, 0x44, 0x8b, 0xc1, 0x75, 0x03, 0x8b, 0xc1, 0xc3}; // cmp [flag],0; mov r8d,ecx; jne +3; mov eax,ecx; ret
+static unsigned (*slot_original)(unsigned);
+static unsigned local_slot_hook(unsigned lc)
+{
+	static int on = -1;
+	if (on < 0)
+		on = cfg("ownfix", 1);
+	if (on && ctx_current == 1 && lc == 0)
+		return 1;
+	if (!*(const uint8_t *)(base + 0x52fb5c))
+		return lc;
+	const uint8_t *q = base + 0x540bb8;
+	for (unsigned i = 0;;) {
+		if (*(const int *)(q - 8) == 2 && *(const uint16_t *)q == lc)
+			return i;
+		i++;
+		q += 0x2650;
+		if (q > base + 0x545857)
+			return 0;
+	}
+}
+
+// The cgame's second per-entity pass (rva 0xb0680) draws every entity that is not "mine". In context 1, with ownfix, the other player is entity 0, whose slot holds a copy
+// of player 2's own data there (it is filled from the player state): for the call it gets player 1's entity as context 0 holds it.
+static void (*pass2_original)(unsigned);
+static const uint8_t pass2_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x68, 0x18, 0x56, 0x57, 0x41, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00};
+static void pass2_hook(unsigned lc)
+{
+	static int on = -1;
+	if (on < 0)
+		on = cfg("p0copy", 1) && cfg("ownfix", 1);
+	if (on && ctx_current == 1 && p0_ent_ok) {
+		uint8_t saved[0x1a8];
+		memcpy(saved, base + 0x441070, sizeof(saved));
+		memcpy(base + 0x441070, p0_ent, sizeof(p0_ent));
+		pass2_original(lc);
+		memcpy(base + 0x441070, saved, sizeof(saved));
+		return;
+	}
+	pass2_original(lc);
+}
+
 static void add_entity_hook(int n)
 {
 	static unsigned frames;
 	static int logging;
+	if (ctx_current == 0) { // diagnostics: [native] skip0=<n> drops entity n in context 0's draw (is the bottom half's head a leftover of the top half's scene?)
+		static int skip0 = -2;
+		if (skip0 == -2)
+			skip0 = cfg("skip0", -1);
+		if (n == skip0)
+			return;
+	}
+
 	// Lag measurement ([native] laglog=1): while context 0 draws, the floats of player 1's entity as the cgame holds them, next to context 1's own view yaw
 	// (its accumulator), both stamped by the log's own clock: the field that follows the yaw and its delay behind the accumulator show where the time goes.
 	if (ctx_current == 0 && n == 1 && cfg("laglog", 0)) {
@@ -2484,10 +2539,10 @@ static void add_entity_hook(int n)
 			float sv[LAG_SAVED];
 			int ap;
 			uint8_t slot1_saved[0x1a8];
-			int p0copy = n == 1 && p0_ent_ok && cfg("p0copy", 1);
+			int p0copy = n == 0 && p0_ent_ok && cfg("p0copy", 1);
 			if (p0copy) {
-				memcpy(slot1_saved, base + 0x441070 + 0x1a8, sizeof(slot1_saved));
-				memcpy(base + 0x441070 + 0x1a8, p0_ent, sizeof(p0_ent));
+				memcpy(slot1_saved, base + 0x441070, sizeof(slot1_saved));
+				memcpy(base + 0x441070, p0_ent, sizeof(p0_ent));
 			}
 			if (n == 0)
 				lag_record();
@@ -2495,7 +2550,7 @@ static void add_entity_hook(int n)
 			add_entity_original(n);
 			lag_unfix_yaw(n, sv, ap);
 			if (p0copy)
-				memcpy(base + 0x441070 + 0x1a8, slot1_saved, sizeof(slot1_saved));
+				memcpy(base + 0x441070, slot1_saved, sizeof(slot1_saved));
 		}
 		*flags = saved;
 		return;
@@ -2636,12 +2691,16 @@ static void contexts_install(void)
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
 		if ((enabled & (1 << i)) && !jhook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
-	swap_entities = cfg("swapent", 1);
-	skip_entity = cfg("skipent", swap_entities ? -1 : 1);
+	swap_entities = cfg("swapent", 0); // the old workaround for context 1's "mine" (superseded by ownfix, local_slot_hook)
+	skip_entity = cfg("skipent", -1);
 	log_entities = cfg("entdraw", 0);
 	{
 		if (!jhook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
+		if (!jhook_function(base + 0xb0680, pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
+			log_printf("native: second entity pass bytes differ");
+		if (!jhook_function(base + 0xa5ec0, slot_bytes, sizeof(slot_bytes), local_slot_hook, (void **)&slot_original))
+			log_printf("native: local slot function bytes differ");
 	}
 	p1pad = cfg("p1pad", -1);
 	skip_hud_mask = cfg("skiphud", 0);
