@@ -2468,6 +2468,28 @@ static void pass2_hook(unsigned lc)
 	pass2_original(lc);
 }
 
+// Diagnostics ([native] dobjlog=1): the scene's "add a DObj" function (rva 0x2bb0: DObj in rcx, origin pointer in rdx, entity number as a ushort in r8, flags in r9) logged
+// for context 1's frames, to see which entity a stray model comes from and where it is placed.
+static void *(*dobj_add_original)(void *, void *, unsigned, unsigned, void *, void *, void *, void *);
+static const uint8_t dobj_add_bytes[] = {0x40, 0x55, 0x56, 0x41, 0x54, 0x41, 0x55, 0x41, 0x57, 0x48, 0x83, 0xec, 0x40, 0xf3, 0x0f, 0x10, 0x8c, 0x24, 0x98, 0x00, 0x00, 0x00};
+static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, void *f, void *g, void *h)
+{
+	static int on = -1;
+	if (on < 0)
+		on = cfg("dobjlog", 0);
+	if (on && ctx_current == 1) {
+		static unsigned seen, frame;
+		if (c == 0 || ++seen % 1 == 0) {
+			if (seen < 5000 && seen > 800) {
+				const float *o = (const float *)b;
+				{ const float *p = (const float *)e; static const float zero[0x1a8 / 4]; const float *eo = (c & 0xffff) < 64 ? (const float *)(base + 0x441070 + (size_t)(c & 0xffff) * 0x1a8) : zero; log_printf("native: dobj add ctx1 ent %u flags %08x draw %.1f %.1f %.1f | slot %.1f %.1f %.1f yaw %.1f", c & 0xffff, d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, eo[63], eo[64], eo[65], eo[73]); (void)o; }
+			}
+		}
+		(void)frame;
+	}
+	return dobj_add_original(a, b, c, d, e, f, g, h);
+}
+
 static void add_entity_hook(int n)
 {
 	static unsigned frames;
@@ -2692,13 +2714,15 @@ static void contexts_install(void)
 		if ((enabled & (1 << i)) && !jhook_call(base + sites[i].site, sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
 	swap_entities = cfg("swapent", 0); // the old workaround for context 1's "mine" (superseded by ownfix, local_slot_hook)
-	skip_entity = cfg("skipent", -1);
+	skip_entity = cfg("skipent", 1); // context 1's own entity (player 2) is never drawn by the first pass either
 	log_entities = cfg("entdraw", 0);
 	{
 		if (!jhook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
 		if (!jhook_function(base + 0xb0680, pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
 			log_printf("native: second entity pass bytes differ");
+		if (!jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
+			log_printf("native: dobj add bytes differ");
 		if (!jhook_function(base + 0xa5ec0, slot_bytes, sizeof(slot_bytes), local_slot_hook, (void **)&slot_original))
 			log_printf("native: local slot function bytes differ");
 	}
