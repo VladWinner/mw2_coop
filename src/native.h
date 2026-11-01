@@ -4,8 +4,6 @@
 //   settings.ini [native] players=2 experiment=10 ...   QA: the session starts with the game
 //   native_split_start() / native_split_stop()          the menu's split screen lobby: the session starts with its Start and ends when the game is back in the menus
 void native_install(void);
-// 1 when this build has the native split screen
-int native_split_available(void);
 // 1 while a session runs
 int native_split_active(void);
 // One key press (down and up) through the engine's key event, for the split screen lobby's pad
@@ -17,3 +15,5 @@ int native_split_start2(int dev0, int dev1); // each player's device: an XInput 
 void native_split_stop(void);
 // For the crash log: which client context was live, the session state
 const char *native_crash_state(void);
+// Installs the Present hooks on the game's device without a session (the developer console draws from them); needs the device to exist.
+void native_present_hooks(void);

@@ -18,8 +18,8 @@
 #include "fov.h"
 #include "access.h"
 #include "firewall.h"
-#include "splitscreen.h"
-#include "instance.h"
+#include "devices.h"
+#include "console.h"
 #include "localize.h"
 #include "menus.h"
 #include "net.h"
@@ -240,10 +240,10 @@ static DWORD WINAPI identify(LPVOID unused)
 			firewall_install();
 			shot_install();
 			fov_install();
-			splitscreen_install();
 			native_install(); // (iw4x-sp: the official addresses go through XR(), src/addr159.c)
 			rumble_install();
-			instance_install();
+			devices_install();
+			console_install();
 			control_start();
 			return 0;
 		}

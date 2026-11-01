@@ -1,8 +1,8 @@
 # Native split screen (one process, two local players): plan
 
-Decision of the owner (2026-10-26): the two-process split screen (`src/splitscreen.c`, `src/instance.c`) is dropped as the way forward; a split
-screen inside the game itself is to be built. The two-process code stays in the repo as a fallback until the native one works; it is not polished
-any more.
+Decision of the owner (2026-10-26): the two-process split screen (the old `src/splitscreen.c`, `src/instance.c`) is dropped as the way forward; a split
+screen inside the game itself is built. 2026-11-01: the two-process code is removed from the repo (it is in the git history); `src/devices.c` keeps the
+lobby's device choice, and the menu's Split screen button opens the lobby directly (no window or video mode change).
 
 ## What the Xbox 360 game does (reference: https://github.com/PaulCombal/mw2-recompiled, docs/gameplay.md and docs/rendering.md)
 

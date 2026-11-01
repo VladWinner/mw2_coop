@@ -41,7 +41,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	[ -n "${MW2COOP_PRE:-}" ] && echo "$MW2COOP_PRE" | tr ';' '\n'
 	echo "!sleep 6000"
 	if [ -n "${MW2COOP_LOBBY:-}" ]; then # the lobby's own way: the split screen button, the host popup's Continue, the second player's button, Start
-		echo "mw2coop_split_menu_open"
+		echo "mw2coop_split_menu"
 		echo "!sleep 2000"
 		echo "mw2coop_host_go"
 		echo "!sleep 4000"

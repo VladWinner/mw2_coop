@@ -98,8 +98,8 @@ a 20-byte node let `Cmd_AddCommand` overwrite a neighbouring static (it zeroed t
 The `net_port` default is patched in DllMain in 32 bits too (checked 2026-10-28: settings.ini port 28990 gives "net_port default 28990").
 
 **To port (owner, 2026-10-28): everything done for the 64-bit native split screen since then**, because the 32-bit build's addresses, structure
-layouts and resources differ. Each item names its 64-bit rvas in `src/native.c`, `src/menus.c`, `src/instance.c`, `src/padicon.c`:
-the native split screen itself (mode 10: contexts, compositor, 2D layers, hooks of `native.c`; the 32-bit build has the two-process split only);
+layouts and resources differ. Each item names its 64-bit rvas in `src/native.c`, `src/menus.c`, `src/devices.c`, `src/padicon.c`:
+the native split screen itself (mode 10: contexts, compositor, 2D layers, hooks of `native.c`; the 32-bit build has it too since the port);
 the renderer worker wait before a context swap (rva 0x300a0, command types 0-18); the title lines over both halves (HUD element draw 0xa3b80, the
 `_introscreen` patch's sort marker, placements 0x5e0b80); subtitles / notices per half (game message window draw 0xcb4f0, windows 0x52f348);
 partner names (0x93ac0 loop, 0xd3110 name); the compass mask in `layer_fix`; pads for both players (action table 0x3be770, 0xd1810 / 0xce450,

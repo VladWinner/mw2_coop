@@ -44,3 +44,6 @@ Problems: attach mw2coop\mw2coop.log from both players.
 
 Not affiliated with or endorsed by Activision or Infinity Ward or AlterWare (iw4x-sp). mw2coop's own code is MIT
 licensed (LICENSE.txt). No game files are included.
+
+Developer console: press the key left of 1 (` or ~) in the game to open it over the top of the picture; "help" lists what it
+knows (game commands, dvar values, cmdlist, dvarlist, dvardump, find, condump, Tab completion). The same key closes it.

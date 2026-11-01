@@ -451,6 +451,19 @@ static void run_line(char *line)
 		}
 		return;
 	}
+	if (strncmp(line, "!type ", 6) == 0) { // QA: characters posted to the game window as typed text (the developer console reads them)
+		HWND game = NULL;
+		struct find_data {
+			HWND *out;
+		} fd = {&game};
+		EnumWindows(qa_find_window, (LPARAM)&fd);
+		if (game) {
+			for (const char *c = line + 6; *c; c++)
+				PostMessageA(game, WM_CHAR, (WPARAM)(unsigned char)*c, 1);
+			log_printf("control: typed '%s'", line + 6);
+		}
+		return;
+	}
 	if (strncmp(line, "!shot ", 6) == 0) {
 		shot_request(line + 6);
 		return;

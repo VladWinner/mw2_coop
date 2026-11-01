@@ -8,6 +8,7 @@
 
 #define RVA_CBUF_ADDTEXT   0x1ee890  // void Cbuf_AddText(int localClientNum, const char *text); locks CS 0x24
 #define RVA_DVAR_FINDVAR   0x26bdf0  // dvar_t *Dvar_FindVar(const char *name); reader-locked, thread safe
+#define RVA_DVAR_HASH      0x1b21e90 // dvar_t *table[1024]: the buckets Dvar_FindVar walks (chain: dvar_t.hash_next)
 #define RVA_CMD_FUNCTIONS  0x1315308 // cmd_function_t *cmd_functions (list head)
 // Console command arguments {int nesting; ...; int argc[8]; char **argv[8]}: console commands
 // (connect @0xd23c0) and server commands (devmap @0x22cb70) have one each.
@@ -57,6 +58,7 @@
 
 #define RVA_CBUF_ADDTEXT   0x0a1090
 #define RVA_DVAR_FINDVAR   0x235c50  // USERCALL, name in EDI (iw4x's cdecl wrapper is 0xb29d0)
+#define RVA_DVAR_HASH      0x156d010 // dvar_t *table[1024] (Dvar_FindVar's buckets)
 #define RVA_CMD_ADDCOMMAND 0x0478a0
 #define RVA_CMD_ARGS       0x104fed0
 #define RVA_SV_CMD_ARGS    0x105aba0
@@ -99,6 +101,7 @@
 
 #define RVA_CBUF_ADDTEXT   0x009b40  // void Cbuf_AddText(int localClientNum, const char *text); cdecl, locks CS 0x21
 #define RVA_DVAR_FINDVAR   0x233480  // dvar_t *Dvar_FindVar(const char *name): USERCALL, name in EDI
+#define RVA_DVAR_HASH      0x1569a90 // dvar_t *table[1024] (Dvar_FindVar's buckets)
 #define RVA_CMD_ADDCOMMAND 0x028090  // void Cmd_AddCommand(name, function, node, 0); cdecl
 #define RVA_CMD_ARGS       0x104c950 // nesting; argc[nesting] at +0x44, argv[nesting] at +0x64
 #define RVA_SV_CMD_ARGS    0x1057620 // the server commands' arguments, same layout (argc +0x44, argv +0x64); read in the devmap handler 0x659780
@@ -212,6 +215,13 @@ void game_cbuf_addtext(const char *text);
 dvar_t *game_find_dvar(const char *name);
 // Formats a dvar's current value into buf; returns buf ("<missing>" when not registered).
 const char *game_dvar_string(const char *name, char *buf, int size);
+// 1 when a console command of that name is registered (the client command list).
+int game_command_exists(const char *name);
+// Every registered dvar / console command (the developer console's lists and completion). The callback returns nonzero to stop.
+void game_for_each_dvar(int (*fn)(dvar_t *dvar, void *ctx), void *ctx);
+void game_for_each_command(int (*fn)(const char *name, void *ctx), void *ctx);
+// A dvar value as text: bool/int as numbers, enum as its index, float with %g, vectors and colors as lists, strings in quotes.
+void game_dvar_value_text(const dvar_t *dvar, const dvar_value_t *value, char *buf, int size);
 void game_log_commands(void);
 // Copies a dvar's current value into buf (a string, or a bool/int as a number); 0 if missing or another type.
 int game_dvar_raw(const char *name, char *buf, int size);

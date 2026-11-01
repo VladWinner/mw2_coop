@@ -149,6 +149,72 @@ int game_dvar_raw(const char *name, char *buf, int size)
 	}
 }
 
+void game_dvar_value_text(const dvar_t *d, const dvar_value_t *v, char *buf, int size)
+{
+	switch (d->type) {
+	case DVAR_TYPE_BOOL:
+		snprintf(buf, size, "%d", v->enabled);
+		break;
+	case DVAR_TYPE_INT:
+	case DVAR_TYPE_ENUM:
+		snprintf(buf, size, "%d", v->integer);
+		break;
+	case DVAR_TYPE_FLOAT:
+		snprintf(buf, size, "%g", (double)v->value);
+		break;
+	case DVAR_TYPE_FLOAT_2:
+		snprintf(buf, size, "%g %g", (double)v->vector[0], (double)v->vector[1]);
+		break;
+	case DVAR_TYPE_FLOAT_3:
+		snprintf(buf, size, "%g %g %g", (double)v->vector[0], (double)v->vector[1], (double)v->vector[2]);
+		break;
+	case DVAR_TYPE_FLOAT_4:
+	case DVAR_TYPE_COLOR:
+		snprintf(buf, size, "%g %g %g %g", (double)v->vector[0], (double)v->vector[1], (double)v->vector[2], (double)v->vector[3]);
+		break;
+	case DVAR_TYPE_STRING: {
+		const char *s = v->string;
+		snprintf(buf, size, "%s", s && !IsBadStringPtrA(s, 1) ? s : "");
+		break;
+	}
+	default:
+		snprintf(buf, size, "<type %d>", d->type);
+	}
+}
+
+void game_for_each_dvar(int (*fn)(dvar_t *dvar, void *ctx), void *ctx)
+{
+	if (!ready || !RVA_DVAR_HASH)
+		return;
+	dvar_t **table = (dvar_t **)(base + RVA_DVAR_HASH);
+	for (int i = 0; i < 1024; i++) {
+		int guard = 0;
+		for (dvar_t *d = table[i]; d && guard < 64 && !IsBadReadPtr(d, sizeof(*d)); d = d->hash_next, guard++)
+			if (d->name && fn(d, ctx))
+				return;
+	}
+}
+
+void game_for_each_command(int (*fn)(const char *name, void *ctx), void *ctx)
+{
+	if (!ready || !RVA_CMD_FUNCTIONS)
+		return;
+	int guard = 0;
+	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c && guard < 4000; c = c->next, guard++)
+		if (c->name && fn(c->name, ctx))
+			return;
+}
+
+int game_command_exists(const char *name)
+{
+	if (!ready || !RVA_CMD_FUNCTIONS)
+		return 0;
+	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c; c = c->next)
+		if (c->name && !strcmp(c->name, name))
+			return 1;
+	return 0;
+}
+
 void game_log_commands(void)
 {
 	if (!ready || !RVA_CMD_FUNCTIONS)

@@ -24,7 +24,5 @@ void menus_campaign_loading_begin(void);
 int menus_briefing_holds(void);
 void menus_log_instances(const char *name, const char *mat);
 void menus_log_names(void);
-// instance.c: the second player of a split screen lobby pressed a button or Ready (the lobby texts follow)
+// devices.c: a player of the split screen lobby pressed a button or gave his device back (the lobby texts follow)
 void menus_split_changed(void);
-// splitscreen.c: the game restarted its video: the lobby picture has to be set again
-void menus_video_restarted(void);

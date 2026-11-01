@@ -29,8 +29,7 @@
 #include "firewall.h"
 #include "hook.h"
 #include "localize.h"
-#include "instance.h"
-#include "splitscreen.h"
+#include "devices.h"
 #include "native.h"
 #include "padicon.h"
 #include "padopts.h"
@@ -819,29 +818,15 @@ static void host_lobby(const char *map)
 	game_cbuf_addtext(cmd);
 	if (InterlockedExchange(&split_pending, 0)) { // a split screen lobby: the second player presses a button on his device first
 		InterlockedExchange(&split_mode, 1);
-		instance_assign_begin();
+		devices_begin();
 	} else {
 		InterlockedExchange(&split_mode, 0);
-		instance_assign_end();
+		devices_end();
 	}
 }
 
-// the Split screen button: the game goes from full screen to a borderless window of the screen's size once (the only change the player may see: it is
-// the moment he chose the mode), then the host popup opens; from here on nothing changes on the screen until the mission is on
-static DWORD WINAPI split_prepare_thread(LPVOID unused)
-{
-	(void)unused;
-	splitscreen_prepare_windowed();
-	game_cbuf_addtext("mw2coop_split_menu_open\n");
-	return 0;
-}
-
+// the Split screen button: the host popup of the split screen lobby (the screen does not change: both players are in this one window)
 static void split_menu_f(void)
-{
-	CreateThread(NULL, 0, split_prepare_thread, NULL, 0, NULL);
-}
-
-static void split_menu_open_f(void)
 {
 	host_menu_open(1);
 }
@@ -969,7 +954,7 @@ static void patch_split_lobby(uint8_t *menu)
 	static uint8_t *cards[2], *title_item;
 	static void *title_native;
 	static int split_was;
-	int split = split_mode && native_split_available();
+	int split = split_mode;
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	if (!cards[0] || !cards[1] || !title_item) {
@@ -1017,7 +1002,7 @@ static void patch_split_lobby(uint8_t *menu)
 		uint8_t *want = kb_material;
 		int shown = 1;
 		if (split) {
-			int d = instance_device(pl);
+			int d = devices_get(pl);
 			shown = d != DEVICE_NONE; // no picture before the player has pressed a button on his device
 			want = d >= 0 ? (uint8_t *)padicon_material(kb_material) : kb_material;
 #ifndef _WIN64
@@ -1114,12 +1099,6 @@ static uint8_t *pic_item, *name_item;
 static void *pic_native_material, *pic_native_exp, *name_native_exp;
 static const char *name_native_text;
 static char shown_map[64];
-
-// splitscreen.c: after a video restart the lobby's mission picture is a check pattern until it is set again
-void menus_video_restarted(void)
-{
-	shown_map[0] = 0;
-}
 
 static void find_mission_items(uint8_t *menu)
 {
@@ -1331,23 +1310,21 @@ int menus_on_packet(const char *buf, int len)
 // the native split screen lobby: both players pressed a button on their devices
 static int split_devices_chosen(void)
 {
-	return instance_device(0) != DEVICE_NONE && instance_device(1) != DEVICE_NONE;
+	return devices_get(0) != DEVICE_NONE && devices_get(1) != DEVICE_NONE;
 }
 
 static void update_texts(void)
 {
 	int host = base[RVA_PARTY_IS_HOST];
-	// a split screen lobby has no Ready button: the second player is on this PC, his device is all that is needed, his process comes with Start
+	// a split screen lobby has no Ready button: the second player is on this PC, his device is all that is needed
 	if (split_mode)
 		localize_set_text("MW2COOP_READY", "");
 	else
 		localize_select("MW2COOP_READY", my_ready ? "MW2COOP_READY_UNSET" : "MW2COOP_READY_SET");
 	show_row(ui_find_menu("coop_lobby"), "dont_selectdiff", !split_mode);
 	const char *start;
-	if (split_mode && native_split_available())
+	if (split_mode)
 		start = split_devices_chosen() ? "MW2COOP_START_GO" : "MW2COOP_START_NEED_DEVICES";
-	else if (split_mode)
-		start = instance_pad() < 0 ? "MW2COOP_START_NEED_PARTNER" : "MW2COOP_START_GO";
 	else if (!partner_present() || (host && !party_full()))
 		start = "MW2COOP_START_NEED_PARTNER";
 	else if (my_ready && partner_ready)
@@ -1374,42 +1351,14 @@ static void ready_f(void)
 
 static void partner_questions(void);
 static void start_launch(void);
-static volatile LONG split_starting; // a split screen Start is on its way (the screen change, the second process, its join)
 
-// instance.c: the second player's device or Ready changed
+// devices.c: a player's device changed
 void menus_split_changed(void)
 {
 	update_texts();
 }
 
-// A split screen Start: the second process was started, it joins this lobby by itself and marks itself ready; then the launch goes on as usual
-static DWORD WINAPI split_wait_thread(LPVOID unused)
-{
-	(void)unused;
-	for (int i = 0; i < 2400 && !(party_full() && partner_present() && partner_ready); i++)
-		Sleep(50); // two minutes: the second process boots, joins and marks itself ready
-	if (!(party_full() && partner_present() && partner_ready)) {
-		log_printf("menus: Start: the second process did not join the lobby");
-		return 0;
-	}
-	log_printf("menus: Start: the second process is in the lobby");
-	start_launch();
-	return 0;
-}
-
-// A split screen Start, first part: the screen is made ready (a window as big as the screen: a full screen game would close when the second process takes
-// the focus), then the second process is started
-static DWORD WINAPI split_start_thread(LPVOID unused)
-{
-	(void)unused;
-	splitscreen_cover(1); // black over the screen: the second process starts and the video mode changes behind it
-	if (instance_start(instance_pad()))
-		split_wait_thread(NULL);
-	InterlockedExchange(&split_starting, 0);
-	return 0;
-}
-
-// The native split screen's Start (src/native.c): the second player is on this PC, in this process. The lobby's party is let go, the game becomes a two local players game and the
+// The split screen's Start (src/native.c): the second player is on this PC, in this process. The lobby's party is let go, the game becomes a two local players game and the
 // mission the lobby shows starts as a normal level.
 static volatile LONG native_started; // tick count of the launch, for tick_f's check that the session ends
 static void native_launch(void)
@@ -1426,13 +1375,13 @@ static void native_launch(void)
 		lstrcpyA(map, "trainer");
 	// the second player is a member of the save like a partner who joins it
 	progress_begin(continuing, "split-screen", 0x53504c4954ULL, "Player 2", 1);
-	int dev0 = instance_device(0), dev1 = instance_device(1);
+	int dev0 = devices_get(0), dev1 = devices_get(1);
 	if (!native_split_start2(dev0, dev1)) {
 		log_printf("menus: Start: the split screen could not be started");
 		return;
 	}
 	log_printf("menus: Start: native split screen, mission '%s', player 1 on %d, player 2 on %d (-1 keyboard)", map, dev0, dev1);
-	instance_assign_end();
+	devices_end();
 	InterlockedExchange(&split_mode, 0);
 	((void (*)(void))(base + RVA_PARTY_RESET))();
 	char cmd[160];
@@ -1466,7 +1415,7 @@ static void native_session_tick(void)
 // are taken and the bandwidth test is done.
 static void start_f(void)
 {
-	if (split_mode && native_split_available()) { // the second player is on this PC: no party, the host check does not apply
+	if (split_mode) { // the second player is on this PC: no party, the host check does not apply
 		native_launch();
 		return;
 	}
@@ -1476,18 +1425,6 @@ static void start_f(void)
 	}
 	if (!access_can_start())
 		return; // password mode without a password: the popup asks for it
-	if (split_mode) {
-		if (split_starting)
-			return; // it is on its way: the threads go on
-		if (instance_pad() < 0) {
-			log_printf("menus: Start: the second player has not pressed a button on his device yet");
-			return;
-		}
-		log_printf("menus: Start: starting the second game process");
-		InterlockedExchange(&split_starting, 1);
-		CreateThread(NULL, 0, split_start_thread, NULL, 0, NULL);
-		return;
-	}
 	if (!party_full() || !partner_present()) {
 		log_printf("menus: Start: waiting for the second player");
 		return;
@@ -1499,7 +1436,7 @@ static void start_f(void)
 	start_launch();
 }
 
-// the launch itself, once everyone is in and ready (a normal Start, or the split screen one when the second process has joined)
+// the launch itself, once everyone is in and ready
 static void start_launch(void)
 {
 	if (continuing && !partner_confirmed && progress_partner_is_new(partner_id, partner_xuid)) {
@@ -1511,10 +1448,8 @@ static void start_launch(void)
 	progress_begin(continuing, partner_id, partner_xuid, (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38, // slot 1
 		       add_member);
 	log_printf("menus: Start: coopLaunch");
-	if (!splitscreen_before_launch()) {
-		campaign_loading_begin();
-		game_cbuf_addtext("coopLaunch\n");
-	}
+	campaign_loading_begin();
+	game_cbuf_addtext("coopLaunch\n");
 }
 
 // The popups' questions with the names in them, in the game's language.
@@ -1766,7 +1701,7 @@ static void player_info_original(int lc, int *args, int *out)
 static void player_info_hook(int lc, int *args, int *out)
 {
 	player_info_original(lc, args, out);
-	if (!(split_mode && native_split_available()) || args[PI_COUNT] != 2)
+	if (!split_mode || args[PI_COUNT] != 2)
 		return;
 	int n = args[0] == 1 ? (int)*(const float *)(args + PI_VALUE) : args[0] == 0 ? args[PI_VALUE] : atoi(*(const char **)(args + PI_VALUE));
 	if (n < 0 || n > 1)
@@ -1840,7 +1775,7 @@ static DWORD WINAPI lobby_pad_thread(LPVOID unused)
 	DWORD repeat_at = 0;
 	for (;;) {
 		Sleep(16);
-		int pad = instance_menu_pad();
+		int pad = devices_menu_pad();
 		if (!split_mode || native_split_active() || pad < 0) {
 			seen = -1;
 			continue;
@@ -1890,7 +1825,6 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_menu", NULL, NULL, split_menu_f CMD_NODE_FLAG},
-	{NULL, "mw2coop_split_menu_open", NULL, NULL, split_menu_open_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},
@@ -2275,10 +2209,10 @@ static void tick_f(void)
 	// a split screen lobby: until the second player has pressed a button on his device, the lobby's own hint line (bottom right, where the game says
 	// "double-click a friend's name for voice chat") tells him what to do
 	static int hint_shown;
-	if (split_mode && native_split_available()) { // each player presses a button on his device: the line says who plays on what, and who is still to press
+	if (split_mode) { // each player presses a button on his device: the line says who plays on what, and who is still to press
 		char line[256] = "", dev[64];
 		for (int pl = 0; pl < 2; pl++) {
-			int d = instance_device(pl);
+			int d = devices_get(pl);
 			char who[48]; // the player's call sign, as on his card
 			const char *sign = localize_text(pl ? "MW2COOP_CALLSIGN_B" : "MW2COOP_CALLSIGN_A");
 			snprintf(who, sizeof(who), "%s: ", sign ? sign : pl ? "Bravo" : "Alpha");
@@ -2308,12 +2242,6 @@ static void tick_f(void)
 		}
 		localize_override("MENU_SP_STEAM_CHAT_HINT", line);
 		hint_shown = 1;
-	} else if (split_mode && instance_pad() < 0) {
-		const char *hint = localize_text("MW2COOP_SPLIT_HINT");
-		if (hint) {
-			localize_override("MENU_SP_STEAM_CHAT_HINT", hint);
-			hint_shown = 1;
-		}
 	} else if (hint_shown) {
 		localize_override("MENU_SP_STEAM_CHAT_HINT", NULL);
 		hint_shown = 0;

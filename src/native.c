@@ -20,6 +20,7 @@
 #include "localize.h"
 #include "menus_ui.h"
 #include "native.h"
+#include "console.h"
 #include "padopts.h"
 #include "padglyphs.h"
 #include "rumble.h"
@@ -978,6 +979,7 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
+	console_present(via, dev);
 	skip_this_present = 0;
 	static int on = -1;
 	if (on < 0)
@@ -1619,6 +1621,11 @@ static void comp_hook(void)
 	log_printf("native: Present hooks set (device %p, Ex %s)", (void *)dev, present_ex_orig ? "yes" : "no");
 	if (cfg("watchdog", 1))
 		CreateThread(NULL, 0, watchdog_thread, NULL, 0, NULL);
+}
+
+void native_present_hooks(void)
+{
+	comp_hook();
 }
 
 // the second draw of the frame must not start a new frame: it adds its view to the one the first draw began
@@ -5964,11 +5971,6 @@ const char *native_crash_state(void)
 	static char text[96];
 	snprintf(text, sizeof(text), "session %d, context %d live, context 1 ready %d, split %d, frame_bottom %d", native_active, ctx_current, ctx1_ready, split_on, frame_bottom);
 	return text;
-}
-
-int native_split_available(void)
-{
-	return base != NULL;
 }
 
 // One key press for the split screen lobby's pad (menus.c mw2coop_menukey): the engine's key event, down and up

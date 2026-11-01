@@ -130,9 +130,6 @@ static const ModString strings[] = {
 	// РАЗДЕЛЕНИЕ ЭКРАНА (the console game's own wording of this button, MENU_SPLIT_SCREEN_CAPS; suggested in issue 2)
 	{"MW2COOP_SPLITSCREEN", "\xd0\xc0\xc7\xc4\xc5\xcb\xc5\xcd\xc8\xc5 \xdd\xca\xd0\xc0\xcd\xc0",
 	 "SPLIT SCREEN"},
-	// Второй игрок: нажмите любую кнопку на своём устройстве (the lobby's hint line)
-	{"MW2COOP_SPLIT_HINT", "\xc2\xf2\xee\xf0\xee\xe9\x20\xe8\xe3\xf0\xee\xea\x3a\x20\xed\xe0\xe6\xec\xe8\xf2\xe5\x20\xeb\xfe\xe1\xf3\xfe\x20\xea\xed\xee\xef\xea\xf3\x20\xed\xe0\x20\xf1\xe2\xee\xb8\xec\x20\xf3\xf1\xf2\xf0\xee\xe9\xf1\xf2\xe2\xe5",
-	 "Second player: press any button on your device"},
 	// Разделение экрана: the split screen lobby's title, after "Campaign :"
 	{"MW2COOP_SPLIT_TITLE", "\xd0\xe0\xe7\xe4\xe5\xeb\xe5\xed\xe8\xe5 \xfd\xea\xf0\xe0\xed\xe0", "Split Screen"},
 	// Альфа / Браво: the split screen lobby's player cards (call signs, owner 2026-10-28)

@@ -114,6 +114,10 @@ main()
 		case "p2away":
 			p2away();
 			break;
+		case "airwalk":
+			thread angles_log();
+			airwalk();
+			break;
 		case "p2walk":
 			p2walk();
 			break;
@@ -456,6 +460,24 @@ veil()
 	}
 	SetDvar( "fx_draw", "1" );
 	report( "done" );
+}
+
+// airwalk: (native split screen test, airport) once the elevator ride is over and player 2 is let go, he walks forward for 4 s on the pad dvar: does his camera
+// (native.c viewlog origin, context 1) go with his body (angles_log: the server position)?
+airwalk()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	while ( !isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	while ( isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	report( "airwalk: player 2 is let go at " + level.player2.origin );
+	wait 12;
+	SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 0" );
+	wait 8;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	report( "airwalk: player 2 stopped at " + level.player2.origin );
 }
 
 // p2walk: (native split screen test) player 1 stands, player 2 walks forward / back / left / right on the pad dvar from 15 s on (1.5 s each, three rounds), the mod's follow and

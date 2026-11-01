@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.5.7-beta (2026-11-01, pre-release: extra fixes and a developer console)
+
+- **Developer console (new, all three builds)**: the key left of 1 (` or ~) opens a console panel over the top of the
+  game picture; the game does not turn or react to keys while it is open. The retail game has no console code, so this
+  is the mod's own: any game command runs from it (all of the game's commands work: `map`, `devmap`, `god`, `noclip`,
+  `give`, `set`, `toggle`, ...), a dvar's name shows its value and default, `name value` sets it, and the original
+  console's lists are back: `cmdlist` / `commands`, `dvarlist`, `dvardump` (a filter is part of a name, or with `*` and
+  `?`), `find`, `echo`, `condump`, `clear`, `help`. Tab completes command and dvar names, Up / Down recall lines, PgUp /
+  PgDn scroll. The game's own replies (messages of its commands) are not shown: this build no longer prints them.
+- **Split screen: the menu button starts it properly.** Campaign → Split screen opens the host popup straight away
+  (it used to switch the game to a screen sized window first, a step the test tools skipped, so it was never checked).
+  The old two process split screen (a hidden second game process) is removed; the native one is the only one.
+- Test tools: the lobby test now goes through the real button command; new QA commands for typing into the console.
+- **Known and not fixed in this version:** in the split screen on No Russian (airport) the second player's camera can end up away from his body after the elevator (bottom half shows a wall or the flower beds while he stands elsewhere); the characters around can look jittery in both halves.
+
 ## v0.5.6-beta (2026-10-30, pre-release: extra fixes of v0.5.5-beta)
 
 Fixes of the split screen found after v0.5.5-beta; nothing else changes. Same state as 0.5.5: tested with bots and

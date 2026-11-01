@@ -27,7 +27,7 @@ if [ "$MW2COOP_IW4X" = 1 ]; then BITS=32; HB=32; CB=32; A=$ROOT/mw2-iw4x; B=$ROO
 # iw4x host and official 32-bit client: MW2COOP_DIR_A=$ROOT/mw2-iw4x MW2COOP_DIR_B=$ROOT/mw2-32-b MW2COOP_BITS=32
 [ -n "$MW2COOP_DIR_A" ] && A=$MW2COOP_DIR_A
 [ -n "$MW2COOP_DIR_B" ] && B=$MW2COOP_DIR_B
-# a [native] section in a copy'"'"'s settings.ini (left by run32.sh / run32lobby.sh / qa_split.sh) starts a split screen session in that copy: the pair would not be a pair
+# a [native] section in a copy'"'"'s settings.ini (left by run32.sh / run32lobby.sh) starts a split screen session in that copy: the pair would not be a pair
 for d in "$A" "$B"; do
 	if grep -q '^\[native\]' "$d/mw2coop/settings.ini" 2>/dev/null; then
 		echo "WARNING: $d/mw2coop/settings.ini has a [native] section: that copy starts a split screen session. Copy content/release/settings.ini over it first."
