@@ -4626,30 +4626,30 @@ static void hudelem_hook(int lc, void *e)
 }
 
 // The name the loop shows comes from rva 0xd3110, which outside the engine's co-op gives the profile's name for every client: player 2 got player 1's name. The call at 0x93e2f
-// gets player 2's from [native] p2name, by default the profile's name with " (2)" after it, the way the console names a second player on one profile.
+// gets both players' names in the split screen: Alpha and Bravo, the callsigns of the lobby's cards, unless [native] p1name / p2name give others (they used to be the profile's name
+// and the profile's name with " (2)" after it: both halves showed the same nickname twice).
 static const char *(*name_get_original)(int);
 static const char *name_get_hook(int client)
 {
-	static char p2[64], v[48];
+	static char p2[64], v[48], p1[64], u[48];
 	static unsigned gen, logged;
 	const char *own = name_get_original(client);
 	if (native_active && client >= 0 && client < 2 && !(logged & (1u << (client * 2 + ctx_current)))) { // once per client and context: whose name each half draws
 		logged |= 1u << (client * 2 + ctx_current);
 		log_printf("native: name over client %d drawn in context %d", client, ctx_current);
 	}
-	if (client != 1 || !native_active)
+	if (client < 0 || client > 1 || !native_active)
 		return own;
-	if (ctx_current == 1) // the loop takes client 1 for a remote one when the local player count it reads is 1 (it never reaches the test above): no name over player 2 in his own half
+	if (client == 1 && ctx_current == 1) // the loop takes client 1 for a remote one when the local player count it reads is 1 (it never reaches the test above): no name over player 2 in his own half
 		return "";
 	if (gen != cfg_gen) { // read once per session
+		GetPrivateProfileStringA("native", "p1name", "", u, sizeof(u), settings_path);
 		GetPrivateProfileStringA("native", "p2name", "", v, sizeof(v), settings_path);
 		gen = cfg_gen;
 	}
-	if (v[0])
-		snprintf(p2, sizeof(p2), "%s", v);
-	else
-		snprintf(p2, sizeof(p2), "%.40s (2)", own ? own : "");
-	return p2;
+	char *out = client ? p2 : p1;
+	snprintf(out, 64, "%s", (client ? v : u)[0] ? (client ? v : u) : (client ? "Bravo" : "Alpha"));
+	return out;
 }
 
 // The cgame's second per-entity pass (rva 0xb0680) draws every entity that is not "mine". In context 1, with ownfix, the other player is entity 0, whose slot holds a copy

@@ -1,11 +1,11 @@
 <p align="center"><a href="README.md">English</a> · <b>Русский</b></p>
 
 <p align="center">
-  <img src="docs/banner.jpg" alt="Call of Duty: Modern Warfare 2 — кооператив кампании" width="100%">
+  <img src="docs/banner.jpg" alt="Call of Duty: Modern Warfare 2 Enhanced" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/stxlvn/mw2_coop/releases/latest"><img alt="Последний релиз" src="https://img.shields.io/github/v/release/stxlvn/mw2_coop?include_prereleases&label=релиз&color=78c020"></a>
+  <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><img alt="Последний релиз" src="https://img.shields.io/github/v/release/stxlvn/mw2_enhanced?include_prereleases&label=релиз&color=78c020"></a>
   <a href="https://www.nexusmods.com/codmw2/mods/99"><img alt="Nexus Mods" src="https://img.shields.io/badge/Nexus_Mods-MW2_Campaign_Co--op-d98f40"></a>
   <img alt="Статус: бета" src="https://img.shields.io/badge/статус-бета-78c020">
   <img alt="Игроков: 2" src="https://img.shields.io/badge/игроков-2-4a4a4a">
@@ -17,7 +17,7 @@
 
 <p align="center">
   Кооператив на двоих на актуальной <b>64-битной Steam-версии</b>: по сети или вдвоём на одном ПК с <b>разделённым экраном</b> (новое, экспериментально). На сетевом коде, который уже есть в игре для Спецназа (Spec Ops).<br>
-  <a href="https://github.com/stxlvn/mw2_coop/releases/latest"><b>⬇ Скачать последний релиз</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="#install">Установка</a> · <a href="#known-issues">Известные проблемы</a>
+  <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><b>⬇ Скачать последний релиз</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="#install">Установка</a> · <a href="#known-issues">Известные проблемы</a>
 </p>
 
 ---
@@ -68,7 +68,7 @@
 
 > Обоим нужна **Call of Duty: Modern Warfare 2 (2009) в Steam**, актуальная **64-битная версия**, и **одна и та же версия mw2coop**.
 
-1. Скачайте `mw2coop-<версия>.zip` из [релизов](https://github.com/stxlvn/mw2_coop/releases/latest). (Для старой **32-битной** игры рядом лежит `mw2coop-<версия>-x86.zip`, для клиента **iw4x-sp** — экспериментальный `mw2coop-<версия>-iw4x.zip`; что в них проверено, написано в их `INSTALL.txt`.)
+1. Скачайте `mw2coop-<версия>.zip` из [релизов](https://github.com/stxlvn/mw2_enhanced/releases/latest). (Для старой **32-битной** игры рядом лежит `mw2coop-<версия>-x86.zip`, для клиента **iw4x-sp** — экспериментальный `mw2coop-<версия>-iw4x.zip`; что в них проверено, написано в их `INSTALL.txt`.)
 2. Steam → Библиотека → Modern Warfare 2 → ⚙ Управление → **Просмотреть локальные файлы** (папка с `iw4sp.exe`).
 3. Скопируйте туда `winmm.dll` и папку `mw2coop`. Файлы игры не заменяются.
 4. **Хост:** Кампания → СЕТЕВАЯ ИГРА ВДВОЕМ. Миссия и доступ выбираются в лобби.

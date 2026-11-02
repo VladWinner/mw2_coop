@@ -691,7 +691,7 @@ static void paint(int w, int h)
 	int rows = (h - 12 - lh * 2) / lh;
 	EnterCriticalSection(&lock);
 	SetTextColor(mem_dc, RGB(130, 150, 190));
-	TextOutA(mem_dc, margin, 3, "MW2 co-op console  (` closes, help lists the keys)", 51);
+	TextOutA(mem_dc, margin, 3, "MW2 Enhanced console  (` closes, help lists the keys)", 53);
 	int shown = 0;
 	for (int k = 0; k < rows && k + scroll < line_count; k++) {
 		int idx = (line_next - 1 - scroll - k + MAX_LINES * 2) % MAX_LINES;
@@ -914,7 +914,7 @@ static DWORD WINAPI setup_thread(LPVOID unused)
 		log_printf("console: the game's device or window never appeared");
 		return 0;
 	}
-	console_print("^5MW2 co-op console^7: type help");
+	console_print("^5MW2 Enhanced console^7: type help");
 	{ // the cursor the game reads its mouse movement from (the exe's imports; a client that maps the game itself, iw4x-sp, has them in the game's own image)
 		HMODULE mods[2] = {GetModuleHandleA(NULL), GetModuleHandleA("iw4sp.exe")};
 		for (int m = 0; m < 2; m++) {

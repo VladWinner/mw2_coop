@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Renamed to Modern Warfare 2 Enhanced.** The GitHub repository is now `stxlvn/mw2_enhanced` (the old address redirects). The `mw2coop` folder, the `winmm.dll` proxy, the settings, the dvars and the archive names stay as they are, so installs and saves keep working.
+- **Split screen: the names over the players are Alpha and Bravo.** Both halves showed the profile's nickname (player 2's with " (2)" after it). `[native] p1name` and `p2name` in `settings.ini` set other names.
+- **Russian game: the Favela Escape objective no longer names Price** (issue #6). The stock text told the player to help Captain Price reach the landing zone before Price has appeared in the story; it now says Captain MacTavish, as in the h2-mod translation. Only the Russian text is replaced.
 - **Split screen (64-bit): the sun's fade now really stays in its own half.** The renderer writes that state while it draws
   the previous frame, after the game had already switched to the other player's view, so each half held the other view's
   value. The swap now waits for the renderer first (`[native] sunwait=0` turns it off). In the 32-bit and iw4x builds this

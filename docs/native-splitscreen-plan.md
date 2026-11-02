@@ -351,7 +351,7 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
    The compass and the ammo counter over the scope's black overlay are not a bug (owner, 2026-10-28): they stay as they are.
 3a. DONE 2026-10-28: names over the partner in both halves. rva 0x93ac0 draws them for clients 0 and 1 and skips "self" (CMP EBP,EAX at 0x93db3); context 1 skipped player 1.
    A stub at 0x93daa (`name_self_install`) skips player 2 in context 1; client 1 is never tested as local there (the local player count it reads is 1), so `name_get_hook` (the call at
-   0x93e2f) gives it an empty name in context 1. Player 2's name: [native] p2name, else the profile's name + " (2)" (rva 0xd3110 gives the profile's name for every client).
+   0x93e2f) gives it an empty name in context 1. Names (changed 2026-11-02): Alpha and Bravo, or [native] p1name / p2name; before, the profile's name and the profile's name + " (2)" (rva 0xd3110 gives the profile's name for every client).
 3. The "Follow" waypoint hint of the objective must show in both halves (only the top one has it; the bottom context does not draw it).
 4. The helicopters of the mission before the Gulag move jerkily back and forth: not investigated; suspects: moving state outside the swapped ranges stepped by both contexts, or the entity cleanup.
    2026-10-28, owner on trainer: in the bottom half the FAR models (NPCs, vehicles, distant scenery) jump to the right and back, near ones are fine; with `set r_forceLod high` the jumps

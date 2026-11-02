@@ -1,6 +1,6 @@
 The fonts in this folder: bank.ttf, default.otf and defaultBold.otf
 Made by Vlad Loktionov for h2-mod (https://github.com/alicealys/h2-mod, data/zonetool/fonts, taken at commit ff5e6b1c83813feb9290285b6d6f309d74cf199e,
-suggested for this mod in https://github.com/stxlvn/mw2_coop/issues/1). The mod draws the Russian game's menus, subtitles and briefings with them (src/fonts.c).
+suggested for this mod in https://github.com/stxlvn/mw2_enhanced/issues/1). The mod draws the Russian game's menus, subtitles and briefings with them (src/fonts.c).
 
 == bank.ttf: H*-Mod Mix Gothic Regular
 Made from: + Science Gothic 1.06 (modified)

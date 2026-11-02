@@ -250,6 +250,20 @@ static Alias aliases[] = {
 
 static LocalizeEntry entries[sizeof(strings) / sizeof(strings[0])];
 
+// The game's own strings that read wrong in the Russian build. The text is Windows-1251 like the rest.
+typedef struct {
+	const char *name;
+	const char *ru;
+	LocalizeEntry entry;
+} FixedString;
+
+static FixedString fixed[] = {
+	// The stock text names Price, who has not been introduced yet at this point of the story
+	// (issue #6): "Доберитесь с капитаном Мактавишем и отрядом до зоны посадки."
+	{"FAVELA_ESCAPE_OBJ_FOLLOW_SOAP", "\xc4\xee\xe1\xe5\xf0\xe8\xf2\xe5\xf1\xfc \xf1 \xea\xe0\xef\xe8\xf2\xe0\xed\xee\xec \xcc\xe0\xea\xf2\xe0\xe2\xe8\xf8\xe5\xec \xe8 \xee\xf2\xf0\xff\xe4\xee\xec \xe4\xee \xe7\xee\xed\xfb \xef\xee\xf1\xe0\xe4\xea\xe8.", {NULL, NULL}},
+};
+#define FIXED_COUNT (int)(sizeof(fixed) / sizeof(fixed[0]))
+
 int localize_is_russian(void);
 static int game_is_russian(void)
 {
@@ -297,6 +311,19 @@ static void *find_header(int type, const char *name)
 			entries[i].name = strings[i].name;
 			entries[i].value = text_of(i);
 			return &entries[i];
+		}
+	}
+	if (type == ASSET_TYPE_LOCALIZE_ENTRY && name) {
+		for (int i = 0; i < FIXED_COUNT; i++) {
+			if (strcmp(name, fixed[i].name) != 0 || !game_is_russian())
+				continue;
+			if (!fixed[i].entry.name) {
+				LocalizeEntry *stock = original(type, name);
+				log_printf("localize: %s replaced (stock text: %s)", name, stock && stock->value ? stock->value : "?");
+			}
+			fixed[i].entry.name = fixed[i].name;
+			fixed[i].entry.value = fixed[i].ru;
+			return &fixed[i].entry;
 		}
 	}
 #ifdef MW2COOP_IW4X

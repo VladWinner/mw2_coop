@@ -1,11 +1,11 @@
 <p align="center"><b>English</b> · <a href="README.ru.md">Русский</a></p>
 
 <p align="center">
-  <img src="docs/banner.jpg" alt="Call of Duty: Modern Warfare 2 — Campaign Co-op" width="100%">
+  <img src="docs/banner.jpg" alt="Call of Duty: Modern Warfare 2 Enhanced" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/stxlvn/mw2_coop/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/stxlvn/mw2_coop?include_prereleases&label=release&color=78c020"></a>
+  <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/stxlvn/mw2_enhanced?include_prereleases&label=release&color=78c020"></a>
   <a href="https://www.nexusmods.com/codmw2/mods/99"><img alt="Nexus Mods" src="https://img.shields.io/badge/Nexus_Mods-MW2_Campaign_Co--op-d98f40"></a>
   <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-78c020">
   <img alt="Players: 2" src="https://img.shields.io/badge/players-2-4a4a4a">
@@ -17,7 +17,7 @@
 
 <p align="center">
   Two-player co-op on the current <b>64-bit Steam build</b>: online, or both on one PC in <b>split screen</b> (new, experimental). Built on the co-op netcode the game already ships for Spec Ops.<br>
-  <a href="https://github.com/stxlvn/mw2_coop/releases/latest"><b>⬇ Download the latest release</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="#install">Install</a> · <a href="#known-issues">Known issues</a>
+  <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><b>⬇ Download the latest release</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="#install">Install</a> · <a href="#known-issues">Known issues</a>
 </p>
 
 ---
@@ -66,7 +66,7 @@ All mission intros hold both players; the title plays only on a mission's first 
 
 > You both need **Call of Duty: Modern Warfare 2 (2009) on Steam**, the current **64-bit build**, and **the same mw2coop version**.
 
-1. Download `mw2coop-<version>.zip` from [Releases](https://github.com/stxlvn/mw2_coop/releases/latest).
+1. Download `mw2coop-<version>.zip` from [Releases](https://github.com/stxlvn/mw2_enhanced/releases/latest).
 2. Steam → Library → Modern Warfare 2 → ⚙ Manage → **Browse local files** (the folder with `iw4sp.exe`).
 3. Copy `winmm.dll` and the `mw2coop` folder there. No game file is replaced.
 4. **Host:** Campaign → co-op. Pick the mission and access in the lobby.

@@ -1,5 +1,5 @@
-mw2coop {VERSION}: campaign co-op for Call of Duty: Modern Warfare 2 (2009), two players
-https://github.com/stxlvn/mw2_coop
+Modern Warfare 2 Enhanced {VERSION}: campaign co-op for Call of Duty: Modern Warfare 2 (2009), two players
+https://github.com/stxlvn/mw2_enhanced
 
 === По-русски ===
 
