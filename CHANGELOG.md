@@ -10,7 +10,7 @@
 - **Split screen: the sun's white-out and dark blind no longer leak between the halves.** The renderer keeps that fade
   per local client and both of our views are local client 0, so a player who looked into the sun brightened or darkened
   the other player's half too ("overexposure in one half, a mask in the other"). Each view now has its own state
-  (64-bit build; the 32-bit and iw4x builds still share it). `[native] sunsplit=0` turns the change off.
+  (all three builds). `[native] sunsplit=0` turns the change off.
 - Camera watch (log line `CAMERA MISMATCH`) now really runs: the script that feeds it passed a word where a number was
   expected, so it never produced anything in v0.5.7.
 - No Russian: player 2 can walk out of the elevator. His place beside player 1 was against the wall next to the doors

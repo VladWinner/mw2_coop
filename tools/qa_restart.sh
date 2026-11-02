@@ -3,7 +3,7 @@
 # Usage: tools/qa_restart.sh [seconds in each level, default 25]   (64-bit test copy mw2-64; MW2COOP_PAD player 2's pad, default 0)
 LEVEL_S=${1:-25}
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
-A=$ROOT/mw2-64
+A=$ROOT/${MW2COOP_COPY:-mw2-64}
 HERE=$(cd "$(dirname "$0")" && pwd -W)
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies.ps1" -Root "$(cygpath -w "$ROOT")" | tr -d '\r'
 printf '[network]\nport=28960\n\n[native]\n' > "$A/mw2coop/settings.ini"

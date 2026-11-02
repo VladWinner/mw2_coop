@@ -2154,9 +2154,12 @@ static const range_t ranges[] = {
                                      // 0xd89200 (0x107a80 bytes)): see the 64-bit range; [native] fxsplit=0 turns it off
     {0x1af9bc8, 0xbd8},              // the renderer's view of each local client (VA 0x1ef9bd0 + local client * 0x2b8, copied by VA 0x516950) and the camera's visible cell
                                      // bits (pointer VA 0x1efa6c0, bits 0x1efa6c4, cleared and filled by the portal walk VA 0x516320): see the 64-bit range ([native] viewsplit=0 off)
+    {0x204a260, 0x28},               // the sun's blind and glare state of local client 0 (VA 0x244a260 + local client * 40, read by VA 0x543290 and its callees): see the 64-bit range
+                                     // ([native] sunsplit=0 off)
 };
 #define RANGE_FX 10
 #define RANGE_VIEW 11
+#define RANGE_SUN 12
 #endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
 #define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)

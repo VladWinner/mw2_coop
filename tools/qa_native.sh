@@ -15,7 +15,7 @@ MAP=${MW2COOP_MAP:-trainer}
 RES=${MW2COOP_RES:-1920x1080}
 RAW_AT=${MW2COOP_RAW_AT:-115}
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
-A=$ROOT/mw2-64
+A=$ROOT/${MW2COOP_COPY:-mw2-64}
 HERE=$(cd "$(dirname "$0")" && pwd -W)
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies.ps1" -Root "$(cygpath -w "$ROOT")" | tr -d '\r'
 {

@@ -237,6 +237,7 @@ static const struct {
 	{0x188edb8, 0x1891a7c},
 	{0x1af9bc8, 0x1afc858},
 	{0x1b19f98, 0x1b1cc24},
+	{0x204a260, 0x204cee0},
 };
 
 unsigned addr159(unsigned rva)

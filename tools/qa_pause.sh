@@ -3,7 +3,7 @@
 # Usage: tools/qa_pause.sh [seconds in the level before ESC, default 35]   (64-bit test copy mw2-64; frames mw2coop\shots\pause-*.bmp)
 LEVEL_S=${1:-35}
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
-A=$ROOT/mw2-64
+A=$ROOT/${MW2COOP_COPY:-mw2-64}
 HERE=$(cd "$(dirname "$0")" && pwd -W)
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies.ps1" -Root "$(cygpath -w "$ROOT")" | tr -d '\r'
 printf '[network]\nport=28960\n\n[native]\n' > "$A/mw2coop/settings.ini"
