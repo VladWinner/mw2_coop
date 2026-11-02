@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Split screen (64-bit): the sun's fade now really stays in its own half.** The renderer writes that state while it draws
+  the previous frame, after the game had already switched to the other player's view, so each half held the other view's
+  value. The swap now waits for the renderer first (`[native] sunwait=0` turns it off). In the 32-bit and iw4x builds this
+  wait is not mapped yet, so the per-view sun state is off there by default (`[native] sunsplit=1` turns it on); the
+  v0.5.7.5-beta note "in all three builds" does not hold for them.
+- Diagnostics only (off by default): `sunlog`, `npclog`, `npcwait`, `npcsnap`, `snaplog`; QA scenario `sunlook`.
+
 ## v0.5.7.5-beta (2026-11-02, pre-release: extra fixes of v0.5.7-beta)
 
 - **Split screen: starting it a second time in one game run no longer crashes.** After "quit to the main menu" and a new

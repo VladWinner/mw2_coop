@@ -125,6 +125,9 @@ main()
 		case "p1move":
 			p1move();
 			break;
+		case "sunlook":
+			sunlook();
+			break;
 		case "airsee":
 			airsee();
 			break;
@@ -535,6 +538,23 @@ p1move()
 		wait 0.1;
 	}
 	report( "p1move: player 1 at " + level.player.origin + ", player 2 at " + level.player2.origin );
+}
+
+// sunlook: (native split screen test, a sunny level, [native] sunlog=1) player 1 turns once around in 36 s from 20 s into the level (10 degrees per second), player 2 keeps his view:
+// the sun state lines show whether player 1 looking into the sun moves player 2's state too
+sunlook()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 20;
+	p = level.player GetPlayerAngles();
+	for ( i = 0; i < 72; i++ )
+	{
+		level.player SetPlayerAngles( ( p[ 0 ], p[ 1 ] + i * 5, 0 ) );
+		if ( i % 4 == 0 )
+			report( "sunlook: player 1 yaw " + level.player GetPlayerAngles()[ 1 ] + ", player 2 yaw " + level.player2 GetPlayerAngles()[ 1 ] );
+		wait 0.5;
+	}
 }
 
 // airsee: (native split screen test, airport) player 2 walks out as in airreal and the report gives both positions (a frame from the hall: does player 1 see player 2's body where he is?)

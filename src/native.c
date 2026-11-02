@@ -1779,6 +1779,7 @@ static void smooth_sample(int k)
 	}
 }
 static const char *vision_name_of(int ctx);
+static void npc_log(void);
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
 	cg_draw_hook_inner(local_client, a, b);
@@ -1826,6 +1827,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	// (rva 0x533d14 pitch, 0x533d18 yaw) and the cl block's playerState copy (rva RVA_CL_PS) yaw
 	// Camera watch: player 2's body (the script's server position, dvar mw2coop_p2pos every half second) against where his own view is (context 1's player state origin). A
 	// mismatch of more than 48 units for two looks in a row is logged with both places and his state, so a report of "the bottom camera is in a wall" has numbers.
+	if (CFG_ONCE("npclog", 0) && ((ctx_on && split_on && ctx1_ready) || (CFG_ONCE("npclog", 0) >= 2 && !native_active))) // (npclog=2 in the plain game, with smoothlog=1: the same numbers without a split, for comparison)
+		npc_log();
 	if (CFG_ONCE("p1entlog", 0) && ctx_on && ctx_current == 1) { // diagnostics: where context 1 (player 2's screen) holds entity 0, player 1's body: pose origin and the next state's origin, once a second
 		static unsigned en1;
 		if (++en1 % 60 == 0) {
@@ -1894,6 +1897,18 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			}
 	}
 #endif
+	if (CFG_ONCE("sunlog", 0) && ctx_on && split_on && ctx1_ready) { // diagnostics: the sun blind/glare state of the context that is live (RANGE_SUN), about every half second per context
+		static unsigned sn[2];
+		if (++sn[ctx_current] % 30 == 0) {
+			#ifdef _WIN64
+			const float *s = (const float *)(base + 0x45851b0); // (the RANGE_SUN range, defined further down)
+#else
+			const float *s = (const float *)(base + XR(0x204a260));
+#endif
+			log_printf("native: sunlog ctx %d state %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f cg.time %d", ctx_current, (double)s[0], (double)s[1], (double)s[2], (double)s[3], (double)s[4], (double)s[5],
+				   (double)s[6], (double)s[7], (double)s[8], (double)s[9], *(int *)(base + 0x422434));
+		}
+	}
 	if (CFG_ONCE("viewlog", 0) && ctx_on) {
 		static unsigned vn;
 		if (++vn % 25 == 0 && vn < 20000) {
@@ -2136,6 +2151,7 @@ static const range_t ranges[] = {
 #define RANGE_FX 9
 #define RANGE_VIEW 10
 #define RANGE_SUN 11
+#define SUNSPLIT_DEFAULT 1
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
 // (the first 135 entities included, as in 64 bits) and [9] the view model pointers behind the entity array
@@ -2160,6 +2176,7 @@ static const range_t ranges[] = {
 #define RANGE_FX 10
 #define RANGE_VIEW 11
 #define RANGE_SUN 12
+#define SUNSPLIT_DEFAULT 0 // off until the 32-bit renderer's wait for the frame in flight is mapped (the 64-bit swap needs it, see sunwait in ctx_swap_mask)
 #endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
 #define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)
@@ -2255,6 +2272,14 @@ static void ctx_swap_mask(int to, unsigned mask)
 	static int fx_on = -1;
 	if (fx_on < 0)
 		fx_on = cfg("fxsplit", 1);
+#if defined(_WIN64) && defined(RANGE_SUN)
+	if (mask == CTX_ALL && CFG_ONCE("sunwait", 1) && CFG_ONCE("sunsplit", SUNSPLIT_DEFAULT)) { // the sun state is written by the frame the renderer draws, after the client went on: without this wait each context's state got the other view's value (QA 2026-11-02: player 1 turning moved player 2's state); [native] sunwait=0 off
+		static int (*idle)(void);
+		if (!idle)
+			idle = xr_render_idle;
+		((void (*)(int (*)(void)))(base + 0x301e0))(idle);
+	}
+#endif
 	for (size_t i = 0; i < NRANGES; i++) {
 		if (!(mask & (1u << i)))
 			continue;
@@ -2267,7 +2292,7 @@ static void ctx_swap_mask(int to, unsigned mask)
 			continue;
 #endif
 #ifdef RANGE_SUN
-		if (i == RANGE_SUN && !CFG_ONCE("sunsplit", 1))
+		if (i == RANGE_SUN && !CFG_ONCE("sunsplit", SUNSPLIT_DEFAULT))
 			continue;
 #endif
 		uint8_t *live = base + RANGE_RVA(i);
@@ -2683,6 +2708,96 @@ static void ctx_entity_log(void)
 	}
 }
 
+// Diagnostics ([native] npclog=1, jitter): the entity (index >= 2) that travelled furthest in the last 300 frames of context 0 (whoever is walking now) is followed in both contexts: its pose origin at the
+// start of each draw, with wall time, cg.time and the interpolation numbers. [native] npcwait=<seconds> starts the measuring that long after the first draw (the airport squad walks after about 25 s).
+static int npc_pick = -1, npc_goff = -1; // the tracked entity and where its origin lies in the server entity (npc_log)
+#define pick npc_pick
+#define goff npc_goff
+static void npc_log(void)
+{
+	static float last[2][1024][3];
+	static float moved[1024];
+	static unsigned frames[2], logged[2];
+	static double first_wall = -1;
+	unsigned c = (unsigned)ctx_current & 1;
+	LARGE_INTEGER pc, hz;
+	QueryPerformanceCounter(&pc);
+	QueryPerformanceFrequency(&hz);
+	double wall_now = (double)pc.QuadPart / (double)hz.QuadPart;
+	if (first_wall < 0)
+		first_wall = wall_now;
+	if (wall_now - first_wall < (double)CFG_ONCE("npcwait", 0))
+		return;
+	frames[c]++;
+	if (CFG_ONCE("npcsnap", 0) && frames[c] % 50 == 1 && frames[c] < 60) { // which dwords near cg.time point into the client's snapshot ring (rva 0x51b078..0x51dcb0): cg.snap, cg.nextSnap
+		char line[1800];
+		int n = snprintf(line, sizeof(line), "native: npcsnap ctx %d:", ctx_current);
+		for (int off = 0x404450; off < 0x44f000; off += 8) {
+			uintptr_t v = *(const uintptr_t *)(base + off);
+			if (v >= (uintptr_t)base + 0x51b078 && v < (uintptr_t)base + 0x51dcb0 + 0x100)
+			{
+				n += snprintf(line + n, sizeof(line) - n, " [%x]=snap+%x:", off, (unsigned)(v - (uintptr_t)base - 0x51b078));
+				for (int k = 0; k < 12; k++)
+					n += snprintf(line + n, sizeof(line) - n, " %d", *(const int *)(v + k * 4));
+			}
+		}
+		log_printf("%s", line);
+	}
+	for (int i = 2; i < 1024; i++) {
+		const uint8_t *e = base + RVA_CENT + (size_t)i * CENT_SIZE;
+		const float *o = (const float *)(e + 0x18);
+		if (!e[CENT_TYPE] || !(*(const uint32_t *)(e + CENT_VALID) & 1))
+			continue;
+		float step = fabsf(o[0] - last[0][i][0]) + fabsf(o[1] - last[0][i][1]);
+		if (c == 0 && step < 30.0f)
+			moved[i] += step;
+		last[c][i][0] = o[0];
+		last[c][i][1] = o[1];
+		last[c][i][2] = o[2];
+	}
+	if (c == 0 && frames[0] % 300 == 0) {
+		float best = 25.0f;
+		int np = -1;
+		for (int i = 2; i < 1024; i++) {
+			if (moved[i] > best)
+				best = moved[i], np = i;
+			moved[i] = 0;
+		}
+		if (np >= 0 && np != pick) {
+			pick = np;
+			log_printf("native: npclog tracks entity %d (it travelled %.0f units in the last 300 frames)", pick, (double)best);
+		}
+	}
+	static int goff_pick = -1; // the server entity's origin (gentity r.currentOrigin), found by matching the snapshot's origin of the tracked entity
+	float gx = 0, gy = 0;
+	if (pick >= 0) {
+		const uint8_t *g = base + RVA_GENTITIES + (size_t)pick * GENT_SIZE;
+		if (goff_pick != pick) {
+			const float *n3 = (const float *)(base + RVA_CENT + (size_t)pick * CENT_SIZE + 0xfc);
+			goff = -1;
+			for (int o = 0; o + 12 <= GENT_SIZE && goff < 0; o += 4) {
+				const float *f = (const float *)(g + o);
+				if (fabsf(f[0] - n3[0]) < 6.0f && fabsf(f[1] - n3[1]) < 6.0f && fabsf(n3[0]) > 1.0f)
+					goff = o;
+			}
+			goff_pick = pick;
+			log_printf("native: npclog entity %d: server origin found at gentity+0x%x", pick, goff);
+		}
+		if (goff >= 0) {
+			gx = *(const float *)(g + goff);
+			gy = *(const float *)(g + goff + 4);
+		}
+	}
+	if (pick >= 0 && logged[c] < 9000) {
+		const uint8_t *e = base + RVA_CENT + (size_t)pick * CENT_SIZE;
+		const float *o = (const float *)(e + 0x18), *n2 = (const float *)(e + 0xfc), *c2 = (const float *)(e + 0x80);
+		logged[c]++;
+		log_printf("native: npc ctx %d ent %d wall %.2f cg.time %d interp %.3f snap %d frac %.3f pos %.2f %.2f next %.2f %.2f cur %.2f %.2f type %u flags %08x s0 %d s1 %d srv %.2f %.2f", ctx_current, pick, wall_now * 1000.0, *(int *)(base + 0x422434),
+			   (double)*(float *)(base + 0x42242c), *(int *)(base + 0x51dca8), (double)*(float *)(base + 0x51dcb0), (double)o[0], (double)o[1], (double)n2[0], (double)n2[1], (double)c2[0], (double)c2[1], (unsigned)e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS),
+			   *(const int *)(*(const uintptr_t *)(base + 0x40cac0) + 4), *(const int *)(*(const uintptr_t *)(base + 0x40cac8) + 4), (double)gx, (double)gy);
+	}
+}
+
 // Diagnostics ([native] timelog=1): the cgame's time (rva 0x422434) at the end of each context's draw, a few dozen frames in a row
 static void time_log(void)
 {
@@ -2783,6 +2898,15 @@ static void server_cmds_hook(uintptr_t lc, int *msg)
 static void snapshot_msg_hook(void *msg, int time)
 {
 	hook_counts[4]++;
+	if (CFG_ONCE("snaplog", 0)) { // diagnostics (jitter): when the snapshot messages come: the server time they carry, the message's size fields, the live context
+		static unsigned sn;
+		LARGE_INTEGER pc, hz;
+		QueryPerformanceCounter(&pc);
+		QueryPerformanceFrequency(&hz);
+		if (++sn > (unsigned)CFG_ONCE("snaplog", 0) && sn < (unsigned)CFG_ONCE("snaplog", 0) + 400)
+			log_printf("native: snapmsg #%u wall %.1f time %d ctx %d msg ints %d %d %d %d %d %d cg.time %d", sn, (double)pc.QuadPart * 1000.0 / (double)hz.QuadPart, time, ctx_current, ((int *)msg)[0], ((int *)msg)[1], ((int *)msg)[2],
+				   ((int *)msg)[3], ((int *)msg)[4], ((int *)msg)[5], *(int *)(base + 0x422434));
+	}
 	int was = ctx_current;
 	if (was)
 		ctx_swap(0);
@@ -4039,6 +4163,21 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 
 // The simulation step and the hand-over of its results (rva 0x2343a0) run from inside the client frame (called at 0xb8d50): in context 1's frame they would write context 0's data
 // into the live (context 1's) client block. They run with context 0 live; the hand-over hooks above put each client's data where its context keeps it.
+// (jitter diagnostics) the tracked entity's server origin before and after each simulation step, with the wall time and the context whose frame called it
+static void npc_step_note(const float before[2], int ctx)
+{
+	if (!CFG_ONCE("npclog", 0) || npc_pick < 0 || npc_goff < 0)
+		return;
+	static unsigned n;
+	if (n++ > 4000)
+		return;
+	const uint8_t *g = base + RVA_GENTITIES + (size_t)npc_pick * GENT_SIZE;
+	LARGE_INTEGER pc, hz;
+	QueryPerformanceCounter(&pc);
+	QueryPerformanceFrequency(&hz);
+	log_printf("native: npcstep ent %d wall %.2f ctx %d before %.2f %.2f after %.2f %.2f", npc_pick, (double)pc.QuadPart * 1000.0 / (double)hz.QuadPart, ctx, (double)before[0], (double)before[1], (double)*(const float *)(g + npc_goff),
+		   (double)*(const float *)(g + npc_goff + 4));
+}
 static void (*server_step_original)(void);
 static void aim_targets_update(void);
 #ifndef _WIN64
@@ -4048,6 +4187,12 @@ static void server_step_hook(void)
 {
 	hook_counts[2]++;
 	LONGLONG t0 = perf_now();
+	float npc_before[2] = {0, 0};
+	if (CFG_ONCE("npclog", 0) && npc_pick >= 0 && npc_goff >= 0) {
+		const uint8_t *g = base + RVA_GENTITIES + (size_t)npc_pick * GENT_SIZE;
+		npc_before[0] = *(const float *)(g + npc_goff);
+		npc_before[1] = *(const float *)(g + npc_goff + 4);
+	}
 	if (ctx_current == 1) {
 		ctx_swap(0);
 		server_step_original();
@@ -4058,6 +4203,7 @@ static void server_step_hook(void)
 		}
 		ctx_swap(1);
 		perf_step += perf_now() - t0;
+		npc_step_note(npc_before, 1);
 		return;
 	}
 	server_step_original();
@@ -4067,6 +4213,7 @@ static void server_step_hook(void)
 		perf_aim += perf_now() - t1;
 	}
 	perf_step += perf_now() - t0;
+	npc_step_note(npc_before, 0);
 }
 
 // Player 1 (local client 1) has no input device yet: every simulation step he gets the usercmd of player 0 with the buttons and the movement cleared and the view turned by
