@@ -13,16 +13,18 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-4a4a4a"></a>
 </p>
 
-<h3 align="center">Play the whole Modern Warfare 2 (2009) campaign with a friend.</h3>
+<h3 align="center">Modern Warfare 2 (2009), made better. Play the whole campaign with a friend.</h3>
 
 <p align="center">
-  Two-player co-op on the current <b>64-bit Steam build</b>: online, or both on one PC in <b>split screen</b> (new, experimental). Built on the co-op netcode the game already ships for Spec Ops.<br>
+  <b>Modern Warfare 2 Enhanced</b> is a mod for the original 2009 game on the current <b>64-bit Steam build</b>, in the spirit of <a href="https://github.com/alicealys/h2-mod">h2-mod</a>. It starts with what the game lacks most: <b>two-player co-op for the whole campaign</b>, online or on one PC in <b>split screen</b> (new, experimental), built on the co-op netcode the game already ships for Spec Ops. Fixes and improvements of the game itself are added as they are found.<br>
   <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><b>⬇ Download the latest release</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="#install">Install</a> · <a href="#known-issues">Known issues</a>
 </p>
 
 ---
 
 ## ✨ Features
+
+### 🤝 Co-op campaign
 
 - 🤝 **The real campaign, for two.** Both PCs run the same level in lockstep, so the world, the enemies and every scripted scene are shared, not faked.
 - 🎬 **Every set piece reworked for two players**: vehicles, turrets, climbs, swims, cutscenes and the final knife fight. Nobody is left behind or thrown out of a scene.
@@ -33,10 +35,13 @@
 - 🚩 **Checkpoints in every mission**: a failed mission starts again from the last section you both reached.
 - 🧭 **Hosting and joining in the game's menus**: Campaign → co-op lobby, mission select, open / Steam friends only / password, a list of games on the network, join by address or Steam invite.
 - 🌐 **Online made easy**: an in-game Windows Firewall prompt and automatic UPnP port forwarding for the host.
-- 🖥 **Split screen on one PC (new, experimental)**: Campaign → Split screen puts both players in one game window, cut top and bottom like the Xbox 360 version, each half with its own view, weapon, HUD and effects. Each player picks his device in the lobby by pressing a button on it (keyboard and mouse, or a gamepad); a gamepad gets the console layout, aim assist, vibration, its buttons in the hints and its own options page.
+- 🖥 **Split screen on one PC (new, experimental)**: Campaign → Split screen puts both players in one game window, cut top and bottom like the Xbox 360 version, each half with its own view, weapon, HUD and effects. Each player picks his device in the lobby by pressing a button on it (keyboard and mouse, or a gamepad); a gamepad gets the console layout, aim assist, vibration, its buttons in the hints and its own options page. The names over the players read Alpha and Bravo.
 - 🎞 **Loads like single player**: the campaign's loading screen with the mission's briefing film; online, the level waits for the film until it ends or either player skips it.
 - 💾 **Saves for each playthrough, kept by the host**: each save remembers who played it. "Continue" picks up your partner's playthrough, "Pick a save" lists them (mission and players); playing on with someone new asks first: add them to the playthrough, or start a new game from the beginning. Both move on to the next mission together, and each player's own campaign records (missions unlocked, difficulty, achievements) are written as in single player.
+### 🛠 Fixes and improvements of the game
+
 - 🔤 **Fonts closer to the English original (Russian game)**: the Russian build draws everything in one generic sans; the mod swaps in the H*-Mod fonts (a Bank Gothic like face for the headings, a Conduit like one for the running text, a bold one for the mission intro text; SIL OFL; `mw2coop\fonts`). Off with `fonts=0` in `settings.ini`; the English game is not touched.
+- 📝 **Russian text fixes**: the Favela Escape objective no longer names Captain Price before he has appeared in the story (wording from the h2-mod translation). More are welcome as issues.
 - ⌨️ **Developer console (new)**: the key left of 1 (` or ~) opens a console over the top of the picture in every build (the retail game has none): game commands, dvar values and defaults, `cmdlist`, `dvarlist`, `dvardump`, `find`, `condump`, Tab completion and history.
 - 🧩 **Nothing of the game replaced**: one `winmm.dll` and a `mw2coop` folder; scripts are patched in memory when they load.
 
@@ -61,10 +66,14 @@
 
 All mission intros hold both players; the title plays only on a mission's first start.
 
+## 🧭 Plans
+
+Modern Warfare 2 Enhanced grows into an improvement mod for the original game, not only a co-op one: translation and font fixes, rendering fixes (for example the sharpness of downscaled text), quality of life. There are no dates; what is done is in the [changelog](CHANGELOG.md), ideas and bug reports go to [Issues](https://github.com/stxlvn/mw2_enhanced/issues).
+
 <a id="install"></a>
 ## 📦 Install
 
-> You both need **Call of Duty: Modern Warfare 2 (2009) on Steam**, the current **64-bit build**, and **the same mw2coop version**.
+> You both need **Call of Duty: Modern Warfare 2 (2009) on Steam**, the current **64-bit build**, and **the same version of the mod**.
 
 1. Download `mw2coop-<version>.zip` from [Releases](https://github.com/stxlvn/mw2_enhanced/releases/latest).
 2. Steam → Library → Modern Warfare 2 → ⚙ Manage → **Browse local files** (the folder with `iw4sp.exe`).
@@ -173,15 +182,16 @@ A scenario can press a player's buttons for real: `press( player, "activate", ms
 
 ## 🙏 Credits
 
-mw2coop is our own code, but it stands on other people's work:
+Modern Warfare 2 Enhanced (`mw2coop` inside: the folder, the DLL's scripts and settings keep that name) is our own code, but it stands on other people's work:
 
+- **[h2-mod](https://github.com/alicealys/h2-mod)** by alicealys and contributors: the model for this mod, and the source of the Russian wording of the Favela Escape objective.
 - **COD-MOD** and its campaign co-op pack (`x_coop`, author unknown): the first MW2 campaign co-op, for the old 32-bit build. We checked how it handled each mission (where the players stand, the Whiskey Hotel flare) before building ours. The COD-MOD client is by momo5502 and contributors ([FreeTheTech101/cod-mod](https://github.com/FreeTheTech101/cod-mod)).
 - **H\*-Mod fonts** (Vlad Loktionov, made for [h2-mod](https://github.com/alicealys/h2-mod); suggested in issue 1): the fonts of the Russian game's new look, SIL Open Font License 1.1 as stated in the files (the notes and the license text are in `mw2coop\fonts`).
 - **[iw4x-sp](https://git.alterware.dev/alterware/iw4x-sp)** by AlterWare: read for how the engine handles player input and asset pools (reference only; no code taken).
-- **Infinity Ward**: the game's own Spec Ops co-op, which mw2coop turns into a campaign mode.
+- **Infinity Ward**: the game's own Spec Ops co-op, which the mod turns into a campaign mode.
 - **[Co-op Anything](https://github.com/cranebeaker/coop-anything)**: the playbook and test tools this mod was built with.
 - Tools: [Ghidra](https://github.com/NationalSecurityAgency/ghidra) (NSA), [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (Martin Storsjö), [Capstone](https://www.capstone-engine.org/), the [Steamworks documentation](https://partner.steamgames.com/doc/home), [shields.io](https://shields.io) badges.
 
 ## ⚖️ Legal
 
-Not affiliated with or endorsed by Activision or Infinity Ward. Call of Duty and Modern Warfare are trademarks of Activision; the banner uses the game's Steam artwork and logo as a fan work. You need your own copy of the game; no game files are included. mw2coop's own code is MIT licensed (see `LICENSE`). Patch files quote short lines of the game's scripts only to say where a change goes; those lines belong to their owners and are not covered by the MIT license. mw2coop uses the game's co-op mode between players who agree to play together; it is not for multiplayer cheating.
+Not affiliated with or endorsed by Activision or Infinity Ward. Call of Duty and Modern Warfare are trademarks of Activision; the banner uses the game's Steam artwork and logo as a fan work. You need your own copy of the game; no game files are included. The mod's own code is MIT licensed (see `LICENSE`). Patch files quote short lines of the game's scripts only to say where a change goes; those lines belong to their owners and are not covered by the MIT license. The mod uses the game's co-op mode between players who agree to play together; it is not for multiplayer cheating.
