@@ -321,6 +321,13 @@ static void half_note(int time, int half)
 	half_tbl[i].half = half;
 	half_tbl[i].time = time;
 }
+// A frame drawn while the picture is NOT split (a menu: the pause menu, the objectives) must not find a note: the game's time stands still in a pause, so its time matched the notes of the
+// last split frames and the menu went into whichever half was noted last (the pause menu showed in the bottom half, "player 2's", half the time). Called for every unsplit draw.
+static void half_forget(void)
+{
+	for (int i = 0; i < 64; i++)
+		half_tbl[i].time = (int)0x80000000;
+}
 static int half_find(int time)
 {
 	LONG head = half_tbl_head;
@@ -979,7 +986,6 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
-	console_present(via, dev);
 	skip_this_present = 0;
 	static int on = -1;
 	if (on < 0)
@@ -989,6 +995,10 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	if (on) {
 		perf_comp += perf_now() - t0;
 		InterlockedIncrement(&perf_comp_n);
+	}
+	if (!skip_this_present) { // after the composed picture is made: the console and the QA frames are on what the player sees
+		console_present(via, dev);
+		shot_present_tick(dev);
 	}
 }
 
@@ -1768,6 +1778,7 @@ static void smooth_sample(int k)
 		}
 	}
 }
+static const char *vision_name_of(int ctx);
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
 	cg_draw_hook_inner(local_client, a, b);
@@ -1813,6 +1824,76 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	// View angle check ([native] viewlog=1, 2026-10-28: a script's SetPlayerAngles turns player 2's body but not his camera): per context, every 25th draw, the live context's
 	// playerState view angles (cg.ps rva 0x422440: pitch +0x108, yaw +0x10c, roll +0x110) and dwords +0x100..+0x120 (delta_angles are among them), the view angle accumulators
 	// (rva 0x533d14 pitch, 0x533d18 yaw) and the cl block's playerState copy (rva RVA_CL_PS) yaw
+	// Camera watch: player 2's body (the script's server position, dvar mw2coop_p2pos every half second) against where his own view is (context 1's player state origin). A
+	// mismatch of more than 48 units for two looks in a row is logged with both places and his state, so a report of "the bottom camera is in a wall" has numbers.
+	if (CFG_ONCE("p1entlog", 0) && ctx_on && ctx_current == 1) { // diagnostics: where context 1 (player 2's screen) holds entity 0, player 1's body: pose origin and the next state's origin, once a second
+		static unsigned en1;
+		if (++en1 % 60 == 0) {
+			const uint8_t *e = base + RVA_CENT;
+			const float *o = (const float *)(e + 0x18), *st = (const float *)(e + 0xfc);
+			log_printf("native: p1 body in player 2's screen: pose origin %.1f %.1f %.1f, state origin %.1f %.1f %.1f", (double)o[0], (double)o[1], (double)o[2], (double)st[0], (double)st[1], (double)st[2]);
+		}
+	}
+	if (CFG_ONCE("p2entlog", 0) && ctx_on && ctx_current == 0) { // diagnostics: where context 0 (player 1's screen) holds entity 1, player 2's body: origin, valid flag, eType, once a second
+		static unsigned en;
+		if (++en % 60 == 0) {
+			const uint8_t *e = base + RVA_CENT + CENT_SIZE;
+			const float *o = (const float *)(e + 0x18);
+			const float *st = (const float *)(e + 0xfc); // the entity state's origin (trBase) as the snapshot delivered it
+			log_printf("native: p2 body in player 1's screen: pose origin %.1f %.1f %.1f, state origin %.1f %.1f %.1f, valid flag %u, eType %u", (double)o[0], (double)o[1], (double)o[2], (double)st[0], (double)st[1], (double)st[2],
+				   *(const uint32_t *)(e + CENT_VALID) & 1, *(const uint32_t *)(e + 0xe0));
+		}
+	}
+	if (ctx_on && ctx_current == 1) {
+		static unsigned watch_n, watch_logs;
+		static int watch_bad;
+		if (++watch_n % 30 == 0) {
+			char v[96];
+			float bx, by, bz;
+			int linked, stance;
+			if (game_dvar_raw("mw2coop_p2pos", v, sizeof(v)) && sscanf(v, "%f %f %f %d %d", &bx, &by, &bz, &linked, &stance) == 5) {
+#ifdef _WIN64
+				const uint8_t *ps = base + 0x422440;
+#else
+				const uint8_t *ps = base + RVA_CL_PS;
+#endif
+				float cx = *(const float *)(ps + 0x1c), cy = *(const float *)(ps + 0x20), cz = *(const float *)(ps + 0x24);
+				float dx = cx - bx, dy = cy - by, dz = cz - bz;
+				int off = dx * dx + dy * dy > 48.0f * 48.0f || dz * dz > 64.0f * 64.0f;
+				// the body is a sample up to half a second old: while the view is moving (about 150 units a second walking out of the airport elevator, QA 2026-11-02:
+				// a false "57 apart" for 0.4 s) only a still view can be judged
+				static float lcx, lcy, lcz;
+				if ((cx - lcx) * (cx - lcx) + (cy - lcy) * (cy - lcy) + (cz - lcz) * (cz - lcz) > 4.0f)
+					off = 0;
+				lcx = cx;
+				lcy = cy;
+				lcz = cz;
+				static int first_look;
+				if (!first_look++)
+					log_printf("native: camera watch running: player 2's view %.1f %.1f %.1f, his body %.1f %.1f %.1f", (double)cx, (double)cy, (double)cz, (double)bx, (double)by, (double)bz);
+				if (off && ++watch_bad == 2 && watch_logs < 40) {
+					watch_logs++;
+					log_printf("native: CAMERA MISMATCH: player 2's view at %.1f %.1f %.1f, his body at %.1f %.1f %.1f (%.0f apart), linked %d, stance %d", (double)cx, (double)cy, (double)cz,
+						   (double)bx, (double)by, (double)bz, (double)sqrtf(dx * dx + dy * dy + dz * dz), linked, stance);
+				} else if (!off) {
+					if (watch_bad >= 2)
+						log_printf("native: camera is back with player 2's body");
+					watch_bad = 0;
+				}
+			}
+		}
+	}
+#ifdef _WIN64
+	if (CFG_ONCE("visionlog", 0) && ctx_on && ctx_current == 1 && vision_name_of(0)) { // diagnostics: each context's visionset_naked name (cgame block, rva 0x43c0ac: "visionset_naked <name> <time>" server command)
+		static char last[2][64] = {"?", "?"};
+		const char *names[2] = {vision_name_of(0), vision_name_of(1)};
+		for (int c = 0; c < 2; c++)
+			if (strncmp(last[c], names[c], 63)) {
+				strncpy(last[c], names[c], 63);
+				log_printf("native: vision: player %d's naked visionset is now '%.63s'", c + 1, names[c]);
+			}
+	}
+#endif
 	if (CFG_ONCE("viewlog", 0) && ctx_on) {
 		static unsigned vn;
 		if (++vn % 25 == 0 && vn < 20000) {
@@ -1851,6 +1932,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		seq++;
 	}
 	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
+		if (mode >= 5 && !split_on)
+			half_forget();
 		if ((mode == 8 || mode == 10) && cg_aspect_have) { // back from the split: the cgame's aspect as it was
 			*(float *)(base + RVA_CG_ASPECT) = cg_aspect_saved;
 			cg_aspect_have = 0;
@@ -2047,9 +2130,12 @@ static const range_t ranges[] = {
                                      // portal walk rva 0x19760 each frame). The sun shadow set-up comes before the walk and culls its casters with the LAST frame's cells: the other
                                      // view's, so a half's static sun shadows came and went with where the other player looked (the camo net over the trainer's grenade box).
                                      // [native] viewsplit=0 off
+    {0x45851b0, 0x38},               // the sun's blind and glare state of local client 0 (rva 0x4dd80 lerps its blind / glare amounts, 0x4e030 its flare; the array is indexed by local client,
+                                     // stride 0x38): with one state the fade of a player who looks into the sun (white-out, or the dark blind) was drawn in the other half too
 };
 #define RANGE_FX 9
 #define RANGE_VIEW 10
+#define RANGE_SUN 11
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
 // (the first 135 entities included, as in 64 bits) and [9] the view model pointers behind the entity array
@@ -2076,6 +2162,14 @@ static const range_t ranges[] = {
 #define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)
 static uint8_t *ctx_store[2][NRANGES];
 static int ctx_current;
+#ifdef _WIN64
+static const char *vision_name_of(int ctx) // the cgame block's visionset_naked name of a context (live when it is the current one)
+{
+	return ctx == ctx_current ? (const char *)(base + 0x43c0ac) : ctx_store[ctx][0] ? (const char *)(ctx_store[ctx][0] + (0x43c0ac - 0x404450)) : NULL;
+}
+#else
+static const char *vision_name_of(int ctx) { (void)ctx; return NULL; }
+#endif
 
 #ifdef _WIN64
 // Diagnostics ([native] xswap=<mask>): renderer statics swapped with the contexts too (bit 0: shadow light ring and parameters, 1: the scene frontend globals, 2: the sun shadow cache per view)
@@ -2169,6 +2263,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 		if (i == RANGE_VIEW && !CFG_ONCE("viewsplit", 1))
 			continue;
 #endif
+#ifdef RANGE_SUN
+		if (i == RANGE_SUN && !CFG_ONCE("sunsplit", 1))
+			continue;
+#endif
 		uint8_t *live = base + RANGE_RVA(i);
 		memcpy(ctx_store[ctx_current][i], live, ranges[i].size);
 		memcpy(live, ctx_store[to][i], ranges[i].size);
@@ -2207,10 +2305,10 @@ static void ctx_swap(int to)
 
 // The cgame block holds what the cgame registered for the whole process (the media handles the 2D drawing uses even while the cgame is still being initialised). Context 1 starts
 // from context 0's block after its init, so its own init can draw the loading screen.
+static int ctx_seeded; // once for each session (session_reset clears it): a second session in the same process starts context 1 from the new level's cgame, not from the first level's
 static void ctx_seed_cgame(void)
 {
-	static int seeded;
-	if (seeded || ctx_current != 0)
+	if (ctx_seeded || ctx_current != 0)
 		return;
 	ctx_ensure();
 	// Context 1 starts as a copy of context 0 as it is now (the cgame registered dvars and media for the whole process, the snapshot pointers point into their own block), except for
@@ -2224,7 +2322,7 @@ static void ctx_seed_cgame(void)
 			memcpy(ctx_store[1][i], live, ranges[i].size);
 		}
 	}
-	seeded = 1;
+	ctx_seeded = 1;
 }
 
 // The client code reads the number of local players (rva 0x3c3eb0) at these instructions (rva, length, offset of the rip-relative displacement). The server and the game module keep
@@ -4121,7 +4219,7 @@ static void lag_record(void)
 #define LAG_POS_N 16
 static struct { double t; float p[3]; } lag_pos[2][LAG_POS_N];
 static unsigned lag_pos_n[2];
-#define LAG_SAVED 12
+#define LAG_SAVED 15 // 3 yaws, 3 x 3 origins, the extra pushed onto the origins
 static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 {
 	*applied = 0;
@@ -4201,6 +4299,8 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 			e[pidx[i] + c] += ex[c];
 		}
 	}
+	for (int c = 0; c < 3; c++)
+		saved[12 + c] = ex[c];
 	*applied = 1;
 }
 // The bodies are drawn by the cgame's second per-entity pass (rva 0xb0680) and posed between the two passes: a yaw put back after the first pass was never seen
@@ -4210,16 +4310,24 @@ static void lag_unfix_yaw(int n, float saved[LAG_SAVED], int applied)
 {
 	if (!applied)
 		return;
-	static int keep = -1;
-	if (keep < 0)
+	static int keep = -1, posfix = -1;
+	if (keep < 0) {
 		keep = cfg("yawkeep", 1);
+		posfix = cfg("posfix", 1);
+	}
 	float *e = (float *)(base + RVA_CENT + (size_t)n * CENT_SIZE);
 	const int yidx[3] = {CF_YAW0, CF_YAW1, CF_YAW2}, pidx[3] = {CF_ORG0, CF_ORG1, CF_ORG2};
 	for (int i = 0; i < 3; i++) {
 		if (!keep)
 			e[yidx[i]] = saved[i];
-		for (int c = 0; c < 3; c++)
-			e[pidx[i] + c] = saved[3 + i * 3 + c];
+		for (int c = 0; c < 3; c++) {
+			// Only the extra is taken off: the pose origin (floats 6..8) is what the draw's lerp has just worked out from the snapshot's states. Putting the values from before the draw back froze
+			// the body of the other player where it stood at the split: it did not follow its player (owner 2026-11-02, S.S.D.D. and the airport). [native] posfix=0 puts them back as before.
+			if (posfix)
+				e[pidx[i] + c] -= saved[12 + c];
+			else
+				e[pidx[i] + c] = saved[3 + i * 3 + c];
+		}
 	}
 }
 
@@ -5834,6 +5942,7 @@ static void session_reset(void)
 	if (ctx_current)
 		ctx_swap(0);
 	ctx1_ready = 0;
+	ctx_seeded = 0;
 	cg_init_done = 0;
 	draws_after_init = 0;
 	split_on = 0;

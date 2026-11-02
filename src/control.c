@@ -464,6 +464,10 @@ static void run_line(char *line)
 		}
 		return;
 	}
+	if (strncmp(line, "!pshot ", 7) == 0) { // the frame as presented (native split screen QA)
+		shot_request_present(line + 7);
+		return;
+	}
 	if (strncmp(line, "!shot ", 6) == 0) {
 		shot_request(line + 6);
 		return;

@@ -114,6 +114,27 @@ main()
 		case "p2away":
 			p2away();
 			break;
+		case "tele":
+			thread angles_log();
+			tele();
+			break;
+		case "airreal":
+			thread angles_log();
+			airreal();
+			break;
+		case "p1move":
+			p1move();
+			break;
+		case "airsee":
+			airsee();
+			break;
+		case "aircmp":
+			aircmp();
+			break;
+		case "airjump":
+			thread angles_log();
+			airjump();
+			break;
 		case "airwalk":
 			thread angles_log();
 			airwalk();
@@ -460,6 +481,129 @@ veil()
 	}
 	SetDvar( "fx_draw", "1" );
 	report( "done" );
+}
+
+// tele: (native split screen test) 20 s into the level player 2 is moved by a script (SetOrigin) 400 units ahead of player 1 on free ground, and again 15 s later 400 units to
+// the other side: does his camera (native.c viewlog origin, context 1) follow his body (angles_log: the server position)?
+tele()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 20;
+	a = level.player;
+	b = level.player2;
+	for ( i = 0; i < 2; i++ )
+	{
+		fwd = AnglesToForward( ( 0, a.angles[ 1 ] + i * 180, 0 ) );
+		to = PlayerPhysicsTrace( a.origin + ( 0, 0, 16 ), a.origin + fwd * 400 + ( 0, 0, 16 ) );
+		report( "tele: player 2 was at " + b.origin + ", is put at " + to );
+		b SetOrigin( to );
+		wait 15;
+		report( "tele: player 2 now at " + b.origin );
+	}
+}
+
+// airreal: (native split screen test, airport) the mod's own follow and leash stay ON; once the elevator ride is over player 2 walks forward on the pad dvar for 8 s, then
+// stands: what do his camera (native.c viewlog origin, context 1) and his body (angles_log) do?
+airreal()
+{
+	while ( !isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	while ( isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	report( "airreal: the ride is over, player 2 at " + level.player2.origin + ", player 1 at " + level.player.origin );
+	wait 12;
+	SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 0" );
+	wait 8;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	report( "airreal: player 2 stopped at " + level.player2.origin + ", player 1 at " + level.player.origin );
+}
+
+// p1move: (native split screen test) player 1 walks ahead 4 s from 20 s into the level (script steps along his view, stopped by walls), player 2 stands: does player 1's body in
+// player 2's half move with him (native.c p1entlog)?
+p1move()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 20;
+	for ( i = 0; i < 40; i++ )
+	{
+		f = AnglesToForward( ( 0, level.player GetPlayerAngles()[ 1 ], 0 ) );
+		to = level.player.origin + f * 12;
+		hit = PlayerPhysicsTrace( level.player.origin + ( 0, 0, 4 ), to + ( 0, 0, 4 ) );
+		level.player SetOrigin( ( hit[ 0 ], hit[ 1 ], level.player.origin[ 2 ] ) );
+		wait 0.1;
+	}
+	report( "p1move: player 1 at " + level.player.origin + ", player 2 at " + level.player2.origin );
+}
+
+// airsee: (native split screen test, airport) player 2 walks out as in airreal and the report gives both positions (a frame from the hall: does player 1 see player 2's body where he is?)
+airsee()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	while ( !isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	while ( isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	wait 12;
+	SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 0" );
+	wait 8;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	report( "airsee: player 2 stopped at " + level.player2.origin + ", player 1 at " + level.player.origin + " angles " + level.player GetPlayerAngles() + ", player 2 body model " + level.player2.model );
+}
+
+// aircmp: (native split screen test, airport) as airreal, then player 1 is put at player 2's spot with his angles: do both halves show the same picture (is the wall in
+// player 2's half real geometry or a camera/render fault)?
+aircmp()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	while ( !isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	while ( isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	wait 12;
+	SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 0" );
+	wait 8;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	wait 1;
+	a = level.player2 GetPlayerAngles();
+	report( "aircmp: player 2 at " + level.player2.origin + " angles " + a + ", player 1 goes there" );
+	eye = level.player2 GetEye();
+	report( "aircmp: player 2 eye " + eye );
+	for ( d = 0; d < 360; d += 45 )
+	{
+		dir = AnglesToForward( ( 0, d, 0 ) );
+		t = BulletTrace( eye, eye + dir * 200, false, level.player2 );
+		report( "aircmp: eye ray yaw " + d + " hits at " + int( Distance( eye, t[ "position" ] ) ) + " units, surface " + t[ "surfacetype" ] );
+	}
+	level.player SetOrigin( level.player2.origin );
+	level.player SetPlayerAngles( a );
+}
+
+// airjump: (native split screen test, airport) after the elevator ride a script moves player 2 far across the hall (about 1000 units, then 1250), the way the mod's follow and
+// checkpoint code does; does his camera (native.c viewlog origin, context 1) go with his body (angles_log: the server position)?
+airjump()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	while ( !isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	while ( isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	wait 3;
+	spots = [];
+	spots[ 0 ] = ( 5551, 1940, 64.2 );
+	spots[ 1 ] = ( 5290, 2168, 139.4 );
+	spots[ 2 ] = ( 6540, 2043, 64.2 );
+	for ( i = 0; i < spots.size; i++ )
+	{
+		report( "airjump: player 2 at " + level.player2.origin + " is put at " + spots[ i ] );
+		level.player2 SetOrigin( spots[ i ] );
+		wait 8;
+		report( "airjump: player 2 is now at " + level.player2.origin );
+	}
 }
 
 // airwalk: (native split screen test, airport) once the elevator ride is over and player 2 is let go, he walks forward for 4 s on the pad dvar: does his camera

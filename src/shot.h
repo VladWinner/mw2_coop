@@ -9,3 +9,5 @@ void shot_request(const char *name);
 // thread after each frame is composed (src/native.c).
 void shot_burst_start(const char *prefix, int n, int x, int y, int w, int h);
 void shot_burst_tick(void *dev);
+void shot_request_present(const char *name);  // QA: the frame as presented (src/native.c calls shot_present_tick from its Present hooks)
+void shot_present_tick(void *dev);

@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.5.7.5-beta (2026-11-02, pre-release: extra fixes of v0.5.7-beta)
+
+- **Split screen: starting it a second time in one game run no longer crashes.** After "quit to the main menu" and a new
+  mission the second player's view kept pointers into the previous level; its state is now reset for every session.
+- **Split screen: the pause menu (and the objectives) now cover the whole picture.** The game's clock stands still in a
+  pause, so the menu frame matched the notes of the last split frames and was put into whichever half was noted last:
+  half the time into the bottom half, as if it were "player 2's" pause menu.
+- **Split screen: the sun's white-out and dark blind no longer leak between the halves.** The renderer keeps that fade
+  per local client and both of our views are local client 0, so a player who looked into the sun brightened or darkened
+  the other player's half too ("overexposure in one half, a mask in the other"). Each view now has its own state
+  (64-bit build; the 32-bit and iw4x builds still share it). `[native] sunsplit=0` turns the change off.
+- Camera watch (log line `CAMERA MISMATCH`) now really runs: the script that feeds it passed a word where a number was
+  expected, so it never produced anything in v0.5.7.
+- No Russian: player 2 can walk out of the elevator. His place beside player 1 was against the wall next to the doors
+  (the doors let a player through only within about 22 units of the middle line): walking forward ran into the wall,
+  his half showed the wall and its call panel from a hand's width, and player 1 saw his body still standing in the
+  elevator. He now faces the middle of the doors from his place and is let go facing them. (The camera itself was never
+  wrong: it matched the body in every test.)
+- **Split screen: the other player's body now follows him.** The code that turns the body to face its player's view saved
+  the body's origin before each draw and put it back afterwards, undoing the position the game had just worked out from
+  the snapshot: each player's body stayed where it stood when the split began (player 1 saw player 2 still in the airport
+  elevator after he had walked out; in S.S.D.D. the body "tried to move and could not"). Only the offset it adds is taken
+  off now. `[native] posfix=0` goes back to the old behaviour.
+- The camera watch ignores a view that is moving (its body position is up to half a second old: a false "57 apart" while
+  player 2 walked out of the elevator).
+- Test tools: `tools/qa_restart.sh` (second start), `tools/qa_pause.sh` (pause menu, fake pad, scenarios).
+
 ## v0.5.7-beta (2026-11-01, pre-release: extra fixes and a developer console)
 
 - **Developer console (new, all three builds)**: the key left of 1 (` or ~) opens a console panel over the top of the

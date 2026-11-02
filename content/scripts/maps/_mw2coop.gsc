@@ -126,6 +126,7 @@ main()
 	flag_init( "mw2coop_regrouped" );
 	thread regroup_after_start();
 	thread follow_leader_teleports();
+	thread camera_probe();
 	set_bodies();
 	thread sync_weapons();
 	thread track_checkpoints();
@@ -308,6 +309,28 @@ regroup_after_start()
 		state( "no safe spot next to player 1 within 120 s" );
 	// a level placing the two players itself waits for this (maps\_mw2coop_trainer)
 	flag_set( "mw2coop_regrouped" );
+}
+
+// Where player 2's body is, for the split screen's camera watch (native.c: mw2coop_p2pos "x y z linked stance"): if his camera is ever somewhere else the log says so.
+camera_probe()
+{
+	level endon( "mw2coop_level_end" );
+	for ( ;; )
+	{
+		wait 0.5;
+		p = level.player2;
+		if ( !isdefined( p ) ) // (player 2 may not exist yet when this thread starts: a level start that spawns him late)
+			continue;
+		linked = 0;
+		if ( p IsLinked() )
+			linked = 1;
+		stance = 0; // GetStance() is a word: stand 0, crouch 1, prone 2
+		if ( p GetStance() == "crouch" )
+			stance = 1;
+		else if ( p GetStance() == "prone" )
+			stance = 2;
+		SetDvar( "mw2coop_p2pos", p.origin[ 0 ] + " " + p.origin[ 1 ] + " " + p.origin[ 2 ] + " " + linked + " " + stance );
+	}
 }
 
 // When a script moves player 1 far in one step (teleport, start point), bring player 2 along.

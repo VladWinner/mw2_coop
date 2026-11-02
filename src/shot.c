@@ -212,6 +212,30 @@ void shot_request(const char *name)
 	LeaveCriticalSection(&lock);
 }
 
+// QA: the frame at the moment of Present (what the player sees, the composed split picture and the pause menu too), for the native split screen where EndScene is called
+// several times per frame: native.c's Present hooks call shot_present_tick()
+static char present_pending[64];
+
+void shot_request_present(const char *name)
+{
+	char clean[sizeof(present_pending)];
+	int n = 0;
+	for (const char *c = name; *c && n < (int)sizeof(clean) - 1; c++)
+		clean[n++] = (*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '-' ? *c : '_';
+	clean[n] = 0;
+	lstrcpynA(present_pending, clean, sizeof(present_pending));
+}
+
+void shot_present_tick(void *dev)
+{
+	if (!present_pending[0])
+		return;
+	char name[sizeof(present_pending)];
+	lstrcpynA(name, present_pending, sizeof(name));
+	present_pending[0] = 0;
+	shot_save_now(dev, name);
+}
+
 void shot_install(void)
 {
 	InitializeCriticalSection(&lock);

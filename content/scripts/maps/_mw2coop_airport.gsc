@@ -25,10 +25,14 @@ partner_in_elevator( node )
 		return;
 	p2 = level.player2;
 	spot = elevator_spot( node );
+	// he faces the middle of the doors from his place beside player 1 (see elevator_spot)
+	aim = VectorToAngles( door_middle( node ) - spot );
+	aim = ( 0, aim[ 1 ], 0 );
+	level.mw2coop_elevator_aim = aim;
 	p2 SetOrigin( spot );
-	p2 SetPlayerAngles( node.angles );
+	p2 SetPlayerAngles( aim );
 	level.mw2coop_elevator_node = Spawn( "script_origin", spot );
-	level.mw2coop_elevator_node.angles = node.angles;
+	level.mw2coop_elevator_node.angles = aim;
 	p2 PlayerLinkTo( level.mw2coop_elevator_node, undefined, 1, 0, 0, 0, 0, 0 );
 	maps\_mw2coop::state( "airport: player 2 in the elevator " + int( Distance( spot, node.origin ) ) + " units beside player 1" );
 }
@@ -38,26 +42,43 @@ partner_out_of_elevator( angles )
 	if ( !coop() || !isdefined( level.mw2coop_elevator_node ) )
 		return;
 	level.player2 Unlink();
-	level.player2 SetPlayerAngles( angles );
+	level.player2 SetPlayerAngles( level.mw2coop_elevator_aim );
 	level.mw2coop_elevator_node Delete();
 }
 
-// A free spot at the back of the elevator beside player 1: floor at his height, a clear line from
-// him, and nobody of the team standing there.
+// Where the middle of the doors is: on player 1's line, 140 units ahead of him.
+door_middle( node )
+{
+	return node.origin + AnglesToForward( ( 0, node.angles[ 1 ], 0 ) ) * 140;
+}
+
+// A free spot in the elevator beside player 1: floor at his height, a clear line from him, nobody of the team
+// standing there, and a free way out through the doors. The doors are narrower than the elevator: a player's
+// centre passes only within about 22 units of the middle line (QA 2026-11-02: x 6505..6550 at the doors, player 1
+// stands on the middle at 6528). Player 2's old spot 36 units to the side, facing straight ahead, was against the
+// wall beside the doors: he could never walk out, his camera looked at the wall and its call panel from a hand's
+// width, and player 1 saw his body still in the elevator. Now he faces the middle of the doors and the spot that
+// lets him walk the furthest in that direction wins (squad members stand ahead of player 1: no spot in front).
 elevator_spot( node )
 {
 	yaw = ( 0, node.angles[ 1 ], 0 );
 	right = AnglesToRight( yaw );
 	forward = AnglesToForward( yaw );
 	offsets = [];
+	offsets[ offsets.size ] = right * 30;
+	offsets[ offsets.size ] = right * -30;
+	offsets[ offsets.size ] = right * 34;
+	offsets[ offsets.size ] = right * -34;
+	offsets[ offsets.size ] = right * 32 + forward * -16;
+	offsets[ offsets.size ] = right * -32 + forward * -16;
 	offsets[ offsets.size ] = right * 36;
 	offsets[ offsets.size ] = right * -36;
-	offsets[ offsets.size ] = right * 32 + forward * 12;
-	offsets[ offsets.size ] = right * -32 + forward * 12;
-	offsets[ offsets.size ] = right * 44;
-	offsets[ offsets.size ] = right * -44;
+	offsets[ offsets.size ] = forward * -40;
 	chest = node.origin + ( 0, 0, 40 );
+	middle = door_middle( node );
 	ai = GetAIArray( "allies" );
+	best = undefined;
+	best_reach = -1;
 	foreach ( offset in offsets )
 	{
 		at = node.origin + offset;
@@ -72,8 +93,19 @@ elevator_spot( node )
 				taken = true;
 		if ( taken )
 			continue;
-		return floor;
+		start = floor + ( 0, 0, 4 );
+		dir = VectorNormalize( ( middle[ 0 ] - floor[ 0 ], middle[ 1 ] - floor[ 1 ], 0 ) );
+		reach = Distance2D( PlayerPhysicsTrace( start, start + dir * 170 ), start );
+		if ( reach >= 165 )
+			return floor;
+		if ( reach > best_reach )
+		{
+			best = floor;
+			best_reach = reach;
+		}
 	}
+	if ( isdefined( best ) )
+		return best;
 	return node.origin + right * 36;
 }
 
