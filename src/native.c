@@ -28,6 +28,7 @@
 #include "rumble.h"
 #include "shot.h"
 #include "d3dcap.h"
+#include "zones.h"
 
 // Both builds compile this file; the 64-bit addresses below are used by the 64-bit build, the 32-bit ones are found in docs/32bit-native-map/ and come in piece by piece
 // (NATIVE32_READY in native_install says what is switched on).
@@ -1622,9 +1623,10 @@ static void final2d_hook(void *vp)
 		IDirect3DSurface9_Release(old);
 }
 
+static DWORD comp_not_before; // GetTickCount: the device hooks are not (re)installed before it (after a vid_restart the Steam overlay hooks the new device first)
 static void comp_hook(void)
 {
-	if (the_device)
+	if (the_device || GetTickCount() < comp_not_before)
 		return;
 #ifdef _WIN64
 	IDirect3DDevice9 *dev = *(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE);
@@ -1673,6 +1675,52 @@ void native_present_hooks(void)
 {
 	comp_hook();
 }
+
+// vid_restart (and alt+enter, which runs it) destroys the D3D device and makes a new one. Our hooks sit on the d3d9 vtable slots; the Steam overlay hooks the new device again,
+// finds ours where its own should be and the two call each other until the stack is gone (0xc00000fd inside gameoverlayrenderer64, v0.6.0 report; reproduced here with a
+// split session). The same happens at the start when the hooks go in too early (see console.c), so the way out is the same: the hooks are taken out before the command
+// runs and put in again once the new device has been up for a while. The command's function pointer is in its table entry (rva 0x5dae38 + 0x20, the function 0xd51d0).
+#ifdef _WIN64
+static void (*vid_restart_original)(void);
+static void vid_restart_hook(void)
+{
+	// The engine restores the level after a vid_restart from a save it makes itself; a co-op session saves nothing (progress.c), so the reload ends in the engine's error "Trying to read
+	// corrupted file" and the players are thrown out to the menu (checked with a split session, v0.6.0 report: alt+enter). A running co-op level therefore does not restart its video
+	// ([native] vidrestart=1 lets it through); in the menus it is as before.
+	if (!cfg("vidrestart", 0) && *(volatile int *)(base + 0x533cb8) == 6) { // RVA_CLIENT_STATE: 6 = a level is running
+		char coop[8] = "";
+		game_dvar_string("coop", coop, sizeof(coop));
+		if (coop[0] == '1') {
+			log_printf("native: vid_restart ignored: a co-op level is running (the engine could not restore it; change the video settings in the main menu)");
+			return;
+		}
+	}
+	zones_pools_reset(); // the restart initialises the asset database again: the raised pool sizes of the co-op levels must not be what it builds from
+	if (the_device) {
+		log_printf("native: vid_restart: the device hooks are taken out, they go back on the new device");
+		comp_release();
+		slots_take_out();
+		nslots = 0;
+		the_device = NULL;
+		comp_not_before = GetTickCount() + 4000;
+	}
+	vid_restart_original();
+}
+static void vid_restart_install(void)
+{
+	void **entry = (void **)(base + 0x5dae38 + 0x20);
+	DWORD old;
+	if (*entry != (void *)(base + 0xd51d0)) {
+		log_printf("native: vid_restart not hooked (the command table entry differs)");
+		return;
+	}
+	if (!VirtualProtect(entry, sizeof(void *), PAGE_READWRITE, &old))
+		return;
+	vid_restart_original = (void (*)(void))*entry;
+	*entry = (void *)vid_restart_hook;
+	VirtualProtect(entry, sizeof(void *), old, &old);
+}
+#endif
 
 // the second draw of the frame must not start a new frame: it adds its view to the one the first draw began
 static void begin_frame_hook(void)
@@ -5272,14 +5320,17 @@ static unsigned local_slot_hook(unsigned lc)
 // Mode 10: the game message windows (rva 0x52f348, outside the swapped ranges: one set, local client 0's) are drawn by both contexts, so their texts came in both halves and
 // the layer comparison left a ghost of them. The HUD's draw of a game message window (rva 0xcb4f0: local client, window, x, y, ...) draws window 2 (console channel
 // "subtitle") in the bottom half only, window 0 ("gamenotify obituary", top left) in the top half only ([native] subonce=0 off).
+// Like the Xbox 360 game (its subtitles_ss menu is visible for local player 0 only, at y 375 of 480 of that view) the subtitles are in the top half; [native] subtop=0 puts them back in the bottom half.
 static const uint8_t msgwin_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x70};
 static void (*msgwin_original)(int, int, int, int, int, int, void *, float, const float *, int, int, int); // x and y come in integer registers (r8d, r9d)
 static void msgwin_hook(int lc, int window, int x, int y, int horz, int vert, void *font, float scale, const float *color, int style, int align, int how)
 {
-	static int on = -1;
-	if (on < 0)
+	static int on = -1, sub_top = 0;
+	if (on < 0) {
 		on = cfg("subonce", 1);
-	if (on && mode == 10 && native_active && split_on && ((window == 2 && ctx_current == 0) || (window == 0 && ctx_current == 1)))
+		sub_top = cfg("subtop", 1);
+	}
+	if (on && mode == 10 && native_active && split_on && ((window == 2 && ctx_current == (sub_top ? 1 : 0)) || (window == 0 && ctx_current == 1)))
 		return;
 	msgwin_original(lc, window, x, y, horz, vert, font, scale, color, style, align, how);
 }
@@ -7006,6 +7057,7 @@ void native_install(void)
 		game_add_command(&native_commands[i]);
 	padglyphs_install(text_pad_player);
 #ifdef _WIN64
+	vid_restart_install();
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");
 #endif

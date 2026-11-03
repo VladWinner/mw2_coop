@@ -345,6 +345,7 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
 1. DONE 2026-10-28: subtitles once, in the bottom half, no ghost. The game message windows (rva 0x52f348, outside the swapped ranges, so one set that both contexts draw) are drawn by
    rva 0xcb4f0 (local client, window, x, y as ints in r8d/r9d, ...); window 2 is the channel "subtitle" (default filters at rva 0x3bf1f0: "gamenotify obituary", "boldgame", "subtitle", "").
    `msgwin_hook` draws window 2 in context 1 only and window 0 (the notices at the top left, e.g. a new objective) in context 0 only (`subonce=0` off). Checked on trainer frames.
+   From 2026-11-03 (default `subtop=1`; `subtop=0` is the old placement) window 2 is drawn in context 0 instead: the Xbox 360 game shows its subtitles once, in the top view only (menu `subtitles_ss`: visible when `player("number") == 0`, rect y 375 of 480 in that view, subright/submiddle), read from the console disc's `ui/hud_splitscreen.txt`. Not yet checked in frames.
 2. The dark backing was the compass's mask: it writes a rectangle into the alpha alone (blending off, colour write 8), multiplies it by its round edge (ZERO/SRCALPHA, colour write 8),
    then draws its map by destination alpha (DESTALPHA/INVDESTALPHA). `layer_fix` forced "keep the alpha" on the multiply, so the map covered the whole rectangle: a dark square
    around the compass, seen on snow. Alpha-only draws now keep the game's own blending (fixed 2026-10-28, checked on trainer frames while walking).

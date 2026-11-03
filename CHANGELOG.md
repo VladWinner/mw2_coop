@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Split screen: the subtitles are in the top half, as on the Xbox 360.** The console's `subtitles_ss` menu (read from the console disc's `ui/hud_splitscreen.txt`) shows them once, for the first player's view only, in the lower part of the top half; they were in the bottom half. `[native] subtop=0` brings the old placement back.
+- **Fixed: alt+enter / `vid_restart` crashed the game in a split session** (0xc00000fd inside the Steam overlay, v0.6.0 report). `vid_restart` destroys and recreates the D3D device; the mod's hooks on the device stayed in place, the overlay hooked the new device again and the two called each other until the stack was gone. The hooks are now taken out when the command runs and put back on the new device after four seconds. The asset pool the mod enlarges for the co-op levels (1350 to 2000 entries) is put back to its size before the restart too: the engine builds the pools again from that table and overran their memory.
+- **A running co-op or split level ignores `vid_restart` (and so alt+enter).** The engine restores the level after a restart from a save of its own, and a co-op session saves nothing, so the reload ended in "Trying to read corrupted file" and the players were thrown out to the menu. Change the video settings in the main menu. `[native] vidrestart=1` lets the command through.
+- **Fixed: a crash when the game drew an entity whose weapon definition pointer was not valid** (64-bit; access violation at `iw4sp.exe+0x9eb2b`, reported with player 2 picking up a weapon). The lookup is checked now and the entity is skipped; the weapon index is logged (`guards:` lines) to find out where the stale pointer comes from.
+
 ## v0.6.0-beta (2026-11-03, the first full release since v0.5.0-beta: it includes everything of 0.5.5, 0.5.6, 0.5.7 and 0.5.7.5)
 
 - **Russian game: small text is smooth** (font offer from the community). The mod's font atlas had one mip level and the game's sampler for it has the mip filter off (`r_texFilterMipMode` never reached it), so text drawn smaller than the 4x raster was only bilinear-sampled: sharp and jagged. The atlas now has three levels (4x, 2x, 1x) and its sampler uses them (trilinear). `fontmip=0` under `[display]` in `settings.ini` gives the old look. Built on top of the finer glyph grid (PR #8): the packer leaves a transparent 4-pixel margin around each glyph so the 1x level never mixes neighbours. Checked by a frame of the Russian lobby in the 64-bit build; the 32-bit build compiles the same code and was not run.

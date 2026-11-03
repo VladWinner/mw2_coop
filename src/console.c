@@ -477,14 +477,9 @@ static void set_open(int on)
 {
 	if (on == (int)is_open)
 		return;
-	if (on) { // (the Present hooks go in the first time the console opens, long after the Steam overlay put its own on the same functions: set at the start, the two call each other
-		  // round until the stack is gone, 0xc00000fd inside gameoverlayrenderer)
-		static int hooked;
-		if (!hooked) {
-			hooked = 1;
-			native_present_hooks();
-		}
-	}
+	if (on) // (the Present hooks go in when the console opens, long after the Steam overlay put its own on the same functions: set at the start, the two call each other
+		// round until the stack is gone, 0xc00000fd inside gameoverlayrenderer. A vid_restart takes them out again (native.c), so every opening asks, which costs nothing once they are in)
+		native_present_hooks();
 	InterlockedExchange(&is_open, on);
 	InterlockedExchange(&dirty, 1);
 	clip_mouse(on);

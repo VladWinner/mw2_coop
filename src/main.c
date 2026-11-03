@@ -11,6 +11,7 @@
 #include "firewall.h"
 #include "devices.h"
 #include "console.h"
+#include "guards.h"
 #include "native.h"
 #include "game.h"
 #include "localize.h"
@@ -80,6 +81,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		fov_install();
 		devices_install();
 		native_install();
+		guards_install();
 		console_install();
 		control_start();
 	}

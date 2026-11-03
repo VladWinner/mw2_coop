@@ -98,6 +98,9 @@ static const struct {
 #endif
 #define ASSET_TYPE_LOADED_SOUND 13
 
+static int pool_added[43]; // entries pool_extend() added to each type's size table entry (undone by zones_pools_reset)
+static int pools_extended;
+
 static void pool_extend(int type, int extra, size_t entry_size)
 {
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
@@ -119,6 +122,22 @@ static void pool_extend(int type, int extra, size_t entry_size)
 	*head = more;
 	log_printf("zones: pool %d: %d entries more (%d -> %d)", type, extra, sizes[type], sizes[type] + extra);
 	sizes[type] += extra;
+	pool_added[type] += extra;
+}
+
+// vid_restart runs DB_Init again: it builds each pool's free list from the size table over the pool's original memory. With the table raised that is 2000 entries in a span
+// made for 1350: the free list ran past the pool, and the level that was reloaded failed with "Trying to read corrupted file". Called before the restart: the sizes are the
+// original ones again and the next co-op level extends the pools again (the fresh pools have none of the extra entries).
+void zones_pools_reset(void)
+{
+	int *sizes = (int *)((uint8_t *)GetModuleHandleA(NULL) + RVA_POOL_SIZES);
+	for (int i = 0; i < 43; i++)
+		if (pool_added[i]) {
+			sizes[i] -= pool_added[i];
+			log_printf("zones: pool %d back to %d entries (the database is initialised again)", i, sizes[i]);
+			pool_added[i] = 0;
+		}
+	pools_extended = 0;
 }
 
 
@@ -130,8 +149,7 @@ static void load_level_zones(const char *map, int flag)
 	log_printf("zones: loading level zones for '%s' (coop '%s', flag %d)", map ? map : "", coop, flag);
 	if (coop[0] == '1' && map) {
 		// once, before the first co-op level's zones: the database thread is idle here
-		static int extended;
-		if (!extended++)
+		if (!pools_extended++)
 			pool_extend(ASSET_TYPE_LOADED_SOUND, 650, sizeof(void *) == 8 ? 64 : 0); // 64: the pool's span / 1350; 0: found
 
 
