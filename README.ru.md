@@ -7,7 +7,6 @@
 <p align="center">
   <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><img alt="Последний релиз" src="https://img.shields.io/github/v/release/stxlvn/mw2_enhanced?include_prereleases&label=релиз&color=78c020"></a>
   <a href="https://www.nexusmods.com/codmw2/mods/99"><img alt="Nexus Mods" src="https://img.shields.io/badge/Nexus_Mods-MW2_Campaign_Co--op-d98f40"></a>
-  <a href="https://discord.gg/uCvu82XHX"><img alt="Discord" src="https://img.shields.io/badge/Discord-join-5865f2?logo=discord&logoColor=white"></a>
   <img alt="Статус: бета" src="https://img.shields.io/badge/статус-бета-78c020">
   <img alt="Игроков: 2" src="https://img.shields.io/badge/игроков-2-4a4a4a">
   <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-4a4a4a">
@@ -19,6 +18,10 @@
 <p align="center">
   <b>Modern Warfare 2 Enhanced</b> — мод для оригинальной игры 2009 года на актуальной <b>64-битной Steam-версии</b>, по духу как <a href="https://github.com/alicealys/h2-mod">h2-mod</a>. Начинаем с того, чего игре не хватает больше всего: <b>кооператива на двоих на всю кампанию</b>, по сети или на одном ПК с <b>разделённым экраном</b> (новое, экспериментально), на сетевом коде, который уже есть в игре для Спецопераций (Spec Ops). Исправления и улучшения самой игры добавляются по мере находок.<br>
   <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><b>⬇ Скачать последний релиз</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="https://discord.gg/uCvu82XHX">Discord</a> · <a href="#install">Установка</a> · <a href="#known-issues">Известные проблемы</a>
+</p>
+
+<p align="center">
+  <a href="https://discord.gg/uCvu82XHX"><img alt="Присоединяйтесь к нашему Discord-серверу" src="https://img.shields.io/badge/%D0%9F%D1%80%D0%B8%D1%81%D0%BE%D0%B5%D0%B4%D0%B8%D0%BD%D1%8F%D0%B9%D1%82%D0%B5%D1%81%D1%8C_%D0%BA_%D0%BD%D0%B0%D1%88%D0%B5%D0%BC%D1%83_Discord--%D1%81%D0%B5%D1%80%D0%B2%D0%B5%D1%80%D1%83-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="52"></a>
 </p>
 
 ---

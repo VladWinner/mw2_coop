@@ -7,7 +7,6 @@
 <p align="center">
   <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/stxlvn/mw2_enhanced?include_prereleases&label=release&color=78c020"></a>
   <a href="https://www.nexusmods.com/codmw2/mods/99"><img alt="Nexus Mods" src="https://img.shields.io/badge/Nexus_Mods-MW2_Campaign_Co--op-d98f40"></a>
-  <a href="https://discord.gg/uCvu82XHX"><img alt="Discord" src="https://img.shields.io/badge/Discord-join-5865f2?logo=discord&logoColor=white"></a>
   <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-78c020">
   <img alt="Players: 2" src="https://img.shields.io/badge/players-2-4a4a4a">
   <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-4a4a4a">
@@ -19,6 +18,10 @@
 <p align="center">
   <b>Modern Warfare 2 Enhanced</b> is a mod for the original 2009 game on the current <b>64-bit Steam build</b>, in the spirit of <a href="https://github.com/alicealys/h2-mod">h2-mod</a>. It starts with what the game lacks most: <b>two-player co-op for the whole campaign</b>, online or on one PC in <b>split screen</b> (new, experimental), built on the co-op netcode the game already ships for Spec Ops. Fixes and improvements of the game itself are added as they are found.<br>
   <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><b>⬇ Download the latest release</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="https://discord.gg/uCvu82XHX">Discord</a> · <a href="#install">Install</a> · <a href="#known-issues">Known issues</a>
+</p>
+
+<p align="center">
+  <a href="https://discord.gg/uCvu82XHX"><img alt="Join our Discord server" src="https://img.shields.io/badge/Join_our_Discord_server-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="52"></a>
 </p>
 
 ---
