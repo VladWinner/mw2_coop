@@ -103,6 +103,10 @@ static const method_t wrappers[MIRRORED] = {wrap0, wrap1, wrap2, wrap3, wrap4};
 void mirror_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
+	if (game_qa_flag("nomirror")) {
+		log_printf("mirror: nomirror file found, nothing is wrapped");
+		return;
+	}
 	int done = 0;
 	for (size_t i = 0; i < MIRRORED; i++) {
 		uint8_t *entry = base + mirrored[i].rva;

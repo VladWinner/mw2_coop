@@ -629,6 +629,18 @@ static void setdvar_wrap(void)
 static void hook_script_setdvar(void)
 {
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	{ // QA bisect: a file mw2coop\nosetdvar next to the exe leaves the builtin alone
+		char probe[MAX_PATH];
+		DWORD n = GetModuleFileNameA(NULL, probe, MAX_PATH);
+		while (n > 0 && probe[n - 1] != '\\')
+			n--;
+		probe[n] = 0;
+		lstrcatA(probe, "mw2coop\\nosetdvar");
+		if (GetFileAttributesA(probe) != INVALID_FILE_ATTRIBUTES) {
+			log_printf("control: nosetdvar file found, the setdvar builtin is not wrapped");
+			return;
+		}
+	}
 	uint8_t *entry = base + RVA_FN_SETDVAR_ENTRY;
 	if (lstrcmpA(*(const char **)entry, "setdvar") != 0) {
 		log_printf("control: no setdvar entry at rva 0x%x, script dvars stay unreadable in co-op", RVA_FN_SETDVAR_ENTRY);

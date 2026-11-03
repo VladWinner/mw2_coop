@@ -10,6 +10,7 @@
 #include "crash.h"
 #include "hook.h"
 #include "native.h"
+#include "scrdebug_stack.h"
 #include "log.h"
 
 // the registers of the exception context: 64 bits Rip/Rsp..., 32 bits Eip/Esp...
@@ -97,6 +98,8 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 		}
 		log_printf("%s", mods);
 	}
+	log_printf("CRASH: GSC position of the script VM:");
+	scrdebug_stack_log();
 #ifdef _WIN64
 	log_printf("CRASH: native split screen: %s", native_crash_state());
 #endif

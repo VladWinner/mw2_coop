@@ -284,6 +284,10 @@ static DWORD WINAPI watchdog(void *arg)
 void rumble_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
+	if (game_qa_flag("norumble")) {
+		log_printf("rumble: norumble file found, the builtins stay empty");
+		return;
+	}
 	HMODULE m = LoadLibraryA("xinput1_4.dll");
 	if (!m)
 		m = LoadLibraryA("xinput1_3.dll");

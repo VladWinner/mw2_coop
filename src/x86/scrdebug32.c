@@ -18,6 +18,15 @@
 #define RVA_ERROR_FLAG_A  0x14e750f
 #define RVA_ERROR_FLAG_B  0x118bfb4
 #define ERROR_FLAG_ADDR   {0x0f, 0x75, 0x8e, 0x01}
+// the script VM in the 159 image (tools/map159.py, every data address agrees on all its references): function_count 0x190ddf8, the frame pointer 0x190ddfc (frames of 0x18 bytes),
+// the live code position 0x190ddd4, the program buffer pointer 0x18e7560, Scr_GetFunctionHandle VA 0x462750 (the same bytes as the official function, it reads 0x18e7560), Scr_EndLoadScripts VA 0x45dc30
+#define RVA_END_LOAD_SCRIPTS 0x5dc30
+#define RVA_GET_FUNC_HANDLE  0x62750
+#define RVA_PROGRAM_BUFFER   0x14e7560
+#define RVA_VM_POS           0x150ddd4
+#define RVA_VM_DEPTH         0x150ddf8
+#define RVA_VM_FRAME_PTR     0x150ddfc
+#define VM_FRAME_SIZE        0x18
 #else
 #define RVA_ERROR_HANDLER 0x212f50 // void (void); starts with cmp byte [0x18e3f8f], 0
 #define RVA_ERROR_MESSAGE 0x14e3f90 // const char * (0x18e3f90)
@@ -38,24 +47,54 @@
 static uint8_t *base;
 static void (*handler_original)(void);
 
+// A script that keeps failing raises the same error from the same place thousands of times a second (the official 32-bit build wrote 522,000 of them, 125 MB, in two minutes while
+// a squad's thread read fields of a struct that was gone). As in the 64-bit build, per place (the message and the code position) the first three hits are logged, then the 10th, 100th,
+// 1000th...
+#define MAX_SITES 128
+static uint32_t site_key[MAX_SITES];
+static unsigned site_hits[MAX_SITES];
+static int site_count;
+
+static unsigned site_hit(const char *message, const void *pos)
+{
+	uint32_t key = (uint32_t)(uintptr_t)pos * 2654435761u;
+	for (const char *c = message; c && *c && c < message + 400; c++)
+		key = (key ^ (uint8_t)*c) * 16777619u;
+	int i;
+	for (i = 0; i < site_count && site_key[i] != key; i++)
+		;
+	if (i == site_count) {
+		if (site_count >= MAX_SITES)
+			return 0;
+		site_key[site_count++] = key;
+	}
+	return ++site_hits[i];
+}
+
 static void error_hook(void)
 {
 	if (!base[RVA_ERROR_FLAG_A] && !base[RVA_ERROR_FLAG_B]) {
 		const char *message = *(const char **)(base + RVA_ERROR_MESSAGE);
 		MEMORY_BASIC_INFORMATION mbi;
-		if (message && VirtualQuery(message, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT)
-			log_printf("script error: %.400s", message);
-		else
-			log_printf("script error (no message)");
-#ifndef MW2COOP_IW4X
-		scrdebug_stack_log();
-#endif
+		const int readable = message && VirtualQuery(message, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT;
+		unsigned n = site_hit(readable ? message : "", *(const void *const *)(base + RVA_VM_POS));
+		int show = n != 0 && n <= 3;
+		for (unsigned p = 10; !show && n >= p && p < 1000000000u; p *= 10)
+			show = n == p;
+		if (n == 0)
+			show = 1; // (more places than the table holds: no counting)
+		if (show) {
+			if (readable)
+				log_printf("script error #%u: %.400s", n, message);
+			else
+				log_printf("script error #%u (no message)", n);
+			scrdebug_stack_log();
+		}
 	}
 	handler_original();
 }
 
-#ifndef MW2COOP_IW4X
-// Scr_EndLoadScripts (VA 0x490180) starts with  53 / 6a 02 / e8 rel32 (call 0x4b3150)  and is entered by a call (rva 0xf921) and by a tail jump (rva 0x171dd), so the function
+// Scr_EndLoadScripts (VA 0x490180; 159: VA 0x45dc30, the same first bytes) starts with  53 / 6a 02 / e8 rel32 (call 0x4b3150)  and is entered by a call (rva 0xf921) and by a tail jump (rva 0x171dd), so the function
 // itself is patched: its first 8 bytes (up to the end of the call) are replaced by a jump to end_load_scripts, whose trampoline runs them (the call made absolute) and goes on at +8.
 static void (*end_load_original)(void);
 
@@ -96,7 +135,6 @@ static void hook_end_load(void)
 		return;
 	hook_jump(target, 8, end_load_scripts, 0x90);
 }
-#endif
 
 void scrdebug_install(void)
 {
@@ -108,7 +146,6 @@ void scrdebug_install(void)
 		return;
 	}
 	log_printf("scrdebug: script errors are logged");
-#ifndef MW2COOP_IW4X
 	static const scrdebug_vm_t vm = {RVA_GET_FUNC_HANDLE, RVA_PROGRAM_BUFFER, RVA_VM_POS, RVA_VM_DEPTH, 0, RVA_VM_FRAME_PTR, VM_FRAME_SIZE};
 	static const uint8_t handle_bytes[] = {0x8b, 0x44, 0x24, 0x04, 0x83, 0xec, 0x08, 0x56, 0x57, 0x50};
 	if (memcmp(base + RVA_GET_FUNC_HANDLE, handle_bytes, sizeof(handle_bytes)) == 0) {
@@ -117,5 +154,4 @@ void scrdebug_install(void)
 	} else {
 		log_printf("scrdebug: unexpected bytes at Scr_GetFunctionHandle, no script stacks");
 	}
-#endif
 }

@@ -274,3 +274,15 @@ void game_add_command(cmd_function_t *node)
 	((void (*)(const char *, void (*)(void), void *, int))(base + RVA_CMD_ADDCOMMAND))(node->name, node->function, node, 0);
 #endif
 }
+
+int game_qa_flag(const char *name)
+{
+	char path[MAX_PATH];
+	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
+	while (n > 0 && path[n - 1] != '\\')
+		n--;
+	path[n] = 0;
+	lstrcatA(path, "mw2coop\\");
+	lstrcatA(path, name);
+	return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}

@@ -225,6 +225,7 @@ void game_dvar_value_text(const dvar_t *dvar, const dvar_value_t *value, char *b
 void game_log_commands(void);
 // Copies a dvar's current value into buf (a string, or a bool/int as a number); 0 if missing or another type.
 int game_dvar_raw(const char *name, char *buf, int size);
+int game_qa_flag(const char *name); // QA bisect: 1 when the file mw2coop\<name> exists next to the exe
 // Read the pointer stored at rva, then width bytes at pointer+off (0 if null/unreadable).
 unsigned long long game_peek_ptr(unsigned long long rva, unsigned long long off, int width);
 // QA only: change local client 0's XUID by delta.

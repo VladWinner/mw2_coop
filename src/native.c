@@ -19,6 +19,7 @@
 #include "log.h"
 #include "localize.h"
 #include "menus_ui.h"
+#include "scrdebug_stack.h"
 #include "native.h"
 #include "console.h"
 #include "control.h"
@@ -3093,12 +3094,40 @@ static void hang_dump_thread(const char *why, DWORD only) // only: one thread's 
 			continue;
 		uintptr_t addrs[40];
 		int na = 0;
+		char regs[160] = "";
 		if (SuspendThread(th) != (DWORD)-1) {
 			CONTEXT ctx;
 			memset(&ctx, 0, sizeof(ctx));
 			ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
 			if (GetThreadContext(th, &ctx)) {
 				addrs[na++] = CTX_IP(ctx);
+#ifndef _WIN64
+				snprintf(regs, sizeof(regs), " regs eax %lx ebx %lx ecx %lx edx %lx esi %lx edi %lx ebp %lx", ctx.Eax, ctx.Ebx, ctx.Ecx, ctx.Edx, ctx.Esi, ctx.Edi, ctx.Ebp);
+#endif
+#if !defined(_WIN64) && defined(MW2COOP_IW4X)
+				// the string release loop of the iw4x exe (SL_RemoveRef..., rva 0x213d5c): the string (ebp), its hash bucket chain
+				if (CTX_IP(ctx) >= (uintptr_t)base + 0x213d50 && CTX_IP(ctx) <= (uintptr_t)base + 0x213d63) {
+					const uint8_t *str = (const uint8_t *)ctx.Ebp;
+					char text[48] = "?";
+					MEMORY_BASIC_INFORMATION mbi;
+					if (VirtualQuery(str, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT) {
+						for (int i = 0; i < 40 && str[4 + i]; i++)
+							text[i] = str[4 + i] >= 32 && str[4 + i] < 127 ? (char)str[4 + i] : '.', text[i + 1] = 0;
+						log_printf("native: string release loop: string %p refs %u text '%s' bytes %02x%02x%02x%02x %02x%02x%02x%02x", str, *(const uint16_t *)str, text, str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
+					}
+					const uint8_t *tbl = (const uint8_t *)base + 0x128f380;
+					unsigned idx = ((unsigned)ctx.Eax - 0x168f380u) / 8;
+					char chain[600] = "";
+					int cn = 0;
+					for (int k = 0; k < 24; k++) {
+						unsigned nxt = *(const uint16_t *)(tbl + idx * 8);
+						unsigned val = *(const uint32_t *)(tbl + idx * 8 + 4);
+						cn += snprintf(chain + cn, sizeof(chain) - cn, " %x(next %x val %x)", idx, nxt, val);
+						idx = nxt;
+					}
+					log_printf("native: string release loop: chain from eax:%s", chain);
+				}
+#endif
 				const uintptr_t *sp = (const uintptr_t *)CTX_SP(ctx);
 				for (int i = 0; i < 600 && na < 40; i++) {
 					uintptr_t v = 0;
@@ -3113,7 +3142,7 @@ static void hang_dump_thread(const char *why, DWORD only) // only: one thread's 
 			ResumeThread(th);
 		}
 		CloseHandle(th);
-		int n = snprintf(lines[nl], sizeof(lines[nl]), "native: HANG (%s) thread %lu:", why, (unsigned long)te.th32ThreadID);
+		int n = snprintf(lines[nl], sizeof(lines[nl]), "native: HANG (%s) thread %lu:%s", why, (unsigned long)te.th32ThreadID, regs);
 		for (int i = 0; i < na && n < (int)sizeof(lines[nl]) - 60; i++) {
 			HMODULE m = NULL;
 			char name[MAX_PATH] = "?";
@@ -3131,6 +3160,8 @@ static void hang_dump_thread(const char *why, DWORD only) // only: one thread's 
 }
 static void hang_dump(const char *why)
 {
+	log_printf("native: GSC position of the script VM at the hang (%s):", why);
+	scrdebug_stack_log();
 	hang_dump_thread(why, 0);
 }
 // Stall watch (QA, [native] stallwatch=<ms>, off by default): when the thread of the client frames has not started a frame for that long, its stack is logged in the middle of
@@ -4465,7 +4496,69 @@ static void video_pop(void)
 // everything the client does in a frame (time, snapshot use, usercmds, the cgame draw, the 2D) happens in the right context. One scene per frame, as the renderer needs.
 static void (*client_frame_original)(void);
 static unsigned make_cmd_calls[3]; // QA (padlog): calls of the usercmd maker per context
+// [native] scrwatch=1 (iw4x-sp only, diagnostics): the script variable table (159 image VA 0x16c7480, 0x22000 entries of 16 bytes) should change only while the server
+// frame runs the scripts. A copy is taken when a server step ends and compared at the next points outside it (the client frame's begin and end, the next step's start): every
+// 16-byte entry that differs there was written by something that is not the server step, and is logged with its old and new bytes and the window it was found in.
+#ifdef MW2COOP_IW4X
+#define SCRW_RVA 0x12c7480u
+#define SCRW_SIZE 0x220000u
+static uint8_t *scrw_copy;
+static unsigned scrw_logged;
+static void strw_check(const char *label)
+{
+	// the script VM between scripts: value stack top (VA 0x190de00; the stack starts at 0x190e110, 8 bytes a value), call depth (0x190ddf8), parameter counts (0x190de08, 0x190de0c):
+	// at a server step's edge nothing runs, so a top or depth that drifts away from the start shows a builtin that pushed or popped too many
+	const uint32_t top = *(const uint32_t *)(base + 0x150de00);
+	const int depth = *(const int *)(base + 0x150ddf8);
+	const int pc1 = *(const int *)(base + 0x150de08), pc2 = *(const int *)(base + 0x150de0c);
+	static int last_top = -1, last_depth = -1, logged;
+	const int idx = (int)((top - 0x190e110u) / 8);
+	if ((idx != last_top || depth != last_depth) && logged < 400) {
+		logged++;
+		log_printf("vmwatch: %s ctx %d step %u cg %u: stack top index %d, depth %d, params %d %d", label, ctx_current, hook_counts[2], cg_draw_count, idx, depth, pc1, pc2);
+		last_top = idx;
+		last_depth = depth;
+	}
+}
+static void scrw_diff(const char *label, int log_it)
+{
+	if (!CFG_ONCE("scrwatch", 0))
+		return;
+	strw_check(label);
+	const uint8_t *live = base + SCRW_RVA;
+	if (!scrw_copy) {
+		scrw_copy = VirtualAlloc(NULL, SCRW_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		if (!scrw_copy)
+			return;
+		memcpy(scrw_copy, live, SCRW_SIZE);
+		return;
+	}
+	unsigned changed = 0;
+	for (unsigned i = 0; i < SCRW_SIZE / 16; i++) {
+		const uint32_t *a = (const uint32_t *)(live + i * 16), *b = (const uint32_t *)(scrw_copy + i * 16);
+		if (a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3])
+			continue;
+		changed++;
+		if (log_it && CFG_ONCE("scrwatch", 0) >= 2 && split_on && hook_counts[2] > 200 && scrw_logged < 4000) {
+			scrw_logged++;
+			log_printf("scrwatch: %s ctx %d step %u cg %u: entry 0x%x %08x %08x %08x %08x -> %08x %08x %08x %08x", label, ctx_current, hook_counts[2], cg_draw_count, i, b[0], b[1], b[2], b[3], a[0], a[1], a[2], a[3]);
+		}
+	}
+	if (log_it && changed && CFG_ONCE("scrwatch", 0) >= 2 && split_on && hook_counts[2] > 200)
+		log_printf("scrwatch: %s: %u entries changed outside the server step", label, changed);
+	memcpy(scrw_copy, live, SCRW_SIZE);
+}
+#else
+static void scrw_diff(const char *label, int log_it) { (void)label; (void)log_it; }
+#endif
+static void client_frame_inner(void);
 static void client_frame_hook(void)
+{
+	scrw_diff("client frame begin", 1);
+	client_frame_inner();
+	scrw_diff("client frame end", 1);
+}
+static void client_frame_inner(void)
 {
 	static unsigned frame;
 	{
@@ -4473,7 +4566,11 @@ static void client_frame_hook(void)
 		static DWORD last;
 		DWORD now = GetTickCount();
 		if (seen < 4 || now - last >= 2000) {
-			log_printf("native: client frame #%d (active %d, ctx %d, ready %d, split %d, cg draws %u) cls %d | sv clients %d %d | hooks: snap %u ps %u step %u ucmd %u smsg %u scmd %u", seen, native_active, ctx_current, ctx1_ready, split_on, cg_draw_count, *(int *)(base + RVA_CLS_STATE), *(int *)(base + RVA_SV_CLIENTS), *(int *)(base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE), hook_counts[0], hook_counts[1], hook_counts[2], hook_counts[3], hook_counts[4], hook_counts[5]);
+			log_printf("native: client frame #%d (active %d, ctx %d, ready %d, split %d, cg draws %u) cls %d | sv clients %d %d | hooks: snap %u ps %u step %u ucmd %u smsg %u scmd %u | entities %d", seen, native_active, ctx_current, ctx1_ready, split_on, cg_draw_count, *(int *)(base + RVA_CLS_STATE), *(int *)(base + RVA_SV_CLIENTS), *(int *)(base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE), hook_counts[0], hook_counts[1], hook_counts[2], hook_counts[3], hook_counts[4], hook_counts[5], *(int *)(base + RVA_LEVEL_NUM_ENT));
+#ifdef MW2COOP_IW4X
+			// the script variable pool (159 image): AllocVariable counts the variables of the root object (VA 0x18e7540) and of all others (0x18e7544); the table has 0x22000 entries
+			log_printf("native: script variables in use: root %d, others %d, of 139264 (free list head entry %u)", *(int *)(base + 0x14e7540), *(int *)(base + 0x14e7544), (unsigned)*(const uint16_t *)(base + 0x12c7480));
+#endif
 			last = now;
 		}
 		seen++;
@@ -4824,7 +4921,14 @@ static void svslice_now(void)
 		svslice_orig();
 #endif
 }
+static void server_step_inner(void);
 static void server_step_hook(void)
+{
+	scrw_diff("step start", 1);
+	server_step_inner();
+	scrw_diff("step end", 0);
+}
+static void server_step_inner(void)
 {
 	hook_counts[2]++;
 #ifdef _WIN64
