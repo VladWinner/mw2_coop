@@ -17,7 +17,7 @@
 
 <p align="center">
   <b>Modern Warfare 2 Enhanced</b> — мод для оригинальной игры 2009 года на актуальной <b>64-битной Steam-версии</b>, по духу как <a href="https://github.com/alicealys/h2-mod">h2-mod</a>. Начинаем с того, чего игре не хватает больше всего: <b>кооператива на двоих на всю кампанию</b>, по сети или на одном ПК с <b>разделённым экраном</b> (новое, экспериментально), на сетевом коде, который уже есть в игре для Спецопераций (Spec Ops). Исправления и улучшения самой игры добавляются по мере находок.<br>
-  <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><b>⬇ Скачать последний релиз</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="https://discord.gg/uCvu82XHX">Discord</a> · <a href="#install">Установка</a> · <a href="#known-issues">Известные проблемы</a>
+  <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><b>⬇ Скачать последний релиз</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="#install">Установка</a> · <a href="#known-issues">Известные проблемы</a>
 </p>
 
 <p align="center">
