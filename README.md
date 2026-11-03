@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="https://discord.gg/uCvu82XHX"><img alt="Join our Discord server" src="https://img.shields.io/badge/Join_our_Discord_server-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="52"></a>
+  <a href="https://discord.gg/q882kMMEY"><img alt="Join our Discord server" src="https://img.shields.io/badge/Join_our_Discord_server-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="52"></a>
 </p>
 
 ---
