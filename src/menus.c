@@ -1129,11 +1129,32 @@ static void find_mission_items(uint8_t *menu)
 	}
 }
 
+// The campaign missions' pictures (levelshot_mw2_*) are square art: the item is 216 x 120 for the Spec Ops 16:9 pictures, so a campaign mission gets a square one in the middle
+// of that space (v0.6.0 report), and the Spec Ops ops the original rectangle back.
+static void lobby_picture_shape(int square)
+{
+	float *r = (float *)(pic_item + ITEM_RECT), *rc = (float *)(pic_item + ITEM_RECT_CLIENT_Y - 4); // (the menu draws from rectClient, worked out when the menu opened)
+	static float x0, w0;
+	if (!w0 && r[2] == 216)
+		x0 = r[0], w0 = r[2];
+	if (!w0)
+		return;
+	static int logged;
+	if (!logged++)
+		log_printf("menus: lobby picture rect %.0f %.0f %.0f %.0f client %.0f %.0f %.0f %.0f align %d %d", r[0], r[1], r[2], r[3], rc[0], rc[1], rc[2], rc[3], pic_item[ITEM_RECT_ALIGN_H], pic_item[ITEM_RECT_ALIGN_V]);
+	float w = square ? r[3] : w0, dx = square && pic_item[ITEM_RECT_ALIGN_H] == 1 ? (w0 - r[3]) / 2 : 0; // (left aligned: moved in by half the difference)
+	rc[0] += x0 + dx - r[0];
+	rc[2] = w;
+	r[0] = x0 + dx;
+	r[2] = w;
+}
+
 static void patch_lobby_mission(uint8_t *menu, int campaign)
 {
 	find_mission_items(menu);
 	if (!pic_item || !name_item)
 		return;
+	lobby_picture_shape(campaign);
 	if (!campaign) {
 		*(void **)(pic_item + ITEM_MATERIAL_EXP) = pic_native_exp;
 		*(void **)(pic_item + ITEM_BACKGROUND) = pic_native_material;

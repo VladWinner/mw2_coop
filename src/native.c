@@ -2710,10 +2710,13 @@ static const range_t ranges[] = {
                                      // [native] viewsplit=0 off
     {0x45851b0, 0x38},               // the sun's blind and glare state of local client 0 (rva 0x4dd80 lerps its blind / glare amounts, 0x4e030 its flare; the array is indexed by local client,
                                      // stride 0x38): with one state the fade of a player who looks into the sun (white-out, or the dark blind) was drawn in the other half too
+    {0x3efcc8, 0x1c},                // the screen blur of local client 0 (scr_blur / clear_blur, set by 0x8cf00 and 0x8cf90, stepped by 0x8cfe0, read by 0x8cfc0 for the view; stride 0x1c):
+                                     // with one state the damage blur of a player who was hit showed in the other half too (v0.6.0 report). [native] blursplit=0 off
 };
 #define RANGE_FX 9
 #define RANGE_VIEW 10
 #define RANGE_SUN 11
+#define RANGE_BLUR 12
 #define SUNSPLIT_DEFAULT 1
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
@@ -2924,6 +2927,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 #endif
 #ifdef RANGE_SUN
 		if (i == RANGE_SUN && !CFG_ONCE("sunsplit", SUNSPLIT_DEFAULT))
+			continue;
+#endif
+#ifdef _WIN64
+		if (i == RANGE_BLUR && !CFG_ONCE("blursplit", 1))
 			continue;
 #endif
 		uint8_t *live = base + RANGE_RVA(i);
