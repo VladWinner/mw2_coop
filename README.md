@@ -101,7 +101,7 @@ Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 - Checkpoints: bots fail the mission in every section of every campaign mission, 64-bit and 32-bit, and check that the level starts again with both players up and together (all pass). A restart goes to the level's own checkpoint, which is sometimes the section before the one you died in. Not tried by two people yet.
 - Rarely (once in about a hundred mission loads, seen in the 32-bit build) both PCs hang right after a mission starts. A cause was found and fixed (see the changelog) but one hang does not prove it; if it happens, restart the mission and tell us.
 - Nobody has played the whole campaign through together yet: tell us how far you got.
-- Split screen: the characters around you (the team, the civilians) can look jittery in the pictures of both halves. Known and being investigated.
+- Split screen: the characters around you (the team, the civilians) used to stop and jump in both halves; fixed in this version in all three builds (checked on No Russian: the actors that do not move in a frame fell from 20-35 % to under 1 %; not yet seen by two people).
 - Split screen (new): tested with bots, screenshots of both halves and simulated gamepads, not yet with two real gamepads or by two people. Two sound listeners (each sound is heard from the nearer player's place, like on the console), no second keyboard, the second player can only pause (not work the menus); the game may not close by itself after quitting (end it in Task Manager).
 - The split screen of the 32-bit game (archive `-x86`) was checked with bots on the Trainer and Cliffhanger only. The iw4x-sp client (archive `-iw4x`) is experimental: checked with bots on the Trainer only.
 

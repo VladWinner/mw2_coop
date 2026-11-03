@@ -441,3 +441,23 @@ pose). Found by building older commits in a git worktree (ce6b1c1 and f15be90 fi
 brace-less body of `if (p0copy)` in add_entity_hook, so the following `memcpy(slot 0, slot1_saved)` ran after EVERY entity of context 1's pass and wrote an unset stack
 buffer over player 1's entity. In 64 bits that stack still held the last real copy, so it did not crash, but slot 0 was rewritten after every entity there too. Braces
 restored; the tail setting is now read when the session starts.
+
+## Actor stutter in the split screen: the snapshot entity states are read late (found and fixed 2026-11-02)
+
+Symptom: in both halves every AI actor (team, enemies, civilians) froze for a snapshot and then jumped (20-35 % of the frames of a walking actor did not move; the plain game: 0 %).
+
+What it was. In single player the server and the cgame share ONE array of entity states (64-bit rva 0x19c6410, 0xac bytes per entity, indexed by entity number; 32-bit VA 0x1b2aca0). The server's snapshot
+build (64-bit FUN_140234540, reached by a tail jump at rva 0x234a44; 32-bit 0x65cc90 called at VA 0x42d18b) overwrites it for every snapshot, 20 times a second. The cgame copies the states of cg.nextSnap
+out of it when it reads that snapshot (64-bit CG_SetNextSnap rva 0xb9320, the getter 0x234520 called at 0xb9772; 32-bit 0x41a3a0, the getter 0x40dd30 called at VA 0x41a649). In the plain game that read
+always comes before the next build. In the split screen it came after the next build in about 47 % of the snapshot reads (measured as 408,223 of 866,169 reads in the 64-bit build, 402,998 of 863,151 in the
+32-bit build, 0 of 862,631 in the plain game), so the client got the newer snapshot's states: the actor's walk step of the snapshot was skipped and the next one read twice.
+Evidence: write watchpoints (control.c, `[native] npcwatch=5`) on the tracked actor's server origin and the client's current/next state: the server origin moved by a regular ~2.3 units every ~50 ms while the
+client's next-state values skipped 6419.9, 6415.3, 6396.7, 6392.1 and repeated 6424.6, 6417.6, 6412.9, 6394.4, 6387.5; every write of the client's states was context 0's (context 1 never touches them).
+
+Fix (`[native] entring`, default 1 in a split session; `entring=0` off; src/native.c): a ring of 8 copies of the array, one per build, tagged with the server time (level time: 64-bit rva 0xd96ec8, 32-bit VA 0x10a3c44;
+it is the snapshot's time). The getter call in the snapshot reading function is redirected to a function that returns the copy whose time equals cg.nextSnap's time (the pointer is context-private:
+64-bit rva 0x51b080, 32-bit VA 0x867990, serverTime at +4), else the live array. The ring is cleared when the level time goes backwards. Result on No Russian (airport): frames in which a walking AI actor does not move:
+20-35 % -> 0-1 % in both views; the client's next-state values follow the server's one for one. The 32-bit build and the iw4x-sp profile (1.0.159: array VA 0x1b2e218, level time rva 0xca71c4, builder jump at rva 0x9c4fb, getter call at rva 0xbc0f9, cg.nextSnap at rva 0x46a990, in tools/addr159_manual.txt and src/addr159.c) have it too; in all three about half of the snapshot reads were late and the ring served every read from a copy.
+Other findings of the same hunt (all ruled out as causes): the frame cost (a 8 ms busy wait per frame in the plain game does not make it stutter), the clock (a QPC time source changed nothing), the server's
+time-sliced frame (it runs once per step, in the first draw after it, in both modes), a double entity transition (context 1 never transitions the shared entities), late or missing snapshots, the pose
+interpolation (rva 0x9da90). The AI itself does react to player 2's body: with him ignored (QA scenario `p2ghost`) the server's per-step stalls of an actor fall from 12 % to 4 % (plain: 6 %).
