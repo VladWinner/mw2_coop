@@ -14,8 +14,8 @@
 //   (the original is 512 x 844, white colour with glyph shapes in alpha) reached through Material -> textureTable (MaterialTextureDef,
 //   16 bytes, GfxImage * at +8) -> GfxImage, whose first field is the IDirect3DTexture9 * and whose width/height are two u16 at +0x18.
 // A replacement atlas is built on the game's own D3D9 device and installed into that GfxImage. Its glyphs are rasterized at 4x
-// resolution, while the game's glyph metrics remain in logical 1x coordinates. The texture has ATLAS_MIPS levels (4x, 2x, 1x: a text
-// drawn at its logical size shows the 1x level, so it is filtered, not skipped over) and uses the renderer's existing sampler state. Latin letters and their Cyrillic look-alikes share identical bitmaps, as they do in the game's own tables.
+// resolution, while the game's glyph metrics remain in logical 1x coordinates. The texture has one mip level and uses the renderer's
+// existing sampler state. Latin letters and their Cyrillic look-alikes share identical bitmaps, as they do in the game's own tables.
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
@@ -55,9 +55,6 @@
 #define ATLAS_MIN_WIDTH 1024
 #define ATLAS_MAX_SIZE 4096
 #define ATLAS_GLYPH_PADDING 1
-// Levels of the atlas: 4x, 2x and 1x of the logical size. The packer puts every glyph in a cell whose origin and size are multiples of 4 pixels, so a
-// texel of these levels never covers two cells (a 0.5x level would, and bleed one glyph into its neighbour).
-#define ATLAS_MIPS 3
 
 // The faces are the supplied files in mw2coop\fonts; the bundled defaults approximate Bank Gothic, Conduit and Carbon.
 // The font assets that live on the shared atlas, and the face assigned to each asset.
@@ -84,10 +81,6 @@ typedef struct {
 	uint32_t hash;
 	int x, y;       // where the bitmap sits in the atlas (set by the packer)
 	int shared;     // index of an identical bitmap, or -1
-	// The quad the game draws: whole logical pixels, so that the glyph is never stretched or shifted by a rounding (set by prepare_quad).
-	int ql, qt;     // left and top of the quad in logical pixels from the pen / above the baseline
-	int qw, qh;     // size of the quad in atlas pixels (a multiple of 4: logical pixels * FONT_RENDER_SCALE)
-	int ex, ey;     // where the bitmap sits inside the quad, in atlas pixels
 } Bitmap;
 
 static Bitmap *bitmaps;
@@ -288,32 +281,6 @@ static double cap_ratio(int face)
     return ratio;
 }
 
-static int floor_div(int v, int d)
-{
-    return v >= 0 ? v / d : -((-v + d - 1) / d);
-}
-
-// The glyph's quad is the smallest whole-logical-pixel rectangle that holds its bitmap; the bitmap is put inside it at its exact 4x offset. The game draws the quad with
-// integer sizes and positions, so a quad that is the rounded bitmap (the old way) stretched every glyph by up to a logical pixel in each direction, a different amount for
-// each letter: the letters of a line jumped up and down and were not the same height.
-static void prepare_quad(Bitmap *b)
-{
-    if (!b->w || !b->h) {
-        b->ql = b->qt = b->qw = b->qh = b->ex = b->ey = 0;
-        return;
-    }
-    int left = floor_div(b->ox, FONT_RENDER_SCALE);
-    int right = -floor_div(-(b->ox + b->w), FONT_RENDER_SCALE);
-    int top = -floor_div(-b->oy, FONT_RENDER_SCALE);
-    int bottom = floor_div(b->oy - b->h, FONT_RENDER_SCALE);
-    b->ql = left;
-    b->qt = top;
-    b->qw = (right - left) * FONT_RENDER_SCALE;
-    b->qh = (top - bottom) * FONT_RENDER_SCALE;
-    b->ex = b->ox - left * FONT_RENDER_SCALE;
-    b->ey = top * FONT_RENDER_SCALE - b->oy;
-}
-
 static int logical_metric(double value)
 {
     if (value < 0.0) return -(int)((-value + FONT_RENDER_SCALE / 2.0) / FONT_RENDER_SCALE);
@@ -492,7 +459,7 @@ static int add_blank_bitmap(int advance)
 static int cmp_height(const void *a, const void *b)
 {
 	const Bitmap *x = &bitmaps[*(const int *)a], *y = &bitmaps[*(const int *)b];
-	return y->qh != x->qh ? y->qh - x->qh : y->qw - x->qw;
+	return y->h != x->h ? y->h - x->h : y->w - x->w;
 }
 
 static int pack(const int *order, int count, int width, int max_height)
@@ -500,22 +467,20 @@ static int pack(const int *order, int count, int width, int max_height)
     int x = 0, y = 0, row_h = 0;
     for (int i = 0; i < count; i++) {
         Bitmap *b = &bitmaps[order[i]];
-        // one transparent 4-pixel texel before the quad (the next cell's before-texel serves as the one after it): the 1x level's bilinear
-        // sample at the quad's edge reads a whole texel outside it, which must not hold a neighbour's glyph
-        int cw = b->qw + 4;
-        int ch = b->qh + 4;
-        if (x + cw + 4 > width) {
+        int cw = (b->w + 2 * ATLAS_GLYPH_PADDING + 3) & ~3;
+        int ch = (b->h + 2 * ATLAS_GLYPH_PADDING + 3) & ~3;
+        if (x + cw > width) {
             x = 0;
             y += row_h;
             row_h = 0;
         }
         if (cw > width) return 0;
-        b->x = x + 4;
-        b->y = y + 4;
+        b->x = x + ATLAS_GLYPH_PADDING;
+        b->y = y + ATLAS_GLYPH_PADDING;
         x += cw;
         if (ch > row_h) row_h = ch;
     }
-    y += row_h + 4;
+    y += row_h;
     y = (y + 3) & ~3;
     return y <= max_height ? y : 0;
 }
@@ -746,8 +711,6 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		return;
 	}
 	int nuniq = 0;
-	for (int i = 0; i < bitmap_count; i++)
-		prepare_quad(&bitmaps[i]);
 	for (int i = 0; i < bitmap_count; i++) {
 		Bitmap *b = &bitmaps[i];
 		if (!b->w || !b->h)
@@ -755,7 +718,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		int found = -1;
 		for (int k = 0; k < nuniq && found < 0; k++) {
 			Bitmap *other = &bitmaps[unique[k]];
-			if (other->hash == b->hash && other->w == b->w && other->h == b->h && other->ex == b->ex && other->ey == b->ey && other->qw == b->qw && other->qh == b->qh && !memcmp(other->alpha, b->alpha, (size_t)b->w * b->h))
+			if (other->hash == b->hash && other->w == b->w && other->h == b->h && !memcmp(other->alpha, b->alpha, (size_t)b->w * b->h))
 				found = unique[k];
 		}
 		if (found >= 0)
@@ -795,7 +758,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			break;
 		}
 	}
-	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph bounds and bearings from 4x, whole-pixel quads around the 4x bitmaps, three mip levels, bank width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT);
+	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph bounds and bearings from 4x, logical metrics rounded to 1x, no mipmaps, bank width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT);
 	if (!atlas_h) {
 		log_printf("fonts: glyphs do not fit supported texture dimensions; will retry on the next font asset");
 		free(unique);
@@ -815,7 +778,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 	for (int k = 0; k < nuniq; k++) {
 		Bitmap *b = &bitmaps[unique[k]];
 		for (int y = 0; y < b->h; y++)
-			memcpy(alpha + (size_t)(b->y + b->ey + y) * atlas_width + b->x + b->ex, b->alpha + (size_t)y * b->w, (size_t)b->w);
+			memcpy(alpha + (size_t)(b->y + y) * atlas_width + b->x, b->alpha + (size_t)y * b->w, (size_t)b->w);
 	}
 	// Create the texture on the game's own device.
 	IDirect3DDevice9 *dev = NULL;
@@ -829,7 +792,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		free_bitmaps();
 		return;
 	}
-	HRESULT hr = IDirect3DDevice9_CreateTexture(dev, atlas_width, atlas_h, ATLAS_MIPS, 0, D3DFMT_DXT5, D3DPOOL_MANAGED, &tex, NULL);
+	HRESULT hr = IDirect3DDevice9_CreateTexture(dev, atlas_width, atlas_h, 1, 0, D3DFMT_DXT5, D3DPOOL_MANAGED, &tex, NULL);
 	IDirect3DDevice9_Release(dev);
 	if (FAILED(hr) || !tex) {
 		log_printf("fonts: cannot create the replacement atlas texture (hr=0x%08lx); will retry on the next font asset", (unsigned long)hr);
@@ -861,37 +824,6 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		IDirect3DTexture9_Release(tex);
 		return;
 	}
-	// The smaller levels: each texel the average of the 2 x 2 of the level above, encoded like level 0.
-	{
-		int lw = atlas_width, lh = atlas_h;
-		uint8_t *prev = alpha;
-		for (int lvl = 1; lvl < ATLAS_MIPS; lvl++) {
-			int nw = lw / 2, nh = lh / 2;
-			uint8_t *next = malloc((size_t)nw * nh);
-			D3DLOCKED_RECT mr;
-			if (!next || FAILED(IDirect3DTexture9_LockRect(tex, lvl, &mr, NULL, 0))) {
-				log_printf("fonts: cannot build mip level %d of the atlas; the text is drawn without it", lvl);
-				free(next);
-				break;
-			}
-			for (int y = 0; y < nh; y++)
-				for (int x = 0; x < nw; x++) {
-					const uint8_t *q = prev + (size_t)(2 * y) * lw + 2 * x;
-					next[(size_t)y * nw + x] = (uint8_t)((q[0] + q[1] + q[lw] + q[lw + 1] + 2) / 4);
-				}
-			for (int by = 0; by < nh / 4; by++)
-				for (int bx = 0; bx < nw / 4; bx++)
-					encode_block(next + (size_t)(by * 4) * nw + bx * 4, nw, (uint8_t *)mr.pBits + (size_t)by * mr.Pitch + (size_t)bx * 16);
-			IDirect3DTexture9_UnlockRect(tex, lvl);
-			if (prev != alpha)
-				free(prev);
-			prev = next;
-			lw = nw;
-			lh = nh;
-		}
-		if (prev != alpha)
-			free(prev);
-	}
 	// Keep the renderer's sampler state unchanged; font filtering must be changed in the rendering path.
 	free(alpha);
 	// Update the glyph tables, then install the new texture.
@@ -909,9 +841,11 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			if (advance > 255) advance = 255;
 			g[4] = (uint8_t)advance;
 			if (src->w && src->h) {
-				int left = b->ql;
-				int top = b->qt;
-				int width = b->qw / FONT_RENDER_SCALE, height = b->qh / FONT_RENDER_SCALE;
+				int left = logical_metric(b->ox);
+				int right = logical_metric(b->ox + b->w);
+				int top = logical_metric(b->oy);
+				int bottom = logical_metric(b->oy - b->h);
+				int width = right - left, height = top - bottom;
 				if (width < 1) width = 1;
 				if (height < 1) height = 1;
 				if (left < -128) left = -128;
@@ -925,8 +859,8 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 				g[6] = (uint8_t)(height > 255 ? 255 : height);
 				*(float *)(g + 8) = (float)src->x / atlas_width;
 				*(float *)(g + 12) = (float)src->y / atlas_h;
-				*(float *)(g + 16) = (float)(src->x + src->qw) / atlas_width;
-				*(float *)(g + 20) = (float)(src->y + src->qh) / atlas_h;
+				*(float *)(g + 16) = (float)(src->x + src->w) / atlas_width;
+				*(float *)(g + 20) = (float)(src->y + src->h) / atlas_h;
 			} else {
 				g[2] = 0;
 				g[3] = (uint8_t)(int8_t)(-j->pixel_height);
@@ -944,15 +878,6 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 	uint32_t texture_bytes = (uint32_t)atlas_width * (uint32_t)atlas_h;
 	*(uint32_t *)(image + IMAGE_DATALEN) = texture_bytes;
 	*(uint32_t *)(image + IMAGE_DATALEN + 4) = texture_bytes;
-	{
-		uint8_t *table = *(uint8_t *const *)(atlas_material + MATERIAL_TABLE);
-		uint8_t before = table[6];
-		// The material's texture def says "no mip filter" (state 0xe2: bits 0-1 the filter, linear; bits 2-3 the mip mode, off; bits 5-7 clamp), so the new levels
-		// were never read, and the game's r_texFilterMipMode does not reach this sampler. Bits 2-3 = 2 is linear between the levels ([display] fontmip=0 leaves it).
-		if (settings_fontmip())
-			table[6] = (uint8_t)((table[6] & ~0x0c) | 0x08);
-		log_printf("fonts: atlas texture def sampler state 0x%02x -> 0x%02x (mip filter %s)", before, table[6], settings_fontmip() ? "linear" : "as the game has it");
-	}
 	patched_image = image;
 	patched_texture = tex;
 	for (int n = 0; n < njobs; n++) {
