@@ -142,7 +142,7 @@ Ported and checked in the 32-bit build: script hook, QA channel, lobby/menus, ac
 pool extension (fixed the airport client hang), fonts, script error logging (scrdebug32).
 
 Ported in 32 bits later (2026-10-29), after the owner asked why they were "deliberately 64-bit only":
-- `steamnet` (Steam P2P relay, steam_relay=1, off by default, still untried with two real accounts): the join function VA 0x4090c0 (cdecl, a wrapper that stops an earlier co-op session and jumps to
+- `steamnet` (Steam P2P relay, steam_relay=1, off by default; the owner and a friend played a snow mission (Cliffhanger, with MacTavish) over it and the connection went through Steam, 2026-11, build and details not recorded): the join function VA 0x4090c0 (cdecl, a wrapper that stops an earlier co-op session and jumps to
   PartyClient_Join 0x42fc40) is hooked with the original called after the host info is rewritten; the Steam interface methods are thiscall (ECX = this, a CSteamID as two stack dwords),
   the callback object is {vtable, flags +4, id +8} with thiscall methods; steam_api.dll exports SteamNetworking / SteamFriends / SteamAPI_RegisterCallback. Checked: "steamnet: on".
 - `scrdebug` call stacks: shared code in `src/scrdebug_stack.c` (function names from the compiled source, offsets from Scr_GetFunctionHandle VA 0x5018f0 cdecl, mapped back from the live position
