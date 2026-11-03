@@ -96,6 +96,8 @@ Modern Warfare 2 Enhanced grows into an improvement mod for the original game, n
 
 The host needs UDP port **28960** reachable. The mod opens it on the router by itself when UPnP is on; otherwise forward the port or play over a shared VPN. The port can be changed in `mw2coop\settings.ini` (the same on both PCs).
 
+No port forwarding, or a provider that does not allow it? Set `steam_relay=1` under `[network]` in `mw2coop\settings.ini` on both PCs and join through a Steam invite: the game traffic then goes through Steam, behind any router. Two players have played a mission this way.
+
 Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 
 <a id="known-issues"></a>

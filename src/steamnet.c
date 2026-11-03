@@ -1,5 +1,5 @@
-// Game traffic through Steam (settings.ini [network] steam_relay=1; off by default, untested
-// with two real accounts yet).
+// Game traffic through Steam (settings.ini [network] steam_relay=1; off by default). Played by two
+// real players on one mission (Cliffhanger, 2026-11): the connection went through Steam and it worked.
 //
 // A Steam invite makes the client join the host's Steam lobby and then "connect <host ip>
 // <port>" (rva 0x28f1b0 -> 0x22dda0 -> PartyClient_Join 0xd7cb0): plain UDP, so a host behind
