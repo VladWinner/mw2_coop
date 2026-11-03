@@ -106,6 +106,7 @@ static uint8_t *base;
 #define SLOT_END_PAST(q) ((q) > base + 0x545857)
 #define RVA_AIM_GLOB 0x3cf180 // aaGlob
 #define RVA_AIM_TARGET_GLOB 0x3d0530
+#define RVA_XFER_APPLY 0x29a210 // the animation transfer queue's apply loop (the entity cleanup function's first call)
 #define RVA_LEVEL_NUM_ENT 0xd96e80
 #define RVA_GENTITIES 0xd9e070
 #define GENT_SIZE 0x2a0
@@ -178,6 +179,7 @@ static uint8_t *base;
 #define SLOT_END_PAST(q) ((q) >= base + XR(0x4941e0))
 #define RVA_AIM_GLOB XR(0x33ba90)
 #define RVA_AIM_TARGET_GLOB XR(0x33cec0)
+#define RVA_XFER_APPLY XR(0x5a8f0) // the animation transfer queue's apply loop (the entity cleanup function's first call)
 #define RVA_LEVEL_NUM_ENT XR(0xca3c18)
 #define RVA_GENTITIES XR(0xaa76b8)
 #define GENT_SIZE 0x270
@@ -2716,6 +2718,7 @@ static void render_wait_idle(void)
 #define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)
 static uint8_t *ctx_store[2][NRANGES];
 static int ctx_current;
+int native_log_ctx(void) { return native_active ? ctx_current : 0; } // (for the script debug log of the 32-bit builds)
 #ifdef _WIN64
 static const char *vision_name_of(int ctx) // the cgame block's visionset_naked name of a context (live when it is the current one)
 {
@@ -4922,9 +4925,15 @@ static void svslice_now(void)
 #endif
 }
 static void server_step_inner(void);
+#ifndef _WIN64
+extern volatile DWORD mt_main_tid;
+#endif
 static void server_step_hook(void)
 {
 	scrw_diff("step start", 1);
+#ifndef _WIN64
+	mt_main_tid = GetCurrentThreadId();
+#endif
 	server_step_inner();
 	scrw_diff("step end", 0);
 }
@@ -6078,7 +6087,15 @@ static void ent_clean_hook(void)
 			ctx_swap(0);
 			ent_clean_hook();
 			ctx_swap(1);
+			return;
 		}
+		// The animation transfer queue: every client frame the engine saves the animation state of every DObj it frees (about 540 of them, each holding a reference to the string of its
+		// notify name) into a global queue, and the start of this function applies the queue (restoring the states, giving the strings back); the caller empties the queue right after.
+		// Context 1 used to skip this whole function, so the empty-the-queue that follows it in its frame threw away what context 0 had saved: the animation states of all DObjs were lost
+		// (the actors' animation "drawdown") and the references of the strings never given back (a string's count is 16 bits: it wrapped after some 35 s in a busy level, the string was
+		// freed while it was in use and its next release froze or crashed the game: the failure of the Roadkill split screen). Only the apply is run here ([native] xferfix=0 off).
+		if (CFG_ONCE("xferfix", 1) && ctx1_ready && split_on)
+			((void (*)(void))(base + RVA_XFER_APPLY))();
 		return;
 	}
 #ifdef _WIN64

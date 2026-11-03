@@ -470,6 +470,8 @@ static script_entry_t *script_entry(const char *name, raw_file_t *raw)
 		buffer_original(raw, buf, len);
 		buf[len] = 0;
 		e->text = patched_text(name, buf, len, &e->n);
+		if (!e->text)
+			scrdebug_note_source(name, buf, len); // (the zone's own script: its function names are for the call stacks too)
 		free(buf);
 	}
 	e->fake.name = e->name;

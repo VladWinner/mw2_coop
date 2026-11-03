@@ -5,8 +5,10 @@
 // whose VM addresses are not mapped).
 #include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
+#include "game.h"
 #include "hook.h"
 #include "log.h"
 #include "scrdebug.h"
@@ -21,11 +23,16 @@
 // the script VM in the 159 image (tools/map159.py, every data address agrees on all its references): function_count 0x190ddf8, the frame pointer 0x190ddfc (frames of 0x18 bytes),
 // the live code position 0x190ddd4, the program buffer pointer 0x18e7560, Scr_GetFunctionHandle VA 0x462750 (the same bytes as the official function, it reads 0x18e7560), Scr_EndLoadScripts VA 0x45dc30
 #define RVA_END_LOAD_SCRIPTS 0x5dc30
+#define RVA_MT_SIZE          0x2127e0
+#define RVA_SL_FREE          0x213cd0 // the last release of a script string: edi = its handle, [esp+4] the string, [esp+8] its length; the hash function is 0x2f0 before it
+#define RVA_SL_TABLE         0x128f380 // the string hash table (8-byte entries: next index u16, handle at +4)
 #define RVA_GET_FUNC_HANDLE  0x62750
 #define RVA_PROGRAM_BUFFER   0x14e7560
 #define RVA_VM_POS           0x150ddd4
 #define RVA_VM_DEPTH         0x150ddf8
 #define RVA_VM_FRAME_PTR     0x150ddfc
+#define RVA_VM_STACK_TOP     0x150de00
+#define RVA_VM_STACK_BASE_VA 0x190e110u
 #define VM_FRAME_SIZE        0x18
 #else
 #define RVA_ERROR_HANDLER 0x212f50 // void (void); starts with cmp byte [0x18e3f8f], 0
@@ -36,11 +43,16 @@
 // the script VM (docs/32bit-native-map): function_count 0x190a878, the pointer one past the top call frame 0x190a87c (frames of 0x18 bytes, the saved code position first),
 // the live code position 0x190a854, the program buffer pointer 0x18e3fe0, Scr_GetFunctionHandle(file, name) 0x5018f0 (cdecl), Scr_EndLoadScripts 0x490180
 #define RVA_END_LOAD_SCRIPTS 0x90180
+#define RVA_MT_SIZE          0x20ffa0 // MT_GetSize(esi = bytes) -> eax: the size class of a script memory request
+#define RVA_SL_FREE          0x211490
+#define RVA_SL_TABLE         0x128be00
 #define RVA_GET_FUNC_HANDLE  0x1018f0
 #define RVA_PROGRAM_BUFFER   0x14e3fe0
 #define RVA_VM_POS           0x150a854
 #define RVA_VM_DEPTH         0x150a878
 #define RVA_VM_FRAME_PTR     0x150a87c
+#define RVA_VM_STACK_TOP     0x150a900 // (not known for the official build: reads the frame pointer's neighbour, only for the log line)
+#define RVA_VM_STACK_BASE_VA 0x190a000u
 #define VM_FRAME_SIZE        0x18
 #endif
 
@@ -136,6 +148,223 @@ static void hook_end_load(void)
 	hook_jump(target, 8, end_load_scripts, 0x90);
 }
 
+// The script memory (strings, vectors, the saved stacks of waiting threads) hands out blocks of at most 65535 bytes: MT_GetSize (ESI = the request) ends the game with "failed memory
+// allocation for script usage" for more. This stub (entered with the function's registers as they are) logs every request of 16 KB or more with the script code position and the
+// call stack, so the thread that asks for the huge block, or the one whose saved stack keeps growing, is named.
+extern char mt_size_stub[];
+void *mt_size_next; // (not static: the stub below names it)
+void mt_size_log(unsigned bytes, const uintptr_t *entry_sp);
+extern volatile DWORD mt_main_tid;
+__asm__(
+	".text\n"
+	".globl _mt_size_stub\n"
+	"_mt_size_stub:\n"
+	"\tpushl %eax\n"
+	"\tmovl %fs:0x24, %eax\n"
+	"\tcmpl _mt_main_tid, %eax\n"
+	"\tpopl %eax\n"
+	"\tjne 2f\n"
+	"\tcmpl $0x4000, %esi\n"
+	"\tjb 1f\n"
+	"2:\n"
+	"\tpushfl\n"
+	"\tpushal\n"
+	"\tleal 36(%esp), %eax\n"
+	"\tpushl %eax\n"
+	"\tpushl %esi\n"
+	"\tcall _mt_size_log\n"
+	"\taddl $8, %esp\n"
+	"\tpopal\n"
+	"\tpopfl\n"
+	"1:\n"
+	"\tjmp *_mt_size_next\n");
+
+volatile DWORD mt_main_tid; // the thread of the server frames (set by the native split screen code): the script VM runs there
+void mt_size_log(unsigned bytes, const uintptr_t *entry_sp)
+{
+	const uintptr_t caller = entry_sp[0];
+	static volatile LONG logged, other;
+	const DWORD tid = GetCurrentThreadId();
+	if (mt_main_tid && tid != mt_main_tid) {
+		// the script memory is used by a thread that is not the script thread: its allocator is not safe for that unless it is locked
+		static DWORD seen[8];
+		static int seen_n;
+		for (int k = 0; k < seen_n; k++)
+			if (seen[k] == tid)
+				return;
+		if (seen_n < 8) {
+			seen[seen_n++] = tid;
+			log_printf("script memory: thread %lu (script thread %lu) asks for %u bytes from rva 0x%x", (unsigned long)tid, (unsigned long)mt_main_tid, bytes, (unsigned)(caller - (uintptr_t)base));
+		}
+		return;
+	}
+	if (bytes < 0x4000 || !mt_main_tid || InterlockedIncrement(&logged) > 80)
+		return;
+	log_printf("script memory: request of %d bytes (%u as unsigned; the limit is 65535) from rva 0x%x, VM stack top index %d, call depth %d, GSC position:", (int)bytes, bytes, (unsigned)(caller - (uintptr_t)base),
+		   (int)((*(const uint32_t *)(base + RVA_VM_STACK_TOP) - RVA_VM_STACK_BASE_VA) / 8), *(const int *)(base + RVA_VM_DEPTH));
+	{ // the native callers: return addresses (a call right before them) among the next 80 stack words
+		char chain[400];
+		int n = 0;
+		for (int k = 1; k < 80 && n < (int)sizeof(chain) - 12; k++) {
+			const uintptr_t v = entry_sp[k];
+			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && ((const uint8_t *)v)[-5] == 0xe8)
+				n += snprintf(chain + n, sizeof(chain) - n, " %x", (unsigned)(v - (uintptr_t)base));
+		}
+		chain[n] = 0;
+		log_printf("script memory: native callers (rva):%s", chain);
+	}
+	scrdebug_stack_log();
+	(void)other;
+}
+
+// The last release of a script string (edi = its handle, [esp+4] the string, [esp+8] its length) unlinks the string from its hash chain by walking the chain until the handle is
+// found. A string that is released twice is no longer in its chain, the walk never ends (the chain's last entry points at itself) and the game freezes. This stub checks the chain
+// first: a string that is not in it is logged, with the script position and the native callers, and the second release is skipped (the first one already freed it).
+extern char sl_free_stub[];
+void *sl_free_next;
+volatile int sl_free_ok;
+int sl_free_check(unsigned handle, const uint8_t *str, int len, const uintptr_t *entry_sp);
+__asm__(
+	".text\n"
+	".globl _sl_free_stub\n"
+	"_sl_free_stub:\n"
+	"\tpushfl\n"
+	"\tpushal\n"
+	"\tleal 36(%esp), %eax\n"
+	"\tpushl %eax\n"
+	"\tpushl 48(%esp)\n"
+	"\tpushl 48(%esp)\n"
+	"\tpushl 12(%esp)\n"
+	"\tcall _sl_free_check\n"
+	"\taddl $16, %esp\n"
+	"\tmovl %eax, _sl_free_ok\n"
+	"\tpopal\n"
+	"\tpopfl\n"
+	"\tcmpl $0, _sl_free_ok\n"
+	"\tje 1f\n"
+	"\tjmp *_sl_free_next\n"
+	"1:\n"
+	"\tret\n");
+
+int sl_free_check(unsigned handle, const uint8_t *str, int len, const uintptr_t *entry_sp)
+{
+	static volatile LONG reported;
+	if (*(const uint16_t *)str != 0) // (more references: the function does nothing)
+		return 1;
+	void *hash_fn = base + RVA_SL_FREE - 0x2f0;
+	const uint8_t *tbl = base + RVA_SL_TABLE;
+	unsigned bucket = (unsigned)len; // (in: the length, out: the bucket)
+	const uint8_t *text = str + 4;
+	__asm__ volatile("call *%2" : "+a"(bucket), "+d"(text) : "r"(hash_fn) : "ecx", "ebx", "esi", "memory", "cc");
+	if (bucket == 0 || bucket > 0x6fff)
+		return 1; // (not what was expected of the hash: leave it to the game)
+	const uint8_t *e = tbl + (size_t)bucket * 8;
+	int found = *(const uint32_t *)(e + 4) == handle;
+	unsigned prev = bucket, idx = *(const uint16_t *)e;
+	for (int k = 0; !found && k < 4096 && idx != prev && idx < 0x7000; k++) {
+		const uint8_t *n = tbl + (size_t)idx * 8;
+		if (*(const uint32_t *)(n + 4) == handle) {
+			found = 1;
+			break;
+		}
+		prev = idx;
+		idx = *(const uint16_t *)n;
+	}
+	if (found)
+		return 1;
+	if (InterlockedIncrement(&reported) <= 12) {
+		char chain[300];
+		int n = 0;
+		for (int k = 0; k < 80 && n < (int)sizeof(chain) - 12; k++) {
+			const uintptr_t v = entry_sp[k];
+			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && ((const uint8_t *)v)[-5] == 0xe8)
+				n += snprintf(chain + n, sizeof(chain) - n, " %x", (unsigned)(v - (uintptr_t)base));
+		}
+		chain[n] = 0;
+		log_printf("script strings: string %p (handle 0x%x, %d bytes, text '%.24s') is released but is not in its hash chain (released twice, or changed after it was made); the release is skipped. Native callers (rva):%s",
+			   str, handle, len, (const char *)(str + 4), chain);
+		scrdebug_stack_log();
+	}
+	return 0;
+}
+
+#ifdef MW2COOP_IW4X
+// Diagnostics (a file mw2coop\\xferlog next to the exe): the animation transfer queue (159 image: entries of 36 bytes at VA 0x1a4ade0, their count at VA 0x1a53de4). A DObj that is
+// freed saves its animation state into it (VA 0x486930, the tree in [esp+8]); VA 0x42b260 applies every entry (and gives back the strings the entries hold) at the start of VA 0x4bbe50;
+// VA 0x4dfe40 empties it. A string that is given back twice is what the string guard catches, so the order of these three calls with the live context is logged.
+extern int native_log_ctx(void);
+static volatile LONG xfer_events;
+static DWORD xfer_t0;
+static volatile LONG xfer_saves; // the saves since the last other event (a block of hundreds is logged as one line)
+static volatile ULONG_PTR xfer_save_caller, xfer_save_ctx;
+static void xfer_note(const char *what, unsigned a, uintptr_t caller)
+{
+	const int ctx = native_log_ctx();
+	if (GetTickCount() - xfer_t0 < 45000)
+		return; // (the level load saves hundreds of trees; the split screen starts after it)
+	if (!strcmp(what, "save")) {
+		if (!xfer_saves++) {
+			xfer_save_caller = caller;
+			xfer_save_ctx = (ULONG_PTR)ctx;
+		}
+		return;
+	}
+	LONG n = InterlockedIncrement(&xfer_events);
+	if (n < 4000) {
+		LONG saves = InterlockedExchange(&xfer_saves, 0);
+		log_printf("xfer #%ld ctx %d: %s from rva %x (queue count %u); %ld saves before it (first from rva %x in ctx %d)", (long)n, ctx, what, (unsigned)(caller - (uintptr_t)base),
+			   *(const unsigned *)(base + 0x1a53de4 - 0x400000), (long)saves, (unsigned)(xfer_save_caller - (uintptr_t)base), (int)xfer_save_ctx);
+	}
+}
+static void (*xfer_apply_next)(void);
+static void (*xfer_reset_next)(void);
+void *xfer_save_tramp;
+extern char xfer_save_hook[];
+void xfer_save_log(unsigned tree, uintptr_t caller)
+{
+	xfer_note("save", tree, caller);
+}
+static void xfer_apply_hook(void)
+{
+	xfer_note("apply begin", 0, (uintptr_t)__builtin_return_address(0));
+	xfer_apply_next();
+	xfer_note("apply end", 0, (uintptr_t)__builtin_return_address(0));
+}
+static void xfer_reset_hook(void)
+{
+	xfer_note("reset", 0, (uintptr_t)__builtin_return_address(0));
+	xfer_reset_next();
+}
+// save: the tree is the function's argument at [esp+4] of its entry; its first instruction reads a global, so a stub that keeps every register is used
+__asm__(
+	".text\n"
+	".globl _xfer_save_hook\n"
+	"_xfer_save_hook:\n"
+	"\tpushfl\n"
+	"\tpushal\n"
+	"\tpushl 36(%esp)\n"
+	"\tpushl 48(%esp)\n"
+	"\tcall _xfer_save_log\n"
+	"\taddl $8, %esp\n"
+	"\tpopal\n"
+	"\tpopfl\n"
+	"\tjmp *_xfer_save_tramp\n");
+
+static void xfer_install(void)
+{
+	if (!game_qa_flag("xferlog"))
+		return;
+	xfer_t0 = GetTickCount();
+	static const uint8_t save_bytes[] = {0xa1, 0xe4, 0x3d, 0xa5, 0x01}; // mov eax, [0x1a53de4]
+	static const uint8_t apply_bytes[] = {0x56, 0x33, 0xf6, 0x39, 0x35, 0xe4, 0x3d, 0xa5, 0x01}; // push esi / xor esi, esi / cmp [0x1a53de4], esi
+	static const uint8_t reset_bytes[] = {0x33, 0xc0, 0xa3, 0xe0, 0x3d, 0xa5, 0x01}; // xor eax, eax / mov [0x1a53de0], eax
+	int ok = hook_function(base + 0x486930 - 0x400000, save_bytes, sizeof(save_bytes), xfer_save_hook, &xfer_save_tramp) &&
+		 hook_function(base + 0x42b260 - 0x400000, apply_bytes, sizeof(apply_bytes), xfer_apply_hook, (void **)&xfer_apply_next) &&
+		 hook_function(base + 0x4dfe40 - 0x400000, reset_bytes, sizeof(reset_bytes), xfer_reset_hook, (void **)&xfer_reset_next);
+	log_printf("scrdebug: animation transfer queue events are logged: %s", ok ? "on" : "bytes did not match");
+}
+#endif
+
 void scrdebug_install(void)
 {
 	static const uint8_t flag_addr[4] = ERROR_FLAG_ADDR;
@@ -146,6 +375,23 @@ void scrdebug_install(void)
 		return;
 	}
 	log_printf("scrdebug: script errors are logged");
+#ifdef MW2COOP_IW4X
+	xfer_install();
+#endif
+	{
+		static const uint8_t mt_bytes[] = {0x51, 0x81, 0xfe, 0x00, 0x00, 0x01, 0x00}; // push ecx / cmp esi, 0x10000 (the next instruction, jge, stays whole)
+		if (hook_function(base + RVA_MT_SIZE, mt_bytes, sizeof(mt_bytes), mt_size_stub, &mt_size_next))
+			log_printf("scrdebug: script memory requests of 16 KB and more are logged");
+		else
+			log_printf("scrdebug: unexpected bytes at MT_GetSize, big script memory requests are not logged");
+	}
+	{
+		static const uint8_t sl_bytes[] = {0x8b, 0x44, 0x24, 0x08, 0x53}; // mov eax, [esp+8] / push ebx
+		if (hook_function(base + RVA_SL_FREE, sl_bytes, sizeof(sl_bytes), sl_free_stub, &sl_free_next))
+			log_printf("scrdebug: releases of strings that are not in the string table are caught");
+		else
+			log_printf("scrdebug: unexpected bytes at the string release, not caught");
+	}
 	static const scrdebug_vm_t vm = {RVA_GET_FUNC_HANDLE, RVA_PROGRAM_BUFFER, RVA_VM_POS, RVA_VM_DEPTH, 0, RVA_VM_FRAME_PTR, VM_FRAME_SIZE};
 	static const uint8_t handle_bytes[] = {0x8b, 0x44, 0x24, 0x04, 0x83, 0xec, 0x08, 0x56, 0x57, 0x50};
 	if (memcmp(base + RVA_GET_FUNC_HANDLE, handle_bytes, sizeof(handle_bytes)) == 0) {

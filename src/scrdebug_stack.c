@@ -23,7 +23,7 @@ void scrdebug_stack_init(uint8_t *module_base, const scrdebug_vm_t *where)
 }
 
 // Function names per script file, from the source text the game compiled.
-#define MAX_FILES 512
+#define MAX_FILES 2048
 static struct {
 	char *name;  // "maps/_coop", as Scr_GetFunctionHandle wants it
 	char **funcs;
