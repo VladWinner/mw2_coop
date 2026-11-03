@@ -114,7 +114,7 @@ uint8_t *hook_page_near(const uint8_t *where)
 
 int hook_call(uint8_t *site, void *replacement, void **original)
 {
-	if (site[0] != 0xe8)
+	if (site[0] != 0xe8 && site[0] != 0xe9) // a call, or a tail jump (the replacement is entered like a function either way)
 		return 0;
 	int32_t rel;
 	memcpy(&rel, site + 1, 4);
@@ -142,7 +142,7 @@ int hook_call(uint8_t *site, void *replacement, void **original)
 // 32 bits: every address is within reach of a relative call, so the call site goes straight to the replacement.
 int hook_call(uint8_t *site, void *replacement, void **original)
 {
-	if (site[0] != 0xe8)
+	if (site[0] != 0xe8 && site[0] != 0xe9) // a call, or a tail jump (the replacement is entered like a function either way)
 		return 0;
 	int32_t rel;
 	memcpy(&rel, site + 1, 4);

@@ -125,6 +125,9 @@ main()
 		case "p1move":
 			p1move();
 			break;
+		case "p2ghost":
+			p2ghost();
+			break;
 		case "sunlook":
 			sunlook();
 			break;
@@ -542,6 +545,23 @@ p1move()
 
 // sunlook: (native split screen test, a sunny level, [native] sunlog=1) player 1 turns once around in 36 s from 20 s into the level (10 degrees per second), player 2 keeps his view:
 // the sun state lines show whether player 1 looking into the sun moves player 2's state too
+// Player 2 does not exist for the AI and the physics: not solid, ignored by every enemy and friend (jitter hunt: do the actors move unevenly in the split because of his body?)
+p2ghost()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 3;
+	level.player2.ignoreme = true;
+	level.player2.ignoreall = true;
+	report( "p2ghost: player 2 is ignored by the AI" );
+	if ( getdvar( "mw2coop_qa_arg" ) == "solid" )
+	{
+		wait 1;
+		level.player2 SetContents( 0 );
+		report( "p2ghost: player 2 has no contents" );
+	}
+}
+
 sunlook()
 {
 	level.mw2coop_no_follow = true;

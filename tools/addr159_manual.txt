@@ -9,3 +9,4 @@
 0x331b04 -> 0x334b04    # builtin entry stopallrumbles (the empty builtin, found by its name)
 0xaf719 -> 0x102589    # found by moved-data-address matching before more anchors were added; the iw4x split screen ran with it
 0x1af9bc8 -> 0x1afc858    # the split screen view range (per local client views + visible cell bits): VA 0x1ef9bd0/0x1ef9bcc/0x1efa6c0/0x1efa6c4/0x1ef9cb0 all map +0x2c90 (map159 data, 2-8 refs each agree)
+0x2d18b -> 0x9c4fb    # the tail jmp to the snapshot build (official 0x65cc90, 159 rva 0x25f400: mov eax,0x4028; call alloca_probe), 0x36 behind the server commands call 0x2d155 -> 0x9c4c5 (entring)

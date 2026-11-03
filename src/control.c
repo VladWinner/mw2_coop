@@ -292,10 +292,16 @@ static void watch_poll(void)
 // QA: "!watchw <rva> [size 1|2|4|8]": a hardware watchpoint on writes to the game memory at rva, set for every thread; each hit logs the writer (rva of the instruction and of
 // the return addresses on its stack) and the thread goes on. Finds what changes a variable (the UI state, 2026-10-29).
 #include <tlhelp32.h>
-static volatile uintptr_t watchw_addr;
+static volatile uintptr_t watchw_addrs[4];
+static volatile int watchw_count;
+static int (*watchw_probe)(void); // set by native.c: a number the hit lines carry (the live client context)
+void control_set_probe(int (*fn)(void))
+{
+	watchw_probe = fn;
+}
 static LONG CALLBACK watchw_veh(EXCEPTION_POINTERS *ep)
 {
-	if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP || !(ep->ContextRecord->Dr6 & 1))
+	if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP || !(ep->ContextRecord->Dr6 & 0xf))
 		return EXCEPTION_CONTINUE_SEARCH;
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 #ifdef _WIN64
@@ -303,20 +309,27 @@ static LONG CALLBACK watchw_veh(EXCEPTION_POINTERS *ep)
 #else
 	const uintptr_t ip = ep->ContextRecord->Eip, sp = ep->ContextRecord->Esp;
 #endif
-	char line[700];
-	int n = snprintf(line, sizeof(line), "watchw: written at %p by rva 0x%x (thread %lu), stack rvas:", (void *)watchw_addr, (unsigned)(ip - (uintptr_t)base), GetCurrentThreadId());
-	const uintptr_t *st = (const uintptr_t *)sp;
-	for (int i = 0; i < 48 && n < 640; i++) {
-		uintptr_t v = st[i];
-		if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && (((uint8_t *)v)[-5] == 0xe8 || ((uint8_t *)v)[-2] == 0xff || ((uint8_t *)v)[-6] == 0xff))
-			n += snprintf(line + n, sizeof(line) - n, " %x", (unsigned)(v - (uintptr_t)base));
+	for (int w = 0; w < 4; w++) {
+		if (!(ep->ContextRecord->Dr6 & (1u << w)))
+			continue;
+		char line[1500];
+		const uintptr_t a = watchw_addrs[w];
+		int n = snprintf(line, sizeof(line), "watchw: written at %p by rva 0x%x (thread %lu), slot %d value %.2f ctx %d, stack rvas:", (void *)a, (unsigned)(ip - (uintptr_t)base), GetCurrentThreadId(), w,
+				 a ? (double)*(const float *)a : 0.0, watchw_probe ? watchw_probe() : -1);
+		const uintptr_t *st = (const uintptr_t *)sp;
+		for (int i = 0; i < 400 && n < 1400; i++) {
+			uintptr_t v = st[i];
+			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && (((uint8_t *)v)[-5] == 0xe8 || ((uint8_t *)v)[-2] == 0xff || ((uint8_t *)v)[-6] == 0xff))
+				n += snprintf(line + n, sizeof(line) - n, " %x", (unsigned)(v - (uintptr_t)base));
+		}
+		log_printf("%s", line);
 	}
-	log_printf("%s", line);
 	ep->ContextRecord->Dr6 = 0;
 	return EXCEPTION_CONTINUE_EXECUTION;
 }
 
-static void watchw_set(uintptr_t rva, int size)
+// Up to four 4-byte write watchpoints (rva list), in every thread but the caller's.
+static void watchw_set_multi(const uintptr_t *rvas, int count)
 {
 	static int installed;
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
@@ -324,8 +337,11 @@ static void watchw_set(uintptr_t rva, int size)
 		AddVectoredExceptionHandler(1, watchw_veh);
 		installed = 1;
 	}
-	watchw_addr = (uintptr_t)base + rva;
-	unsigned len = size == 1 ? 0 : size == 2 ? 1 : size == 8 ? 2 : 3;
+	if (count > 4)
+		count = 4;
+	for (int i = 0; i < count; i++)
+		watchw_addrs[i] = (uintptr_t)base + rvas[i];
+	watchw_count = count;
 	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
 	THREADENTRY32 te;
 	te.dwSize = sizeof(te);
@@ -341,8 +357,14 @@ static void watchw_set(uintptr_t rva, int size)
 			memset(&ctx, 0, sizeof(ctx));
 			ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
 			if (GetThreadContext(th, &ctx)) {
-				ctx.Dr0 = (DWORD_PTR)watchw_addr;
-				ctx.Dr7 = (ctx.Dr7 & ~0xf0003ull) | 1u | (1u << 16) | (len << 18); // Dr0 enabled, write, size
+				ctx.Dr0 = count > 0 ? (DWORD_PTR)watchw_addrs[0] : 0;
+				ctx.Dr1 = count > 1 ? (DWORD_PTR)watchw_addrs[1] : 0;
+				ctx.Dr2 = count > 2 ? (DWORD_PTR)watchw_addrs[2] : 0;
+				ctx.Dr3 = count > 3 ? (DWORD_PTR)watchw_addrs[3] : 0;
+				DWORD_PTR dr7 = 0;
+				for (int i = 0; i < count; i++)
+					dr7 |= (DWORD_PTR)(1u << (2 * i)) | ((DWORD_PTR)1 << (16 + 4 * i)) | ((DWORD_PTR)3 << (18 + 4 * i)); // slot enabled, write, 4 bytes
+				ctx.Dr7 = dr7;
 				SetThreadContext(th, &ctx);
 				threads++;
 			}
@@ -351,9 +373,40 @@ static void watchw_set(uintptr_t rva, int size)
 		CloseHandle(th);
 	}
 	CloseHandle(snap);
-	log_printf("watchw: writes to rva 0x%x watched in %d threads", (unsigned)rva, threads);
+	log_printf("watchw: %d write watchpoints set in %d threads (first rva 0x%x)", count, threads, (unsigned)rvas[0]);
 }
 
+static void watchw_set(uintptr_t rva, int size)
+{
+	(void)size;
+	watchw_set_multi(&rva, 1);
+}
+
+// For native.c: the same watchpoints, set from a helper thread so that the game's main thread is watched too.
+static uintptr_t watchw_job[4];
+static int watchw_job_n;
+static DWORD WINAPI watchw_thread(LPVOID arg)
+{
+	(void)arg;
+	watchw_set_multi(watchw_job, watchw_job_n);
+	return 0;
+}
+void control_watch_multi(const uintptr_t *rvas, int count)
+{
+	if (count > 4)
+		count = 4;
+	for (int i = 0; i < count; i++)
+		watchw_job[i] = rvas[i];
+	watchw_job_n = count;
+	HANDLE h = CreateThread(NULL, 0, watchw_thread, NULL, 0, NULL);
+	if (h)
+		CloseHandle(h);
+}
+void control_watch_write(uintptr_t rva, int size)
+{
+	(void)size;
+	control_watch_multi(&rva, 1);
+}
 
 static void run_line(char *line)
 {
