@@ -16,6 +16,10 @@
 // A replacement atlas is built on the game's own D3D9 device and installed into that GfxImage. Its glyphs are rasterized at 4x
 // resolution, while the game's glyph metrics remain in logical 1x coordinates. The texture has one mip level and uses the renderer's
 // existing sampler state. Latin letters and their Cyrillic look-alikes share identical bitmaps, as they do in the game's own tables.
+// The game places a glyph on a grid of whole units only (x0, y0, pixelWidth, pixelHeight, dx). Each glyph's bitmap is therefore grown with a transparent margin to a whole number
+// of units on all four sides (fontgrid.h), and its quad is that size: the 4x bitmap lands on the quad exactly, with no stretch and no rounding of the ink's edges.
+// The unit is 1 / m of a logical pixel (the method of ttf2iwi): a font's pixelHeight is written as its height * m and the engine scales text by it, so the size on the screen
+// stays and the positions and advances get m times finer. m is 4, 2 or 1: the finest that all glyphs of the font fit in the record's 8-bit fields.
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
@@ -24,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fontgrid.h"
 #include "fonts.h"
 #include "localize.h"
 #include "log.h"
@@ -74,8 +79,12 @@ static const struct {
 #define PLAN_COUNT (int)(sizeof(plan) / sizeof(plan[0]))
 
 typedef struct {
-	int w, h;       // Native 4x bitmap dimensions used for atlas packing
-	int ox, oy;     // 4x left bearing and top above the baseline
+	// A bitmap is made twice. render() gives the ink as GDI drew it (w, h tight, ox, oy its place). Once the font's grid is known (finish_job), grid_bitmap() makes
+	// the bitmap that goes into the atlas from it: the same ink with a transparent margin up to the grid's units, w = lw * q, h = lh * q, and the tight one is dropped.
+	int w, h;       // 4x bitmap dimensions used for atlas packing (0 for a blank glyph)
+	int ox, oy;     // tight bitmap only: 4x left bearing and top above the baseline
+	int left, top;  // gridded bitmap only: the quad in units: from the pen to its left edge, from the baseline up to its top edge (the glyph's x0 and, with the baseline, y0)
+	int lw, lh;     // the quad's size in units (pixelWidth, pixelHeight)
 	double adv;     // 4x advance; -1 means the face has no matching character
 	uint8_t *alpha; // w * h, 0..255
 	uint32_t hash;
@@ -281,12 +290,6 @@ static double cap_ratio(int face)
     return ratio;
 }
 
-static int logical_metric(double value)
-{
-    if (value < 0.0) return -(int)((-value + FONT_RENDER_SCALE / 2.0) / FONT_RENDER_SCALE);
-    return (int)((value + FONT_RENDER_SCALE / 2.0) / FONT_RENDER_SCALE);
-}
-
 // Hash glyph coverage first; equal hashes are confirmed by comparing the bitmap contents.
 static uint32_t hash_bytes(const uint8_t *p, size_t n, uint32_t h)
 {
@@ -368,8 +371,6 @@ static int render(HFONT font, wchar_t ch, int width_percent, const char **failur
         goto fail;
     }
     b->adv = glyph_advance(dc, ch, width_percent, (int)gm.gmCellIncX);
-    b->ox = (int)gm.gmptGlyphOrigin.x;
-    b->oy = (int)gm.gmptGlyphOrigin.y;
     if (size && gm.gmBlackBoxX && gm.gmBlackBoxY) {
         int width = (int)gm.gmBlackBoxX;
         int height = (int)gm.gmBlackBoxY;
@@ -434,7 +435,7 @@ static int is_per_glyph_gdi_failure(const char *failure)
 }
 
 // Store an empty glyph when a control code or an individual GDI raster operation has no bitmap.
-static int add_blank_bitmap(int advance)
+static int add_blank_bitmap(double advance)
 {
     if (bitmap_count == bitmap_cap) {
         if (bitmap_cap > 0x3fffffff)
@@ -452,6 +453,51 @@ static int add_blank_bitmap(int advance)
     b->adv = advance;
     b->hash = hash_bytes((const uint8_t *)"", 0, 2166136261u);
     return bitmap_count++;
+}
+
+// The tight bitmap is not needed any more: free its coverage and make the packer skip it.
+static void drop_bitmap(int index)
+{
+	Bitmap *b = &bitmaps[index];
+	free(b->alpha);
+	b->alpha = NULL;
+	b->w = b->h = 0;
+	b->hash = hash_bytes((const uint8_t *)"", 0, 2166136261u);
+}
+
+// The bitmap that goes into the atlas, made from a tight one for a grid of q texels per unit: the same ink with a transparent margin up to whole units (fontgrid.h), so the
+// quad of lw x lh units and the bitmap of (lw * q) x (lh * q) texels match exactly. The tight bitmap is dropped. A bitmap without ink is returned as it is; -1 is out of memory.
+static int grid_bitmap(int tight, int q)
+{
+	if (!bitmaps[tight].w || !bitmaps[tight].h)
+		return tight;
+	int tw = bitmaps[tight].w, th = bitmaps[tight].h;
+	FontGridBox box = fontgrid_box(bitmaps[tight].ox, bitmaps[tight].oy, tw, th, q);
+	int grid_w = box.width * q, grid_h = box.height * q;
+	if (grid_w > ATLAS_MAX_SIZE - 2 * ATLAS_GLYPH_PADDING || grid_h > ATLAS_MAX_SIZE - 2 * ATLAS_GLYPH_PADDING)
+		return -1;
+	uint8_t *alpha = calloc((size_t)grid_w * (size_t)grid_h, 1);
+	if (!alpha)
+		return -1;
+	int made = add_blank_bitmap(bitmaps[tight].adv); // (may move the table: take the pointers after it)
+	if (made < 0) {
+		free(alpha);
+		return -1;
+	}
+	const Bitmap *t = &bitmaps[tight];
+	for (int y = 0; y < th; y++)
+		memcpy(alpha + (size_t)(y + box.pad_top) * grid_w + box.pad_left, t->alpha + (size_t)y * tw, (size_t)tw);
+	Bitmap *b = &bitmaps[made];
+	b->alpha = alpha;
+	b->w = grid_w;
+	b->h = grid_h;
+	b->left = box.left;
+	b->top = box.top;
+	b->lw = box.width;
+	b->lh = box.height;
+	b->hash = hash_bytes(alpha, (size_t)grid_w * (size_t)grid_h, 2166136261u ^ (uint32_t)(grid_w * 977 + grid_h));
+	drop_bitmap(tight);
+	return made;
 }
 
 // ---- packing and DXT5 -----------------------------------------------------------------------------------
@@ -558,10 +604,76 @@ typedef struct {
 	uint8_t *font;
 	int count;
 	int *bitmap_of; // per glyph entry: the bitmap index
-	int pixel_height;
+	int pixel_height; // the game's own (see height_original)
 	int face;
 	int plan_index;
+	int m, q, base;   // the font's grid: m units per logical pixel, q = FONT_RENDER_SCALE / m texels per unit, the baseline's height above the pen in units (finish_job)
 } FontJob;
+
+// The table's pixelHeight is written as pixel_height * m, so a second patch of the same Font_s (after vid_restart the glyph tables stay patched while the texture is made again)
+// must start from the game's own height and not from the one written. Not cleared with the rest of the tracking.
+static void *height_font[PLAN_COUNT];
+static int height_original[PLAN_COUNT], height_applied[PLAN_COUNT];
+
+static int job_baseline(const FontJob *j, int m)
+{
+	double adjust = j->face == FACE_TEXT ? TEXT_FACE_Y_ADJUST : 0;
+	return (int)((j->pixel_height * 0.13 + adjust) * m + 0.5); // m = 1: the whole-pixel baseline of the original tables
+}
+
+// Does every glyph of the font fit the game's 8-bit record on a grid of m units per pixel?
+static int job_fits(const FontJob *j, int m)
+{
+	int q = FONT_RENDER_SCALE / m, base = job_baseline(j, m);
+	for (int i = 0; i < j->count; i++) {
+		const Bitmap *b = &bitmaps[j->bitmap_of[i]];
+		FontGridMetrics g = fontgrid_metrics(b->ox, b->oy, b->w, b->h, b->adv, base, q);
+		if (!fontgrid_in_range(&g, b->w > 0 && b->h > 0))
+			return 0;
+	}
+	return 1;
+}
+
+// All glyphs of a font are rasterized (tight bitmaps): pick its grid, the finest of 4, 2 or 1 units per pixel that every glyph fits (a taller font
+// leaves less room in the s8 y0), and make the bitmaps for the atlas. Returns 0 on out of memory.
+static int finish_job(FontJob *j, const char *name)
+{
+	int m = 1;
+	for (int c = FONT_RENDER_SCALE; c > 1; c--)
+		if (FONT_RENDER_SCALE % c == 0 && job_fits(j, c)) {
+			m = c;
+			break;
+		}
+	j->m = m;
+	j->q = FONT_RENDER_SCALE / m;
+	j->base = job_baseline(j, m);
+	int outside = 0;
+	for (int i = 0; i < j->count; i++) {
+		int tight = j->bitmap_of[i];
+		if (!bitmaps[tight].w || !bitmaps[tight].h)
+			continue;
+		const Bitmap *b = &bitmaps[tight];
+		FontGridMetrics g = fontgrid_metrics(b->ox, b->oy, b->w, b->h, b->adv, j->base, j->q);
+		int bi;
+		if (fontgrid_in_range(&g, 1)) {
+			bi = grid_bitmap(tight, j->q);
+		} else { // only on a grid of 1 unit per pixel: a glyph the record cannot hold is left blank rather than drawn off
+			double adv = b->adv;
+			outside++;
+			bi = add_blank_bitmap(adv);
+			if (bi >= 0)
+				drop_bitmap(tight);
+		}
+		if (bi < 0)
+			return 0;
+		j->bitmap_of[i] = bi;
+	}
+	log_printf("fonts: %s: grid of %d unit%s per pixel (%d texels each), pixelHeight %d -> %d%s%s", name, m, m == 1 ? "" : "s", j->q, j->pixel_height, j->pixel_height * m,
+		   m < FONT_RENDER_SCALE ? "; a finer grid does not fit the glyphs' 8-bit fields" : "", outside ? "; glyphs outside the record left blank" : "");
+	if (outside)
+		log_printf("fonts: %s: %d glyphs do not fit the game's glyph record even on the whole-pixel grid and are blank", name, outside);
+	return 1;
+}
 
 static void free_bitmaps(void)
 {
@@ -599,8 +711,17 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		j->font = f;
 		j->count = *(const int *)(f + FONT_COUNT);
 		j->pixel_height = *(const int *)(f + FONT_HEIGHT);
+		if (height_font[p] == (void *)f && height_applied[p] && j->pixel_height == height_applied[p])
+			j->pixel_height = height_original[p]; // this table was patched before: its height is the one we wrote
+		else {
+			height_font[p] = f;
+			height_original[p] = j->pixel_height;
+			height_applied[p] = 0;
+		}
 		j->face = plan[p].face;
 		j->plan_index = p;
+		j->m = 1;
+		j->q = FONT_RENDER_SCALE;
 		const uint8_t *glyphs = *(const uint8_t *const *)(f + FONT_GLYPHS);
 		if (j->count <= 0 || j->count > 4096 || j->pixel_height <= 0 || !readable(glyphs, (size_t)j->count * GLYPH_SIZE)) {
 			njobs--;
@@ -696,6 +817,12 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		log_printf("fonts: %s fallback %d/%d printable glyphs from %s; unresolved %d, skipped controls %d, GDI render errors kept in primary face %d, empty after failure %d", plan[p].name, fallback_count, printable_count, face_files[plan[p].face], fallback_still_missing, control_count, gdi_render_error_count, blank_after_failure_count);
 		DeleteObject(font);
 		DeleteObject(fallback);
+		if (!finish_job(j, plan[p].name)) {
+			log_printf("fonts: out of memory making the glyph bitmaps for %s", plan[p].name);
+			free_jobs(jobs, njobs);
+			free_bitmaps();
+			return;
+		}
 	}
 	if (!njobs) {
 		log_printf("fonts: none of the planned fonts lives on the shared atlas; will retry on the next font asset");
@@ -758,7 +885,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			break;
 		}
 	}
-	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph bounds and bearings from 4x, logical metrics rounded to 1x, no mipmaps, bank width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT);
+	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph quads grown to each font's grid (bitmap and quad match exactly), advances rounded to that grid, no mipmaps, bank width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT);
 	if (!atlas_h) {
 		log_printf("fonts: glyphs do not fit supported texture dimensions; will retry on the next font asset");
 		free(unique);
@@ -827,43 +954,41 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 	// Keep the renderer's sampler state unchanged; font filtering must be changed in the rendering path.
 	free(alpha);
 	// Update the glyph tables, then install the new texture.
+	int yoff_clamped = 0; // glyphs whose y0 does not fit the game's s8 (they would be drawn off by the clamp)
 	for (int n = 0; n < njobs; n++) {
 		FontJob *j = &jobs[n];
 		uint8_t *glyphs = *(uint8_t **)(j->font + FONT_GLYPHS);
-		int baseline = (int)(j->pixel_height * 0.13 + 0.5);
-		if (j->face == FACE_TEXT) baseline += TEXT_FACE_Y_ADJUST;
+		// The table's grid is 1 / m of a logical pixel (finish_job): the engine scales text by the font's pixelHeight, so the height goes up by m with all the units.
+		*(int *)(j->font + FONT_HEIGHT) = j->pixel_height * j->m;
+		height_applied[j->plan_index] = j->pixel_height * j->m;
+		int baseline = j->base;
 		for (int i = 0; i < j->count; i++) {
 			Bitmap *b = &bitmaps[j->bitmap_of[i]];
 			Bitmap *src = b->shared >= 0 ? &bitmaps[b->shared] : b;
 			uint8_t *g = glyphs + (size_t)i * GLYPH_SIZE;
-			int advance = logical_metric(b->adv);
+			int advance = fontgrid_round_div(b->adv, j->q);
 			if (advance < 0) advance = 0;
 			if (advance > 255) advance = 255;
 			g[4] = (uint8_t)advance;
 			if (src->w && src->h) {
-				int left = logical_metric(b->ox);
-				int right = logical_metric(b->ox + b->w);
-				int top = logical_metric(b->oy);
-				int bottom = logical_metric(b->oy - b->h);
-				int width = right - left, height = top - bottom;
-				if (width < 1) width = 1;
-				if (height < 1) height = 1;
-				if (left < -128) left = -128;
-				if (left > 127) left = 127;
-				int yoff = -(baseline + top);
-				if (yoff < -128) yoff = -128;
-				if (yoff > 127) yoff = 127;
-				g[2] = (uint8_t)(int8_t)left;
+				// The quad was fixed when the bitmap was made for the font's grid (grid_bitmap): its bitmap is exactly lw x lh units at q texels, so the
+				// game's x0, y0, pixelWidth and pixelHeight carry it with no rounding and no stretch. Only y0 still depends on the baseline.
+				int yoff = -(baseline + b->top);
+				if (yoff < -128 || yoff > 127) {
+					yoff_clamped++;
+					yoff = yoff < -128 ? -128 : 127;
+				}
+				g[2] = (uint8_t)(int8_t)b->left;
 				g[3] = (uint8_t)(int8_t)yoff;
-				g[5] = (uint8_t)(width > 255 ? 255 : width);
-				g[6] = (uint8_t)(height > 255 ? 255 : height);
+				g[5] = (uint8_t)b->lw;
+				g[6] = (uint8_t)b->lh;
 				*(float *)(g + 8) = (float)src->x / atlas_width;
 				*(float *)(g + 12) = (float)src->y / atlas_h;
 				*(float *)(g + 16) = (float)(src->x + src->w) / atlas_width;
 				*(float *)(g + 20) = (float)(src->y + src->h) / atlas_h;
 			} else {
 				g[2] = 0;
-				g[3] = (uint8_t)(int8_t)(-j->pixel_height);
+				g[3] = (uint8_t)(int8_t)(-j->pixel_height * j->m < -128 ? -128 : -j->pixel_height * j->m); // (no ink: where it sits does not matter, it must only fit the s8)
 				g[5] = 0;
 				g[6] = 0;
 				*(float *)(g + 8) = *(float *)(g + 16) = 0.99f;
@@ -871,6 +996,8 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			}
 		}
 	}
+	if (yoff_clamped)
+		log_printf("fonts: %d glyphs have a vertical offset outside the game's glyph record range and were clamped", yoff_clamped);
 	free_jobs(jobs, njobs);
 	*(IDirect3DTexture9 **)image = tex;
 	*(uint16_t *)(image + IMAGE_DIMS) = (uint16_t)atlas_width;
