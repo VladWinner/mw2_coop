@@ -95,6 +95,10 @@ main()
 	SetDvar( "mw2coop_split_view", "0" );
 	thread split_view_gate();
 
+	// the console game's revive HUD sits at 75 in split screen and at 120 otherwise (maps\_coop); issplitscreen() is false in the native split screen
+	if ( getdvarint( "mw2coop_native_split" ) )
+		level.revive_hud_base_offset = 75;
+
 	if ( !is_campaign_coop() )
 		return;
 

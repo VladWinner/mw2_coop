@@ -27,6 +27,7 @@ static uint16_t port = DEFAULT_PORT;
 static int steam_relay;
 static int fonts_on = 1;
 static int fontmip_on = 1;
+static int darktitle_on = 1;
 static char player_id[33];
 static char player_ini[MAX_PATH];
 
@@ -116,6 +117,7 @@ void settings_load(void)
 	steam_relay = GetPrivateProfileIntA("network", "steam_relay", 0, path) != 0;
 	fonts_on = GetPrivateProfileIntA("display", "fonts", 1, path) != 0;
 	fontmip_on = GetPrivateProfileIntA("display", "fontmip", 1, path) != 0;
+	darktitle_on = GetPrivateProfileIntA("display", "darktitle", 1, path) != 0;
 	log_printf("settings: %s port %u, steam_relay %d", path, (unsigned)port, steam_relay);
 	if (port != DEFAULT_PORT)
 		patch_port(port);
@@ -146,6 +148,11 @@ int settings_fonts(void)
 int settings_fontmip(void)
 {
 	return fontmip_on;
+}
+
+int settings_darktitle(void)
+{
+	return darktitle_on;
 }
 
 uint16_t settings_port(void)

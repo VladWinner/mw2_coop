@@ -16,6 +16,7 @@
 #include "d3dcap.h"
 #include "crash.h"
 #include "fov.h"
+#include "window.h"
 #include "access.h"
 #include "firewall.h"
 #include "devices.h"
@@ -240,6 +241,7 @@ static DWORD WINAPI identify(LPVOID unused)
 			firewall_install();
 			shot_install();
 			fov_install();
+			window_install();
 			native_install(); // (iw4x-sp: the official addresses go through XR(), src/addr159.c)
 			rumble_install();
 			devices_install();

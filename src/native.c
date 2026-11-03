@@ -4306,6 +4306,11 @@ typedef struct {
 static const hud_move_t hud_moves[] = {
     {"weaponinfo", 0, -347.333f, -74.6667f, -19.333f, 1.333f, 0, -1, 0}, // the bar under the weapon's name moves less than the rest
     {"weaponinfo", -1, -347.333f, -74.6667f, -50, 2, 0, -1, 0},		  // ammo, clip pictures, grenades
+    // (the same menu, item by item from the console disc's ui/hud.txt and ui/hud_splitscreen.txt, items paired by their draw type: the two thin lines and the two ammo counts move 88.667 to the left, not 50)
+    {"weaponinfo", 1, -131.333f, -32.6667f, -88.6667f, 2, 0, -1, 0},	  // the line above the grenade icons (draw type 119)
+    {"weaponinfo", 12, -135.333f, -40, -88.6667f, -0.6667f, 0, -1, 0},	  // clip ammo count (117)
+    {"weaponinfo", 13, -135.333f, -46, -88.6667f, 22.6667f, 0, -1, 0},	  // stock ammo count (121): lower than on the full screen HUD
+    {"weaponinfo", 14, -103.333f, -52.6667f, -88.6667f, 2, 0, -1, 0},	  // the line under the weapon's name (81)
     {"compassv2", -1, -86, -74.6667f, -20, 0, 0, -1, 0},
     {"stance", -1, -84, -76, -20, 0, 0, -1, 0}, // (the PC draws the stance inside the compass, not above the ammo as the console: it moves with the compass)
     {"reload", 0, -50, -20, 110, -12, 200, -1, 0.5833f}, // "Low ammo" / "Reload": right of the cross hair, bigger
@@ -4489,6 +4494,19 @@ static void hud_layout_tick(int split)
 		if (!hud_applied)
 			hud_apply();
 		hud_write();
+		static int logged_after;
+		if (CFG_ONCE("hudlog", 0) == 2 && !logged_after++) { // QA: the items after the move
+			int c = 0;
+			uint8_t *m = hud_menu("weaponinfo", &c);
+			if (m) {
+				uint8_t **items = *(uint8_t ***)(m + MENU_ITEMS);
+				for (int i = 0; i < c && i < 20; i++)
+					if (items[i]) {
+						float *rc = (float *)(items[i] + ITEM_RECT);
+						log_printf("native: hudafter: weaponinfo[%d] rect %g %g %g %g", i, rc[0], rc[1], rc[2], rc[3]);
+					}
+			}
+		}
 	} else if (hud_applied)
 		hud_restore();
 }
@@ -7121,6 +7139,8 @@ int native_split_start2(int dev0, int dev1)
 	pad_dev[0] = dev0;
 	p1pad = dev1;
 	int ok = activate(2);
+	if (ok)
+		game_cbuf_addtext("set mw2coop_native_split 1\n"); // the scripts' issplitscreen() is false here: maps\_mw2coop sets the console's split layout of the revive HUD from this
 	if (ok && !cfg("waitmsg", 0)) { // both players are on this PC: nothing to wait for, not even on the loading screen (set now: an asset lookup does not go while a level loads)
 		localize_override("COOP_WAITINGFORPLAYER", " ");
 		localize_override("SPECIAL_OPS_WAITING_OTHER_PLAYER", " ");
@@ -7140,6 +7160,7 @@ void native_split_stop(void)
 	localize_override("COOP_WAITINGFORPLAYER", NULL);
 	localize_override("SPECIAL_OPS_WAITING_OTHER_PLAYER", NULL);
 	hud_layout_tick(0); // the HUD menus get the full screen layout back
+	game_cbuf_addtext("set mw2coop_native_split 0\n");
 	native_active = 0;
 	mode = 0;
 	ctx_on = 0;
