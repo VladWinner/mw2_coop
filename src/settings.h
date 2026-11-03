@@ -9,5 +9,7 @@ uint16_t settings_port(void);
 int settings_steam_relay(void);
 // settings.ini [display] fonts (default 1): the Russian game gets the mod's fonts (fonts.c); 0 keeps the game's own.
 int settings_fonts(void);
+// settings.ini [display] fontmip (default 1): the mod's font atlas is filtered between its mip levels (trilinear), so small text is smooth; 0 keeps the game's plain bilinear.
+int settings_fontmip(void);
 // mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).
 const char *settings_player_id(void);

@@ -14,8 +14,8 @@
 //   (the original is 512 x 844, white colour with glyph shapes in alpha) reached through Material -> textureTable (MaterialTextureDef,
 //   16 bytes, GfxImage * at +8) -> GfxImage, whose first field is the IDirect3DTexture9 * and whose width/height are two u16 at +0x18.
 // A replacement atlas is built on the game's own D3D9 device and installed into that GfxImage. Its glyphs are rasterized at 4x
-// resolution, while the game's glyph metrics remain in logical 1x coordinates. The texture has one mip level and uses the renderer's
-// existing sampler state. Latin letters and their Cyrillic look-alikes share identical bitmaps, as they do in the game's own tables.
+// resolution, while the game's glyph metrics remain in logical 1x coordinates. The texture has ATLAS_MIPS levels (4x, 2x, 1x: a text
+// drawn at its logical size shows the 1x level, so it is filtered, not skipped over) and uses the renderer's existing sampler state. Latin letters and their Cyrillic look-alikes share identical bitmaps, as they do in the game's own tables.
 // The game places a glyph on a grid of whole units only (x0, y0, pixelWidth, pixelHeight, dx). Each glyph's bitmap is therefore grown with a transparent margin to a whole number
 // of units on all four sides (fontgrid.h), and its quad is that size: the 4x bitmap lands on the quad exactly, with no stretch and no rounding of the ink's edges.
 // The unit is 1 / m of a logical pixel (the method of ttf2iwi): a font's pixelHeight is written as its height * m and the engine scales text by it, so the size on the screen
@@ -60,6 +60,9 @@
 #define ATLAS_MIN_WIDTH 1024
 #define ATLAS_MAX_SIZE 4096
 #define ATLAS_GLYPH_PADDING 1
+// Levels of the atlas: 4x, 2x and 1x of the logical size. The packer puts every glyph in a cell whose origin and size are multiples of 4 pixels, so a
+// texel of these levels never covers two cells (a 0.5x level would, and bleed one glyph into its neighbour).
+#define ATLAS_MIPS 3
 
 // The faces are the supplied files in mw2coop\fonts; the bundled defaults approximate Bank Gothic, Conduit and Carbon.
 // The font assets that live on the shared atlas, and the face assigned to each asset.
@@ -513,20 +516,22 @@ static int pack(const int *order, int count, int width, int max_height)
     int x = 0, y = 0, row_h = 0;
     for (int i = 0; i < count; i++) {
         Bitmap *b = &bitmaps[order[i]];
-        int cw = (b->w + 2 * ATLAS_GLYPH_PADDING + 3) & ~3;
-        int ch = (b->h + 2 * ATLAS_GLYPH_PADDING + 3) & ~3;
-        if (x + cw > width) {
+        // one transparent 4-pixel texel before the bitmap (the next cell's before-texel serves as the one after it): the 1x level's bilinear
+        // sample at the quad's edge reads a whole texel outside it, which must not hold a neighbour's glyph
+        int cw = ((b->w + 3) & ~3) + 4;
+        int ch = ((b->h + 3) & ~3) + 4;
+        if (x + cw + 4 > width) {
             x = 0;
             y += row_h;
             row_h = 0;
         }
         if (cw > width) return 0;
-        b->x = x + ATLAS_GLYPH_PADDING;
-        b->y = y + ATLAS_GLYPH_PADDING;
+        b->x = x + 4;
+        b->y = y + 4;
         x += cw;
         if (ch > row_h) row_h = ch;
     }
-    y += row_h;
+    y += row_h + 4;
     y = (y + 3) & ~3;
     return y <= max_height ? y : 0;
 }
@@ -885,7 +890,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			break;
 		}
 	}
-	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph quads grown to each font's grid (bitmap and quad match exactly), advances rounded to that grid, no mipmaps, bank width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT);
+	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph quads grown to each font's grid (bitmap and quad match exactly), advances rounded to that grid, three mip levels, bank width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT);
 	if (!atlas_h) {
 		log_printf("fonts: glyphs do not fit supported texture dimensions; will retry on the next font asset");
 		free(unique);
@@ -919,7 +924,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		free_bitmaps();
 		return;
 	}
-	HRESULT hr = IDirect3DDevice9_CreateTexture(dev, atlas_width, atlas_h, 1, 0, D3DFMT_DXT5, D3DPOOL_MANAGED, &tex, NULL);
+	HRESULT hr = IDirect3DDevice9_CreateTexture(dev, atlas_width, atlas_h, ATLAS_MIPS, 0, D3DFMT_DXT5, D3DPOOL_MANAGED, &tex, NULL);
 	IDirect3DDevice9_Release(dev);
 	if (FAILED(hr) || !tex) {
 		log_printf("fonts: cannot create the replacement atlas texture (hr=0x%08lx); will retry on the next font asset", (unsigned long)hr);
@@ -950,6 +955,37 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		free_bitmaps();
 		IDirect3DTexture9_Release(tex);
 		return;
+	}
+	// The smaller levels: each texel the average of the 2 x 2 of the level above, encoded like level 0.
+	{
+		int lw = atlas_width, lh = atlas_h;
+		uint8_t *prev = alpha;
+		for (int lvl = 1; lvl < ATLAS_MIPS; lvl++) {
+			int nw = lw / 2, nh = lh / 2;
+			uint8_t *next = malloc((size_t)nw * nh);
+			D3DLOCKED_RECT mr;
+			if (!next || FAILED(IDirect3DTexture9_LockRect(tex, lvl, &mr, NULL, 0))) {
+				log_printf("fonts: cannot build mip level %d of the atlas; the text is drawn without it", lvl);
+				free(next);
+				break;
+			}
+			for (int y = 0; y < nh; y++)
+				for (int x = 0; x < nw; x++) {
+					const uint8_t *q = prev + (size_t)(2 * y) * lw + 2 * x;
+					next[(size_t)y * nw + x] = (uint8_t)((q[0] + q[1] + q[lw] + q[lw + 1] + 2) / 4);
+				}
+			for (int by = 0; by < nh / 4; by++)
+				for (int bx = 0; bx < nw / 4; bx++)
+					encode_block(next + (size_t)(by * 4) * nw + bx * 4, nw, (uint8_t *)mr.pBits + (size_t)by * mr.Pitch + (size_t)bx * 16);
+			IDirect3DTexture9_UnlockRect(tex, lvl);
+			if (prev != alpha)
+				free(prev);
+			prev = next;
+			lw = nw;
+			lh = nh;
+		}
+		if (prev != alpha)
+			free(prev);
 	}
 	// Keep the renderer's sampler state unchanged; font filtering must be changed in the rendering path.
 	free(alpha);
@@ -1005,6 +1041,15 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 	uint32_t texture_bytes = (uint32_t)atlas_width * (uint32_t)atlas_h;
 	*(uint32_t *)(image + IMAGE_DATALEN) = texture_bytes;
 	*(uint32_t *)(image + IMAGE_DATALEN + 4) = texture_bytes;
+	{
+		uint8_t *table = *(uint8_t *const *)(atlas_material + MATERIAL_TABLE);
+		uint8_t before = table[6];
+		// The material's texture def says "no mip filter" (state 0xe2: bits 0-1 the filter, linear; bits 2-3 the mip mode, off; bits 5-7 clamp), so the new levels
+		// were never read, and the game's r_texFilterMipMode does not reach this sampler. Bits 2-3 = 2 is linear between the levels ([display] fontmip=0 leaves it).
+		if (settings_fontmip())
+			table[6] = (uint8_t)((table[6] & ~0x0c) | 0x08);
+		log_printf("fonts: atlas texture def sampler state 0x%02x -> 0x%02x (mip filter %s)", before, table[6], settings_fontmip() ? "linear" : "as the game has it");
+	}
 	patched_image = image;
 	patched_texture = tex;
 	for (int n = 0; n < njobs; n++) {
