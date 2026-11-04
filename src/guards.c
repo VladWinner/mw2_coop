@@ -111,6 +111,22 @@ static intptr_t table_entry_guarded(uint64_t index)
 static const uint8_t table_entry_bytes[21] = {0x8b, 0xc1, 0x48, 0x8b, 0x0d, 0xa7, 0x2e, 0x11, 0x04, 0x48, 0x6b, 0xc0, 0x3c, 0x48, 0x03, 0x81, 0x68, 0x01, 0x00, 0x00, 0xc3};
 #endif
 
+#ifdef _WIN64
+// The same list unlink in the 64-bit game (rva 0x1cb9f0; the node is in rcx, the pointer to the previous link at +0x10, the faulting write at 0x1cba87 `mov [rax], rcx`): a Favela
+// test with several failures in a row crashed there three seconds into a restart (thread other than the script's, GSC position maps/_gameskill::playerhealthregen). See the
+// iw4x-sp note below; [native] unlinkguard=0 switches it off.
+static void (*unlink64_original)(void *);
+static void unlink64_guarded(void *node)
+{
+	if (node && !*(void **)((uint8_t *)node + 0x10)) {
+		static LONG seen;
+		if (InterlockedIncrement(&seen) < 6)
+			log_printf("guards: a list node %p that is not in a list was left alone", node);
+		return;
+	}
+	unlink64_original(node);
+}
+#endif
 #if !defined(_WIN64) && defined(MW2COOP_IW4X)
 // The iw4x-sp client (1.0.159 image, rva 0xb2700): the game's unlink of a node from a doubly linked list (next at +4, the pointer to the previous link at +8; called by the function
 // at 0xc6e10 that moves an object between two lists under critical section 0x17). A node whose back pointer is null has been unlinked already: the write through it
@@ -139,6 +155,10 @@ void guards_install(void)
 		log_printf("guards: the entity table lookup at 0x2a70 is guarded");
 	} else
 		log_printf("guards: the entity table lookup at 0x2a70 is not as expected, not guarded");
+	if (settings_unlinkguard()) {
+		static const uint8_t unlink_bytes[15] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20}; // mov [rsp+8], rbx; mov [rsp+0x10], rsi; push rdi; sub rsp, 0x20
+		log_printf("guards: the list unlink at rva 0x1cb9f0 %s", hook_function(base + 0x1cb9f0, unlink_bytes, sizeof(unlink_bytes), (void *)unlink64_guarded, (void **)&unlink64_original) ? "is guarded" : "is not as expected, not guarded");
+	}
 	uint8_t *site = base + 0x9eb1c; // call 0x140085850 (the table lookup)
 	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + 0x85850) {
 		log_printf("guards: weapon definition lookup not guarded (bytes differ)");
