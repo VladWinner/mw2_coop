@@ -2841,6 +2841,8 @@ static const range_t ranges[] = {
                                      // stride 0x38): with one state the fade of a player who looks into the sun (white-out, or the dark blind) was drawn in the other half too
     {0x3efcc8, 0x1c},                // the screen blur of local client 0 (scr_blur / clear_blur, set by 0x8cf00 and 0x8cf90, stepped by 0x8cfe0, read by 0x8cfc0 for the view; stride 0x1c):
                                      // with one state the damage blur of a player who was hit showed in the other half too (v0.6.0 report). [native] blursplit=0 off
+    // (tried: 0x548c00 .. 0x589400, 260 KB changed by both contexts with different values and outside every range, the size of the snapshot entity states: swapping it garbled the
+    // geometry of the second half in a test, so it is not per-client snapshot data: the shared renderer / model data lives there)
 };
 #define RANGE_FX 9
 #define RANGE_VIEW 10
@@ -5229,6 +5231,14 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 			cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0;
 		}
 	}
+	if (inputlog_on() && cmd && native_active && (ctx_current == 0 || ctx_current == 1)) { // the usercmd as it leaves the maker (about 20 a second per context)
+		static DWORD cmd_at[2];
+		DWORD now_ms = GetTickCount();
+		if (now_ms - cmd_at[ctx_current] >= 50) {
+			cmd_at[ctx_current] = now_ms;
+			inputlog("CMD,%d,%d,%d,%d,%d,%d,%d,%d,%d", ctx_current, *(int *)cmd, *(int *)(cmd + 4), *(int *)(cmd + 8), *(int *)(cmd + 12), (int)(int8_t)cmd[0x1a], (int)(int8_t)cmd[0x1b], (int)(int8_t)cmd[0x1c], (int)(int8_t)cmd[0x1d]);
+		}
+	}
 	return cmd;
 }
 
@@ -5322,6 +5332,14 @@ static int p1_yaw;
 static void usercmd_step_inner(int lc)
 {
 	if (lc == 0) {
+		if (inputlog_on() && native_active) { // what the server holds as each client's last usercmd at each simulation step (every 4th)
+			static unsigned steps;
+			if (++steps % 4 == 0) {
+				const uint8_t *c0 = base + RVA_SV_CLIENTS + 0x1630, *c1 = base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE + 0x1630;
+				inputlog("STEP,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", steps, ctx_current, *(int *)c0, *(int *)(c0 + 8), *(int *)(c0 + 12), (int)(int8_t)c0[0x1a], *(int *)c1, *(int *)(c1 + 8), *(int *)(c1 + 12),
+					 (int)(int8_t)c1[0x1a], (int)(int8_t)c1[0x1b]);
+			}
+		}
 		usercmd_step_original(0);
 		return;
 	}

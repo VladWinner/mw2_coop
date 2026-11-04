@@ -43,7 +43,7 @@ void inputlog_open(void)
 	enabled = 1;
 	fprintf(file, "# mw2coop input log: ms,KIND,fields (PAD: player,device,context,play,dt,lx,ly,rx,ry,buttons,lt,rt,keycatchers,forward,right,yaw_in,yaw_out,pitch_in,pitch_out,acc_yaw,acc_pitch,assist; "
 		      "MOUSE: context,routed,kb_player,x,y; RAW: events,raw_dx,raw_dy,cursor_dx,cursor_dy,used_dx,used_dy; FRAME: context,split,native,kb_player,dev0,dev1,keycatchers,cursor_x,cursor_y,focus,map; "
-		      "XI: pad,result,lx,ly,rx,ry,buttons,lt,rt; EVENT: text)\n");
+		      "XI: pad,result,lx,ly,rx,ry,buttons,lt,rt; CMD: context,time,buttons,pitch,yaw,forward,right,up,down (a usercmd as made); STEP: step,context,c0 time,pitch,yaw,fwd, c1 time,pitch,yaw,fwd,right (what the server holds per client); EVENT: text)\n");
 	log_printf("inputlog: writing %s", path);
 }
 
