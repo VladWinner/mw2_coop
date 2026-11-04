@@ -27,6 +27,7 @@
 #include "padglyphs.h"
 #include "rawinput.h"
 #include "weaponfov.h"
+#include "ctxdiff.h"
 #include "loadprof.h"
 #include "rumble.h"
 #include "shot.h"
@@ -4732,6 +4733,24 @@ static void video_pop(void)
 
 // Mode 5: the engine's whole client frame (rva 0xd5b00, called once per engine frame from the main loop at rva 0x1fc331) runs for context 0 on even frames and for context 1 on odd ones, so
 // everything the client does in a frame (time, snapshot use, usercmds, the cgame draw, the 2D) happens in the right context. One scene per frame, as the renderer needs.
+#ifdef _WIN64
+// QA ([native] ctxdiff=1): is this rva inside a range the contexts swap?
+static int ctxdiff_swapped(uint32_t rva)
+{
+	for (size_t i = 0; i < NRANGES; i++)
+		if (rva >= RANGE_RVA(i) && rva < RANGE_RVA(i) + ranges[i].size)
+			return 1;
+	return 0;
+}
+static void ctxdiff_arm(void)
+{
+	static int armed_once;
+	if (!armed_once++ && cfg("ctxdiff", 0))
+		ctxdiff_start(base, ctxdiff_swapped);
+}
+#else
+static void ctxdiff_arm(void) {}
+#endif
 static void (*client_frame_original)(void);
 static unsigned make_cmd_calls[3]; // QA (padlog): calls of the usercmd maker per context
 // [native] scrwatch=1 (iw4x-sp only, diagnostics): the script variable table (159 image VA 0x16c7480, 0x22000 entries of 16 bytes) should change only while the server
@@ -4975,7 +4994,10 @@ static void client_frame_inner(void)
 		}
 		if (split_on)
 			video_push();
+		ctxdiff_arm();
+		ctxdiff_before(1);
 		client_frame_original();
+		ctxdiff_after(1);
 		native_unswap_entities();
 		ctx_swap(0);
 		if (perf_on) {
@@ -5019,7 +5041,9 @@ static void client_frame_inner(void)
 		video_push();
 	else if (!split_on)
 		video_pop();
+	ctxdiff_before(0);
 	client_frame_original();
+	ctxdiff_after(0);
 	if (perf_on) {
 		perf_ctx[0] += perf_now() - perf_start;
 		perf_ctx_n[0]++;
