@@ -245,6 +245,46 @@ static unsigned binding1(intptr_t lc, const char *cmd, char *out)
 	return binding(1, lc, cmd, out);
 }
 
+// A text with its markers made pictures, into out (cap bytes). map (optional, one entry per output byte and one for the end) gives for each output byte the offset in the
+// text it came from. Returns the length, or -1 when the text did not fit.
+static int convert(const char *text, char *out, size_t cap, uint16_t *map)
+{
+	size_t n = 0;
+	const char *p = text;
+	for (; *p; ) {
+		if (n >= cap - 16)
+			return -1;
+		if (p[0] == 0x1b && p[1] >= 'a' && p[1] < 'a' + BUTTONS) {
+			int b = p[1] - 'a';
+			const char *start = p;
+			p += 2;
+			if (n && out[n - 1] == '[' && *p == ']')
+				n--, p++;
+			if (n >= 2 && out[n - 2] == '^' && out[n - 1] >= '0' && out[n - 1] <= '9')
+				n -= 2; // the key's highlight colour ("^3", the localizer's): it would tint the picture
+			size_t from = n;
+			if (materials[b]) {
+				out[n++] = '^', out[n++] = 1, out[n++] = ICON_SIZE, out[n++] = ICON_SIZE;
+				memcpy(out + n, &materials[b], sizeof(void *));
+				n += sizeof(void *); // (8 bytes in 64 bits, 4 in 32)
+			} else
+				for (const char *s = fallback[b]; *s; s++)
+					out[n++] = *s;
+			if (map)
+				for (size_t i = from; i < n; i++)
+					map[i] = (uint16_t)(start - text);
+			continue;
+		}
+		if (map)
+			map[n] = (uint16_t)(p - text);
+		out[n++] = *p++;
+	}
+	if (map)
+		map[n] = (uint16_t)(p - text);
+	out[n] = 0;
+	return (int)n;
+}
+
 // render thread: a text about to be drawn, its markers made pictures (the brackets around one dropped)
 __attribute__((used)) const char *padglyphs_text(const char *text)
 {
@@ -253,29 +293,75 @@ __attribute__((used)) const char *padglyphs_text(const char *text)
 	if (!text || !strchr(text, 0x1b))
 		return text;
 	char *out = buf[at ^= 1];
-	size_t n = 0;
-	for (const char *p = text; *p && n < sizeof(buf[0]) - 16;) {
-		if (p[0] == 0x1b && p[1] >= 'a' && p[1] < 'a' + BUTTONS) {
-			int b = p[1] - 'a';
-			p += 2;
-			if (n && out[n - 1] == '[' && *p == ']')
-				n--, p++;
-			if (n >= 2 && out[n - 2] == '^' && out[n - 1] >= '0' && out[n - 1] <= '9')
-				n -= 2; // the key's highlight colour ("^3", the localizer's): it would tint the picture
-			if (materials[b]) {
-				out[n++] = '^', out[n++] = 1, out[n++] = ICON_SIZE, out[n++] = ICON_SIZE;
-				memcpy(out + n, &materials[b], sizeof(void *));
-				n += sizeof(void *); // (8 bytes in 64 bits, 4 in 32)
-			} else
-				for (const char *s = fallback[b]; *s; s++)
-					out[n++] = *s;
-			continue;
-		}
-		out[n++] = *p++;
-	}
-	out[n] = 0;
+	convert(text, out, sizeof(buf[0]), NULL);
 	return out;
 }
+
+// ---- the sizes. The engine measures a text for centring, right alignment and line breaks before the draw makes the pictures, and sees a marker as two letters; the
+// pictures are wider (the draw's width formula, the same as the line break function's own for a picture it finds).
+#ifdef _WIN64
+#define RVA_TEXT_WIDTH 0x9b30 // int (char *text, int max chars, Font *font): the width of the widest line, in the font's pixels
+#define RVA_TEXT_WRAP 0x9c90 // char *(char *text, int max bytes, int width, Font *font, float scale): where the line ends
+#define FONT_HEIGHT 8
+static const uint8_t width_head[17] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x56, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x20};
+static const uint8_t wrap_head[15] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x44, 0x89, 0x44, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54};
+static int (*width_original)(char *, int, void *);
+static char *(*wrap_original)(char *, int, int, void *, float);
+
+static int picture_width(void *font)
+{
+	return font ? ((ICON_SIZE - 16) * *(int *)((uint8_t *)font + FONT_HEIGHT) + 16) / 32 : 0;
+}
+
+static int text_width(char *text, int max_chars, void *font)
+{
+	char buf[2048];
+	if (!text || !strchr(text, 0x1b) || max_chars > 0)
+		return width_original(text, max_chars, font);
+	int len = convert(text, buf, sizeof(buf), NULL);
+	if (len < 0)
+		return width_original(text, max_chars, font);
+	int line = 0, widest = 0, run = 0;
+	for (int i = 0; i <= len; i++) {
+		int picture = i < len && buf[i] == '^' && buf[i + 1] == 1, stop = i == len || picture || buf[i] == '\n' || buf[i] == '\r';
+		if (!stop)
+			continue;
+		if (i > run) { // the plain part before it
+			char saved = buf[i];
+			buf[i] = 0;
+			line += width_original(buf + run, 0, font);
+			buf[i] = saved;
+		}
+		if (picture) {
+			line += picture_width(font);
+			i += 3 + sizeof(void *); // '^' is at i; 1, width, height and the pointer follow
+			run = i + 1;
+		} else {
+			if (line > widest)
+				widest = line;
+			line = 0;
+			run = i + 1;
+		}
+	}
+	return line > widest ? line : widest;
+}
+
+static char *text_wrap(char *text, int max_bytes, int width, void *font, float scale)
+{
+	char buf[2048];
+	uint16_t map[2048 + 1];
+	if (!text || !strchr(text, 0x1b) || max_bytes > 0)
+		return wrap_original(text, max_bytes, width, font, scale);
+	int len = convert(text, buf, sizeof(buf), map);
+	if (len < 0)
+		return wrap_original(text, max_bytes, width, font, scale);
+	char *end = wrap_original(buf, 0, width, font, scale); // (it finds a picture's size itself)
+	long at = end - buf;
+	if (at < 0 || at > len)
+		return wrap_original(text, max_bytes, width, font, scale);
+	return text + map[at];
+}
+#endif
 
 // the stub at the text command's call of the text draw: the text (rcx) through padglyphs_text, every other argument (rdx, r8, r9, xmm0-3, the stack) as it was
 #ifdef _WIN64
@@ -331,4 +417,17 @@ void padglyphs_install(int (*pad_player)(int *tactical))
 		ok &= hook_call(base + BINDING_SITE_B, (void *)binding1, (void **)&binding_original[1]);
 	}
 	log_printf("padglyphs: %s", ok ? "pad buttons as pictures in texts" : "a call site is not as expected, some texts keep key names");
+#ifdef _WIN64
+	char ini[MAX_PATH];
+	DWORD n = GetModuleFileNameA(NULL, ini, MAX_PATH);
+	while (n > 0 && ini[n - 1] != 0x5c)
+		n--;
+	ini[n] = 0;
+	lstrcatA(ini, "mw2coop\\settings.ini");
+	if (ok && GetPrivateProfileIntA("native", "padwidth", 1, ini)) { // [native] padwidth=0: the engine's own widths (a marker counts as two letters)
+		int w = hook_function(base + RVA_TEXT_WIDTH, width_head, sizeof(width_head), (void *)text_width, (void **)&width_original);
+		int r = hook_function(base + RVA_TEXT_WRAP, wrap_head, sizeof(wrap_head), (void *)text_wrap, (void **)&wrap_original);
+		log_printf("padglyphs: text width %s, line break %s", w ? "counts the pictures" : "NOT hooked", r ? "counts the pictures" : "NOT hooked");
+	}
+#endif
 }

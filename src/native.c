@@ -25,6 +25,7 @@
 #include "control.h"
 #include "padopts.h"
 #include "padglyphs.h"
+#include "rawinput.h"
 #include "rumble.h"
 #include "shot.h"
 #include "d3dcap.h"
@@ -4501,6 +4502,28 @@ static void hud_layout_tick(int split)
 		if (!hud_applied)
 			hud_apply();
 		hud_write();
+		if (CFG_ONCE("hudlog", 0) == 3) { // QA: the hint items as the engine has them, about once a second
+			static DWORD last;
+			DWORD now = GetTickCount();
+			if (now - last > 1000) {
+				last = now;
+				static const char *const names[] = {"cursorhints", "mantlehint"};
+				for (int k = 0; k < 2; k++) {
+					int c = 0;
+					uint8_t *m = hud_menu(names[k], &c);
+					if (!m)
+						continue;
+					float *mr = (float *)(m + ITEM_RECT);
+					uint8_t **items = *(uint8_t ***)(m + MENU_ITEMS);
+					log_printf("native: hudhint: %s menu rect %g %g %g %g align %d %d", names[k], mr[0], mr[1], mr[2], mr[3], m[ITEM_RECT_ALIGN_H], m[ITEM_RECT_ALIGN_V]);
+					for (int i = 0; i < c && i < 4; i++)
+						if (items[i]) {
+							float *rc = (float *)(items[i] + ITEM_RECT), *cl = (float *)(items[i] + ITEM_RECT_CLIENT);
+							log_printf("native: hudhint:   [%d] rect %g %g %g %g client %g %g %g %g", i, rc[0], rc[1], rc[2], rc[3], cl[0], cl[1], cl[2], cl[3]);
+						}
+				}
+			}
+		}
 		static int logged_after;
 		if (CFG_ONCE("hudlog", 0) == 2 && !logged_after++) { // QA: the items after the move
 			int c = 0;
@@ -7082,6 +7105,7 @@ void native_install(void)
 		game_add_command(&native_commands[i]);
 	padglyphs_install(text_pad_player);
 #ifdef _WIN64
+	rawinput_install();
 	vid_restart_install();
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");
