@@ -252,7 +252,7 @@ static DWORD WINAPI identify(LPVOID unused)
 			return 0;
 		}
 	}
-	log_printf("main32: unknown build: nothing is patched");
+	log_printf("main32: unknown build: nothing is patched. The mod supports the unmodified official Steam 32-bit build (code SHA-256 above must be FC9E4843...); a copy with a different iw4sp.exe (another edition, or a modified exe) is not supported. In Steam: Properties > Installed Files > Verify integrity of game files restores the original");
 	return 0;
 }
 
