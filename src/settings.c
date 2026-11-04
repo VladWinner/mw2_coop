@@ -28,6 +28,7 @@ static int steam_relay;
 static int fonts_on = 1;
 static int fontmip_on = 1;
 static int darktitle_on = 1;
+static int hwgamma_on = 1;
 static char player_id[33];
 static char player_ini[MAX_PATH];
 
@@ -118,6 +119,7 @@ void settings_load(void)
 	fonts_on = GetPrivateProfileIntA("display", "fonts", 1, path) != 0;
 	fontmip_on = GetPrivateProfileIntA("display", "fontmip", 1, path) != 0;
 	darktitle_on = GetPrivateProfileIntA("display", "darktitle", 1, path) != 0;
+	hwgamma_on = GetPrivateProfileIntA("display", "hwgamma", 1, path) != 0;
 	log_printf("settings: %s port %u, steam_relay %d", path, (unsigned)port, steam_relay);
 	if (port != DEFAULT_PORT)
 		patch_port(port);
@@ -153,6 +155,11 @@ int settings_fontmip(void)
 int settings_darktitle(void)
 {
 	return darktitle_on;
+}
+
+int settings_hwgamma(void)
+{
+	return hwgamma_on;
 }
 
 uint16_t settings_port(void)

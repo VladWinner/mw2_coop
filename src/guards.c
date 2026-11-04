@@ -12,6 +12,7 @@
 #include "game.h"
 #include "guards.h"
 #include "hook.h"
+#include "settings.h"
 #include "log.h"
 
 #ifdef _WIN64
@@ -61,6 +62,18 @@ static void *wdef_hook(uint64_t index)
 static DWORD WINAPI saved_dvars_thread(LPVOID unused)
 {
 	(void)unused;
+	if (!settings_hwgamma()) { // [display] hwgamma=0: the hardware gamma ramp of exclusive full screen is ignored (r_ignorehwgamma), as the windowed modes have none
+		for (int tries = 0; tries < 40; tries++) {
+			dvar_t *g = game_find_dvar("r_ignorehwgamma");
+			if (g) {
+				g->current.enabled = 1;
+				g->modified = 1;
+				log_printf("guards: r_ignorehwgamma set (hwgamma=0)");
+				break;
+			}
+			Sleep(500);
+		}
+	}
 	static const char *const names[] = {"com_maxfps"};
 	for (int tries = 0; tries < 40; tries++) {
 		int missing = 0;

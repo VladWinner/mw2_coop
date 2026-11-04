@@ -13,5 +13,7 @@ int settings_fonts(void);
 int settings_fontmip(void);
 // settings.ini [display] darktitle (default 1): the game window gets the dark title bar and square corners of Windows 10/11 (window.c); 0 leaves it as the game makes it.
 int settings_darktitle(void);
+// settings.ini [display] hwgamma (default 1): the game sets the display's hardware gamma ramp from r_gamma (default 0.8, a darker picture than the windowed and borderless modes, which have no ramp) in exclusive full screen; 0 sets r_ignorehwgamma so that full screen looks like them (guards.c).
+int settings_hwgamma(void);
 // mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).
 const char *settings_player_id(void);
