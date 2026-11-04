@@ -2866,10 +2866,12 @@ static const range_t ranges[] = {
                                      // bits (pointer VA 0x1efa6c0, bits 0x1efa6c4, cleared and filled by the portal walk VA 0x516320): see the 64-bit range ([native] viewsplit=0 off)
     {0x204a260, 0x28},               // the sun's blind and glare state of local client 0 (VA 0x244a260 + local client * 40, read by VA 0x543290 and its callees): see the 64-bit range
                                      // ([native] sunsplit=0 off)
+    {0x341230, 0x1c},                // the screen blur of local client 0 (VA 0x741230 + local client * 0x1c; clear_blur is VA 0x4a5690): see the 64-bit range ([native] blursplit=0 off)
 };
 #define RANGE_FX 10
 #define RANGE_VIEW 11
 #define RANGE_SUN 12
+#define RANGE_BLUR 13
 #define SUNSPLIT_DEFAULT 1 // (with the wait for the frame in flight, see sunwait in ctx_swap_mask)
 #endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
@@ -3057,10 +3059,8 @@ static void ctx_swap_mask(int to, unsigned mask)
 		if (i == RANGE_SUN && !CFG_ONCE("sunsplit", SUNSPLIT_DEFAULT))
 			continue;
 #endif
-#ifdef _WIN64
 		if (i == RANGE_BLUR && !CFG_ONCE("blursplit", 1))
 			continue;
-#endif
 		uint8_t *live = base + RANGE_RVA(i);
 		swap_copy(ctx_store[range_owner[i]][i], live, ranges[i].size);
 		swap_copy(live, ctx_store[to][i], ranges[i].size);
