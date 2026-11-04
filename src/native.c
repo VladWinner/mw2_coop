@@ -4528,6 +4528,14 @@ static void hud_apply(void)
 		}
 		if (!ok)
 			continue;
+		if (cfg("hintdx", 0) && (!strcmp(hud_moves[m].menu, "cursorhints") || !strcmp(hud_moves[m].menu, "mantlehint"))) { // QA experiment: the menu's own rect too
+			static float moved[4];
+			static int n;
+			float *mr = (float *)(menu + ITEM_RECT);
+			if (n < 4)
+				moved[n++] = mr[0];
+			mr[0] += (float)cfg("hintdx", 0);
+		}
 		for (int i = 0; i < count && hud_nslots < (int)(sizeof(hud_slots) / sizeof(hud_slots[0])); i++) {
 			const hud_move_t *mv = all;
 			for (size_t k = m; k < HUD_MOVES && !strcmp(hud_moves[k].menu, hud_moves[m].menu); k++)
@@ -4545,6 +4553,10 @@ static void hud_apply(void)
 			float *cl = (float *)(items[i] + ITEM_RECT_CLIENT);
 			s->cwas[0] = cl[0], s->cwas[1] = cl[1], s->cwas[2] = cl[2];
 			s->cnow[0] = cl[0] + mv->dx, s->cnow[1] = cl[1] + mv->dy, s->cnow[2] = mv->w > 0 ? mv->w : cl[2];
+			if (!strcmp(hud_moves[m].menu, "cursorhints") || !strcmp(hud_moves[m].menu, "mantlehint")) { // QA ([native] hintdx=<units>): where the hints land for a given shift
+				s->now[0] += (float)cfg("hintdx", 0);
+				s->cnow[0] += (float)cfg("hintdx", 0);
+			}
 			s->now_av = mv->align_v >= 0 ? (uint8_t)mv->align_v : s->was_av;
 			s->now_scale = mv->scale > 0 ? mv->scale : s->was_scale;
 		}

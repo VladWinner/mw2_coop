@@ -414,6 +414,23 @@ __asm__(".text\n"
 	"\tjmp *_draw_original\n");
 #endif
 
+
+#ifdef _WIN64
+// QA ([native] hudlog=3): the rectangle the cursor hint's draw (rva 0xac1f0: local client, rect x y w h, font, scale, style) is given
+#define RVA_HINT_DRAW 0xac1f0
+static const uint8_t hint_head[14] = {0x4c, 0x8b, 0xdc, 0x55, 0x56, 0x41, 0x55, 0x48, 0x81, 0xec, 0x20, 0x03, 0x00, 0x00};
+static void (*hint_original)(int, float *, void *, float, int);
+static void hint_hook(int lc, float *rect, void *font, float scale, int style)
+{
+	static DWORD last;
+	if (padglyphs_log && rect && GetTickCount() - last > 1000) {
+		last = GetTickCount();
+		log_printf("padglyphs: hint draw: client %d rect %g %g %g %g scale %g", lc, rect[0], rect[1], rect[2], rect[3], scale);
+	}
+	hint_original(lc, rect, font, scale, style);
+}
+#endif
+
 void padglyphs_install(int (*pad_player)(int *tactical))
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
@@ -425,6 +442,9 @@ void padglyphs_install(int (*pad_player)(int *tactical))
 		ok &= hook_call(base + BINDING_SITE_B, (void *)binding1, (void **)&binding_original[1]);
 	}
 	log_printf("padglyphs: %s", ok ? "pad buttons as pictures in texts" : "a call site is not as expected, some texts keep key names");
+#ifdef _WIN64
+	hook_function(base + RVA_HINT_DRAW, hint_head, sizeof(hint_head), (void *)hint_hook, (void **)&hint_original);
+#endif
 #ifdef _WIN64
 	char ini[MAX_PATH];
 	DWORD n = GetModuleFileNameA(NULL, ini, MAX_PATH);
