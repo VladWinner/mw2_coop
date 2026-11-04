@@ -23,7 +23,7 @@ HANDLERS = {
         ('handler_burgertown', 'burgertown'),
         ('handler_convoy', 'convoy'),
     ],
-    'oilrig': [('AA_heli_init', 'heli')],
+    'oilrig': [('AA_heli_init', 'heli'), ('AA_escape_init', 'escape')],
     'favela_escape': [('market_evac_escape', 'market_evac_escape'), ('roofrun', 'roofrun')],
     'dcburning': [('AA_heli_ride2', 'heliride2')],
     'contingency': [('handle_woods', 'woods'), ('handle_ridge', 'ridge')],

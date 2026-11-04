@@ -13,3 +13,16 @@ AA_heli_init()
 {
 	maps\_mw2coop::section_reached( "heli" );
 @@@ end
+
+2. "escape" is reached when its section handler AA_escape_init() begins (the section before
+   calls it): the co-op checkpoint (maps\_mw2coop::section_reached).
+@@@ replace
+
+AA_escape_init()
+{
+@@@ with
+
+AA_escape_init()
+{
+	maps\_mw2coop::section_reached( "escape" );
+@@@ end

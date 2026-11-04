@@ -19,6 +19,11 @@ table( level_name )
 		case "favela":
 			t[ t.size ] = pair( "start_chase", "chase" );
 			t[ t.size ] = pair( "favela_music", "favela" );
+			// the lower favela is cleared (the trigger is 450 units from playerstart_soccer), the final bend below the hilltop (180 from playerstart_hilltop) and the
+			// foot of the final stairs (100 from playerstart_end): without them a death near the end of the mission restarted the torture scene (issue #9)
+			t[ t.size ] = pair( "cleared_favela", "soccer" );
+			t[ t.size ] = pair( "player_at_final_bend", "hilltop" );
+			t[ t.size ] = pair( "player_approaching_final_stairs", "end" );
 			break;
 		case "arcadia":
 			t[ t.size ] = pair( "used_laser", "checkpoint" );
@@ -34,8 +39,13 @@ table( level_name )
 			break;
 		case "favela_escape":
 			t[ t.size ] = pair( "radiotower_escape_technical_2_arrival", "street" );
+			t[ t.size ] = pair( "vista1_dialogue_start", "street_mid" );
+			t[ t.size ] = pair( "leftalley_dialogue_start", "street_vista2" );
+			t[ t.size ] = pair( "market_advance_1", "market" );
 			t[ t.size ] = pair( "market_advance_4", "market_evac" );
+			t[ t.size ] = pair( "player_near_bigjump", "roofrun_bigjump" );
 			t[ t.size ] = pair( "solorun_objective_display", "solorun" );
+			t[ t.size ] = pair( "solorun_player_near_balcony", "solorun_rooftops" );
 			t[ t.size ] = pair( "solorun_player_at_balcony", "solorun_chopper" );
 			break;
 		case "dcburning":
@@ -54,12 +64,18 @@ table( level_name )
 			t[ t.size ] = pair( "price_splits_off", "defend_sub" );
 			break;
 		case "boneyard":
+			// the sections lie along +x; each flag's trigger is 180 to 920 units past its start point's place (a respawn puts the players a little back, never ahead)
+			t[ t.size ] = pair( "road", "road" );
+			t[ t.size ] = pair( "flyby_rockets", "flyby" );
+			t[ t.size ] = pair( "higround_ascend", "higround" );
+			t[ t.size ] = pair( "uaz_driver_mount", "ride" );
 			t[ t.size ] = pair( "uaz_mounted", "ride_end" );
 			break;
 		case "af_caves":
 			t[ t.size ] = pair( "rappel_threads", "rappel" );
 			// both players are down the rope (_mw2coop_cave), not when the first starts the knife kill
 			t[ t.size ] = pair( "mw2coop_cave_down", "barracks" );
+			t[ t.size ] = pair( "player_pre_steamroom_stairs", "steamroom" );
 			t[ t.size ] = pair( "steamroom_ambush_finish_dialogue_ended", "ledge" );
 			t[ t.size ] = pair( "player_crossed_bridge", "overlook" );
 			t[ t.size ] = pair( "player_right_near_breach", "control" );
