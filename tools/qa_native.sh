@@ -72,6 +72,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 # the window is made 1920x1080 at start: the config of the copy holds it (no vid_restart: it loses the mod's fonts)
 CFG=$A/players/config.cfg
 sed -i 's/^seta r_mode .*/seta r_mode "'"$RES"'"/; s/^seta r_customMode .*/seta r_customMode "'"$RES"'"/; s/^seta r_fullscreen .*/seta r_fullscreen "0"/; s/^seta vid_xpos .*/seta vid_xpos "'"${MW2COOP_XPOS:-0}"'"/; s/^seta vid_ypos .*/seta vid_ypos "0"/' "$CFG"
+# MW2COOP_DISPLAYMODE: "fullscreen", "windowed (no border)" (borderless: the monitor's rectangle) or "windowed" (the default of these runs)
+sed -i 's/^seta r_displayMode .*/seta r_displayMode "'"${MW2COOP_DISPLAYMODE:-windowed}"'"/' "$CFG"
 rm -f "$A/mw2coop/mw2coop.log" "$A/mw2coop"/shots/seq-*.bmp
 # the QA fake pads (a stick value stays until it is changed: an old fakepad0.txt made player 1 walk forward in every run with p0pad=0): both stand still unless the caller set them
 [ -n "${MW2COOP_KEEP_FAKEPAD:-}" ] || { echo "0 0 0 0 0 0 0" > "$A/mw2coop/fakepad0.txt"; echo "0 0 0 0 0 0 0" > "$A/mw2coop/fakepad.txt"; }

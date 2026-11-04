@@ -26,6 +26,7 @@
 #include "padopts.h"
 #include "padglyphs.h"
 #include "rawinput.h"
+#include "weaponfov.h"
 #include "loadprof.h"
 #include "rumble.h"
 #include "shot.h"
@@ -1718,6 +1719,19 @@ static void final2d_hook(void *vp)
 }
 
 static DWORD comp_not_before; // GetTickCount: the device hooks are not (re)installed before it (after a vid_restart the Steam overlay hooks the new device first)
+// tan(fov / 2) of the field of view the game draws the world with when nothing zooms: cg_fov times cg_fovScale (the first-person weapon's own field of view is set against it)
+static float weaponfov_base_tan(void)
+{
+	static dvar_t *fov, *scale;
+	if (!fov)
+		fov = game_find_dvar("cg_fov");
+	if (!scale)
+		scale = game_find_dvar("cg_fovScale");
+	if (!fov || fov->type != DVAR_TYPE_FLOAT)
+		return 0;
+	float s = scale && scale->type == DVAR_TYPE_FLOAT && scale->current.value > 0 ? scale->current.value : 1.0f;
+	return tanf(fov->current.value * s * 3.14159265f / 360.0f);
+}
 static void comp_hook(void)
 {
 	if (the_device || GetTickCount() < comp_not_before)
@@ -1732,6 +1746,8 @@ static void comp_hook(void)
 	the_device = dev;
 	void **vt = *(void ***)dev;
 	patch_slot(&vt[17], (void *)present_hook, (void **)&present_orig);
+	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0))
+		weaponfov_hook(dev, patch_slot, weaponfov_base_tan, (float)cfg("weaponfov", 0), cfg("weaponfovlog", 0));
 	if (cfg("resethook", 1))
 		patch_slot(&vt[16], (void *)reset_hook, (void **)&reset_orig);
 	IDirect3DDevice9Ex *ex = NULL;
@@ -1768,6 +1784,23 @@ static void comp_hook(void)
 void native_present_hooks(void)
 {
 	comp_hook();
+}
+
+// [native] weaponfov / weaponfovlog in the plain game: the device hooks are put in once the game has made its device (in a split session they are there anyway)
+static DWORD WINAPI device_hooks_thread(LPVOID unused)
+{
+	(void)unused;
+	for (int i = 0; i < 600; i++) {
+#ifdef _WIN64
+		if (*(void **)(base + RVA_D3D_DEVICE)) {
+			Sleep(2000); // the game has finished making its device
+			comp_hook();
+			return 0;
+		}
+#endif
+		Sleep(500);
+	}
+	return 0;
 }
 
 // vid_restart (and alt+enter, which runs it) destroys the D3D device and makes a new one. Our hooks sit on the d3d9 vtable slots; the Steam overlay hooks the new device again,
@@ -7210,6 +7243,10 @@ void native_install(void)
 	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
 		game_add_command(&native_commands[i]);
 	padglyphs_install(text_pad_player);
+#ifdef _WIN64
+	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0))
+		CreateThread(NULL, 0, device_hooks_thread, NULL, 0, NULL);
+#endif
 #ifdef _WIN64
 	rawinput_install();
 	if (cfg("loadprof", 0) > 0)
