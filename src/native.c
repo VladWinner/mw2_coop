@@ -28,6 +28,7 @@
 #include "rawinput.h"
 #include "weaponfov.h"
 #include "ctxdiff.h"
+#include "inputlog.h"
 #include "loadprof.h"
 #include "rumble.h"
 #include "shot.h"
@@ -4268,12 +4269,26 @@ static void pad_frame_player(int pl, int play)
 	if (dt > 0.1f)
 		dt = 0.1f;
 	if (!pad_read(pl, &st)) { // no pad: no input
+		if (inputlog_on()) {
+			static DWORD lost_at[2];
+			if (GetTickCount() - lost_at[pl] > 1000) {
+				lost_at[pl] = GetTickCount();
+				inputlog("PADLOST,%d,%d,%d", pl, pad_dev[pl], ctx_current);
+			}
+		}
 		p->forward = p->right = 0;
 		p->active = 0;
 		return;
 	}
 	p->active = 1;
 	if (*(unsigned *)(base + RVA_KEY_CATCHERS) & 0x10) { // a menu: player 1 works it; player 2 only pauses the game (Start in play), he does not work the menus
+		if (inputlog_on()) {
+			static DWORD menu_at[2];
+			if (GetTickCount() - menu_at[pl] > 250 || st.pad.buttons) {
+				menu_at[pl] = GetTickCount();
+				inputlog("PADMENU,%d,%d,%d,%u,%d,%d,%d,%d,%u", pl, pad_dev[pl], ctx_current, *(unsigned *)(base + RVA_KEY_CATCHERS), st.pad.lx, st.pad.ly, st.pad.rx, st.pad.ry, st.pad.buttons);
+			}
+		}
 		if (pl == 0)
 			pad_menu(pl, &st);
 		p->forward = p->right = 0;
@@ -4301,6 +4316,7 @@ static void pad_frame_player(int pl, int play)
 	const float scale = (lt ? CFG_ONCE("padads", 42) / 100.0f : 1.0f) * o.sens / 3.0f; // sensitivity 3: the speeds of padyaw / padpitch
 	float yaw = -rx * (float)CFG_ONCE("padyaw", 180) * scale * dt;                       // left is positive
 	float pitch = ((CFG_ONCE("padinvert", 0) != 0) != o.invert ? 1.0f : -1.0f) * ry * (float)CFG_ONCE("padpitch", 130) * scale * dt; // down is positive
+	const float yaw_in = yaw, pitch_in = pitch;
 	if (o.assist && !qa_noassist[pl])
 		aim_assist(pl, dt, &yaw, &pitch, sqrtf(lx * lx + ly * ly), sqrtf(rx * rx + ry * ry), lt);
 	else
@@ -4312,6 +4328,15 @@ static void pad_frame_player(int pl, int play)
 		acc[0] = 85.0f;
 	if (acc[0] < -85.0f)
 		acc[0] = -85.0f;
+	if (inputlog_on()) {
+		static DWORD row_at[2];
+		DWORD now_ms = GetTickCount();
+		if (st.pad.lx || st.pad.ly || st.pad.rx || st.pad.ry || st.pad.buttons || st.pad.lt || st.pad.rt || now_ms - row_at[pl] > 250) {
+			row_at[pl] = now_ms;
+			inputlog("PAD,%d,%d,%d,%d,%.4f,%d,%d,%d,%d,%u,%d,%d,%u,%d,%d,%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%d", pl, pad_dev[pl], ctx_current, play, dt, st.pad.lx, st.pad.ly, st.pad.rx, st.pad.ry, st.pad.buttons, st.pad.lt, st.pad.rt,
+				 *(unsigned *)(base + RVA_KEY_CATCHERS), p->forward, p->right, yaw_in, yaw, pitch_in, pitch, acc[1], acc[0], o.assist && !qa_noassist[pl]);
+		}
+	}
 	static const struct {
 		WORD mask;
 		const char *hold;  // a held button (+/-)
@@ -4751,6 +4776,36 @@ static void ctxdiff_arm(void)
 #else
 static void ctxdiff_arm(void) {}
 #endif
+// Diagnostics ([native] inputlog=1): a row about the state of the input at the start of each context's client frame (4 a second per context) and the four XInput pads once a second
+static void inputlog_frame(int ctx)
+{
+	if (!inputlog_on())
+		return;
+	static DWORD at[2], xi_at;
+	DWORD now = GetTickCount();
+	if (ctx < 0 || ctx > 1 || now - at[ctx] < 250)
+		return;
+	at[ctx] = now;
+	POINT cp = {0, 0};
+	GetCursorPos(&cp);
+	DWORD pid = 0;
+	HWND fg = GetForegroundWindow();
+	if (fg)
+		GetWindowThreadProcessId(fg, &pid);
+	char map[40] = "";
+	game_dvar_raw("mapname", map, sizeof(map));
+	inputlog("FRAME,%d,%d,%d,%d,%d,%d,%u,%ld,%ld,%d,%s", ctx, split_on, native_active, native_active ? kb_player() : 0, pad_dev[0], pad_dev[1], *(unsigned *)(base + RVA_KEY_CATCHERS), (long)cp.x, (long)cp.y,
+		 pid == GetCurrentProcessId(), map);
+	if (xinput_get && now - xi_at >= 1000) {
+		xi_at = now;
+		for (DWORD i = 0; i < 4; i++) {
+			xin_state_t s;
+			memset(&s, 0, sizeof(s));
+			DWORD rc = xinput_get(i, &s);
+			inputlog("XI,%lu,%lu,%d,%d,%d,%d,%u,%d,%d", (unsigned long)i, (unsigned long)rc, s.pad.lx, s.pad.ly, s.pad.rx, s.pad.ry, s.pad.buttons, s.pad.lt, s.pad.rt);
+		}
+	}
+}
 static void (*client_frame_original)(void);
 static unsigned make_cmd_calls[3]; // QA (padlog): calls of the usercmd maker per context
 // [native] scrwatch=1 (iw4x-sp only, diagnostics): the script variable table (159 image VA 0x16c7480, 0x22000 entries of 16 bytes) should change only while the server
@@ -4871,8 +4926,10 @@ static void client_frame_inner(void)
 		int on = v && v[0] == '1';
 		if (*(unsigned *)(base + RVA_KEY_CATCHERS) & 0x11) // key catchers of client 0 (rva 0x533cb0, set by 0xd1c10): a menu (pause, objectives, end of game) or the console has the keys: one picture
 			on = 0;
-		if (on != split_on)
+		if (on != split_on) {
 			log_printf("native: split view %s", on ? "on" : "off");
+			inputlog("EVENT,split view %s", on ? "on" : "off");
+		}
 		if (on && !split_on) {
 			split_tick = GetTickCount();
 			// QA: the dvar mw2coop_qa_set ("name value;name value", or | between them) is set when the picture splits: inside the level, where cheat protected dvars take a set
@@ -4994,6 +5051,7 @@ static void client_frame_inner(void)
 		}
 		if (split_on)
 			video_push();
+		inputlog_frame(1);
 		ctxdiff_arm();
 		ctxdiff_before(1);
 		client_frame_original();
@@ -5041,6 +5099,7 @@ static void client_frame_inner(void)
 		video_push();
 	else if (!split_on)
 		video_pop();
+	inputlog_frame(0);
 	ctxdiff_before(0);
 	client_frame_original();
 	ctxdiff_after(0);
@@ -5089,6 +5148,8 @@ static void mouse_read_hook(intptr_t state, float *x, float *y)
 		return;
 	}
 	mouse_read_original(state, x, y);
+	if (inputlog_on() && (*x != 0 || *y != 0))
+		inputlog("MOUSE,%d,%d,%d,%.3f,%.3f", ctx_current, 1, native_active ? kb_player() : 0, *x, *y);
 }
 #ifdef _WIN64
 static void (*mouse_read2_original)(intptr_t, float *, float *);
@@ -7287,6 +7348,7 @@ void native_install(void)
 #endif
 	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
 		game_add_command(&native_commands[i]);
+	inputlog_open();
 	padglyphs_install(text_pad_player);
 #ifdef _WIN64
 	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0))

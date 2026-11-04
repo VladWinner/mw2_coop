@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "hook.h"
+#include "inputlog.h"
 #include "log.h"
 #include "rawinput.h"
 
@@ -59,8 +60,11 @@ static uint64_t consumer(int x, int y, int dx, int dy)
 	static LONG seen;
 	LONG events = raw_events;
 	LONG rdx = InterlockedExchange(&raw_dx, 0), rdy = InterlockedExchange(&raw_dy, 0);
+	const int cursor_dx = dx, cursor_dy = dy;
 	if (events != seen)
 		dx = (int)rdx, dy = (int)rdy;
+	if (inputlog_on() && (rdx || rdy || cursor_dx || cursor_dy))
+		inputlog("RAW,%ld,%ld,%ld,%d,%d,%d,%d", (long)events, (long)rdx, (long)rdy, cursor_dx, cursor_dy, dx, dy);
 	seen = events;
 	return consumer_original(x, y, dx, dy);
 }
