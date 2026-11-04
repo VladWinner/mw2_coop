@@ -1,0 +1,14 @@
+mw2coop patch for maps/_slowmo_breach.gsc (Modern Warfare 2, 64-bit Steam build)
+
+1. The breach hint sits 43 units higher in the console's split screen (-23 instead of 20). The native split
+   screen on one machine is that layout, but the game's IsSplitScreen() is false there: the mod's dvar
+   mw2coop_native_split (set while the picture is split) stands in for it.
+@@@ replace
+	hint_offset = 20;
+	if ( issplitscreen() )
+		hint_offset = -23;
+@@@ with
+	hint_offset = 20;
+	if ( issplitscreen() || GetDvarInt( "mw2coop_native_split" ) )
+		hint_offset = -23;
+@@@ end

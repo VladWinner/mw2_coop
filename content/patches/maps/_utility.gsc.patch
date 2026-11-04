@@ -111,3 +111,20 @@ player_leaves_humvee()
 		player maps\_gameskill::update_player_attacker_accuracy();
 	}
 @@@ end
+
+6. The off-screen test for deleting AI uses a narrower angle in the console's split screen (0.65 instead of 0.75).
+   The native split screen on one machine is that layout, but IsSplitScreen() is false there: the mod's dvar
+   mw2coop_native_split stands in for it.
+@@@ replace
+	off_screen_dot = 0.75;
+	if ( IsSplitScreen() )
+	{
+		off_screen_dot = 0.65;
+	}
+@@@ with
+	off_screen_dot = 0.75;
+	if ( IsSplitScreen() || GetDvarInt( "mw2coop_native_split" ) )
+	{
+		off_screen_dot = 0.65;
+	}
+@@@ end

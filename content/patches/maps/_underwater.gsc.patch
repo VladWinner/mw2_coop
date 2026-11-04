@@ -1,0 +1,13 @@
+mw2coop patch for maps/_underwater.gsc (Modern Warfare 2, 64-bit Steam build)
+
+1. Oilrig: with two players on one machine only player 1 plays the scuba breathing sound, "to avoid sound
+   overlap" (the game's own rule for a split screen). The native split screen is that case, but the game's
+   IsSplitScreen() is false there: the mod's dvar mw2coop_native_split (set while the picture is split)
+   stands in for it.
+@@@ replace
+	if ( !isSplitscreen() )
+		self thread player_scuba_breathe_sound();
+@@@ with
+	if ( !isSplitscreen() && !GetDvarInt( "mw2coop_native_split" ) )
+		self thread player_scuba_breathe_sound();
+@@@ end
