@@ -111,10 +111,28 @@ static intptr_t table_entry_guarded(uint64_t index)
 static const uint8_t table_entry_bytes[21] = {0x8b, 0xc1, 0x48, 0x8b, 0x0d, 0xa7, 0x2e, 0x11, 0x04, 0x48, 0x6b, 0xc0, 0x3c, 0x48, 0x03, 0x81, 0x68, 0x01, 0x00, 0x00, 0xc3};
 #endif
 
+#if !defined(_WIN64) && defined(MW2COOP_IW4X)
+// The iw4x-sp client (1.0.159 image, rva 0xb2700): the game's unlink of a node from a doubly linked list (next at +4, the pointer to the previous link at +8; called by the function
+// at 0xc6e10 that moves an object between two lists under critical section 0x17). A node whose back pointer is null has been unlinked already: the write through it
+// (rva 0xb276f, `mov [edx], eax`) faulted, three seconds after "mission failed" when the level was torn down for the restart (a test with several failures in a row, the thread
+// that runs the animation scripts, `animscripts/run::updatemoveanimweights`). Such a node is left alone. [native] unlinkguard=0 switches it off.
+static void (*unlink_original)(void *);
+static void unlink_guarded(void *node)
+{
+	if (node && !*(void **)((uint8_t *)node + 8)) {
+		static LONG seen;
+		if (InterlockedIncrement(&seen) < 6)
+			log_printf("guards: a list node %p that is not in a list was left alone", node);
+		return;
+	}
+	unlink_original(node);
+}
+#endif
+
 void guards_install(void)
 {
-	CreateThread(NULL, 0, saved_dvars_thread, NULL, 0, NULL);
 #ifdef _WIN64
+	CreateThread(NULL, 0, saved_dvars_thread, NULL, 0, NULL);
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	if (!memcmp(base + 0x2a70, table_entry_bytes, sizeof(table_entry_bytes))) {
 		hook_jump(base + 0x2a70, sizeof(table_entry_bytes), (const void *)table_entry_guarded, 0xcc);
@@ -127,5 +145,12 @@ void guards_install(void)
 		return;
 	}
 	log_printf("guards: weapon definition lookup %s", hook_call(site, (void *)wdef_hook, (void **)&wdef_original) ? "guarded" : "NOT guarded (no hook page)");
+#endif
+#if !defined(_WIN64) && defined(MW2COOP_IW4X)
+	if (settings_unlinkguard()) {
+		static const uint8_t unlink_bytes[7] = {0x51, 0x53, 0x55, 0x8b, 0x6c, 0x24, 0x10}; // push ecx; push ebx; push ebp; mov ebp, [esp+0x10]
+		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);
+		log_printf("guards: the list unlink at rva 0xb2700 %s", hook_function(b32 + 0xb2700, unlink_bytes, sizeof(unlink_bytes), (void *)unlink_guarded, (void **)&unlink_original) ? "is guarded" : "is not as expected, not guarded");
+	}
 #endif
 }

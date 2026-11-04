@@ -29,6 +29,7 @@
 #include "steamnet.h"
 #include "transplant.h"
 #include "mirror.h"
+#include "guards.h"
 #include "native.h"
 #include "rumble.h"
 #include "shot.h"
@@ -243,6 +244,7 @@ static DWORD WINAPI identify(LPVOID unused)
 			fov_install();
 			window_install();
 			native_install(); // (iw4x-sp: the official addresses go through XR(), src/addr159.c)
+			guards_install(); // (iw4x-sp only: see guards.c)
 			rumble_install();
 			devices_install();
 			console_install();

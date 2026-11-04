@@ -15,5 +15,7 @@ int settings_fontmip(void);
 int settings_darktitle(void);
 // settings.ini [display] hwgamma (default 1): the game sets the display's hardware gamma ramp from r_gamma (default 0.8, a darker picture than the windowed and borderless modes, which have no ramp) in exclusive full screen; 0 sets r_ignorehwgamma so that full screen looks like them (guards.c).
 int settings_hwgamma(void);
+// settings.ini [native] unlinkguard (default 1): the iw4x-sp client only, see guards.c.
+int settings_unlinkguard(void);
 // mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).
 const char *settings_player_id(void);

@@ -30,6 +30,7 @@ static int fonts_on = 1;
 static int fontmip_on = 1;
 static int darktitle_on = 1;
 static int hwgamma_on = 1;
+static int unlinkguard_on = 1;
 static char player_id[33];
 static char player_ini[MAX_PATH];
 
@@ -121,6 +122,7 @@ void settings_load(void)
 	fontmip_on = GetPrivateProfileIntA("display", "fontmip", 1, path) != 0;
 	darktitle_on = GetPrivateProfileIntA("display", "darktitle", 1, path) != 0;
 	hwgamma_on = GetPrivateProfileIntA("display", "hwgamma", 1, path) != 0;
+	unlinkguard_on = GetPrivateProfileIntA("native", "unlinkguard", 1, path) != 0;
 	log_printf("settings: %s port %u, steam_relay %d", path, (unsigned)port, steam_relay);
 	voicefix_apply(path);
 	if (port != DEFAULT_PORT)
@@ -162,6 +164,11 @@ int settings_darktitle(void)
 int settings_hwgamma(void)
 {
 	return hwgamma_on;
+}
+
+int settings_unlinkguard(void)
+{
+	return unlinkguard_on;
 }
 
 uint16_t settings_port(void)
