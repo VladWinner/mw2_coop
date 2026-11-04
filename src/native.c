@@ -154,7 +154,7 @@ static uint8_t *base;
 #define RVA_CLS_STATE XR(0x525bc0)
 #define RVA_ACC_PITCH XR(0x525c34)
 #define ACC_IN_CLS (0x525c34 - 0x525bc0)
-#define RVA_PM_FLAGS 0 // (64-bit only: reads the image header here, harmless for the log)
+#define RVA_PM_FLAGS (RVA_CL_PS + 0xc) // the playerstate flags (VA 0x926c64): CL_MouseMove, VA 0x578fe0, skips the look when `& 0x800`
 #define RVA_CG_CLIENTNUM XR(0x35f2a0)
 #define RVA_CL_PS XR(0x526c58)
 #define CL_RING_MASK 63
@@ -1473,6 +1473,34 @@ static void layer_back(IDirect3DDevice9 *dev)
 	set_rt_orig(dev, 0, layer_rt);
 	viewport_orig(dev, &vp);
 }
+#ifdef MW2COOP_IW4X
+// The iw4x-sp client writes its name ("AlterWare IW4x-SP", faint and large) over the view, as one 512x64 DXT1 picture drawn at the end of the scene. In split screen that scene is
+// squeezed into the half, so the name comes out flat and cut off at the top of both halves: it is left out ([native] watermark=1 keeps it).
+static int watermark_draw(IDirect3DDevice9 *dev, UINT nv, UINT pc)
+{
+	static int hide = -1;
+	if (hide < 0)
+		hide = !cfg("watermark", 0);
+	if (!hide || layer_pass || nv != 24 || pc != 16 || mode != 10 || !native_active || !split_on)
+		return 0;
+	IDirect3DBaseTexture9 *t = NULL;
+	int hit = 0;
+	IDirect3DDevice9_GetTexture(dev, 0, &t);
+	if (t) {
+		D3DSURFACE_DESC sd;
+		if (IDirect3DBaseTexture9_GetType(t) == D3DRTYPE_TEXTURE && SUCCEEDED(IDirect3DTexture9_GetLevelDesc((IDirect3DTexture9 *)t, 0, &sd)) && sd.Width == 512 && sd.Height == 64 &&
+		    sd.Format == D3DFMT_DXT1)
+			hit = 1;
+		IDirect3DBaseTexture9_Release(t);
+	}
+	if (hit) {
+		static LONG shown;
+		if (InterlockedIncrement(&shown) < 4)
+			log_printf("native: the iw4x watermark left out");
+	}
+	return hit;
+}
+#endif
 static HRESULT STDMETHODCALLTYPE t_dpup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT pc, const void *v, UINT st)
 {
 	int moved = layer_pass ? layer_to_scene(dev) : 0;
@@ -1548,6 +1576,12 @@ static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t
 		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
+#ifdef MW2COOP_IW4X
+	if (watermark_draw(dev, nv, pc)) {
+		layer_unfix(dev);
+		return D3D_OK;
+	}
+#endif
 	HRESULT hr = dip_orig(dev, t, bv, mi, nv, si, pc);
 	layer_unfix(dev);
 	if (moved)
@@ -4320,14 +4354,12 @@ static void pad_frame_player(int pl, int play)
 	const float scale = (lt ? CFG_ONCE("padads", 42) / 100.0f : 1.0f) * o.sens / 3.0f; // sensitivity 3: the speeds of padyaw / padpitch
 	float yaw = -rx * (float)CFG_ONCE("padyaw", 180) * scale * dt;                       // left is positive
 	float pitch = ((CFG_ONCE("padinvert", 0) != 0) != o.invert ? 1.0f : -1.0f) * ry * (float)CFG_ONCE("padpitch", 130) * scale * dt; // down is positive
-#ifdef _WIN64
-	// The engine's own look (CL_MouseMove, rva 0xcfcf0) does nothing while the playerstate flag 0x800 is set (a scripted or linked scene: the car ride of Favela, the elevator of the
+	// The engine's own look (CL_MouseMove, rva 0xcfcf0; 32-bit VA 0x578fe0) does nothing while the playerstate flag 0x800 is set (a scripted or linked scene: the car ride of Favela, the elevator of the
 	// airport): the mouse cannot turn the view then, and its limits are not applied. The pad added its look to the accumulator regardless, so a stick held through such a scene
 	// wound player 2's view angle up by whole turns (the input log of a test: -3198 degrees in 30 seconds) and the server's arc limit of a linked player then flipped between its
 	// two ends as the angle went round: the camera turned back and forth by itself, or, when the scene ended, jumped to wherever the angle had got to. [native] padlock=0 off.
 	if ((*(unsigned *)(base + RVA_PM_FLAGS) & 0x800) && CFG_ONCE("padlock", 1))
 		yaw = pitch = 0;
-#endif
 	const float yaw_in = yaw, pitch_in = pitch;
 	if (o.assist && !qa_noassist[pl])
 		aim_assist(pl, dt, &yaw, &pitch, sqrtf(lx * lx + ly * ly), sqrtf(rx * rx + ry * ry), lt);
