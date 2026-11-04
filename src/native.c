@@ -7215,7 +7215,17 @@ static int hooks_apply(void)
 // the client state of a session: context 1 starts again with every level
 static void session_reset(void)
 {
-	if (ctx_current || ctx_store[0][0]) // (the stores exist once a swap has been made; ranges left with context 1 by a light swap go back too)
+	char sv[16] = "";
+	game_dvar_raw("sv_running", sv, sizeof(sv));
+	if (sv[0] != '1' && (ctx_current || ctx_store[0][0])) {
+		// the level is gone: the engine has torn the cgame, the renderer's views and the rest down already, and what the stores hold is a picture of the last frame before that (pointers
+		// into memory that has been freed since). Putting it back over the engine's own reset made both the main thread and the render thread crash right after the session ended
+		// (v0.6.0 reports: access violation at iw4sp.exe+0x2a7d / +0x9eb2b from the viewmodel code, session "already ended"; the render thread at +0x11b6f6 reading a stale pointer)
+		for (size_t i = 0; i < NRANGES; i++)
+			range_owner[i] = 0;
+		ctx_current = 0;
+		log_printf("native: session over with the level gone: the swapped ranges are left as the engine reset them");
+	} else if (ctx_current || ctx_store[0][0]) // (the stores exist once a swap has been made; ranges left with context 1 by a light swap go back too)
 		ctx_swap(0);
 	ctx1_ready = 0;
 	ctx_seeded = 0;

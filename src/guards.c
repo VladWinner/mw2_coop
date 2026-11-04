@@ -95,11 +95,32 @@ static DWORD WINAPI saved_dvars_thread(LPVOID unused)
 	return 0;
 }
 
+#ifdef _WIN64
+// rva 0x2a70: (index & 0xffffffff) * 0x3c + *(*(base + 0x4115920) + 0x168), the table of 0x3c-byte entries that the entity code (0x9ed44: the case of the per-client entity switch that
+// adds a weapon / model effect) takes one from. The global is zero once the renderer's device data is gone (the level shut down while the client frame was still adding entities:
+// v0.6.0 crash at iw4sp.exe+0x2a7d, read of 0x168). A zero entry makes the caller (0x2a90: "if (entry->count == 0) return") do nothing.
+static uint8_t empty_entry[0x40];
+static intptr_t table_entry_guarded(uint64_t index)
+{
+	uint8_t *g = *(uint8_t **)(base + 0x4115920);
+	uint8_t *table = g && !IsBadReadPtr(g + 0x168, 8) ? *(uint8_t **)(g + 0x168) : NULL;
+	if (!table)
+		return (intptr_t)empty_entry;
+	return (intptr_t)(table + (index & 0xffffffffu) * 0x3c);
+}
+static const uint8_t table_entry_bytes[21] = {0x8b, 0xc1, 0x48, 0x8b, 0x0d, 0xa7, 0x2e, 0x11, 0x04, 0x48, 0x6b, 0xc0, 0x3c, 0x48, 0x03, 0x81, 0x68, 0x01, 0x00, 0x00, 0xc3};
+#endif
+
 void guards_install(void)
 {
 	CreateThread(NULL, 0, saved_dvars_thread, NULL, 0, NULL);
 #ifdef _WIN64
 	base = (uint8_t *)GetModuleHandleA(NULL);
+	if (!memcmp(base + 0x2a70, table_entry_bytes, sizeof(table_entry_bytes))) {
+		hook_jump(base + 0x2a70, sizeof(table_entry_bytes), (const void *)table_entry_guarded, 0xcc);
+		log_printf("guards: the entity table lookup at 0x2a70 is guarded");
+	} else
+		log_printf("guards: the entity table lookup at 0x2a70 is not as expected, not guarded");
 	uint8_t *site = base + 0x9eb1c; // call 0x140085850 (the table lookup)
 	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + 0x85850) {
 		log_printf("guards: weapon definition lookup not guarded (bytes differ)");
