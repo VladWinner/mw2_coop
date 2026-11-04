@@ -7216,6 +7216,8 @@ void native_install(void)
 		loadprof_start((unsigned)cfg("loadprof", 0));
 	if (cfg("aspectlog", 0))
 		aspectlog_start();
+	if (cfg("readlog", 0))
+		readlog_start();
 	vid_restart_install();
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");

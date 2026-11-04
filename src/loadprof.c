@@ -88,6 +88,29 @@ static DWORD WINAPI prof_thread(LPVOID arg)
 				keys[j] = t;
 			}
 	log_printf("loadprof: %u thread samples in %lu s", samples, (unsigned long)seconds);
+	{ // what the process read and how long each thread worked (CPU time, user + kernel) in that time: a thread that worked less than the clock was waiting (disk, GPU, locks)
+		IO_COUNTERS io;
+		if (GetProcessIoCounters(GetCurrentProcess(), &io))
+			log_printf("loadprof: process read %llu MB in %llu reads, wrote %llu MB", (unsigned long long)(io.ReadTransferCount >> 20), (unsigned long long)io.ReadOperationCount, (unsigned long long)(io.WriteTransferCount >> 20));
+		HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+		THREADENTRY32 te = {sizeof(te)};
+		if (snap != INVALID_HANDLE_VALUE && Thread32First(snap, &te))
+			do {
+				if (te.th32OwnerProcessID != pid)
+					continue;
+				HANDLE h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+				FILETIME c, e, k, u;
+				if (h && GetThreadTimes(h, &c, &e, &k, &u)) {
+					unsigned long long ms = (((unsigned long long)u.dwHighDateTime << 32 | u.dwLowDateTime) + ((unsigned long long)k.dwHighDateTime << 32 | k.dwLowDateTime)) / 10000;
+					if (ms > 300)
+						log_printf("loadprof: thread %lu worked %llu ms (user %llu, kernel %llu)", (unsigned long)te.th32ThreadID, ms, (((unsigned long long)u.dwHighDateTime << 32 | u.dwLowDateTime) / 10000), (((unsigned long long)k.dwHighDateTime << 32 | k.dwLowDateTime) / 10000));
+				}
+				if (h)
+					CloseHandle(h);
+			} while (Thread32Next(snap, &te));
+		if (snap != INVALID_HANDLE_VALUE)
+			CloseHandle(snap);
+	}
 	for (int i = 0; i < nkeys && i < 40; i++)
 		log_printf("loadprof: %5u  %s", keys[i].n, keys[i].key);
 	return 0;
@@ -118,6 +141,57 @@ void aspectlog_start(void)
 		CloseHandle(t);
 }
 
+
+// QA ([native] readlog=1): the engine's ReadFile calls (its import at rva 0x31c308): how many, how big, and how long the process waited in them, per size class, logged every 10 seconds
+static BOOL (WINAPI *readfile_original)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
+static volatile LONG64 rf_calls[8], rf_bytes[8], rf_ticks[8];
+static BOOL WINAPI readfile_hook(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPOVERLAPPED ov)
+{
+	LARGE_INTEGER a, b;
+	QueryPerformanceCounter(&a);
+	BOOL r = readfile_original(h, buf, n, got, ov);
+	QueryPerformanceCounter(&b);
+	int c = n <= 512 ? 0 : n <= 2048 ? 1 : n <= 8192 ? 2 : n <= 32768 ? 3 : n <= 131072 ? 4 : n <= 1048576 ? 5 : 6;
+	InterlockedIncrement64(&rf_calls[c]);
+	InterlockedAdd64(&rf_bytes[c], n);
+	InterlockedAdd64(&rf_ticks[c], b.QuadPart - a.QuadPart);
+	return r;
+}
+static DWORD WINAPI readlog_thread(LPVOID unused)
+{
+	(void)unused;
+	static const char *const names[7] = {"<=512", "<=2K", "<=8K", "<=32K", "<=128K", "<=1M", ">1M"};
+	LARGE_INTEGER f;
+	QueryPerformanceFrequency(&f);
+	for (;;) {
+		Sleep(10000);
+		for (int c = 0; c < 7; c++)
+			if (rf_calls[c])
+				log_printf("readlog: %-6s %8lld calls %8lld KB %8.0f ms inside ReadFile", names[c], (long long)rf_calls[c], (long long)(rf_bytes[c] >> 10), 1000.0 * (double)rf_ticks[c] / (double)f.QuadPart);
+	}
+	return 0;
+}
+
+void readlog_start(void)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	void **slot = (void **)(base + 0x31c308);
+	DWORD old;
+	if (*slot != (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ReadFile") && *slot != (void *)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "ReadFile")) {
+		log_printf("readlog: the ReadFile import is not where expected");
+		return;
+	}
+	readfile_original = (BOOL(WINAPI *)(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED))*slot;
+	if (!VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old))
+		return;
+	*slot = (void *)readfile_hook;
+	VirtualProtect(slot, sizeof(void *), old, &old);
+	HANDLE t = CreateThread(NULL, 0, readlog_thread, NULL, 0, NULL);
+	if (t)
+		CloseHandle(t);
+	log_printf("readlog: ReadFile calls are counted");
+}
+
 void loadprof_start(unsigned seconds)
 {
 	HANDLE t = CreateThread(NULL, 0, prof_thread, (LPVOID)(uintptr_t)seconds, 0, NULL);
@@ -125,6 +199,9 @@ void loadprof_start(unsigned seconds)
 		CloseHandle(t);
 }
 #else
+void readlog_start(void)
+{
+}
 void aspectlog_start(void)
 {
 }
