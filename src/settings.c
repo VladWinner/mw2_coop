@@ -21,6 +21,7 @@
 
 #include "log.h"
 #include "settings.h"
+#include "voicefix.h"
 
 #define DEFAULT_PORT 28960
 static uint16_t port = DEFAULT_PORT;
@@ -121,6 +122,7 @@ void settings_load(void)
 	darktitle_on = GetPrivateProfileIntA("display", "darktitle", 1, path) != 0;
 	hwgamma_on = GetPrivateProfileIntA("display", "hwgamma", 1, path) != 0;
 	log_printf("settings: %s port %u, steam_relay %d", path, (unsigned)port, steam_relay);
+	voicefix_apply(path);
 	if (port != DEFAULT_PORT)
 		patch_port(port);
 	lstrcpynA(player_ini, path, MAX_PATH);
