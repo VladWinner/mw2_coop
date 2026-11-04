@@ -26,6 +26,7 @@
 #include "padopts.h"
 #include "padglyphs.h"
 #include "rawinput.h"
+#include "loadprof.h"
 #include "rumble.h"
 #include "shot.h"
 #include "d3dcap.h"
@@ -1289,9 +1290,97 @@ static const char *trace_surf(IDirect3DDevice9 *dev, IDirect3DSurface9 *s)
 }
 // In the 2D layer the engine's alpha blending (source alpha, inverse source alpha) leaves the colour premultiplied by the alpha and the alpha squared; asking for "source alpha one,
 // inverse source alpha" for the alpha channel alone makes the layer a proper premultiplied picture (blending states 206-208 are ones the engine never sets itself).
+// The engine draws alpha-tested things (names, compass markers, the soft shadows of texts) with alpha to coverage ("r_aaAlpha dither", the 'ATOC' value of D3DRS_ADAPTIVETESS_Y, set at
+// rva 0x44db7 and 0x50576) and counts on its multisampled back buffer to turn the coverage into soft edges. The 2D layer is a plain texture: coverage there is a hard cut, every
+// semi-transparent pixel on or off (1-bit opacity). A draw that asks for it is made an ordinary alpha blended one while it is drawn, and the states are put back after it.
+#define D3DRS_ATOC_STATE 181 // D3DRS_ADAPTIVETESS_Y
+#define ATOC_VALUE 0x434f5441
+static struct {
+	int active;
+	DWORD on, src, dst, test;
+	int mute;
+	DWORD cw;
+} atoc_saved;
+static void layer_unfix(IDirect3DDevice9 *dev)
+{
+	if (atoc_saved.mute) {
+		atoc_saved.mute = 0;
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_COLORWRITEENABLE, atoc_saved.cw);
+	}
+	if (!atoc_saved.active)
+		return;
+	atoc_saved.active = 0;
+	IDirect3DDevice9_SetRenderState(dev, D3DRS_ADAPTIVETESS_Y, ATOC_VALUE);
+	IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHABLENDENABLE, atoc_saved.on);
+	IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLEND, atoc_saved.src);
+	IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLEND, atoc_saved.dst);
+	IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHATESTENABLE, atoc_saved.test);
+}
 static void layer_fix(IDirect3DDevice9 *dev)
 {
-	DWORD on = 0, src = 0, dst = 0, cw = 0xf;
+	DWORD on = 0, src = 0, dst = 0, cw = 0xf, atoc = 0;
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_ADAPTIVETESS_Y, &atoc);
+	if (CFG_ONCE("layerstates", 0)) { // QA: every distinct combination of states the 2D layer's draws come with (blend, colour write, alpha test, alpha to coverage, sRGB)
+		static char seen[64][96];
+		static int nseen;
+		DWORD b = 0, sb = 0, db = 0, cw2 = 0, at = 0, ar = 0, af = 0, srgb = 0, sep = 0, sba = 0, dba = 0, bop = 0, ssrgb = 0;
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &b);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &sb);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &db);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_BLENDOP, &bop);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_COLORWRITEENABLE, &cw2);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHATESTENABLE, &at);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHAREF, &ar);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHAFUNC, &af);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRGBWRITEENABLE, &srgb);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, &sep);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLENDALPHA, &sba);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLENDALPHA, &dba);
+		IDirect3DDevice9_GetSamplerState(dev, 0, D3DSAMP_SRGBTEXTURE, &ssrgb);
+		IDirect3DPixelShader9 *ps = NULL;
+		IDirect3DDevice9_GetPixelShader(dev, &ps);
+		char key[96];
+		snprintf(key, sizeof(key), "blend %lu %lu/%lu op%lu cw%lx at%lu ref%lu fn%lu srgbw%lu sep%lu %lu/%lu srgbtex%lu atoc%lx ps%d", (unsigned long)b, (unsigned long)sb, (unsigned long)db, (unsigned long)bop,
+			 (unsigned long)cw2, (unsigned long)at, (unsigned long)ar, (unsigned long)af, (unsigned long)srgb, (unsigned long)sep, (unsigned long)sba, (unsigned long)dba, (unsigned long)ssrgb,
+			 (unsigned long)atoc, ps ? 1 : 0);
+		if (ps)
+			IDirect3DPixelShader9_Release(ps);
+		int k = 0;
+		for (; k < nseen; k++)
+			if (!strcmp(seen[k], key))
+				break;
+		if (k == nseen && nseen < 64) {
+			strcpy(seen[nseen++], key);
+			log_printf("native: layer states: %s", key);
+		}
+	}
+	if (CFG_ONCE("layerexp", 0) == 2) { // QA experiment: the additive (source alpha, one) draws of the layer are not drawn, to see what they make
+		DWORD sb2 = 0, db2 = 0, b2 = 0, cw3 = 0xf;
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &b2);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &sb2);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &db2);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_COLORWRITEENABLE, &cw3);
+		if (b2 && sb2 == D3DBLEND_SRCALPHA && db2 == D3DBLEND_ONE && cw3 == 0xf) {
+			atoc_saved.mute = 1, atoc_saved.cw = cw3;
+			IDirect3DDevice9_SetRenderState(dev, D3DRS_COLORWRITEENABLE, 0);
+		}
+	}
+	if (atoc == ATOC_VALUE && CFG_ONCE("layeratoc", 1)) {
+		atoc_saved.active = 1;
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &atoc_saved.on);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &atoc_saved.src);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &atoc_saved.dst);
+		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHATESTENABLE, &atoc_saved.test);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_ADAPTIVETESS_Y, 0);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHATESTENABLE, 0);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHABLENDENABLE, 1);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+		IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+		static int logged;
+		if (!logged++)
+			log_printf("native: layer: a draw with alpha to coverage became an alpha blended one (blend was %lu %lu/%lu)", (unsigned long)atoc_saved.on, (unsigned long)atoc_saved.src,
+				   (unsigned long)atoc_saved.dst);
+	}
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &on);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &src);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &dst);
@@ -1387,6 +1476,7 @@ static HRESULT STDMETHODCALLTYPE t_dpup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE 
 	if (trace_on)
 		trace_draw(dev);
 	HRESULT hr = dpup_orig(dev, t, pc, v, st);
+	layer_unfix(dev);
 	if (moved)
 		layer_back(dev);
 	return hr;
@@ -1399,6 +1489,7 @@ static HRESULT STDMETHODCALLTYPE t_dipup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE
 	if (trace_on)
 		trace_draw(dev);
 	HRESULT hr = dipup_orig(dev, t, mi, nv, pc, i, f, v, st);
+	layer_unfix(dev);
 	if (moved)
 		layer_back(dev);
 	return hr;
@@ -1453,6 +1544,7 @@ static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t
 	if (trace_on)
 		trace_draw(dev);
 	HRESULT hr = dip_orig(dev, t, bv, mi, nv, si, pc);
+	layer_unfix(dev);
 	if (moved)
 		layer_back(dev);
 	return hr;
@@ -1465,6 +1557,7 @@ static HRESULT STDMETHODCALLTYPE t_dp(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t,
 	if (trace_on)
 		trace_draw(dev);
 	HRESULT hr = dp_orig(dev, t, sv, pc);
+	layer_unfix(dev);
 	if (moved)
 		layer_back(dev);
 	return hr;
@@ -4502,6 +4595,7 @@ static void hud_layout_tick(int split)
 		if (!hud_applied)
 			hud_apply();
 		hud_write();
+		padglyphs_log = CFG_ONCE("hudlog", 0) == 3;
 		if (CFG_ONCE("hudlog", 0) == 3) { // QA: the hint items as the engine has them, about once a second
 			static DWORD last;
 			DWORD now = GetTickCount();
@@ -7106,6 +7200,10 @@ void native_install(void)
 	padglyphs_install(text_pad_player);
 #ifdef _WIN64
 	rawinput_install();
+	if (cfg("loadprof", 0) > 0)
+		loadprof_start((unsigned)cfg("loadprof", 0));
+	if (cfg("aspectlog", 0))
+		aspectlog_start();
 	vid_restart_install();
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");

@@ -71,6 +71,7 @@ static int button_of(const char *cmd, int tactical)
 }
 
 static uint8_t *base;
+int padglyphs_log; // set by native.c under hudlog=3
 static int (*pad_player_of)(int *);
 static void *materials[BUTTONS];
 
@@ -286,12 +287,19 @@ static int convert(const char *text, char *out, size_t cap, uint16_t *map)
 }
 
 // render thread: a text about to be drawn, its markers made pictures (the brackets around one dropped)
-__attribute__((used)) const char *padglyphs_text(const char *text)
+__attribute__((used)) const char *padglyphs_text(const char *text, float x, float y)
 {
 	static char buf[2][2048];
 	static int at;
 	if (!text || !strchr(text, 0x1b))
 		return text;
+#ifdef _WIN64
+	static DWORD logged;
+	if (padglyphs_log && GetTickCount() - logged > 1000) { // QA ([native] hudlog=3): where a text with a button picture is drawn (pixels)
+		logged = GetTickCount();
+		log_printf("padglyphs: text with a picture drawn at x %g y %g", x, y);
+	}
+#endif
 	char *out = buf[at ^= 1];
 	convert(text, out, sizeof(buf[0]), NULL);
 	return out;
