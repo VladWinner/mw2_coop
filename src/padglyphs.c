@@ -313,6 +313,15 @@ __attribute__((used)) const char *padglyphs_text(const char *text, float x, floa
 #define FONT_HEIGHT 8
 static const uint8_t width_head[17] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x56, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x20};
 static const uint8_t wrap_head[15] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x44, 0x89, 0x44, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54};
+#else
+// the official 32-bit build: the same two functions, cdecl, VA 0x508030 and 0x5080f0 (the font's pixel height at +4); in the iw4x-sp client XR() finds them, and hook_function
+// leaves the code alone when its first bytes are not these
+#define RVA_TEXT_WIDTH XR(0x108030)
+#define RVA_TEXT_WRAP XR(0x1080f0)
+#define FONT_HEIGHT 4
+static const uint8_t width_head[5] = {0x51, 0x53, 0x55, 0x33, 0xed}; // push ecx; push ebx; push ebp; xor ebp, ebp
+static const uint8_t wrap_head[5] = {0x83, 0xec, 0x0c, 0x53, 0x55};   // sub esp, 0xc; push ebx; push ebp
+#endif
 static int (*width_original)(char *, int, void *);
 static char *(*wrap_original)(char *, int, int, void *, float);
 
@@ -369,7 +378,6 @@ static char *text_wrap(char *text, int max_bytes, int width, void *font, float s
 		return wrap_original(text, max_bytes, width, font, scale);
 	return text + map[at];
 }
-#endif
 
 // the stub at the text command's call of the text draw: the text (rcx) through padglyphs_text, every other argument (rdx, r8, r9, xmm0-3, the stack) as it was
 #ifdef _WIN64
@@ -451,7 +459,6 @@ void padglyphs_install(int (*pad_player)(int *tactical))
 #ifdef _WIN64
 	hook_function(base + RVA_HINT_DRAW, hint_head, sizeof(hint_head), (void *)hint_hook, (void **)&hint_original);
 #endif
-#ifdef _WIN64
 	char ini[MAX_PATH];
 	DWORD n = GetModuleFileNameA(NULL, ini, MAX_PATH);
 	while (n > 0 && ini[n - 1] != 0x5c)
@@ -463,5 +470,4 @@ void padglyphs_install(int (*pad_player)(int *tactical))
 		int r = hook_function(base + RVA_TEXT_WRAP, wrap_head, sizeof(wrap_head), (void *)text_wrap, (void **)&wrap_original);
 		log_printf("padglyphs: text width %s, line break %s", w ? "counts the pictures" : "NOT hooked", r ? "counts the pictures" : "NOT hooked");
 	}
-#endif
 }
