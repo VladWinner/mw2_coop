@@ -73,6 +73,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 CFG=$A/players/config.cfg
 sed -i 's/^seta r_mode .*/seta r_mode "'"$RES"'"/; s/^seta r_customMode .*/seta r_customMode "'"$RES"'"/; s/^seta r_fullscreen .*/seta r_fullscreen "0"/; s/^seta vid_xpos .*/seta vid_xpos "'"${MW2COOP_XPOS:-0}"'"/; s/^seta vid_ypos .*/seta vid_ypos "0"/' "$CFG"
 rm -f "$A/mw2coop/mw2coop.log" "$A/mw2coop"/shots/seq-*.bmp
+# the QA fake pads (a stick value stays until it is changed: an old fakepad0.txt made player 1 walk forward in every run with p0pad=0): both stand still unless the caller set them
+[ -n "${MW2COOP_KEEP_FAKEPAD:-}" ] || { echo "0 0 0 0 0 0 0" > "$A/mw2coop/fakepad0.txt"; echo "0 0 0 0 0 0 0" > "$A/mw2coop/fakepad.txt"; }
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/run_test.ps1" -Tag native -Timeout ${MW2COOP_TIMEOUT:-$((LEVEL_S + 50))} -TestRoot "$(cygpath -w "$ROOT")" -Dirs "$(cygpath -w "$A")" | tail -2
 grep -a -E "CRASH: exc|split view|device reset|compositor on" "$A/mw2coop/mw2coop.log" | sed 's/^\([0-9:.]*\) \[[ 0-9]*\] /\1 /' | cut -c1-120
 LAST=$(ls "$A"/mw2coop/shots/seq-*.bmp 2>/dev/null | tail -1)
