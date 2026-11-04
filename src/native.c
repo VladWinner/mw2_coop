@@ -77,6 +77,7 @@ static uint8_t *base;
 #define SLOT_STRIDE 0x2650
 #define RVA_SV_CLIENT_THINK 0x22d000 // void (int lc, const usercmd_t *): copies the cmd into client_t[lc] + 0x1630 and runs the player's think
 #define RVA_KEY_CATCHERS 0x533cb0
+#define RVA_PM_FLAGS 0x535d44 // the live context's playerstate flags that CL_MouseMove (rva 0xcfcf0) tests with 0x800: set, it skips the whole mouse look and its view angle limits
 #define RVA_CLS_STATE 0x533cb8
 #define RVA_ACC_PITCH 0x533d14 // the live view angle accumulators (pitch, then yaw)
 #define ACC_IN_CLS (0x533d14 - 0x533cb8)
@@ -153,6 +154,7 @@ static uint8_t *base;
 #define RVA_CLS_STATE XR(0x525bc0)
 #define RVA_ACC_PITCH XR(0x525c34)
 #define ACC_IN_CLS (0x525c34 - 0x525bc0)
+#define RVA_PM_FLAGS 0 // (64-bit only: reads the image header here, harmless for the log)
 #define RVA_CG_CLIENTNUM XR(0x35f2a0)
 #define RVA_CL_PS XR(0x526c58)
 #define CL_RING_MASK 63
@@ -4318,6 +4320,14 @@ static void pad_frame_player(int pl, int play)
 	const float scale = (lt ? CFG_ONCE("padads", 42) / 100.0f : 1.0f) * o.sens / 3.0f; // sensitivity 3: the speeds of padyaw / padpitch
 	float yaw = -rx * (float)CFG_ONCE("padyaw", 180) * scale * dt;                       // left is positive
 	float pitch = ((CFG_ONCE("padinvert", 0) != 0) != o.invert ? 1.0f : -1.0f) * ry * (float)CFG_ONCE("padpitch", 130) * scale * dt; // down is positive
+#ifdef _WIN64
+	// The engine's own look (CL_MouseMove, rva 0xcfcf0) does nothing while the playerstate flag 0x800 is set (a scripted or linked scene: the car ride of Favela, the elevator of the
+	// airport): the mouse cannot turn the view then, and its limits are not applied. The pad added its look to the accumulator regardless, so a stick held through such a scene
+	// wound player 2's view angle up by whole turns (the input log of a test: -3198 degrees in 30 seconds) and the server's arc limit of a linked player then flipped between its
+	// two ends as the angle went round: the camera turned back and forth by itself, or, when the scene ended, jumped to wherever the angle had got to. [native] padlock=0 off.
+	if ((*(unsigned *)(base + RVA_PM_FLAGS) & 0x800) && CFG_ONCE("padlock", 1))
+		yaw = pitch = 0;
+#endif
 	const float yaw_in = yaw, pitch_in = pitch;
 	if (o.assist && !qa_noassist[pl])
 		aim_assist(pl, dt, &yaw, &pitch, sqrtf(lx * lx + ly * ly), sqrtf(rx * rx + ry * ry), lt);
@@ -4335,8 +4345,8 @@ static void pad_frame_player(int pl, int play)
 		DWORD now_ms = GetTickCount();
 		if (st.pad.lx || st.pad.ly || st.pad.rx || st.pad.ry || st.pad.buttons || st.pad.lt || st.pad.rt || now_ms - row_at[pl] > 250) {
 			row_at[pl] = now_ms;
-			inputlog("PAD,%d,%d,%d,%d,%.4f,%d,%d,%d,%d,%u,%d,%d,%u,%d,%d,%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%d", pl, pad_dev[pl], ctx_current, play, dt, st.pad.lx, st.pad.ly, st.pad.rx, st.pad.ry, st.pad.buttons, st.pad.lt, st.pad.rt,
-				 *(unsigned *)(base + RVA_KEY_CATCHERS), p->forward, p->right, yaw_in, yaw, pitch_in, pitch, acc[1], acc[0], o.assist && !qa_noassist[pl]);
+			inputlog("PAD,%d,%d,%d,%d,%.4f,%d,%d,%d,%d,%u,%d,%d,%u,%d,%d,%.4f,%.4f,%.4f,%.4f,%.3f,%.3f,%d,%08x", pl, pad_dev[pl], ctx_current, play, dt, st.pad.lx, st.pad.ly, st.pad.rx, st.pad.ry, st.pad.buttons, st.pad.lt, st.pad.rt,
+				 *(unsigned *)(base + RVA_KEY_CATCHERS), p->forward, p->right, yaw_in, yaw, pitch_in, pitch, acc[1], acc[0], o.assist && !qa_noassist[pl], *(unsigned *)(base + RVA_PM_FLAGS));
 		}
 	}
 	static const struct {
