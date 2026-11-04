@@ -4905,7 +4905,7 @@ static void client_frame_inner(void)
 		static int fov = -1;
 		static float fov_saved = -1;
 		if (fov < 0)
-			fov = cfg("fov", (mode >= 8) ? 49 : 85); // 85 = the console split screen: cg_fovScale 0.75 (maps/_load.gsc) on a half of 16:9 is about 100 x 38 degrees; a band of half the height cut from a view with cg_fov 85 is the same
+			fov = cfg("fov", (mode >= 8) ? 0 : 85); // 0 (mode 8 and up): the console's way, cg_fovScale 0.75 (below)
 		uint8_t *d = *(uint8_t **)(base + RVA_FOV_DVAR);
 		if (fov > 0 && d) {
 			float *v = (float *)(d + 0x10);
@@ -4916,6 +4916,27 @@ static void client_frame_inner(void)
 			} else if (fov_saved >= 0) {
 				*v = fov_saved;
 				fov_saved = -1;
+			}
+		}
+	}
+	if (mode >= 8) { // the console's split screen field of view: cg_fovScale 0.75 (maps/_load.gsc), which the game multiplies into every view's angle (cg_fov, a weapon's sight zoom, a script's lerp),
+			 // where writing cg_fov itself (what [native] fov=<degrees> does) leaves the sights' zoom and the scripts' angles as for the full screen. [native] fovscale=<percent> (default 75); the
+			 // game's own scripts write the dvar at each level load (1 when IsSplitScreen() is false), so it is held here
+		static int fovscale = -1;
+		static float scale_saved = -1;
+		static dvar_t *scale_dvar;
+		if (fovscale < 0)
+			fovscale = cfg("fovscale", 75);
+		if (!scale_dvar)
+			scale_dvar = game_find_dvar("cg_fovScale");
+		if (fovscale > 0 && cfg("fov", 0) == 0 && scale_dvar && scale_dvar->type == DVAR_TYPE_FLOAT) {
+			if (split_on) {
+				if (scale_saved < 0)
+					scale_saved = scale_dvar->current.value;
+				scale_dvar->current.value = (float)fovscale / 100.0f;
+			} else if (scale_saved >= 0) {
+				scale_dvar->current.value = scale_saved;
+				scale_saved = -1;
 			}
 		}
 	}
