@@ -4625,7 +4625,7 @@ static void hud_layout_tick(int split)
 					for (int i = 0; i < c && i < 4; i++)
 						if (items[i]) {
 							float *rc = (float *)(items[i] + ITEM_RECT), *cl = (float *)(items[i] + ITEM_RECT_CLIENT);
-							log_printf("native: hudhint:   [%d] rect %g %g %g %g client %g %g %g %g", i, rc[0], rc[1], rc[2], rc[3], cl[0], cl[1], cl[2], cl[3]);
+							log_printf("native: hudhint:   [%d] rect %g %g %g %g align %d %d client %g %g %g %g align %d %d", i, rc[0], rc[1], rc[2], rc[3], items[i][ITEM_RECT_ALIGN_H], items[i][ITEM_RECT_ALIGN_V], cl[0], cl[1], cl[2], cl[3], items[i][ITEM_RECT_CLIENT + 0x10], items[i][ITEM_RECT_CLIENT + 0x11]);
 						}
 				}
 			}

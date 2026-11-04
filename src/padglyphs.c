@@ -426,6 +426,12 @@ static void hint_hook(int lc, float *rect, void *font, float scale, int style)
 	if (padglyphs_log && rect && GetTickCount() - last > 1000) {
 		last = GetTickCount();
 		log_printf("padglyphs: hint draw: client %d rect %g %g %g %g scale %g", lc, rect[0], rect[1], rect[2], rect[3], scale);
+		static int dumped;
+		if (dumped++ < 2) // the engine's screen placements (rva 0x5e0b80, 0x70 bytes each; six of them in case the console's four local clients have their own)
+			for (int n = 0; n < 6; n++) {
+				const float *q = (const float *)(base + 0x5e0b80 + n * 0x70);
+				log_printf("padglyphs: placement %d: scale %g %g | full %g %g | viewport %g %g %g %g | virt view %g %g %g %g | real view %g %g %g %g | virt adj %g %g %g %g | real adj %g %g %g %g | %g %g", n, q[0], q[1], q[2], q[3], q[6], q[7], q[8], q[9], q[10], q[11], q[12], q[13], q[14], q[15], q[16], q[17], q[18], q[19], q[20], q[21], q[22], q[23], q[24], q[25], q[26], q[27]);
+			}
 	}
 	hint_original(lc, rect, font, scale, style);
 }
