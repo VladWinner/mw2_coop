@@ -764,9 +764,43 @@ typedef HRESULT(STDMETHODCALLTYPE *present_t)(IDirect3DDevice9 *, const RECT *, 
 typedef HRESULT(STDMETHODCALLTYPE *present_ex_t)(IDirect3DDevice9 *, const RECT *, const RECT *, HWND, const RGNDATA *, DWORD);
 typedef HRESULT(STDMETHODCALLTYPE *sc_present_t)(IDirect3DSwapChain9 *, const RECT *, const RECT *, HWND, const RGNDATA *, DWORD);
 static present_t present_orig;
+static present_t present_base_orig;
 static present_ex_t present_ex_orig;
+static present_ex_t present_ex_base_orig;
 static sc_present_t sc_present_orig;
+static sc_present_t sc_present_base_orig;
 static IDirect3DDevice9 *the_device;
+static volatile LONG present_hooks_pending;
+static volatile LONG comp_hook_busy;
+static volatile LONG present_bootstrap_failure_logged;
+static volatile LONG present_hook_owner;
+static volatile LONG present_passthrough_count[3];
+
+// A graphics wrapper can call another Present route while our hook is active.
+// Only the outermost call may compose a frame or draw the console. Re-entry goes
+// to the implementation captured before our hook was first installed.
+static int present_hook_enter(void)
+{
+	LONG tid = (LONG)GetCurrentThreadId();
+	LONG owner = InterlockedCompareExchange(&present_hook_owner, tid, 0);
+	return owner == 0 ? 1 : owner == tid ? 0 : -1;
+}
+
+static void present_hook_leave(int owner)
+{
+	if (owner == 1)
+		InterlockedExchange(&present_hook_owner, 0);
+}
+
+static void present_log_passthrough(int via, int owner)
+{
+	LONG count = InterlockedIncrement(&present_passthrough_count[via]);
+	if (count == 1)
+		log_printf("native: %s Present via %d bypassed console/compositor re-entry (owner=%ld, thread=%lu)",
+			   owner == 0 ? "nested" : "parallel", via,
+			   (long)InterlockedCompareExchange(&present_hook_owner, 0, 0),
+			   (unsigned long)GetCurrentThreadId());
+}
 static const GUID iid_device9ex = {0xb18b10ce, 0x2649, 0x405a, {0x87, 0x0f, 0x95, 0xf7, 0x77, 0xd4, 0x31, 0x3a}};
 
 // before the picture is shown: the half this frame was drawn into is kept and the other one filled in (once per frame, whichever way the game presents)
@@ -1056,26 +1090,56 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 
 static HRESULT STDMETHODCALLTYPE present_hook(IDirect3DDevice9 *dev, const RECT *a, const RECT *b, HWND c, const RGNDATA *d)
 {
+	int owner = present_hook_enter();
+	if (owner != 1) {
+		present_log_passthrough(0, owner);
+		present_t target = present_base_orig ? present_base_orig : present_orig;
+		return target && target != present_hook ? target(dev, a, b, c, d) : D3DERR_INVALIDCALL;
+	}
 	before_present(0, dev);
-	if (skip_this_present)
+	if (skip_this_present) {
+		present_hook_leave(owner);
 		return D3D_OK;
-	return present_orig(dev, a, b, c, d);
+	}
+	HRESULT hr = present_orig ? present_orig(dev, a, b, c, d) : D3DERR_INVALIDCALL;
+	present_hook_leave(owner);
+	return hr;
 }
 
 static HRESULT STDMETHODCALLTYPE present_ex_hook(IDirect3DDevice9 *dev, const RECT *a, const RECT *b, HWND c, const RGNDATA *d, DWORD e)
 {
+	int owner = present_hook_enter();
+	if (owner != 1) {
+		present_log_passthrough(1, owner);
+		present_ex_t target = present_ex_base_orig ? present_ex_base_orig : present_ex_orig;
+		return target && target != present_ex_hook ? target(dev, a, b, c, d, e) : D3DERR_INVALIDCALL;
+	}
 	before_present(1, dev);
-	if (skip_this_present)
+	if (skip_this_present) {
+		present_hook_leave(owner);
 		return D3D_OK;
-	return present_ex_orig(dev, a, b, c, d, e);
+	}
+	HRESULT hr = present_ex_orig ? present_ex_orig(dev, a, b, c, d, e) : D3DERR_INVALIDCALL;
+	present_hook_leave(owner);
+	return hr;
 }
 
 static HRESULT STDMETHODCALLTYPE sc_present_hook(IDirect3DSwapChain9 *sc, const RECT *a, const RECT *b, HWND c, const RGNDATA *d, DWORD e)
 {
+	int owner = present_hook_enter();
+	if (owner != 1) {
+		present_log_passthrough(2, owner);
+		sc_present_t target = sc_present_base_orig ? sc_present_base_orig : sc_present_orig;
+		return target && target != sc_present_hook ? target(sc, a, b, c, d, e) : D3DERR_INVALIDCALL;
+	}
 	before_present(2, the_device);
-	if (skip_this_present)
+	if (skip_this_present) {
+		present_hook_leave(owner);
 		return D3D_OK;
-	return sc_present_orig(sc, a, b, c, d, e);
+	}
+	HRESULT hr = sc_present_orig ? sc_present_orig(sc, a, b, c, d, e) : D3DERR_INVALIDCALL;
+	present_hook_leave(owner);
+	return hr;
 }
 
 // The vtable slots of the D3D9 device and swap chain that this file patches. The Steam overlay (gameoverlayrenderer64.dll) hooks the same functions and puts its hooks back after
@@ -1086,19 +1150,39 @@ static struct {
 	void *hook;
 	void **orig;
 	int in;
-} slots[24];
+} slots[64];
 static int nslots;
 
-static void patch_slot(void **slot, void *hook, void **orig)
+static int patch_slot(void **slot, void *hook, void **orig)
 {
-	DWORD old;
-	if (nslots >= 24 || !VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old))
-		return;
-	*orig = *slot;
-	*slot = hook;
-	VirtualProtect(slot, sizeof(void *), old, &old);
+	DWORD old, ignored;
+	void *previous;
+	if (!slot || !hook || !orig) {
+		SetLastError(ERROR_INVALID_PARAMETER);
+		return 0;
+	}
+	if (nslots >= (int)(sizeof(slots) / sizeof(slots[0]))) {
+		SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+		return 0;
+	}
+	if (!VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old))
+		return 0;
+	previous = InterlockedCompareExchangePointer((PVOID volatile *)slot, NULL, NULL);
+	if (previous == hook) {
+		VirtualProtect(slot, sizeof(void *), old, &ignored);
+		return 1;
+	}
+	if (!previous) {
+		VirtualProtect(slot, sizeof(void *), old, &ignored);
+		SetLastError(ERROR_INVALID_ADDRESS);
+		return 0;
+	}
+	*orig = previous;
+	InterlockedExchangePointer((PVOID volatile *)slot, hook);
+	VirtualProtect(slot, sizeof(void *), old, &ignored);
 	slots[nslots].slot = slot, slots[nslots].hook = hook, slots[nslots].orig = orig, slots[nslots].in = 1;
 	nslots++;
+	return 1;
 }
 
 static void slots_take_out(void)
@@ -1496,7 +1580,7 @@ static HRESULT STDMETHODCALLTYPE t_scissor(IDirect3DDevice9 *dev, const RECT *r)
 	if (r && mode == 10 && native_active && split_on && CFG_ONCE("scissorlog", 0)) { // QA: the scissor rectangles of split frames
 		static LONG logged;
 		if (!layer_pass && rt_full && comp_h && r->bottom <= (LONG)(comp_h / 2) && r->right - r->left > 64 && InterlockedIncrement(&logged) < 400)
-			log_printf("native: scissor %ld,%ld %ld,%ld layer %d full %d", (long)r->left, (long)r->top, (long)r->right, (long)r->bottom, layer_pass, (int)rt_full);
+			log_printf("native: scissor %ld,%ld %ld,%ld layer %ld full %d", (long)r->left, (long)r->top, (long)r->right, (long)r->bottom, layer_pass, (int)rt_full);
 	}
 	if (r && mode == 10 && native_active && split_on && !layer_pass && rt_full && comp_h && r->bottom <= (LONG)(comp_h / 2) && r->right - r->left > 64 &&
 	    CFG_ONCE("lensfix", 1)) {
@@ -1514,6 +1598,7 @@ static HRESULT STDMETHODCALLTYPE t_scissor(IDirect3DDevice9 *dev, const RECT *r)
 static dpup_t dpup_orig;
 static dipup_t dipup_orig;
 static scene_t begin_scene_orig, end_scene_orig;
+static int comp_hook(IDirect3DDevice9 *hint);
 // Mode 10: the scene's last pass (rva 0x63680, see scene2d_hook) also draws 3D things with the depth test on: effects, particles, the glass and the dot of a red dot
 // sight (the dot is a bone of the gun's model, tag_reticle_red_dot). Into the layer they came out where the half's 2D is laid out (the dot below the layer's rows,
 // the glass and the snow as a veil over the top half), so a depth-tested draw of that pass goes to the half's picture with the 3D instead ([native] layer3d=0: as before)
@@ -1675,9 +1760,12 @@ static HRESULT STDMETHODCALLTYPE t_begin(IDirect3DDevice9 *dev)
 }
 static HRESULT STDMETHODCALLTYPE t_end(IDirect3DDevice9 *dev)
 {
+	HRESULT result = end_scene_orig(dev);
+	if (InterlockedCompareExchange(&present_hooks_pending, 0, 0) && comp_hook(dev))
+		InterlockedExchange(&present_hooks_pending, 0);
 	if (trace_on)
 		trace_event("EndScene");
-	return end_scene_orig(dev);
+	return result;
 }
 static void trace_install(IDirect3DDevice9 *dev)
 {
@@ -1692,7 +1780,8 @@ static void trace_install(IDirect3DDevice9 *dev)
 	patch_slot(&vt[84], (void *)t_dipup, (void **)&dipup_orig);
 	patch_slot(&vt[75], (void *)t_scissor, (void **)&scissor_orig);
 	patch_slot(&vt[41], (void *)t_begin, (void **)&begin_scene_orig);
-	patch_slot(&vt[42], (void *)t_end, (void **)&end_scene_orig);
+	if (!end_scene_orig)
+		patch_slot(&vt[42], (void *)t_end, (void **)&end_scene_orig);
 	trace_dev = dev;
 }
 // called at each Present of the render thread: the frame after the 900th composed one is traced
@@ -1836,27 +1925,63 @@ static float weaponfov_base_tan(void)
 	float s = scale && scale->type == DVAR_TYPE_FLOAT && scale->current.value > 0 ? scale->current.value : 1.0f;
 	return tanf(fov->current.value * s * 3.14159265f / 360.0f);
 }
-static void comp_hook(void)
+static void weaponfov_patch_slot(void **slot, void *hook, void **orig)
 {
-	if (the_device || GetTickCount() < comp_not_before)
-		return;
+	/* weaponfov.c keeps a void-returning patch callback; adapt the checked native
+	   patcher without weakening its result handling for the other hook sites. */
+	(void)patch_slot(slot, hook, orig);
+}
+
+static int comp_hook(IDirect3DDevice9 *hint)
+{
+	if (InterlockedCompareExchange(&comp_hook_busy, 1, 0) != 0)
+		return 0;
+	if (the_device) {
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 1;
+	}
+	/* After vid_restart, let the Steam overlay install its hooks on the new device
+	   before wrapping Present again. The EndScene callback retries until this gate opens. */
+	if (GetTickCount() < comp_not_before) {
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
 #ifdef _WIN64
-	IDirect3DDevice9 *dev = *(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE);
+	IDirect3DDevice9 *dev = hint ? hint : (base ? *(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE) : NULL);
 #else
-	IDirect3DDevice9 *dev = (IDirect3DDevice9 *)d3dcap_device(); // src/d3dcap.c: caught when the game created it
+	IDirect3DDevice9 *dev = hint ? hint : (IDirect3DDevice9 *)d3dcap_device();
 #endif
-	if (!dev)
-		return;
-	the_device = dev;
+	if (!dev) {
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
 	void **vt = *(void ***)dev;
-	patch_slot(&vt[17], (void *)present_hook, (void **)&present_orig);
+	if (!vt) {
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
+	if (!present_base_orig && vt[17] != (void *)present_hook)
+		present_base_orig = (present_t)vt[17];
+	if (!patch_slot(&vt[17], (void *)present_hook, (void **)&present_orig)) {
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
+	if (!present_orig)
+		present_orig = present_base_orig;
+	if (!present_orig) {
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
+	the_device = dev;
 	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0))
-		weaponfov_hook(dev, patch_slot, weaponfov_base_tan, (float)cfg("weaponfov", 0), cfg("weaponfovlog", 0));
+		weaponfov_hook(dev, weaponfov_patch_slot, weaponfov_base_tan, (float)cfg("weaponfov", 0), cfg("weaponfovlog", 0));
 	if (cfg("resethook", 1))
 		patch_slot(&vt[16], (void *)reset_hook, (void **)&reset_orig);
 	IDirect3DDevice9Ex *ex = NULL;
 	if (SUCCEEDED(IDirect3DDevice9_QueryInterface(dev, &iid_device9ex, (void **)&ex)) && ex) {
-		patch_slot(&vt[121], (void *)present_ex_hook, (void **)&present_ex_orig); // PresentEx: the slot of the Ex interface
+		if (!present_ex_base_orig && vt[121] != (void *)present_ex_hook)
+			present_ex_base_orig = (present_ex_t)vt[121];
+		patch_slot(&vt[121], (void *)present_ex_hook, (void **)&present_ex_orig);
 		if (cfg("resethook", 1))
 			patch_slot(&vt[132], (void *)reset_ex_hook, (void **)&reset_ex_orig);
 		IDirect3DDevice9Ex_Release(ex);
@@ -1864,14 +1989,18 @@ static void comp_hook(void)
 	IDirect3DSwapChain9 *sc = NULL;
 	if (SUCCEEDED(IDirect3DDevice9_GetSwapChain(dev, 0, &sc)) && sc) {
 		void **svt = *(void ***)sc;
+		if (!sc_present_base_orig && svt[3] != (void *)sc_present_hook)
+			sc_present_base_orig = (sc_present_t)svt[3];
 		patch_slot(&svt[3], (void *)sc_present_hook, (void **)&sc_present_orig);
 		IDirect3DSwapChain9_Release(sc);
 	}
 	{
 		HMODULE m1 = NULL, m2 = NULL;
 		char n1[MAX_PATH] = "?", n2[MAX_PATH] = "?";
-		GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)present_orig, &m1);
-		GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)sc_present_orig, &m2);
+		if (present_orig)
+			GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)present_orig, &m1);
+		if (sc_present_orig)
+			GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)sc_present_orig, &m2);
 		if (m1)
 			GetModuleFileNameA(m1, n1, sizeof(n1));
 		if (m2)
@@ -1883,22 +2012,87 @@ static void comp_hook(void)
 	log_printf("native: Present hooks set (device %p, Ex %s)", (void *)dev, present_ex_orig ? "yes" : "no");
 	if (cfg("watchdog", 1))
 		CreateThread(NULL, 0, watchdog_thread, NULL, 0, NULL);
+	InterlockedExchange(&present_hooks_pending, 0);
+	InterlockedExchange(&comp_hook_busy, 0);
+	return 1;
 }
 
-void native_present_hooks(void)
+int native_present_hooks(void)
 {
-	comp_hook();
+	IDirect3DDevice9 *dev;
+	void **vt;
+	if (InterlockedCompareExchange(&comp_hook_busy, 1, 0) != 0)
+		return 0;
+	if (the_device) {
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 1;
+	}
+#ifdef _WIN64
+	dev = base ? *(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE) : NULL;
+#else
+	dev = (IDirect3DDevice9 *)d3dcap_device();
+#endif
+	if (!dev) {
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
+	vt = *(void ***)dev;
+	if (!vt) {
+		if (InterlockedCompareExchange(&present_bootstrap_failure_logged, 1, 0) == 0)
+			log_printf("native: EndScene bootstrap failed: device %p has no vtable", (void *)dev);
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
+	if (vt[42] != (void *)t_end && !patch_slot(&vt[42], (void *)t_end, (void **)&end_scene_orig)) {
+		if (InterlockedCompareExchange(&present_bootstrap_failure_logged, 1, 0) == 0)
+			log_printf("native: EndScene bootstrap patch failed (device %p, slot %p, error %lu)",
+				   (void *)dev, (void *)&vt[42], (unsigned long)GetLastError());
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
+	if (vt[42] != (void *)t_end || !end_scene_orig) {
+		if (InterlockedCompareExchange(&present_bootstrap_failure_logged, 1, 0) == 0)
+			log_printf("native: EndScene bootstrap could not be installed (device %p, slot %p, original %p)",
+				   (void *)dev, (void *)&vt[42], (void *)end_scene_orig);
+		InterlockedExchange(&comp_hook_busy, 0);
+		return 0;
+	}
+	InterlockedExchange(&present_bootstrap_failure_logged, 0);
+	InterlockedExchange(&present_hooks_pending, 1);
+	InterlockedExchange(&comp_hook_busy, 0);
+	return 1;
 }
 
-// [native] weaponfov / weaponfovlog in the plain game: the device hooks are put in once the game has made its device (in a split session they are there anyway)
+void native_present_poll(void)
+{
+	static DWORD pending_since;
+	static int timeout_logged;
+	DWORD now = GetTickCount();
+	if (!InterlockedCompareExchange(&present_hooks_pending, 0, 0)) {
+		pending_since = 0;
+		timeout_logged = 0;
+		return;
+	}
+	if (!pending_since)
+		pending_since = now ? now : 1;
+	if (!timeout_logged && now - pending_since >= 2000) {
+		log_printf("native: EndScene bootstrap is still waiting for the render thread after %lu ms; re-arming the callback",
+			   (unsigned long)(now - pending_since));
+		timeout_logged = 1;
+		(void)native_present_hooks();
+	}
+}
+
+// [native] weaponfov / weaponfovlog in the plain game: request the EndScene bootstrap
+// once the device exists; Present itself is installed later from the render thread.
 static DWORD WINAPI device_hooks_thread(LPVOID unused)
 {
 	(void)unused;
 	for (int i = 0; i < 600; i++) {
 #ifdef _WIN64
-		if (*(void **)(base + RVA_D3D_DEVICE)) {
-			Sleep(2000); // the game has finished making its device
-			comp_hook();
+		if (base && *(void **)(base + RVA_D3D_DEVICE)) {
+			Sleep(2000); // let the game and Steam overlay finish setting up the device
+			(void)native_present_hooks();
 			return 0;
 		}
 #endif
@@ -2780,21 +2974,14 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			{ // [native] pixelaspect=<f>: the pixel aspect the 2D is laid out with (rva RVA_PIXEL_ASPECT); the squeeze of the frame into its half flattens text 2:1, a factor of 2 or 0.5 here
 			  // pre-stretches it. Kept while the picture is split.
 				static float want = -1;
-				static float saved;
-				static int have;
 				float *pa = (float *)(base + RVA_PIXEL_ASPECT);
 				if (want < 0) {
 					char v[32];
 					GetPrivateProfileStringA("native", "pixelaspect", "0", v, sizeof(v), settings_path);
 					want = (float)atof(v);
 				}
-				if (want > 0) {
-					if (!have) {
-						saved = *pa;
-						have = 1;
-					}
+				if (want > 0)
 					*pa = want;
-				}
 			}
 		}
 		if (mode == 7) { // the whole view, built for the shape of a half (wide), drawn over the full frame: the compositor squeezes it into the half (rva RVA_VIDEO_ASPECT: aspect, RVA_PIXEL_ASPECT: pixel aspect)
@@ -2809,7 +2996,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				aspect[1] = 1.0f;
 			}
 		}
-		comp_hook();
+		comp_hook(NULL);
 		{
 			static DWORD last_log;
 			static unsigned draws;
@@ -3095,7 +3282,7 @@ static void swap_site_note(uintptr_t site, unsigned mask)
 {
 	static LONGLONG next;
 	for (int i = 0; i < 40; i++)
-		if (swap_sites[i].site == site && swap_sites[i].mask == mask || !swap_sites[i].site) {
+		if ((swap_sites[i].site == site && swap_sites[i].mask == mask) || !swap_sites[i].site) {
 			swap_sites[i].site = site, swap_sites[i].mask = mask, swap_sites[i].n++;
 			break;
 		}
@@ -6177,7 +6364,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 		if (c == 0 || ++seen % 1 == 0) {
 			if (seen < 5000 && seen > 800) {
 				const float *o = (const float *)b;
-				{ const float *p = (const float *)e; static const float zero[CENT_SIZE / 4]; const float *eo = (c & 0xffff) < 64 ? (const float *)(base + RVA_CENT + (size_t)(c & 0xffff) * CENT_SIZE) : zero; const char *mname = "?";
+				{ const float *p = (const float *)e; const char *mname = "?";
 				if (a && !IsBadReadPtr(a, 0xb0)) { const uint8_t *dj = (const uint8_t *)a; const uint8_t *const *mm = *(const uint8_t *const **)(dj + DOBJ_MODELS); if (dj[DOBJ_NUMMODELS] && mm && !IsBadReadPtr(mm, 4) && mm[0] && !IsBadReadPtr(mm[0], 8) && *(const char *const *)mm[0] && !IsBadReadPtr(*(const char *const *)mm[0], 4)) mname = *(const char *const *)mm[0]; }
 				log_printf("native: dobj add ctx1 ent %u flags %08x draw %.1f %.1f %.1f | model %s", c & 0xffff, d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, mname); (void)o; }
 			}

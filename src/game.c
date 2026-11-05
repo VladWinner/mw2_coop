@@ -55,26 +55,22 @@ dvar_t *game_find_dvar(const char *name)
 const char *game_dvar_string(const char *name, char *buf, int size)
 {
 	dvar_t *d = game_find_dvar(name);
+	if (!buf || size <= 0)
+		return buf;
 	if (!d) {
 		snprintf(buf, size, "<missing>");
 		return buf;
 	}
-	switch (d->type) {
-	case DVAR_TYPE_BOOL:
-		snprintf(buf, size, "%d", d->current.enabled);
-		break;
-	case DVAR_TYPE_INT:
-	case DVAR_TYPE_ENUM:
-		snprintf(buf, size, "%d", d->current.integer);
-		break;
-	case DVAR_TYPE_FLOAT:
-		snprintf(buf, size, "%g", d->current.value);
-		break;
-	case DVAR_TYPE_STRING:
-		snprintf(buf, size, "\"%s\"", d->current.string ? d->current.string : "");
-		break;
-	default:
-		snprintf(buf, size, "<type %d>", d->type);
+	/* Keep the historical quoted representation for string dvars, but route all
+	   numeric values through the shared formatter so FLOAT2/3/4 and colour
+	   vectors are rendered instead of leaking an internal '<type N>' marker. */
+	if (d->type == DVAR_TYPE_STRING) {
+		const char *value = d->current.string;
+		if (!value || IsBadStringPtrA(value, 1))
+			value = "";
+		snprintf(buf, size, "\"%s\"", value);
+	} else {
+		game_dvar_value_text(d, &d->current, buf, size);
 	}
 	return buf;
 }
@@ -166,6 +162,7 @@ void game_dvar_value_text(const dvar_t *d, const dvar_value_t *v, char *buf, int
 		snprintf(buf, size, "%g %g", (double)v->vector[0], (double)v->vector[1]);
 		break;
 	case DVAR_TYPE_FLOAT_3:
+	case DVAR_TYPE_FLOAT_3_COLOR:
 		snprintf(buf, size, "%g %g %g", (double)v->vector[0], (double)v->vector[1], (double)v->vector[2]);
 		break;
 	case DVAR_TYPE_FLOAT_4:
@@ -207,9 +204,10 @@ void game_for_each_command(int (*fn)(const char *name, void *ctx), void *ctx)
 
 int game_command_exists(const char *name)
 {
-	if (!ready || !RVA_CMD_FUNCTIONS)
+	int guard = 0;
+	if (!ready || !RVA_CMD_FUNCTIONS || !name)
 		return 0;
-	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c; c = c->next)
+	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c && guard < 4000; c = c->next, guard++)
 		if (c->name && !strcmp(c->name, name))
 			return 1;
 	return 0;
@@ -220,35 +218,62 @@ void game_log_commands(void)
 	if (!ready || !RVA_CMD_FUNCTIONS)
 		return;
 	cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS);
-	char line[1800];
-	int n = 0, count = 0;
-	for (; c; c = c->next) {
-		count++;
+	char line[1800] = {0};
+	int n = 0, count = 0, guard = 0;
+	for (; c && guard < 4000; c = c->next, guard++) {
 		uintptr_t fn = (uintptr_t)c->function;
 		uintptr_t rva = fn >= (uintptr_t)base ? fn - (uintptr_t)base : 0;
-		int w = snprintf(line + n, sizeof(line) - n, "%s@%llx ", c->name ? c->name : "?", (unsigned long long)rva);
-		if (w < 0 || n + w >= (int)sizeof(line) - 64) {
-			log_printf("cmds: %s", line);
+		int w = snprintf(line + n, sizeof(line) - (size_t)n, "%s@%llx ", c->name ? c->name : "?", (unsigned long long)rva);
+		if (w < 0)
+			continue;
+		if ((size_t)w >= sizeof(line) - (size_t)n || n + w >= (int)sizeof(line) - 64) {
+			if (n)
+				log_printf("cmds: %s", line);
 			n = 0;
+			line[0] = 0;
 			w = snprintf(line, sizeof(line), "%s@%llx ", c->name ? c->name : "?", (unsigned long long)rva);
+			if (w < 0 || (size_t)w >= sizeof(line)) {
+				line[0] = 0;
+				continue;
+			}
 		}
 		n += w;
+		count++;
 	}
-	log_printf("cmds: %s", line);
-	log_printf("cmds: %d commands registered", count);
+	if (n)
+		log_printf("cmds: %s", line);
+	log_printf("cmds: %d commands registered%s", count, c ? " (truncated; traversal limit 4000)" : "");
+}
+
+static int cmd_args_argc(int rva)
+{
+	if (!ready || !rva)
+		return 0;
+	uint8_t *args = base + rva;
+	int nesting = *(int *)args;
+	if (nesting < 0 || nesting >= 8)
+		return 0;
+	int argc = *(int *)(args + 0x44 + nesting * 4);
+	return argc >= 0 && argc <= 1024 ? argc : 0;
 }
 
 static const char *cmd_args_argv(int rva, int i)
 {
-	uint8_t *args = (uint8_t *)GetModuleHandleA(NULL) + rva;
-	int nesting = *(int *)args;
-	if (!rva || nesting < 0 || nesting >= 8 || i < 0 || i >= *(int *)(args + 0x44 + nesting * 4))
+	int argc = cmd_args_argc(rva);
+	if (i < 0 || i >= argc)
 		return "";
+	uint8_t *args = base + rva;
+	int nesting = *(int *)args;
 #ifdef _WIN64
 	return (*(const char ***)(args + 0x68 + nesting * 8))[i];
 #else
 	return (*(const char ***)(args + 0x64 + nesting * 4))[i];
 #endif
+}
+
+int game_cmd_argc(void)
+{
+	return cmd_args_argc(RVA_CMD_ARGS);
 }
 
 const char *game_cmd_argv(int i)

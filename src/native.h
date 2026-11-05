@@ -15,5 +15,7 @@ int native_split_start2(int dev0, int dev1); // each player's device: an XInput 
 void native_split_stop(void);
 // For the crash log: which client context was live, the session state
 const char *native_crash_state(void);
-// Installs the Present hooks on the game's device without a session (the developer console draws from them); needs the device to exist.
-void native_present_hooks(void);
+// Arms an EndScene callback; the Present hooks are installed on the render thread after the scene ends.
+// Returns 1 when the bootstrap is armed or the hooks are already installed.
+int native_present_hooks(void);
+void native_present_poll(void);

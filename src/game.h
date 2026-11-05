@@ -151,6 +151,8 @@ typedef enum {
 	DVAR_TYPE_ENUM = 6,
 	DVAR_TYPE_STRING = 7,
 	DVAR_TYPE_COLOR = 8,
+	DVAR_TYPE_FLOAT_3_COLOR = 9,
+	DVAR_TYPE_COUNT = 10,
 } dvar_type_t;
 
 typedef union {
@@ -236,8 +238,8 @@ void game_add_command(cmd_function_t *node);
 // Read 1/2/4/8 bytes of the game image at an RVA (0 outside the image).
 unsigned long long game_peek(unsigned long long rva, int width);
 
-// Argument i of the console (or server) command being run, "" if there is none; call from the
-// command function.
+// Arguments of the console (or server) command being run; call from the command function.
+int game_cmd_argc(void);
 const char *game_cmd_argv(int i);
 const char *game_sv_cmd_argv(int i);
 
