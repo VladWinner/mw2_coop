@@ -214,3 +214,21 @@ flag_wait( "player_course_end" );
 @@@ to
 maps\_mw2coop_trainer::someone_sprinting( sprint_volume )
 @@@ end
+
+7. The exit gate at the end of the timed run closes by door_close( "player_course_end_close_gate" ),
+   which waits for a flag a trigger sets for whichever player passes first: the other player was
+   locked on the course. It waits until both players are through (maps\_mw2coop_trainer::both_past).
+@@@ subst door_close
+flag_wait( sFlagToWaitFor );
+@@@ to
+flag_wait( sFlagToWaitFor );
+		maps\_mw2coop_trainer::both_past( sFlagToWaitFor );
+@@@ end
+
+8. QA only: the course's door_close, so that a test can close the exit gate without running the whole course.
+@@@ subst main
+level.gate_cqb_exit = make_door_from_prefab( "gate_cqb_exit" );
+@@@ to
+level.gate_cqb_exit = make_door_from_prefab( "gate_cqb_exit" );
+	level.mw2coop_door_close = ::door_close;
+@@@ end

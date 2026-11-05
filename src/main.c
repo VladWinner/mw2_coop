@@ -12,6 +12,7 @@
 #include "devices.h"
 #include "console.h"
 #include "guards.h"
+#include "climbads.h"
 #include "window.h"
 #include "native.h"
 #include "game.h"
@@ -83,6 +84,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		devices_install();
 		native_install();
 		guards_install();
+		climbads_install();
 		window_install();
 		console_install();
 		control_start();

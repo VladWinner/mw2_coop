@@ -54,7 +54,7 @@
 | Mission | Reworked for two |
 |---|---|
 | S.S.D.D. | both start in the range's sandbag bay; each takes his own rifle, pistol and frags |
-| Team Player | Shepherd's opening for both; first to the glowing seat is the gunner, the other rides along; **hold Use to swap**; ride end and crash for both |
+| Team Player | Shepherd's opening for both; first to the glowing seat is the gunner, the other rides along (no seat swapping); ride end and crash for both |
 | Cliffhanger | side-by-side ice climb with your own icepicks, the big jump (Soap catches each of you), a snowmobile each, the helicopter waits for both |
 | No Russian | both in Makarov's crew look; own place in the elevator; the cover and the line of fire count for either player; the ending shoots both |
 | Takedown | both ride the opening car; each ducks on his own key |

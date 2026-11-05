@@ -17,5 +17,9 @@ int settings_darktitle(void);
 int settings_hwgamma(void);
 // settings.ini [native] unlinkguard (default 1): the iw4x-sp client only, see guards.c.
 int settings_unlinkguard(void);
+// settings.ini [display] hudtextscale (default 70, percent, 30-200): the size of the objective waypoint labels ("Follow", "Protect") and of the names over other players, relative to the game's own (guards.c).
+int settings_hudtextscale(void);
+// settings.ini [native] keepads (default 1): the aim bit stays in the player's command while the Cliffhanger climb reads it (climbads.c).
+int settings_keepads(void);
 // mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).
 const char *settings_player_id(void);

@@ -241,6 +241,12 @@ swing_pressed( arm, key )
 {
 	if ( !climb_coop() )
 		return level.player ButtonPressed( key );
+	// tells the DLL (src/climbads.c) that the climb reads the aim button: the command of a player linked to the wall carries no right click otherwise
+	if ( !isdefined( level.mw2coop_keepads_time ) || level.mw2coop_keepads_time != GetTime() )
+	{
+		level.mw2coop_keepads_time = GetTime();
+		SetDvar( "mw2coop_keepads", "" + level.mw2coop_keepads_time );
+	}
 	if ( isdefined( self.mw2coop_qa_hold ) && isdefined( self.mw2coop_qa_hold[ arm ] ) && self.mw2coop_qa_hold[ arm ] )
 		return true;
 	if ( arm == "left" )

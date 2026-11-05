@@ -307,6 +307,9 @@ main()
 		case "course":
 			course();
 			break;
+		case "course2":
+			course2();
+			break;
 		case "betrayal":
 			betrayal();
 			break;
@@ -3230,6 +3233,37 @@ bay()
 
 // The obstacle course: the entrance gate closes once both players are upstairs, not when the
 // first one gets there (the other was locked out or in).
+// The end of the timed run: the exit gate closes (door_close waiting for player_course_end_close_gate) only once both players are through that trigger.
+course2()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	trigs = maps\_mw2coop_trainer::course_triggers( "player_course_end_close_gate" );
+	check( trigs.size > 0, "a trigger sets player_course_end_close_gate (" + trigs.size + ")" );
+	ends = maps\_mw2coop_trainer::course_triggers( "player_course_end" );
+	if ( !trigs.size || !ends.size )
+	{
+		report( "done" );
+		return;
+	}
+	// the course loop is not run: the course's own door_close waits for the flag, as the loop calls it at the end
+	door_close = level.mw2coop_door_close;
+	check( isdefined( door_close ), "the course's door_close is known" );
+	level.gate_cqb_exit thread [[ door_close ]]( "player_course_end_close_gate" );
+	gate = level.gate_cqb_exit;
+	yaw = gate.angles[ 1 ];
+	level.player SetOrigin( trigs[ 0 ].origin );
+	wait 3;
+	report( "player 1 at the closing trigger: flag " + flag( "player_course_end_close_gate" ) + ", exit gate turned " + int( gate.angles[ 1 ] - yaw ) );
+	check( Abs( gate.angles[ 1 ] - yaw ) < 1, "the exit gate stays open while player 2 is behind" );
+	level.player2 SetOrigin( trigs[ 0 ].origin );
+	wait 4;
+	report( "player 2 at the closing trigger: gate turned " + int( gate.angles[ 1 ] - yaw ) );
+	check( Abs( gate.angles[ 1 ] - yaw ) > 45, "the exit gate closes once both are through" );
+	report( "done" );
+}
+
 course()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );

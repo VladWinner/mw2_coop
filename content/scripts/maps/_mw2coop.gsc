@@ -756,6 +756,7 @@ section_reached( name, leader )
 	level.mw2coop.section = index;
 	if ( start_is_dev( name ) || ( isdefined( level.start_point ) && level.start_point == name ) )
 		return;
+	rank = note_checkpoint_rank();
 	SetDvar( "start", name );
 	state( "checkpoint " + name + " (section " + index + ")" );
 	if ( !isdefined( leader ) )
@@ -766,7 +767,13 @@ section_reached( name, leader )
 	request( "checkpoint " + level.script + " " + name + " " + spot );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
-	bring_partner_to( leader );
+	if ( isdefined( leader ) )
+	{
+		progress_of( leader );
+		leader.mw2coop_progress = rank;
+	}
+	level.mw2coop.cp_spots[ rank ] = checkpoint_spot_origin( leader );
+	bring_partner_to( leader, rank );
 }
 
 // --------------------------------------------------------------------------------------------
@@ -866,11 +873,71 @@ standing_leader()
 	return undefined;
 }
 
-bring_partner_to( leader )
+// Owner, 2026-11-04: the partner is brought to a checkpoint only when he is two checkpoints behind the
+// player who reached it. Each player's progress is the number of the last real checkpoint he reached
+// himself or came near (progress_watch), so a partner who is just a section behind walks on.
+checkpoint_lead()
+{
+	return 2;
+}
+
+// A real checkpoint (not a developers' start, not the one the level began at) was reached: its number.
+note_checkpoint_rank()
+{
+	if ( !isdefined( level.mw2coop.cp_rank ) )
+	{
+		level.mw2coop.cp_rank = 0;
+		level.mw2coop.cp_spots = [];
+		thread progress_watch();
+	}
+	level.mw2coop.cp_rank++;
+	return level.mw2coop.cp_rank;
+}
+
+// self: nothing. The player's progress: the checkpoints before the first one reached count as reached.
+progress_of( player )
+{
+	if ( !isdefined( player.mw2coop_progress ) )
+		player.mw2coop_progress = 0;
+	return player.mw2coop_progress;
+}
+
+checkpoint_spot_origin( leader )
+{
+	if ( isdefined( leader ) )
+		return leader.origin;
+	return level.player.origin;
+}
+
+// A player near the place where a checkpoint was reached has reached it too.
+progress_watch()
+{
+	level endon( "mw2coop_level_end" );
+	for ( ;; )
+	{
+		wait 0.5;
+		foreach ( player in level.players )
+		{
+			if ( !IsAlive( player ) )
+				continue;
+			have = progress_of( player );
+			for ( rank = have + 1; rank <= level.mw2coop.cp_rank; rank++ )
+				if ( isdefined( level.mw2coop.cp_spots[ rank ] ) && DistanceSquared( player.origin, level.mw2coop.cp_spots[ rank ] ) < 700 * 700 )
+					player.mw2coop_progress = rank;
+		}
+	}
+}
+
+bring_partner_to( leader, rank )
 {
 	if ( !isdefined( leader ) || !isdefined( level.player2 ) )
 		return;
 	other = other_player( leader );
+	if ( rank - progress_of( other ) < checkpoint_lead() )
+	{
+		state( "checkpoint " + rank + ": " + player_label( other ) + " is at checkpoint " + progress_of( other ) + ", less than " + checkpoint_lead() + " behind: not brought" );
+		return;
+	}
 	if ( !IsAlive( other ) || other IsLinked() || is_downed( other ) || is_downed( leader ) )
 		return;
 	if ( DistanceSquared( other.origin, leader.origin ) < 400 * 400 && is_standing( other ) )
@@ -884,7 +951,10 @@ brought_to( leader )
 	level endon( "mw2coop_level_end" );
 	self endon( "death" );
 	if ( self teleport_to_partner_when_safe( leader, 10 ) )
+	{
+		self.mw2coop_progress = leader.mw2coop_progress;
 		state( player_label( self ) + " brought to " + player_label( leader ) + " at the checkpoint" );
+	}
 	else
 		state( "no safe spot next to " + player_label( leader ) + " for " + player_label( self ) );
 	self notify( "mw2coop_brought" );

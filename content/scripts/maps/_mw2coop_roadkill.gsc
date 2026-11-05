@@ -4,10 +4,17 @@
 //
 // The player's Humvee: whoever reaches the glowing seat first is the gunner (the game's get-in
 // animation and the 50 cal turret); the other boards the same door onto a rear seat; the convoy
-// (flag "player_gets_in") leaves once both are in. Either of them holds Use for a second to swap
-// places. At the end of the ride both get out where they are.
+// (flag "player_gets_in") leaves once both are in. Swapping places (hold Use) is switched off, see
+// swap_enabled(). At the end of the ride both get out where they are.
 #include common_scripts\utility;
 #include maps\_utility;
+
+// Owner, 2026-11-04: no swapping of the gunner and the passenger in Team Player (the feature stays in the
+// file, off). Without it no hint is shown and Use does nothing in the Humvee.
+swap_enabled()
+{
+	return false;
+}
 
 swap_hold_time()
 {
@@ -164,6 +171,8 @@ partner_rides_now()
 // self: the player's Humvee.
 swap_seats()
 {
+	if ( !swap_enabled() )
+		return;
 	level endon( "mw2coop_ride_ends" );
 	level endon( "ride_ends" );
 	hinted = undefined;

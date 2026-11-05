@@ -145,8 +145,48 @@ static void unlink_guarded(void *node)
 }
 #endif
 
+// The text of the objective pointers ("Follow", "Protect" over a squadmate or a place) and the names over other players are big next to the rest of the HUD (owner, 2026-11-04):
+// their font sizes (dvars objectiveFontSize, friendlyNameFontSize and its split screen twin) are brought to [display] hudtextscale percent (default 70) of the game's own,
+// once, and only while the dvar still holds the game's default (a size the player or his config set is left alone, and a config that saved the scaled value is not scaled again).
+static DWORD WINAPI hud_text_thread(LPVOID unused)
+{
+	(void)unused;
+	int pct = settings_hudtextscale();
+	if (pct == 100)
+		return 0;
+	static const char *const names[] = {"objectiveFontSize", "friendlyNameFontSize", "friendlyNameFontSizeSplitscreen"};
+	int done[3] = {0, 0, 0};
+	for (int tries = 0; tries < 60; tries++) {
+		int missing = 0;
+		for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+			if (done[i])
+				continue;
+			dvar_t *d = game_find_dvar(names[i]);
+			if (!d) {
+				missing++;
+				continue;
+			}
+			done[i] = 1;
+			if (d->type != DVAR_TYPE_FLOAT || d->reset.value <= 0.0f)
+				continue;
+			if (d->current.value != d->reset.value) {
+				log_printf("guards: %s is %.3f, not the game's %.3f: left alone", names[i], (double)d->current.value, (double)d->reset.value);
+				continue;
+			}
+			d->current.value = d->reset.value * (float)pct / 100.0f;
+			d->modified = 1;
+			log_printf("guards: %s %.3f -> %.3f (hudtextscale %d)", names[i], (double)d->reset.value, (double)d->current.value, pct);
+		}
+		if (!missing)
+			return 0;
+		Sleep(1000);
+	}
+	return 0;
+}
+
 void guards_install(void)
 {
+	CreateThread(NULL, 0, hud_text_thread, NULL, 0, NULL);
 #ifdef _WIN64
 	CreateThread(NULL, 0, saved_dvars_thread, NULL, 0, NULL);
 	base = (uint8_t *)GetModuleHandleA(NULL);

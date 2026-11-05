@@ -134,6 +134,8 @@ course_triggers( flag_name )
 	trigs = [];
 	found = GetEntArray( "trigger_multiple_flag_set_touching", "classname" );
 	found = array_combine( found, GetEntArray( "trigger_multiple_flag_set", "classname" ) );
+	found = array_combine( found, GetEntArray( "trigger_multiple", "classname" ) );
+	found = array_combine( found, GetEntArray( "trigger_radius", "classname" ) );
 	foreach ( trig in found )
 		if ( isdefined( trig.script_flag ) && trig.script_flag == flag_name )
 			trigs[ trigs.size ] = trig;
@@ -152,6 +154,7 @@ both_past( flag_name )
 		maps\_mw2coop::state( "trainer: no trigger for " + flag_name + ", not waiting for both" );
 		return;
 	}
+	maps\_mw2coop::state( "trainer: " + flag_name + " set, waiting for both players to be through" );
 	foreach ( player in level.players )
 		player.mw2coop_past = false;
 	for ( ;; )
@@ -168,7 +171,10 @@ both_past( flag_name )
 				waiting = true;
 		}
 		if ( !waiting )
+		{
+			maps\_mw2coop::state( "trainer: both players through " + flag_name );
 			return;
+		}
 		wait 0.05;
 	}
 }

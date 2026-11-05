@@ -81,3 +81,32 @@ self setgoalentity( level.player )
 @@@ to
 self setgoalentity( maps\_mw2coop::seek_player( self.origin ) )
 @@@ end
+
+4. The kitchen ladders (Nate's diner, Burger Town) are blocked behind the player who has gone up
+   (the clip turns solid once "player_on_roof" / "player_on_burgertown_roof" is set and level.player
+   is not in it): player 2, still below, could start climbing and hit the clip at the top. In
+   co-op the ladders stay open.
+@@@ subst setup_nates_kitchen_ladder_clip
+nates_kitchen_ladder_clip solid();
+@@@ to
+if ( !maps\_mw2coop::is_campaign_coop() )
+			nates_kitchen_ladder_clip solid();
+@@@ end
+@@@ subst setup_bt_ktichen_ladder_clip
+bt_ktichen_ladder_clip solid();
+@@@ to
+if ( !maps\_mw2coop::is_campaign_coop() )
+			bt_ktichen_ladder_clip solid();
+@@@ end
+
+5. The Predator laptop (remote_missile_detonator): the level gives it to level.player together with
+   the d-pad slot and the threads that raise the laptop, run the drone and put it away
+   (maps\_remotemissile::give_remotemissile_weapon). Player 2 only got a copy of the weapon from
+   the loadout sync, with none of that: with the laptop out he could neither use nor put it away.
+@@@ subst give_player_predator_drone
+level.player maps\_remotemissile::give_remotemissile_weapon( "remote_missile_detonator" );
+@@@ to
+level.player maps\_remotemissile::give_remotemissile_weapon( "remote_missile_detonator" );
+	if ( maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) )
+		level.player2 maps\_remotemissile::give_remotemissile_weapon( "remote_missile_detonator" );
+@@@ end

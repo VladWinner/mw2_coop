@@ -117,6 +117,41 @@ int ui_item_index(uint8_t *menu, const char *name)
 
 // QA: logs what a menu item runs ("!menuaction <menu> <item>" in commands.txt): its action
 // handlers, a script for type 0, else the handler type.
+#ifdef _WIN64
+static void log_statement(const char *label, const uint8_t *st);
+// QA: a handler set with its conditions and nested sets (type 0 script, 1 if (expression + set), 2 else (set), others by type only)
+static void log_handler_set(const char *label, const MenuEventHandlerSet *set, int depth)
+{
+	if (!set || IsBadReadPtr(set, sizeof(*set)) || depth > 6 || set->count < 1 || set->count > 24 || IsBadReadPtr(set->handlers, set->count * sizeof(void *)))
+		return;
+	for (int i = 0; i < set->count; i++) {
+		MenuEventHandler *h = set->handlers[i];
+		if (!h || IsBadReadPtr(h, 16))
+			continue;
+		if (h->type == 0 && (!h->data || IsBadStringPtrA((const char *)h->data, 8)))
+			continue;
+		if (h->type == 0 && h->data)
+			log_printf("menus:   %*s%s script: %.1500s", depth * 2, "", label, (const char *)h->data);
+		else if (h->type == 1 && h->data && !IsBadReadPtr(h->data, 16)) {
+			log_printf("menus:   %*s%s if:", depth * 2, "", label);
+			// (the layout of the conditional is not known: try the handler set at either place; log_handler_set only follows a readable one with a plausible count)
+			log_handler_set(label, *(MenuEventHandlerSet **)h->data, depth + 1);
+			log_handler_set(label, *(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1);
+		} else if (h->type == 2 && h->data) {
+			log_printf("menus:   %*s%s else:", depth * 2, "", label);
+			log_handler_set(label, (MenuEventHandlerSet *)h->data, depth + 1);
+		} else if (h->type >= 3 && h->type <= 6 && h->data && !IsBadReadPtr(h->data, 16)) { // set local var: name, expression
+			const char *nm = *(const char **)h->data;
+			log_printf("menus:   %*s%s setLocalVar type %d '%s'", depth * 2, "", label, h->type, nm && !IsBadStringPtrA(nm, 40) ? nm : "?");
+			const uint8_t *st = *(uint8_t **)((uint8_t *)h->data + 8);
+			if (st && !IsBadReadPtr(st, 0x18))
+				log_statement("value", st);
+		} else
+			log_printf("menus:   %*s%s handler type %d", depth * 2, "", label, h->type);
+	}
+}
+#endif
+
 void menus_log_action(const char *menu_name, const char *item_name)
 {
 	uint8_t *menu = ui_find_menu(menu_name);
@@ -128,6 +163,12 @@ void menus_log_action(const char *menu_name, const char *item_name)
 	uint8_t *item = (*(uint8_t ***)(menu + MENU_ITEMS))[at];
 	MenuEventHandlerSet *set = *(MenuEventHandlerSet **)(item + ITEM_ACTION);
 	log_printf("menus: %s/%s action: %d handler(s)", menu_name, item_name, set ? set->count : 0);
+#ifdef _WIN64
+	log_handler_set("action", set, 0);
+	log_handler_set("onFocus", *(MenuEventHandlerSet **)(item + ITEM_ON_FOCUS), 0);
+	log_handler_set("leaveFocus", *(MenuEventHandlerSet **)(item + ITEM_LEAVE_FOCUS), 0);
+	return;
+#endif
 	for (int i = 0; set && i < set->count && i < 16; i++) {
 		MenuEventHandler *h = set->handlers[i];
 		if (h && h->type == 0 && h->data)
@@ -474,6 +515,56 @@ static void patch_main_menu(void)
 	*(uint8_t ***)(menu + MENU_ITEMS) = list;
 	*(int *)(menu + MENU_ITEM_COUNT) = count + MAIN_BUTTONS;
 	log_printf("menus: main_text: co-op buttons added under Mission Select (%d items)", count + MAIN_BUTTONS);
+}
+
+// No Russian in Mission Select (owner, 2026-11-04): the PC game's Act I list holds Trainer, Roadkill, Cliffhanger and Favela but not the airport mission. A button for it is cloned from
+// Cliffhanger's, put after it (the ones below move down), always selectable (it takes Trainer's visibility expression), and starts the level at once with the profile's difficulty
+// (devmap airport; in a co-op pick the devmap hook above takes it into the lobby as for the other missions). Its picture and text come from the airport's own strings.
+static uint8_t **act1_items; // our items array for popmenu_act1
+static void patch_act1_menu(void)
+{
+	uint8_t *menu = ui_find_menu("popmenu_act1");
+	if (!menu)
+		return;
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	if (items == act1_items)
+		return;
+	act1_items = items;
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	int after = ui_item_index(menu, "@MENU_SP_SP_CLIFFHANGER"), first = ui_item_index(menu, "@MENU_SP_SP_TRAINER");
+	if (after < 0 || first < 0 || ui_item_index(menu, "@MENU_SP_SP_AIRPORT") >= 0) {
+		log_printf("menus: popmenu_act1 has no Cliffhanger button (or already has No Russian), none added");
+		return;
+	}
+	uint8_t *src = items[after];
+	float y = *(float *)(src + ITEM_RECT_Y) + BUTTON_HEIGHT;
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(*list));
+	memcpy(list, items, (after + 1) * sizeof(*list));
+	uint8_t *item = ui_clone_item(src, menu);
+	*(const char **)item = "@MENU_SP_SP_AIRPORT";
+	*(const char **)(item + ITEM_TEXT) = "@MENU_SP_SP_AIRPORT";
+	*(void **)(item + ITEM_FLOAT_EXPS) = *(void **)(items[first] + ITEM_FLOAT_EXPS);
+	*(float *)(item + ITEM_RECT_Y) = y;
+	*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
+	*(MenuEventHandlerSet **)(item + ITEM_ACTION) =
+		ui_script_set("\"play\" \"mouse_click\" ; \"setdvar\" \"credits\" 0 ; \"setdvar\" \"credits_active\" 0 ; \"exec\" \"devmap airport\" ; ");
+	*(MenuEventHandlerSet **)(item + ITEM_ON_FOCUS) =
+		ui_script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; \"setLocalVarBool\" \"ui_menuAButton\" 1 ; "
+			      "\"setLocalVarString\" \"ui_level_name\" \"@MENU_SP_SP_AIRPORT\" ; \"setLocalVarString\" \"ui_level_levelshot\" \"levelshot_mw2_airport\" ; "
+			      "\"setLocalVarString\" \"ui_level_desc\" \"@MENU_SP_SP_AIRPORT_DESC\" ; \"setLocalVarString\" \"ui_choicegroup\" \"CHOICE_GROUP\" ; ");
+	list[after + 1] = item;
+	memcpy(list + after + 2, items + after + 1, (count - after - 1) * sizeof(*list));
+	for (int i = after + 2; i < count + 1; i++) { // the missions below move down
+		const char *nm = *(const char **)list[i];
+		if (nm && strncmp(nm, "@MENU_SP_SP_", 12) == 0 && *(float *)(list[i] + ITEM_RECT_Y) >= y - 0.5f) {
+			*(float *)(list[i] + ITEM_RECT_Y) += BUTTON_HEIGHT;
+			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += BUTTON_HEIGHT;
+		}
+	}
+	act1_items = list;
+	*(uint8_t ***)(menu + MENU_ITEMS) = list;
+	*(int *)(menu + MENU_ITEM_COUNT) = count + 1;
+	log_printf("menus: popmenu_act1: No Russian added after Cliffhanger (%d items)", count + 1);
 }
 
 // ---------------------------------------------------------------- joining a game on the network
@@ -2191,6 +2282,7 @@ static void tick_f(void)
 		return;
 	native_session_tick();
 	patch_main_menu();
+	patch_act1_menu();
 	add_lobbies_menu();
 	add_host_menu();
 	add_saves_menu();
