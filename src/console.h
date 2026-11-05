@@ -1,12 +1,18 @@
 #pragma once
 
-// The developer console (console.c). The retail builds have the console's dvars but not its code (nothing draws it, nothing reads its key), so the mod brings its own:
-// the key left of 1 (` / ~, by scan code) opens a panel over the top of the game picture, the keyboard goes to it and not to the game while it is open.
-//   <command>        sent to the game's command buffer
-//   <dvar>           prints the dvar's value; <dvar> <value> sets it
-//   clear            empties the panel;  help  lists the keys
+// The MW2 Enhanced developer console (console.c). The retail build has console dvars but no console UI.
+// ` / ~ opens an almost-square Enhanced window on the right; use the Enhanced/Legacy title-bar button to switch layouts, drag the title bar to move it, double-click the title bar to expand/restore, and use the bottom-right grip to resize; Shift+~ expands to fullscreen. Input maps letters through the US layout while Shift+punctuation follows the active keyboard layout. Console UI and localized messages follow the game language by default; the RU/EN title-bar toggle can override this choice.
+// Ctrl+A/C/X/V edit the input; Ctrl+W or Ctrl+Backspace deletes a word; Ctrl+U/K delete to the start/end; Ctrl+L clears scrollback.
+// Output and input text can be selected with the mouse and copied; double-click an input word, triple-click an output row, or use Copy Line in the output context menu. Autocomplete appears in a content-sized dropdown; `*term`, `term*`, `*term*`, and `?term` search names. Ctrl+F searches output; F3 / Shift+F3 move through matches. A typed prefix filters Up/Down history. QoL commands: click the pin glyph beside a dvar autocomplete entry to pin/unpin it; watch/unwatch/watchlist and dvarcompare <name> are also available.
+// The software arrow is a separate D3D sprite, scaled from client to backbuffer coordinates; it follows the actual Win32 cursor in menus and raw relative movement while gameplay has captured it. The hardware/game cursor is suppressed with WM_SETCURSOR while the console is open and restored through the original game procedure on close.
+// Drag the title bar to move the window; double-click it to expand/restore; drag the bottom-right grip to resize. The leftmost title-bar control toggles the persistent Pause mode (grey/off by default). Enhanced starts almost square on the right; Legacy starts half-width near the left. Both can be moved and resized within the overlay area. Right-click opens an editor-style menu with selection, clipboard and output actions.
+// The selected layout, UI language and Pause mode are persisted in mw2coop\settings.ini as [console] layout=enhanced|legacy, language=auto|en|ru and pause_mode=0|1. Pause mode is off by default; when enabled, opening the console pauses with cl_paused 1 and closing it returns to 0 only if the game was not already paused. While open, the console captures mouse input so menu cursors do not move behind the overlay.
+// When Pause mode itself pauses a previously running game, paint a large subdued "|| Game pause activated" watermark behind the output. Favorite dvar values use the shared typed formatter, including FLOAT2/FLOAT3/FLOAT4 and colour vectors.
+// Bare dvar writes use `seta`; successful changes stay silent, and failed or deferred changes show a warning.
+// The direct BOOL sv_cheats command is retained; a separate internal command enables it at startup.
 void console_install(void);
 // A line of output for the panel (any thread). Engine output is added the same way once the print function is hooked.
 void console_print(const char *text);
-// native.c's Present hooks call this once per frame (render thread): draws the panel while the console is open.
+// native.c's Present hooks call this after the final back-buffer composition (render thread).
+// The panel is drawn only for a frame that will actually be presented.
 void console_present(int via, void *device);
