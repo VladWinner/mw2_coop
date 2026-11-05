@@ -31,6 +31,7 @@ static int fontmip_on = 1;
 static int darktitle_on = 1;
 static int hwgamma_on = 1;
 static int unlinkguard_on = 1;
+static int hotguards_on = 1;
 static int hudtextscale = 50;
 static int nametagscale = 70;
 static int keepads_on = 1;
@@ -127,6 +128,7 @@ void settings_load(void)
 	darktitle_on = GetPrivateProfileIntA("display", "darktitle", 1, path) != 0;
 	hwgamma_on = GetPrivateProfileIntA("display", "hwgamma", 1, path) != 0;
 	unlinkguard_on = GetPrivateProfileIntA("native", "unlinkguard", 1, path) != 0;
+	hotguards_on = GetPrivateProfileIntA("native", "hotguards", 1, path) != 0;
 	keepads_on = GetPrivateProfileIntA("native", "keepads", 1, path) != 0;
 	d3d9ex_on = GetPrivateProfileIntA("display", "d3d9ex", 0, path) != 0;
 	hudtextscale = (int)GetPrivateProfileIntA("display", "hudtextscale", 50, path);
@@ -176,6 +178,11 @@ int settings_darktitle(void)
 int settings_hwgamma(void)
 {
 	return hwgamma_on;
+}
+
+int settings_hotguards(void)
+{
+	return hotguards_on;
 }
 
 int settings_unlinkguard(void)

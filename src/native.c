@@ -1126,7 +1126,7 @@ static void slots_put_back(void)
 	}
 }
 
-// [native] resetlog (default on): the vtable slots around a device Reset, to see who else writes them (the Steam and Discord overlays hook the device as well): where each slot points, as module+offset
+// [native] resetlog=1 (default off): the vtable slots around a device Reset, to see who else writes them (the Steam and Discord overlays hook the device as well): where each slot points, as module+offset
 static void slot_owner(void *p, char *out, size_t size)
 {
 	HMODULE m = NULL;
@@ -1141,7 +1141,7 @@ static void slot_owner(void *p, char *out, size_t size)
 }
 static void slots_log(const char *when)
 {
-	if (!cfg("resetlog", 1))
+	if (!cfg("resetlog", 0))
 		return;
 	for (int i = 0; i < nslots; i++) {
 		char who[MAX_PATH + 24];
@@ -1187,7 +1187,7 @@ static HRESULT STDMETHODCALLTYPE reset_hook(IDirect3DDevice9 *dev, void *params)
 	slots_log("after the Reset");
 	slots_put_back();
 	slots_log("put back");
-	if (cfg("resetlog", 1))
+	if (cfg("resetlog", 0))
 		CloseHandle(CreateThread(NULL, 0, slots_watch_thread, NULL, 0, NULL));
 	return hr;
 }
@@ -1205,7 +1205,7 @@ static HRESULT STDMETHODCALLTYPE reset_ex_hook(IDirect3DDevice9 *dev, void *para
 	slots_log("after the Reset");
 	slots_put_back();
 	slots_log("put back");
-	if (cfg("resetlog", 1))
+	if (cfg("resetlog", 0))
 		CloseHandle(CreateThread(NULL, 0, slots_watch_thread, NULL, 0, NULL));
 	return hr;
 }
@@ -5455,15 +5455,16 @@ static void ctx1_deliver_commands(void)
 		ctx1_clc_synced = 1;
 		return;
 	}
-	if (*seq - *ack > 0x80)
-		*ack = *seq - 0x80;
+	int pending = *seq - *ack;
+	if (pending < 0 || pending > 0x80) // a ring that was cleared or lapped (a level restart, a reconnect): only what the ring still holds, never a count through the whole range
+		*ack = pending < 0 ? *seq : *seq - 0x80;
 	while (*ack != *seq) {
 		(*ack)++;
 		const char *text = (const char *)(clc + CLC_TEXT + (*ack & 0x7f) * 0x40);
 		static unsigned logged;
 		if (logged++ < 40)
 			log_printf("native: client command of local client 1 to the server: '%.40s'", text);
-		((void (*)(int, const char *))(base + fn_rva))(1, text);
+		((void (*)(int, const char *))(base + fn_rva))(cfg("ctx1lc", 1), text);
 	}
 }
 

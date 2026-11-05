@@ -24,18 +24,51 @@ static struct {
 } wdef_empty;
 static void *wdef_empty_slots[256];
 
+// The two checks below run for every entity of every frame (a big fight: thousands of calls a frame), and a VirtualQuery each cost a third of the frame time there (Invasion's diner:
+// 53 and 102 fps with the guards, 144 without). The answer of a query is the whole region (base, size), so the regions found are kept for a millisecond per thread: a pointer inside one
+// needs no query. A region that goes away is noticed within that millisecond (the level's teardown is the case these guards are for, and it takes longer).
+#define READABLE_SPANS 4
+static _Thread_local struct {
+	uintptr_t lo[READABLE_SPANS], hi[READABLE_SPANS];
+	int n, next;
+	LONGLONG stamp;
+} spans;
+static LONGLONG qpc_ms;
+
 static int readable(const void *p, size_t n)
 {
+	if (!qpc_ms) {
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		qpc_ms = f.QuadPart / 1000 ? f.QuadPart / 1000 : 1;
+	}
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	if (now.QuadPart - spans.stamp > qpc_ms) {
+		spans.n = 0;
+		spans.stamp = now.QuadPart;
+	}
+	uintptr_t from = (uintptr_t)p, to = from + n;
+	for (int i = 0; i < spans.n; i++)
+		if (from >= spans.lo[i] && to <= spans.hi[i])
+			return 1;
 	const uint8_t *at = p;
-	while (n) {
+	size_t left = n;
+	while (left) {
 		MEMORY_BASIC_INFORMATION mbi;
 		if (!VirtualQuery(at, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
 			return 0;
 		size_t room = (size_t)((const uint8_t *)mbi.BaseAddress + mbi.RegionSize - at);
-		if (room >= n)
+		if (room >= left) {
+			if (at == (const uint8_t *)p) { // the whole range in one region: kept
+				int slot = spans.n < READABLE_SPANS ? spans.n++ : (spans.next++ % READABLE_SPANS);
+				spans.lo[slot] = (uintptr_t)mbi.BaseAddress;
+				spans.hi[slot] = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+			}
 			return 1;
+		}
 		at += room;
-		n -= room;
+		left -= room;
 	}
 	return 1;
 }
@@ -103,7 +136,7 @@ static uint8_t empty_entry[0x40];
 static intptr_t table_entry_guarded(uint64_t index)
 {
 	uint8_t *g = *(uint8_t **)(base + 0x4115920);
-	uint8_t *table = g && !IsBadReadPtr(g + 0x168, 8) ? *(uint8_t **)(g + 0x168) : NULL;
+	uint8_t *table = g && readable(g + 0x168, 8) ? *(uint8_t **)(g + 0x168) : NULL;
 	if (!table)
 		return (intptr_t)empty_entry;
 	return (intptr_t)(table + (index & 0xffffffffu) * 0x3c);
@@ -155,6 +188,8 @@ static DWORD WINAPI hud_text_thread(LPVOID unused)
 	(void)unused;
 	static const char *const names[] = {"objectiveFontSize", "friendlyNameFontSize", "friendlyNameFontSizeSplitscreen"};
 	const int pcts[3] = {settings_hudtextscale(), settings_nametagscale(), settings_nametagscale()};
+	if (pcts[0] == 100 && pcts[1] == 100)
+		return 0; // nothing to scale: no thread that looks at the game's dvars for the whole session
 	int own[3] = {0, 0, 0}; // the first value seen was not the default: the player's own, left alone
 	int seen[3] = {0, 0, 0};
 	int logged = 0;
@@ -192,7 +227,9 @@ void guards_install(void)
 #ifdef _WIN64
 	CreateThread(NULL, 0, saved_dvars_thread, NULL, 0, NULL);
 	base = (uint8_t *)GetModuleHandleA(NULL);
-	if (!memcmp(base + 0x2a70, table_entry_bytes, sizeof(table_entry_bytes))) {
+	if (!settings_hotguards()) {
+		log_printf("guards: [native] hotguards=0: the entity table and weapon definition lookups are not guarded");
+	} else if (!memcmp(base + 0x2a70, table_entry_bytes, sizeof(table_entry_bytes))) {
 		hook_jump(base + 0x2a70, sizeof(table_entry_bytes), (const void *)table_entry_guarded, 0xcc);
 		log_printf("guards: the entity table lookup at 0x2a70 is guarded");
 	} else
@@ -201,6 +238,8 @@ void guards_install(void)
 		static const uint8_t unlink_bytes[15] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20}; // mov [rsp+8], rbx; mov [rsp+0x10], rsi; push rdi; sub rsp, 0x20
 		log_printf("guards: the list unlink at rva 0x1cb9f0 %s", hook_function(base + 0x1cb9f0, unlink_bytes, sizeof(unlink_bytes), (void *)unlink64_guarded, (void **)&unlink64_original) ? "is guarded" : "is not as expected, not guarded");
 	}
+	if (!settings_hotguards())
+		return;
 	uint8_t *site = base + 0x9eb1c; // call 0x140085850 (the table lookup)
 	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + 0x85850) {
 		log_printf("guards: weapon definition lookup not guarded (bytes differ)");

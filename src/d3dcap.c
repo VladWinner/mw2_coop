@@ -7,7 +7,9 @@
 // participant for 10 s" and the game that had been left crashed afterwards, and in split screen the Reset on the way back ended in a stack overflow inside the Steam overlay (v0.6.0 reports,
 // 2026-11-05). Our function then makes the object with Direct3DCreate9Ex (an IDirect3D9Ex is an IDirect3D9 with more methods) and the device with CreateDeviceEx; Direct3D 9Ex has no
 // managed pool, so the vtable entries that create textures and buffers turn D3DPOOL_MANAGED into the default pool with dynamic usage (the same way the iw4x client does it, which has
-// this as its option r_useD3D9Ex). 64 bits: the exe's import table entry for Direct3DCreate9 is pointed at our function (the same code from there on).
+// this as its option r_useD3D9Ex). Known limits (2026-11-05): a vid_restart with it on stalls (the new device is made, the menus never come back; the default pool resources of the old
+// device are not the reason: the game makes a new device), a texture whose format the driver will not make dynamic is made without it and cannot be locked (not seen in any test run),
+// and the 32-bit build is not tested. 64 bits: the exe's import table entry for Direct3DCreate9 is pointed at our function (the same code from there on).
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
@@ -150,6 +152,7 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 	int ex = 0;
 	IDirect3D9Ex *obj = NULL;
 	if (use_ex && pp && out && SUCCEEDED(IDirect3D9_QueryInterface(d3d, &iid_d3d9ex, (void **)&obj)) && obj) {
+		D3DPRESENT_PARAMETERS asked = *pp; // a failed CreateDeviceEx can leave the parameters rewritten: the plain attempt gets what the game asked for
 		D3DDISPLAYMODEEX mode, *pmode = NULL;
 		if (!pp->Windowed) { // exclusive fullscreen: the mode the game asked for
 			memset(&mode, 0, sizeof(mode));
@@ -171,7 +174,10 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 			log_printf("d3d9ex: CreateDeviceEx failed (hr %lx, %s, %ux%u at %u Hz format %d), the plain Direct3D 9 is used instead", (unsigned long)hr, pp->Windowed ? "windowed" : "fullscreen",
 				   pp->BackBufferWidth, pp->BackBufferHeight, pp->FullScreen_RefreshRateInHz, (int)pp->BackBufferFormat);
 			IDirect3D9 *plain = create9_orig ? create9_orig(ex_version) : NULL;
+			*pp = asked;
 			hr = plain ? IDirect3D9_CreateDevice(plain, adapter, type, window, flags, pp, out) : D3DERR_NOTAVAILABLE;
+			if (plain)
+				IDirect3D9_Release(plain); // a device keeps the object alive
 		}
 	} else {
 		hr = create_device_orig(d3d, adapter, type, window, flags, pp, out);

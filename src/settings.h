@@ -17,6 +17,8 @@ int settings_darktitle(void);
 int settings_hwgamma(void);
 // settings.ini [native] unlinkguard (default 1): the iw4x-sp client only, see guards.c.
 int settings_unlinkguard(void);
+// settings.ini [native] hotguards (default 1): 0 leaves the game's per-entity weapon definition and entity table lookups unguarded (QA: tells their cost from the game's own).
+int settings_hotguards(void);
 // settings.ini [display] hudtextscale (default 50, percent, 20-200): the size of the objective pointer labels ("Follow", "Protect", the distance such as "2.0m") relative to the game's own (guards.c).
 int settings_hudtextscale(void);
 // settings.ini [display] nametagscale (default 70, percent, 20-200): the same for the names over other players.

@@ -98,7 +98,12 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 		}
 		log_printf("%s", mods);
 	}
-	if (code == EXCEPTION_STACK_OVERFLOW) { // the frames at the stack pointer are the loop; the ones at the base of the stack (the oldest) show what started it
+	log_printf("CRASH: GSC position of the script VM:");
+	scrdebug_stack_log();
+#ifdef _WIN64
+	log_printf("CRASH: native split screen: %s", native_crash_state());
+#endif
+	if (code == EXCEPTION_STACK_OVERFLOW) { // the frames at the stack pointer are the loop; the ones at the base of the stack (the oldest) show what started it. Last: the handler has little stack left after an overflow, and the lines above must not be lost to it
 		const uintptr_t *top = (const uintptr_t *)((NT_TIB *)NtCurrentTeb())->StackBase;
 		char oldest[900];
 		int m = wsprintfA(oldest, "CRASH: oldest frames (from the stack base):");
@@ -118,11 +123,6 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 		}
 		log_printf("%s", oldest);
 	}
-	log_printf("CRASH: GSC position of the script VM:");
-	scrdebug_stack_log();
-#ifdef _WIN64
-	log_printf("CRASH: native split screen: %s", native_crash_state());
-#endif
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
