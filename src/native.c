@@ -76,6 +76,10 @@ static uint8_t *base;
 #define RVA_COOP_SLOTS 0x540bb0 // slot p: type int at +p*0x2650
 #define SLOT_STRIDE 0x2650
 #define RVA_SV_CLIENT_THINK 0x22d000 // void (int lc, const usercmd_t *): copies the cmd into client_t[lc] + 0x1630 and runs the player's think
+#define RVA_CLIENT_COMMAND 0x166710 // void (int client, const char *text): the server's ClientCommand (thunk 0x22d150); "n <index>" wakes a NotifyOnPlayerCommand
+#define CLC_SEQ 0   // the client's reliable command ring (rva 0x545844 for local client 0): the sequence queued
+#define CLC_ACK 4   // the number handed to the server
+#define CLC_TEXT 8  // the texts, 0x40 bytes each, indexed by number & 0x7f
 #define RVA_KEY_CATCHERS 0x533cb0
 #define RVA_PM_FLAGS 0x535d44 // the live context's playerstate flags that CL_MouseMove (rva 0xcfcf0) tests with 0x800: set, it skips the whole mouse look and its view angle limits
 #define RVA_CLS_STATE 0x533cb8
@@ -150,6 +154,10 @@ static uint8_t *base;
 #define RVA_COOP_SLOTS XR(0x48f560)
 #define SLOT_STRIDE 0x263c
 #define RVA_SV_CLIENT_THINK XR(0xe7750)
+#define RVA_CLIENT_COMMAND XR(0x86920) // cdecl void (int client, const char *text): the server's ClientCommand (VA 0x486920, what VA 0x4c6f30 calls for each text of the ring)
+#define CLC_SEQ 4   // the clc range (VA 0x88c330) starts 4 bytes before the ring: the sequence queued at VA 0x88c334
+#define CLC_ACK 8   // the number handed to the server
+#define CLC_TEXT 0xc // the texts, 0x40 bytes each, indexed by number & 0x7f
 #define RVA_KEY_CATCHERS XR(0x525bb8)
 #define RVA_CLS_STATE XR(0x525bc0)
 #define RVA_ACC_PITCH XR(0x525c34)
@@ -1118,6 +1126,52 @@ static void slots_put_back(void)
 	}
 }
 
+// [native] resetlog (default on): the vtable slots around a device Reset, to see who else writes them (the Steam and Discord overlays hook the device as well): where each slot points, as module+offset
+static void slot_owner(void *p, char *out, size_t size)
+{
+	HMODULE m = NULL;
+	char name[MAX_PATH] = "?";
+	if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)p, &m) && m) {
+		GetModuleFileNameA(m, name, sizeof(name));
+		const char *slash = strrchr(name, '\\');
+		snprintf(out, size, "%s+%lx", slash ? slash + 1 : name, (unsigned long)((uintptr_t)p - (uintptr_t)m));
+	} else {
+		snprintf(out, size, "%p", p);
+	}
+}
+static void slots_log(const char *when)
+{
+	if (!cfg("resetlog", 1))
+		return;
+	for (int i = 0; i < nslots; i++) {
+		char who[MAX_PATH + 24];
+		slot_owner(*slots[i].slot, who, sizeof(who));
+		log_printf("native: slot %d %s: %s%s", i, when, who, *slots[i].slot == slots[i].hook ? " (ours)" : "");
+	}
+}
+// after a Reset: any change of a slot made by somebody else is logged for a few seconds (when the overlays put their hooks back, and what they leave in the slot)
+static DWORD WINAPI slots_watch_thread(LPVOID unused)
+{
+	(void)unused;
+	void *last[24];
+	for (int i = 0; i < nslots; i++)
+		last[i] = *slots[i].slot;
+	for (int t = 0; t < 60; t++) {
+		Sleep(100);
+		for (int i = 0; i < nslots; i++) {
+			void *now = *slots[i].slot;
+			if (now == last[i])
+				continue;
+			char from[MAX_PATH + 24], to[MAX_PATH + 24];
+			slot_owner(last[i], from, sizeof(from));
+			slot_owner(now, to, sizeof(to));
+			log_printf("native: slot %d changed %d ms after the Reset: %s -> %s%s", i, (t + 1) * 100, from, to, now == slots[i].hook ? " (ours)" : "");
+			last[i] = now;
+		}
+	}
+	return 0;
+}
+
 // Reset (vtable 16) fails while default-pool resources of ours are alive: the half textures are let go first (a lost device, a vid_restart, a change of the desktop: "DirectX error")
 typedef HRESULT(STDMETHODCALLTYPE *reset_t)(IDirect3DDevice9 *, void *);
 static reset_t reset_orig;
@@ -1126,9 +1180,15 @@ static HRESULT STDMETHODCALLTYPE reset_hook(IDirect3DDevice9 *dev, void *params)
 	log_printf("native: device reset: the half textures are released, the hooks taken out for it");
 	comp_release();
 	reset_t call = reset_orig;
+	slots_log("before the Reset");
 	slots_take_out();
+	slots_log("taken out");
 	HRESULT hr = call(dev, params);
+	slots_log("after the Reset");
 	slots_put_back();
+	slots_log("put back");
+	if (cfg("resetlog", 1))
+		CloseHandle(CreateThread(NULL, 0, slots_watch_thread, NULL, 0, NULL));
 	return hr;
 }
 typedef HRESULT(STDMETHODCALLTYPE *reset_ex_t)(IDirect3DDevice9 *, void *, void *);
@@ -1138,9 +1198,15 @@ static HRESULT STDMETHODCALLTYPE reset_ex_hook(IDirect3DDevice9 *dev, void *para
 	log_printf("native: device reset (Ex): the half textures are released, the hooks taken out for it");
 	comp_release();
 	reset_ex_t call = reset_ex_orig;
+	slots_log("before the Reset");
 	slots_take_out();
+	slots_log("taken out");
 	HRESULT hr = call(dev, params, mode);
+	slots_log("after the Reset");
 	slots_put_back();
+	slots_log("put back");
+	if (cfg("resetlog", 1))
+		CloseHandle(CreateThread(NULL, 0, slots_watch_thread, NULL, 0, NULL));
 	return hr;
 }
 
@@ -1904,6 +1970,7 @@ static int asp_have;
 static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the intro is over; before that there is one picture
 static int frame_bottom; // mode 5: this client frame is context 1's (the bottom half)
 static int ctx1_ready;
+static int ctx1_clc_synced; // ctx1_deliver_commands: the ring of context 1 has been made equal (nothing pending) since its init
 static void ctx_swap(int to);
 void native_unswap_entities(void);
 static void ctx_after_draw(void);
@@ -3749,6 +3816,7 @@ static void ctx_after_draw(void)
 	// but is client 1
 	*(int *)(ctx_store[1][0] + ((RVA_CG_CLIENTNUM + 4) - RANGE_RVA(0))) = cfg("ctx1lc", 1);
 	ctx1_ready = 1;
+	ctx1_clc_synced = 0;
 	log_printf("native: context 1 initialised");
 	ctx_dump("after init");
 }
@@ -5368,6 +5436,37 @@ static void server_step_inner(void)
 	npc_step_note(npc_before, 0);
 }
 
+// The client commands of local client 1. Every action a player's input runs (rva 0xce450) queues the text "n <index>" in the client's reliable command ring (clc: the sequence at +0,
+// the number acknowledged at +4, the texts of 0x40 bytes from +8, indexed by number & 0x7f; rva 0xd21a0), and the engine hands the ring to the server in rva 0xd02a0, which calls
+// ClientCommand (rva 0x166710) for each text: that is how a script's NotifyOnPlayerCommand hears a player's key. 0xd02a0 only runs for local client 0 here, so the ring of context 1
+// was never delivered: player 2's keys never reached a script that waits for a command (Takedown's duck in the opening car: Makarov shot player 2 whatever he pressed, a tester's
+// report). Delivered here, with context 0 live, next to his usercmds. [native] p1cmds=0 turns it off.
+static void ctx1_deliver_commands(void)
+{
+	static unsigned fn_rva = ~0u;
+	if (fn_rva == ~0u)
+		fn_rva = RVA_CLIENT_COMMAND; // (0 in the iw4x-sp profile: tools/gen_addr159.py cannot map it, the delivery is off there)
+	uint8_t *clc = ctx_store[1][6];
+	if (!clc || !fn_rva || !CFG_ONCE("p1cmds", 1))
+		return;
+	int *seq = (int *)(clc + CLC_SEQ), *ack = (int *)(clc + CLC_ACK);
+	if (!ctx1_clc_synced) { // the ring was copied from context 0's at the init: what was pending there is not player 2's
+		*ack = *seq;
+		ctx1_clc_synced = 1;
+		return;
+	}
+	if (*seq - *ack > 0x80)
+		*ack = *seq - 0x80;
+	while (*ack != *seq) {
+		(*ack)++;
+		const char *text = (const char *)(clc + CLC_TEXT + (*ack & 0x7f) * 0x40);
+		static unsigned logged;
+		if (logged++ < 40)
+			log_printf("native: client command of local client 1 to the server: '%.40s'", text);
+		((void (*)(int, const char *))(base + fn_rva))(1, text);
+	}
+}
+
 // Player 1 (local client 1) has no input device yet: every simulation step he gets the usercmd of player 0 with the buttons and the movement cleared and the view turned by
 // [native] p1yaw (a 16-bit angle, 0x8000 = half a turn), through the engine's own SV_ClientThink analogue (rva 0x22d000, client_t[n] + 0x1630 holds the last cmd).
 static int p1_yaw;
@@ -5400,6 +5499,7 @@ static void usercmd_step_inner(int lc)
 		// context 1's own client frame makes its usercmds in its cl block (ring of 128 x 0x40 at +0, cmdNumber at +0x2000, the number sent at +0x2004): player 1 gets them
 		// through the engine's SV_ClientThink analogue, as player 0 gets his through rva 0xd02a0
 		uint8_t *cl = ctx_store[1][5];
+		ctx1_deliver_commands();
 		int number = *(int *)(cl + CL_CMDNUM);
 		int *sent = (int *)(cl + CL_SENT);
 		if (number - *sent > 32)
@@ -7427,7 +7527,7 @@ void native_install(void)
 #ifdef _WIN64
 	rawinput_install();
 	if (cfg("loadprof", 0) > 0)
-		loadprof_start((unsigned)cfg("loadprof", 0));
+		loadprof_start((unsigned)cfg("loadprof", 0), (unsigned)cfg("loadprofat", 0));
 	if (cfg("aspectlog", 0))
 		aspectlog_start();
 	if (cfg("readlog", 0))

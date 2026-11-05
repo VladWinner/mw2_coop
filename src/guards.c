@@ -146,40 +146,42 @@ static void unlink_guarded(void *node)
 #endif
 
 // The text of the objective pointers ("Follow", "Protect" over a squadmate or a place) and the names over other players are big next to the rest of the HUD (owner, 2026-11-04):
-// their font sizes (dvars objectiveFontSize, friendlyNameFontSize and its split screen twin) are brought to [display] hudtextscale percent (default 70) of the game's own,
-// once, and only while the dvar still holds the game's default (a size the player or his config set is left alone, and a config that saved the scaled value is not scaled again).
+// their font sizes (dvars objectiveFontSize for the labels: [display] hudtextscale percent, default 50; friendlyNameFontSize and its split screen twin for the names: nametagscale,
+// default 70) are brought to that part of the game's own, whenever the dvar holds the game's default: a size the player or his config set (different from the default the first time it is seen) is left alone. The game registers these
+// dvars again when a level's cgame starts, which puts the default back (a first version that scaled once at the start showed the full-size text in the level: the "2.0m" over the
+// weapon table of the Trainer), so the dvars are looked at twice a second for as long as the game runs.
 static DWORD WINAPI hud_text_thread(LPVOID unused)
 {
 	(void)unused;
-	int pct = settings_hudtextscale();
-	if (pct == 100)
-		return 0;
 	static const char *const names[] = {"objectiveFontSize", "friendlyNameFontSize", "friendlyNameFontSizeSplitscreen"};
-	int done[3] = {0, 0, 0};
-	for (int tries = 0; tries < 60; tries++) {
-		int missing = 0;
+	const int pcts[3] = {settings_hudtextscale(), settings_nametagscale(), settings_nametagscale()};
+	int own[3] = {0, 0, 0}; // the first value seen was not the default: the player's own, left alone
+	int seen[3] = {0, 0, 0};
+	int logged = 0;
+	for (;;) {
 		for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-			if (done[i])
+			int pct = pcts[i];
+			if (own[i] || pct == 100)
 				continue;
 			dvar_t *d = game_find_dvar(names[i]);
-			if (!d) {
-				missing++;
+			if (!d || d->type != DVAR_TYPE_FLOAT || d->reset.value <= 0.0f)
 				continue;
+			if (!seen[i]) {
+				seen[i] = 1;
+				if (d->current.value != d->reset.value) {
+					own[i] = 1;
+					log_printf("guards: %s is %.3f, not the game's %.3f: left alone", names[i], (double)d->current.value, (double)d->reset.value);
+					continue;
+				}
 			}
-			done[i] = 1;
-			if (d->type != DVAR_TYPE_FLOAT || d->reset.value <= 0.0f)
+			if (d->current.value != d->reset.value)
 				continue;
-			if (d->current.value != d->reset.value) {
-				log_printf("guards: %s is %.3f, not the game's %.3f: left alone", names[i], (double)d->current.value, (double)d->reset.value);
-				continue;
-			}
 			d->current.value = d->reset.value * (float)pct / 100.0f;
 			d->modified = 1;
-			log_printf("guards: %s %.3f -> %.3f (hudtextscale %d)", names[i], (double)d->reset.value, (double)d->current.value, pct);
+			if (logged++ < 12)
+				log_printf("guards: %s %.3f -> %.3f (%d percent)", names[i], (double)d->reset.value, (double)d->current.value, pct);
 		}
-		if (!missing)
-			return 0;
-		Sleep(1000);
+		Sleep(500);
 	}
 	return 0;
 }

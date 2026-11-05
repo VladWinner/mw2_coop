@@ -98,6 +98,26 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 		}
 		log_printf("%s", mods);
 	}
+	if (code == EXCEPTION_STACK_OVERFLOW) { // the frames at the stack pointer are the loop; the ones at the base of the stack (the oldest) show what started it
+		const uintptr_t *top = (const uintptr_t *)((NT_TIB *)NtCurrentTeb())->StackBase;
+		char oldest[900];
+		int m = wsprintfA(oldest, "CRASH: oldest frames (from the stack base):");
+		for (int i = 1, got = 0; i < 16384 && got < 28 && m < (int)sizeof(oldest) - 80; i++) {
+			MEMORY_BASIC_INFORMATION mbi;
+			uintptr_t v = top[-i];
+			if (v > 0x10000 && VirtualQuery((void *)v, &mbi, sizeof(mbi)) && mbi.Type == MEM_IMAGE && (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) {
+				HMODULE mod = NULL;
+				char name[MAX_PATH] = "?";
+				if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)v, &mod) && mod) {
+					GetModuleFileNameA(mod, name, sizeof(name));
+					const char *slash = strrchr(name, '\\');
+					m += wsprintfA(oldest + m, " %s+%lx", slash ? slash + 1 : name, (unsigned long)(v - (uintptr_t)mod));
+					got++;
+				}
+			}
+		}
+		log_printf("%s", oldest);
+	}
 	log_printf("CRASH: GSC position of the script VM:");
 	scrdebug_stack_log();
 #ifdef _WIN64

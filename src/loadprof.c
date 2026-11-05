@@ -30,10 +30,18 @@ static void note(const char *key)
 	}
 }
 
+static unsigned prof_delay;
+
 static DWORD WINAPI prof_thread(LPVOID arg)
 {
 	DWORD seconds = (DWORD)(uintptr_t)arg, self = GetCurrentThreadId(), pid = GetCurrentProcessId();
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	HMODULE mod_self = NULL; // this DLL: its own buckets are told apart from the real winmm.dll
+	GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)prof_thread, &mod_self);
+	if (prof_delay) { // [native] loadprofat=<s>: the profile starts that many seconds after the game started (a level's fight, not its load)
+		Sleep(prof_delay * 1000);
+		log_printf("loadprof: sampling now");
+	}
 	DWORD start = GetTickCount();
 	unsigned samples = 0;
 	while (GetTickCount() - start < seconds * 1000) {
@@ -62,6 +70,8 @@ static DWORD WINAPI prof_thread(LPVOID arg)
 							file = name + n;
 							if (m == (HMODULE)base)
 								wsprintfA(key, "exe+%06x thread %lu", (unsigned)(((uint8_t *)c.Rip - base) & ~0xffull), (unsigned long)(te.th32ThreadID % 100000));
+							else if (m == mod_self)
+								wsprintfA(key, "mod+%06x thread %lu", (unsigned)(((uint8_t *)c.Rip - (uint8_t *)m) & ~0xffull), (unsigned long)(te.th32ThreadID % 100000));
 							else if (lstrcmpiA(file, "ntdll.dll") && lstrcmpiA(file, "KERNELBASE.dll") && lstrcmpiA(file, "win32u.dll") && lstrcmpiA(file, "KERNEL32.DLL"))
 								wsprintfA(key, "%s thread %lu", file, (unsigned long)(te.th32ThreadID % 100000));
 							else
@@ -88,6 +98,18 @@ static DWORD WINAPI prof_thread(LPVOID arg)
 				keys[j] = t;
 			}
 	log_printf("loadprof: %u thread samples in %lu s", samples, (unsigned long)seconds);
+	{ // where the work was: the game, this mod, the rest (graphics driver, system)
+		unsigned exe_n = 0, mod_n = 0, other_n = 0;
+		for (int i = 0; i < nkeys; i++) {
+			if (!strncmp(keys[i].key, "exe+", 4))
+				exe_n += keys[i].n;
+			else if (!strncmp(keys[i].key, "mod+", 4))
+				mod_n += keys[i].n;
+			else
+				other_n += keys[i].n;
+		}
+		log_printf("loadprof: busy samples: game %u, this mod %u, other modules %u", exe_n, mod_n, other_n);
+	}
 	{ // what the process read and how long each thread worked (CPU time, user + kernel) in that time: a thread that worked less than the clock was waiting (disk, GPU, locks)
 		IO_COUNTERS io;
 		if (GetProcessIoCounters(GetCurrentProcess(), &io))
@@ -192,8 +214,9 @@ void readlog_start(void)
 	log_printf("readlog: ReadFile calls are counted");
 }
 
-void loadprof_start(unsigned seconds)
+void loadprof_start(unsigned seconds, unsigned delay)
 {
+	prof_delay = delay;
 	HANDLE t = CreateThread(NULL, 0, prof_thread, (LPVOID)(uintptr_t)seconds, 0, NULL);
 	if (t)
 		CloseHandle(t);
@@ -205,8 +228,9 @@ void readlog_start(void)
 void aspectlog_start(void)
 {
 }
-void loadprof_start(unsigned seconds)
+void loadprof_start(unsigned seconds, unsigned delay)
 {
 	(void)seconds;
+	(void)delay;
 }
 #endif

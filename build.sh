@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")"
 LLVM_MINGW=${LLVM_MINGW:-../tools/llvm-mingw/llvm-mingw-20261006-ucrt-x86_64}
 CC="$LLVM_MINGW/bin/x86_64-w64-mingw32-clang"
-SRC="src/main.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/control.c src/crash.c src/scripts.c src/localize.c src/memdump.c src/menus.c src/mirror.c src/transplant.c src/access.c src/settings.c src/voicefix.c src/upnp.c src/steamnet.c src/firewall.c src/zones.c src/net.c src/fonts.c src/devices.c src/console.c src/native.c src/guards.c src/climbads.c src/window.c
+SRC="src/main.c src/d3dcap.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/control.c src/crash.c src/scripts.c src/localize.c src/memdump.c src/menus.c src/mirror.c src/transplant.c src/access.c src/settings.c src/voicefix.c src/upnp.c src/steamnet.c src/firewall.c src/zones.c src/net.c src/fonts.c src/devices.c src/console.c src/native.c src/guards.c src/climbads.c src/window.c
 	src/party.c src/progress.c src/scrdebug.c src/scrdebug_stack.c src/shot.c src/fov.c src/padicon.c src/padopts.c src/padglyphs.c src/rawinput.c src/weaponfov.c src/ctxdiff.c src/inputlog.c src/loadprof.c src/rumble.c src/winmm_stubs.S src/winmm.def"
 if [ "$1" = x86 ]; then
 	STRIP=; { [ "$2" = release ] || [ "$3" = release ]; } && STRIP=-s   # release: stripped, no local paths in the DLL (`x86 iw4x release` too)

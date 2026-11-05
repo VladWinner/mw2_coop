@@ -17,8 +17,13 @@ int settings_darktitle(void);
 int settings_hwgamma(void);
 // settings.ini [native] unlinkguard (default 1): the iw4x-sp client only, see guards.c.
 int settings_unlinkguard(void);
-// settings.ini [display] hudtextscale (default 70, percent, 30-200): the size of the objective waypoint labels ("Follow", "Protect") and of the names over other players, relative to the game's own (guards.c).
+// settings.ini [display] hudtextscale (default 50, percent, 20-200): the size of the objective pointer labels ("Follow", "Protect", the distance such as "2.0m") relative to the game's own (guards.c).
 int settings_hudtextscale(void);
+// settings.ini [display] nametagscale (default 70, percent, 20-200): the same for the names over other players.
+int settings_nametagscale(void);
+// settings.ini [display] d3d9ex (default 0 until tested, then 1): the game's Direct3D 9 is the extended one (Direct3DCreate9Ex, src/d3dcap.c): a window that loses the focus (Alt+Tab) does not lose the device,
+// so the render thread does not stop and a co-op partner is not left waiting. Not in the iw4x-sp profile (it has its own r_useD3D9Ex).
+int settings_d3d9ex(void);
 // settings.ini [native] keepads (default 1): the aim bit stays in the player's command while the Cliffhanger climb reads it (climbads.c).
 int settings_keepads(void);
 // mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).

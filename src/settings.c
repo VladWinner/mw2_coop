@@ -31,8 +31,10 @@ static int fontmip_on = 1;
 static int darktitle_on = 1;
 static int hwgamma_on = 1;
 static int unlinkguard_on = 1;
-static int hudtextscale = 70;
+static int hudtextscale = 50;
+static int nametagscale = 70;
 static int keepads_on = 1;
+static int d3d9ex_on = 0;
 static char player_id[33];
 static char player_ini[MAX_PATH];
 
@@ -126,9 +128,13 @@ void settings_load(void)
 	hwgamma_on = GetPrivateProfileIntA("display", "hwgamma", 1, path) != 0;
 	unlinkguard_on = GetPrivateProfileIntA("native", "unlinkguard", 1, path) != 0;
 	keepads_on = GetPrivateProfileIntA("native", "keepads", 1, path) != 0;
-	hudtextscale = (int)GetPrivateProfileIntA("display", "hudtextscale", 70, path);
-	if (hudtextscale < 30 || hudtextscale > 200)
-		hudtextscale = 70;
+	d3d9ex_on = GetPrivateProfileIntA("display", "d3d9ex", 0, path) != 0;
+	hudtextscale = (int)GetPrivateProfileIntA("display", "hudtextscale", 50, path);
+	if (hudtextscale < 20 || hudtextscale > 200)
+		hudtextscale = 50;
+	nametagscale = (int)GetPrivateProfileIntA("display", "nametagscale", 70, path);
+	if (nametagscale < 20 || nametagscale > 200)
+		nametagscale = 70;
 	log_printf("settings: %s port %u, steam_relay %d", path, (unsigned)port, steam_relay);
 	voicefix_apply(path);
 	if (port != DEFAULT_PORT)
@@ -182,9 +188,19 @@ int settings_keepads(void)
 	return keepads_on;
 }
 
+int settings_d3d9ex(void)
+{
+	return d3d9ex_on;
+}
+
 int settings_hudtextscale(void)
 {
 	return hudtextscale;
+}
+
+int settings_nametagscale(void)
+{
+	return nametagscale;
 }
 
 uint16_t settings_port(void)

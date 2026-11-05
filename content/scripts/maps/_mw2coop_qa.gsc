@@ -19,6 +19,8 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   takedown3 - player 2 ducks with REAL input: a network client presses his stance key (press(), mw2coop_bind +stance); takedown3s: split screen, his pad's B
+//              through the dvar mw2coop_qa_pad2. Player 1 ducks through the notify. Makarov must not hit player 2 (Vlad's report: he could not duck)
 //   crashsite - (dcburning, start "crash") the same crash site at the end of dcburning
 //   dcemp    - (dcemp, default start) both wake up in the crashed Black Hawk, both get a rifle,
 //              both float at the ISS, both come back to the wreck and are let out
@@ -247,6 +249,10 @@ main()
 		case "takedown":
 		case "takedown2":
 			takedown();
+			break;
+		case "takedown3":
+		case "takedown3s":
+			takedown3();
 			break;
 		case "oilrig":
 		case "oilrig2":
@@ -2117,6 +2123,33 @@ takedown()
 	d = Distance( p1.origin, p2.origin );
 	check( d < 120 && abs( p1.origin[ 2 ] - p2.origin[ 2 ] ) < 30, "out next to each other (" + int( d ) + " units)" );
 	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
+	report( "done" );
+}
+
+// Takedown opening car, player 2 ducks with real input (see the list at the top). Player 1 ducks through the notify; player 2's own stance button has to reach his
+// go_crouch (the engine's "n <index>" client command), or Makarov's shots hit him.
+takedown3()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 2;
+	p1 = level.player;
+	p2 = level.player2;
+	check( p1 IsLinked() && p2 IsLinked(), "both in the car (linked " + p1 IsLinked() + " " + p2 IsLinked() + ")" );
+	p1 notify( "go_crouch" );
+	if ( GetDvar( "mw2coop_qa" ) == "takedown3s" )
+	{
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 8192 0 0 0" ); // B: stance (the pad's polling reads it about every other frame: held for a while)
+		wait 0.8;
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	}
+	else
+		press( p2, "stance", 300 );
+	for ( t = 0; t < 4 && !( isdefined( p2.mw2coop_ducking ) && p2.mw2coop_ducking ); t += 0.1 )
+		wait 0.1;
+	check( isdefined( p2.mw2coop_ducking ) && p2.mw2coop_ducking, "player 2 ducks on his own stance button" );
+	flag_wait( "car_getting_shot" );
+	flag_wait( "start_chase" );
+	check( !isdefined( p2.mw2coop_shot ) && !isdefined( p1.mw2coop_shot ), "Makarov hit nobody" );
 	report( "done" );
 }
 
