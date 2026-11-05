@@ -896,9 +896,52 @@ static void save_pick_f(void)
 	host_lobby(NULL);
 }
 
+// A split screen lobby needs no Steam lobby, but "listen" makes the game ask Steam for one, and when Steam answers with anything but OK (offline mode, no connection, too many lobbies
+// made in a row: issue 11, "Steam connect failed" in the Campaign split screen lobby) the game's console command steamlobbycreatefail shows the error and drops the lobby. Its command
+// node is looked at once the game has registered it (at the Steam start-up) and the function in it is put behind ours: a split screen lobby ignores the failure, a network one still shows it.
+#ifdef _WIN64
+#define STEAM_LOBBY_FAIL_NODE 0x1a2f758 // the cmd_function node of steamlobbycreatefail (function at 0x241120)
+#else
+#define STEAM_LOBBY_FAIL_NODE XR(0x17eb4e4) // VA 0x1beb4e4 (function at VA 0x66b0c0)
+#endif
+static void (*steam_lobby_fail_original)(void);
+static void steam_lobby_fail_hook(void)
+{
+	if (InterlockedCompareExchange(&split_mode, 0, 0)) {
+		log_printf("menus: Steam did not make a lobby; a split screen lobby does not need one, the error is not shown");
+		return;
+	}
+	if (steam_lobby_fail_original)
+		steam_lobby_fail_original();
+}
+
+static void steam_lobby_fail_install(void)
+{
+	if (!STEAM_LOBBY_FAIL_NODE)
+		return; // (the iw4x-sp profile: not mapped)
+	cmd_function_t *node = (cmd_function_t *)(base + STEAM_LOBBY_FAIL_NODE);
+	if (node->function == steam_lobby_fail_hook)
+		return;
+	if (!node->name || strcmp(node->name, "steamlobbycreatefail") || !node->function) {
+		static int logged;
+		if (!logged++)
+			log_printf("menus: the steamlobbycreatefail command is not where it was expected: a Steam lobby failure is shown in a split screen lobby too");
+		return;
+	}
+	DWORD old;
+	if (!VirtualProtect(&node->function, sizeof(node->function), PAGE_READWRITE, &old))
+		return;
+	steam_lobby_fail_original = node->function;
+	node->function = steam_lobby_fail_hook;
+	VirtualProtect(&node->function, sizeof(node->function), old, &old);
+	log_printf("menus: a failed Steam lobby no longer ends a split screen lobby (steamlobbycreatefail)");
+}
+
 // Host a lobby: what the Spec Ops "two players online" button runs, then mw2coop_online [map].
 static void host_lobby(const char *map)
 {
+	if (split_pending)
+		steam_lobby_fail_install();
 	char cmd[512];
 	snprintf(cmd, sizeof(cmd),
 		 "set arcademode 0\nset arcademode_full 0\nset solo_play 0\nset ui_skip_level_select 1\n"

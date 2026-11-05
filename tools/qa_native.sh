@@ -6,6 +6,7 @@
 #   MW2COOP_POST    extra console commands after the level time, ";"-separated (the run is then LEVEL_S + their time long: give the script a bigger first argument)
 #   MW2COOP_LOBBY=1 the whole menu path: the split screen button, Continue, the players' devices (MW2COOP_PAD player 2's pad, MW2COOP_PAD0 player 1's, -1 the keyboard), Start
 #                   (the mission is the lobby's, not MW2COOP_MAP); frames of the lobby before and after: mw2coop\shots\lobby-a.bmp, lobby-b.bmp
+#   MW2COOP_LOBBY_EARLY / MW2COOP_LOBBY_EXTRA  console commands (";"-separated) before the split screen button / right after Continue (e.g. steamlobbycreatefail: a Steam lobby that failed)
 #   MW2COOP_PLAIN=1 no native split screen at all: the game as it is (to see what the original draws)
 #   MW2COOP_MENU=1  the session is started the way the menu does it (console command mw2coop_native_launch), not by settings.ini; MW2COOP_PAD the second player's pad
 # Writes the copy's settings.ini and commands.txt, runs it, prints the native/split/crash lines and puts the composed frame in local/scratch/native-last.png.
@@ -41,9 +42,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	[ -n "${MW2COOP_PRE:-}" ] && echo "$MW2COOP_PRE" | tr ';' '\n'
 	echo "!sleep 6000"
 	if [ -n "${MW2COOP_LOBBY:-}" ]; then # the lobby's own way: the split screen button, the host popup's Continue, the second player's button, Start
+		[ -n "${MW2COOP_LOBBY_EARLY:-}" ] && echo "$MW2COOP_LOBBY_EARLY" | tr ';' '
+' # console commands before the split screen button (";"-separated)
 		echo "mw2coop_split_menu"
 		echo "!sleep 2000"
 		echo "mw2coop_host_go"
+		[ -n "${MW2COOP_LOBBY_EXTRA:-}" ] && echo "$MW2COOP_LOBBY_EXTRA" | tr ';' '
+' # console commands right after the host's Continue (the lobby is being made)
 		echo "!sleep 4000"
 		echo "!shot lobby-a"
 		echo "!sleep 500"
