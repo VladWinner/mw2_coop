@@ -19,6 +19,7 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   framesevery - (any level and start) a frame of both players (a composed one in split screen) every second for 40 s: mw2coop\shotse-<n>.bmp, with both players' positions in the report
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
 //   heldweapons - (any level) the weapon each player holds in his hands, every 2 s for 40 s (player 2 must not stand with empty hands while player 1 holds one)
@@ -264,6 +265,9 @@ main()
 		case "oilrig":
 		case "oilrig2":
 			oilrig();
+			break;
+		case "framesevery":
+			framesevery();
 			break;
 		case "squadgather":
 			squadgather();
@@ -2174,6 +2178,18 @@ takedown3()
 	flag_wait( "car_getting_shot" );
 	flag_wait( "start_chase" );
 	check( !isdefined( p2.mw2coop_shot ) && !isdefined( p1.mw2coop_shot ), "Makarov hit nobody" );
+	report( "done" );
+}
+
+framesevery()
+{
+	level.mw2coop_no_follow = true;
+	for ( i = 0; i < 40; i++ )
+	{
+		wait 1;
+		SetDvar( "mw2coop_qa_shot", "fe-" + i );
+		report( "frame " + i + ": p1 " + vec_int( level.player.origin ) + " linked " + level.player IsLinked() + " alive " + IsAlive( level.player ) + ", p2 " + vec_int( level.player2.origin ) + " linked " + level.player2 IsLinked() );
+	}
 	report( "done" );
 }
 
