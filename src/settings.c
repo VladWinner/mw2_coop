@@ -137,7 +137,7 @@ void settings_load(void)
 	nametagscale = (int)GetPrivateProfileIntA("display", "nametagscale", 70, path);
 	if (nametagscale < 20 || nametagscale > 200)
 		nametagscale = 70;
-	log_printf("settings: %s port %u, steam_relay %d", path, (unsigned)port, steam_relay);
+	log_printf("settings: %s port %u, steam_relay %d, fonts %d, fontmip %d", path, (unsigned)port, steam_relay, fonts_on, fontmip_on);
 	voicefix_apply(path);
 	if (port != DEFAULT_PORT)
 		patch_port(port);

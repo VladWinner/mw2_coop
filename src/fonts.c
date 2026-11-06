@@ -1136,3 +1136,53 @@ void fonts_seen(void *font, const char *name, void *(*find)(int, const char *))
 	}
 	patch_all(find, mat);
 }
+
+// A font lookup can arrive before loc_language and/or the shared atlas is ready. The
+// localization hook calls this on ordinary asset lookups too, so a transient startup miss cannot
+// disable fonts for the rest of the session. Keep the work bounded: at most one retry every 500 ms.
+static volatile LONG retry_tick;
+static volatile LONG waiting_language_logged;
+static volatile LONG waiting_atlas_logged;
+
+void fonts_retry(void *(*find)(int, const char *))
+{
+	if (!find || !settings_fonts() || InterlockedCompareExchange(&patch_state, 0, 0) != 0)
+		return;
+
+	DWORD now = GetTickCount();
+	LONG last = InterlockedCompareExchange(&retry_tick, 0, 0);
+	if ((DWORD)(now - (DWORD)last) < 500)
+		return;
+	if (InterlockedCompareExchange(&retry_tick, (LONG)now, last) != last)
+		return;
+
+	if (!localize_is_russian()) {
+		if (InterlockedCompareExchange(&waiting_language_logged, 1, 0) == 0)
+			log_printf("fonts: waiting for Russian game localization; will retry on later asset lookups");
+		return;
+	}
+	InterlockedExchange(&waiting_language_logged, 0);
+
+	for (int p = 0; p < PLAN_COUNT; p++) {
+		uint8_t *font = (uint8_t *)find(24, plan[p].name);
+		if (!font || !readable(font, 0x30))
+			continue;
+		const uint8_t *mat = *(const uint8_t *const *)(font + FONT_MATERIAL);
+		if (!mat || !readable(mat, 8))
+			continue;
+		const char *mname = *(const char *const *)mat;
+		if (!mname || !readable(mname, 20) || strcmp(mname, "fonts/gamefonts_pc") != 0)
+			continue;
+		uint8_t *image = material_image(mat);
+		if (!image || !*(void **)image)
+			continue;
+
+		InterlockedExchange(&waiting_atlas_logged, 0);
+		log_printf("fonts: retrying font replacement after the game assets became ready");
+		patch_all(find, mat);
+		return;
+	}
+	if (InterlockedCompareExchange(&waiting_atlas_logged, 1, 0) == 0)
+		log_printf("fonts: Russian localization is active, waiting for the shared font atlas");
+}
+
