@@ -29,6 +29,7 @@
 //   cookfrag - (native split, any level) player 2 holds his frag button (his pad through mw2coop_qa_pad2) for 8 s: the grenade cooks too long (Vlad's log: press frag, 4.1 s later 100000 MOD_SUICIDE, then his downed camera tumbled); frames ck-N every second for 30 s
 //   downnone - player 2 has NO weapon in his hands (Vlad's log: w none) and goes down (stance prone); frames dn-N every second for 30 s: does his downed view tumble without a viewmodel?
 //   hitdown - player 2 goes down, then player 1 hits him 10 times a second for 12 s (Vlad's clip: player 1 held his attack on the downed Bravo for 18 s and his camera tumbled); frames hd-N every 0.5 s
+//   oilrigladder - (oilrig, start "heli") where the ambush scaffolding's nodes and trigger are and where both players stand: the first look for the ladder (owner: the ladder does not work for player 2)
 //   allyrestore - (any level with a start point) the allies' places are snapshotted, one ally's recorded place is moved 1500 units away, the mission is failed: after the restart that ally must be at the recorded place (maps/_mw2coop restore_ally_positions)
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
@@ -297,6 +298,9 @@ main()
 			break;
 		case "hitdown":
 			hitdown();
+			break;
+		case "oilrigladder":
+			oilrigladder();
 			break;
 		case "downaudio":
 			downaudio();
@@ -2248,6 +2252,24 @@ framesevery()
 		SetDvar( "mw2coop_qa_shot", "fe-" + i );
 		report( "frame " + i + ": p1 " + vec_int( level.player.origin ) + " linked " + level.player IsLinked() + " alive " + IsAlive( level.player ) + ", p2 " + vec_int( level.player2.origin ) + " linked " + level.player2 IsLinked() );
 	}
+	report( "done" );
+}
+
+oilrigladder()
+{
+	level.mw2coop_no_follow = true;
+	wait 4;
+	report( "p1 at " + level.player.origin + " p2 at " + level.player2.origin );
+	nodes = getnodearray( "friendlyStartHeli", "targetname" );
+	foreach ( n in nodes )
+		report( "node friendlyStartHeli " + n.script_noteworthy + " at " + n.origin );
+	n = getnode( "node_guard_scaffolding", "targetname" );
+	if ( isdefined( n ) )
+		report( "node_guard_scaffolding at " + n.origin );
+	t = getent( "ambush_area", "targetname" );
+	if ( isdefined( t ) )
+		report( "ambush_area trigger at " + t.origin );
+	report( "flag player_in_ambush_position " + flag( "player_in_ambush_position" ) + ", player_on_ladder " + flag( "player_on_ladder" ) + ", obj_c4_ambush_plant_complete " + flag( "obj_c4_ambush_plant_complete" ) );
 	report( "done" );
 }
 
