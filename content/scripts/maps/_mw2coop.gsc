@@ -298,6 +298,7 @@ regroup_after_start()
 		return;
 	wait 0.1;
 	restore_checkpoint_spot();
+	thread restore_ally_positions();
 	for ( waited = 0; waited < 120; waited += 0.25 )
 	{
 		if ( level.player2 IsLinked() )
@@ -752,6 +753,7 @@ checkpoint_wait( index, cp )
 	level.mw2coop.checkpoint = index;
 	SetDvar( "start", cp.start );
 	state( "checkpoint " + cp.start );
+	snapshot_allies();
 	request( "checkpoint " + level.script + " " + cp.start );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
@@ -799,6 +801,7 @@ section_reached( name, leader )
 	spot = checkpoint_spot( leader );
 	SetDvar( "mw2coop_cp_start", name );
 	SetDvar( "mw2coop_cp_pos", spot );
+	snapshot_allies();
 	request( "checkpoint " + level.script + " " + name + " " + spot );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
@@ -809,6 +812,78 @@ section_reached( name, leader )
 	}
 	level.mw2coop.cp_spots[ rank ] = checkpoint_spot_origin( leader );
 	bring_partner_to( leader, rank );
+}
+
+// --------------------------------------------------------------------------------------------
+// Where the allies stood when a checkpoint was reached. A restart at a checkpoint runs the level's start function for it, which places only the people it names and leaves the rest where
+// the level began (Wolverines!, diner start: the squad, the president and the defenders 4400 units behind the players, the players waiting for them; owner's log, 2026-11-05). A game's own
+// autosave would bring everybody back as they were: the allies' places are kept with the checkpoint (dvar mw2coop_cp_allies: "class|name|x_y_z_yaw;..."), and the ones the start left more
+// than 600 units from theirs are put back a few seconds after the start. Allies that are gone or linked (a vehicle) are not touched.
+ally_name( ai )
+{
+	name = "-";
+	if ( isdefined( ai.script_friendname ) )
+		name = ai.script_friendname;
+	else if ( isdefined( ai.animname ) )
+		name = ai.animname;
+	return ai.classname + "|" + name;
+}
+
+snapshot_allies()
+{
+	text = "";
+	n = 0;
+	foreach ( ai in GetAIArray( "allies" ) )
+	{
+		if ( !IsAlive( ai ) || n >= 14 )
+			continue;
+		if ( n > 0 )
+			text += ";";
+		angles = ai.angles;
+		text += ally_name( ai ) + "|" + spot_int( ai.origin[ 0 ] ) + "_" + spot_int( ai.origin[ 1 ] ) + "_" + spot_int( ai.origin[ 2 ] ) + "_" + spot_int( angles[ 1 ] );
+		n++;
+	}
+	SetDvar( "mw2coop_cp_allies", text );
+}
+
+restore_ally_positions()
+{
+	level endon( "mw2coop_level_end" );
+	if ( !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_start" ) != level.start_point )
+		return;
+	text = GetDvar( "mw2coop_cp_allies" );
+	if ( text == "" )
+		return;
+	wait 3.5;
+	used = [];
+	moved = 0;
+	foreach ( entry in StrTok( text, ";" ) )
+	{
+		parts = StrTok( entry, "|" );
+		if ( parts.size != 3 )
+			continue;
+		pos = StrTok( parts[ 2 ], "_" );
+		if ( pos.size != 4 )
+			continue;
+		target = ( spot_value( pos[ 0 ] ), spot_value( pos[ 1 ] ), spot_value( pos[ 2 ] ) );
+		best = undefined;
+		foreach ( ai in GetAIArray( "allies" ) )
+		{
+			if ( !IsAlive( ai ) || isdefined( used[ "" + ai GetEntityNumber() ] ) || ally_name( ai ) != parts[ 0 ] + "|" + parts[ 1 ] )
+				continue;
+			if ( !isdefined( best ) || DistanceSquared( ai.origin, target ) < DistanceSquared( best.origin, target ) )
+				best = ai;
+		}
+		if ( !isdefined( best ) )
+			continue;
+		used[ "" + best GetEntityNumber() ] = true;
+		if ( Distance( best.origin, target ) > 600 )
+		{
+			best ForceTeleport( target, ( 0, spot_value( pos[ 3 ] ), 0 ) );
+			moved++;
+		}
+	}
+	state( "allies put back at the checkpoint " + level.start_point + ": " + moved + " of " + StrTok( text, ";" ).size + " moved" );
 }
 
 // --------------------------------------------------------------------------------------------

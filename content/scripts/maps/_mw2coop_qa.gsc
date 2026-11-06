@@ -20,6 +20,8 @@
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
 //   framesevery - (any level and start) a frame of both players (a composed one in split screen) every second for 40 s: mw2coop\shotse-<n>.bmp, with both players' positions in the report
+//   failspin - (split screen, any level) 12 s in the mission is failed (maps\_mw2coop::mission_failed); after the restart a frame every second for 20 s with player 2's yaw: does his half turn by itself (testers: after a failed mission his camera spins)?
+//   allyrestore - (any level with a start point) the allies' places are snapshotted, one ally's recorded place is moved 1500 units away, the mission is failed: after the restart that ally must be at the recorded place (maps/_mw2coop restore_ally_positions)
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
 //   heldweapons - (any level) the weapon each player holds in his hands, every 2 s for 40 s (player 2 must not stand with empty hands while player 1 holds one)
@@ -268,6 +270,12 @@ main()
 			break;
 		case "framesevery":
 			framesevery();
+			break;
+		case "failspin":
+			failspin();
+			break;
+		case "allyrestore":
+			allyrestore();
 			break;
 		case "squadgather":
 			squadgather();
@@ -2190,6 +2198,87 @@ framesevery()
 		SetDvar( "mw2coop_qa_shot", "fe-" + i );
 		report( "frame " + i + ": p1 " + vec_int( level.player.origin ) + " linked " + level.player IsLinked() + " alive " + IsAlive( level.player ) + ", p2 " + vec_int( level.player2.origin ) + " linked " + level.player2 IsLinked() );
 	}
+	report( "done" );
+}
+
+failspin()
+{
+	level.mw2coop_no_follow = true;
+	if ( GetDvar( "mw2coop_qa_failed" ) != "1" )
+	{
+		wait 12;
+		SetDvar( "mw2coop_qa_failed", "1" );
+		report( "failing the mission now" );
+		if ( GetDvar( "mw2coop_qa_kill" ) == "1" )
+		{
+			// both players really die (the scripted kill of a level: the death view, the downed state of player 2)
+			SetDvar( "mw2coop_god", "0" );
+			wait 0.3;
+			foreach ( p in level.players )
+			{
+				p EnableDeathShield( false );
+				p EnableHealthShield( false );
+				p EnableInvulnerability();
+				p DisableInvulnerability();
+			}
+			level.player2 Kill( level.player2.origin );
+			wait 1;
+			level.player Kill( level.player.origin );
+		}
+		else
+			level thread maps\_mw2coop::mission_failed();
+		return;
+	}
+	for ( i = 0; i < 20; i++ )
+	{
+		wait 1;
+		SetDvar( "mw2coop_qa_shot", "fs-" + i );
+		report( "after the restart, frame " + i + ": p2 yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " pitch " + int( level.player2 GetPlayerAngles()[ 0 ] ) + ", p1 yaw " + int( level.player GetPlayerAngles()[ 1 ] ) );
+	}
+	report( "done" );
+}
+
+allyrestore()
+{
+	level.mw2coop_no_follow = true;
+	if ( GetDvar( "mw2coop_qa_failed" ) != "1" )
+	{
+		wait 8;
+		SetDvar( "mw2coop_qa_failed", "1" );
+		SetDvar( "mw2coop_cp_start", level.start_point );
+		maps\_mw2coop::snapshot_allies();
+		text = GetDvar( "mw2coop_cp_allies" );
+		entries = StrTok( text, ";" );
+		report( "snapshot: " + entries.size + " allies; first '" + entries[ 0 ] + "'" );
+		// the first ally's recorded place: 1500 units along x from where he stands
+		parts = StrTok( entries[ 0 ], "|" );
+		ai = undefined;
+		foreach ( guy in GetAIArray( "allies" ) )
+			if ( !isdefined( ai ) && IsAlive( guy ) )
+				ai = guy;
+		fake = ( ai.origin[ 0 ] + 1500, ai.origin[ 1 ], ai.origin[ 2 ] );
+		entries[ 0 ] = parts[ 0 ] + "|" + parts[ 1 ] + "|" + maps\_mw2coop::spot_int( fake[ 0 ] ) + "_" + maps\_mw2coop::spot_int( fake[ 1 ] ) + "_" + maps\_mw2coop::spot_int( fake[ 2 ] ) + "_0";
+		text = "";
+		foreach ( n, e in entries )
+		{
+			if ( n > 0 )
+				text += ";";
+			text += e;
+		}
+		SetDvar( "mw2coop_cp_allies", text );
+		SetDvar( "mw2coop_qa_fake", maps\_mw2coop::spot_int( fake[ 0 ] ) + " " + maps\_mw2coop::spot_int( fake[ 1 ] ) );
+		report( "failing the mission, the first ally's recorded place is " + vec_int( fake ) );
+		level thread maps\_mw2coop::mission_failed();
+		return;
+	}
+	wait 8;
+	want = StrTok( GetDvar( "mw2coop_qa_fake" ), " " );
+	target = ( maps\_mw2coop::spot_value( want[ 0 ] ), maps\_mw2coop::spot_value( want[ 1 ] ), 0 );
+	near = 99999;
+	foreach ( guy in GetAIArray( "allies" ) )
+		if ( Distance2D( guy.origin, target ) < near )
+			near = Distance2D( guy.origin, target );
+	check( near < 200, "an ally stands at the recorded place after the restart (the nearest is " + int( near ) + " units from it)" );
 	report( "done" );
 }
 
