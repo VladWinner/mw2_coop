@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask or chat on Discord
+    url: https://discord.gg/q882kMMEY
+    about: Questions and quick help. A bug that is not written down in an issue is easy to lose.

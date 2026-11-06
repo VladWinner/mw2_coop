@@ -1,0 +1,82 @@
+name: Bug report
+description: Something does not work (English or Russian is fine)
+labels: ["bug"]
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before you write
+        - Look at the [known issues](https://github.com/stxlvn/mw2_enhanced#known-issues), the [changelog](https://github.com/stxlvn/mw2_enhanced/blob/main/CHANGELOG.md) and the open issues. If your problem is there, **comment on that issue** instead of opening a new one.
+        - Try the [latest release](https://github.com/stxlvn/mw2_enhanced/releases/latest): the bug may be fixed already.
+        - **One problem per issue.** You can write in English or in Russian.
+
+        ## The log is what finds the cause
+        Right after the problem, and **before you start the game again** (the file is replaced at every start), copy `mw2coop\mw2coop.log` from the game folder. Take it **from every PC that played** (host and client) and drag the files into the last box of this form.
+
+        ## Remove before you post (everything here is public)
+        - your Windows user name in folder paths: replace it with `<user>`;
+        - IP addresses, Steam IDs, tokens, passwords: replace them with `<hidden>`;
+        - never attach game files (scripts, maps, sounds, textures).
+
+        A good report: "Arcadia, after the second checkpoint both of us were teleported far ahead; 2 times out of 3 after restarting from the checkpoint". A poor one: "It's broken".
+
+        Full guide: [docs/reporting-issues.md](https://github.com/stxlvn/mw2_enhanced/blob/main/docs/reporting-issues.md)
+  - type: input
+    id: version
+    attributes:
+      label: Mod version and build
+      description: For example v0.6.0-beta 64-bit, or "nightly of 2026-11-06", and 64-bit / 32-bit / iw4x-sp
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How do you play?
+      options:
+        - Network over Steam
+        - Network by IP
+        - Split screen on one PC
+        - Single player
+    validations:
+      required: true
+  - type: dropdown
+    id: who
+    attributes:
+      label: Who has the problem?
+      options:
+        - The host
+        - The client
+        - Both
+        - Split screen (one PC)
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Mission and moment
+      description: The mission and the exact moment, for example "Arcadia, after the second checkpoint" or "right after the first white screen"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps, and how often it happens
+      description: What you did from loading the mission, and for example "3 times out of 5"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, video
+      description: Drag `mw2coop.log` from EACH PC that played here, and a screenshot or a short video if you can see the bug (a missing texture, a body in the wrong place, a stuck camera). Remove your Windows user name, IP addresses and Steam IDs first.
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup (optional)
+      description: Windows version, graphics card, windowed or full screen, pad or keyboard

@@ -1,0 +1,25 @@
+name: Suggestion
+description: An idea or a wish (English or Russian is fine)
+labels: ["enhancement"]
+title: "[Suggestion] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the open issues and the [changelog](https://github.com/stxlvn/mw2_enhanced/blob/main/CHANGELOG.md) first: the idea may exist already (add your voice there with a reaction). **One idea per issue**, in English or in Russian. Say what annoys you now, not only what you want.
+        For a bug, use the **Bug report** form instead.
+  - type: textarea
+    id: idea
+    attributes:
+      label: What do you want?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why? What annoys you now?
+  - type: input
+    id: links
+    attributes:
+      label: Links (optional)
+      description: How another game or mod does it

@@ -100,7 +100,7 @@ The host needs UDP port **28960** reachable. The mod opens it on the router by i
 
 No port forwarding, or a provider that does not allow it? Set `steam_relay=1` under `[network]` in `mw2coop\settings.ini` on both PCs and join through a Steam invite: the game traffic then goes through Steam, behind any router. Two players have played a mission this way.
 
-Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
+Something wrong? Send `mw2coop\mw2coop.log` from both PCs, and see [how to write an issue](docs/reporting-issues.md).
 
 <a id="known-issues"></a>
 ## ⚠️ Known issues
