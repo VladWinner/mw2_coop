@@ -129,6 +129,8 @@ static uint8_t *base;
 #define WD_AIM_RANGE_ADS 0x430
 #define WD_AUTO_RANGE 0x428
 #define WEAPON_DEF(w) (((const uint8_t *(*)(int64_t))(base + 0x85850))(w))
+#define RVA_RENDER_WIDTH 0x4113720 // the active render/backbuffer dimensions
+#define RVA_RENDER_HEIGHT 0x4113724
 #define RVA_CG_ASPECT 0x43c640 // the cgame's aspect
 #define RVA_PIXEL_ASPECT 0x411373c // the pixel aspect of the 2D
 #define RVA_VIDEO_ASPECT 0x4113738
@@ -207,6 +209,8 @@ static uint8_t *base;
 #define WD_AIM_RANGE_ADS 0x2e8
 #define WD_AUTO_RANGE 0x2e0
 #define WEAPON_DEF(w) (*(const uint8_t *const *)(base + XR(0x1669d08) + (size_t)(w) * 4)) // the table of weapon def pointers
+#define RVA_RENDER_WIDTH XR(0x1c8ed9c) // the active render/backbuffer dimensions
+#define RVA_RENDER_HEIGHT XR(0x1c8eda0)
 #define RVA_CG_ASPECT XR(0x35f018)
 #define RVA_PIXEL_ASPECT XR(0x188edb8)
 #define RVA_VIDEO_ASPECT XR(0x188edb4)
@@ -2159,6 +2163,31 @@ static unsigned cg_draw_count, hook_counts[8]; // QA counters: snapshot take, ps
 static int ctx_on;
 static float cg_aspect_saved;
 static int cg_aspect_have;
+
+// The engine's r_aspectRatio dvar selects a small set of display ratios. The cgame's FOV calculation
+// instead needs the actual active render dimensions, including arbitrary window sizes and ultrawide modes.
+static int cg_aspect_full_window_value(int width, int height, float *aspect)
+{
+	if (!aspect || width <= 0 || height <= 0)
+		return 0;
+	*aspect = (float)width / (float)height;
+	return 1;
+}
+static void cg_aspect_apply_full_window(void)
+{
+	static int logged_width, logged_height;
+	int width = *(int *)(base + RVA_RENDER_WIDTH);
+	int height = *(int *)(base + RVA_RENDER_HEIGHT);
+	float aspect;
+	if (!cg_aspect_full_window_value(width, height, &aspect))
+		return;
+	*(float *)(base + RVA_CG_ASPECT) = aspect;
+	if (width != logged_width || height != logged_height) {
+		logged_width = width;
+		logged_height = height;
+		log_printf("native: full-window cgame aspect %.4f from %dx%d", (double)aspect, width, height);
+	}
+}
 static float asp_saved[2];
 static int asp_have;
 static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the intro is over; before that there is one picture
@@ -2935,6 +2964,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		seq++;
 	}
+	int full_window = !mode || (native_active && (!split_on || !sw));
 	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
 		if (mode >= 5 && !split_on)
 			half_forget();
@@ -2946,11 +2976,15 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			memcpy(base + RVA_VIDEO_ASPECT, asp_saved, sizeof(asp_saved));
 			asp_have = 0;
 		}
+		if (full_window)
+			cg_aspect_apply_full_window();
 		cg_draw_original(local_client, a, b);
 		if (ctx_on)
 			ctx_after_draw();
 		return;
 	}
+	if (full_window)
+		cg_aspect_apply_full_window();
 	float saved[4];
 	memcpy(saved, sw, sizeof(saved));
 	if (mode >= 2 && mode <= 10) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
@@ -7499,7 +7533,20 @@ static int players_apply(int n)
 	return 1;
 }
 
-// The hooks of the client side: installed once, they pass everything through while native_active is 0 (journal group 0)
+// The cgame draw hook also applies the full-window aspect correction in ordinary one-viewport gameplay.
+// It is installed at startup and reused by the split-screen hook set if a local session is started later.
+static int cg_draw_install(void)
+{
+	if (cg_draw_original)
+		return 1;
+	int group = jgroup;
+	jgroup = 0;
+	int ok = jhook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original);
+	jgroup = group;
+	return ok && cg_draw_original != NULL;
+}
+
+// The client-side hooks stay installed; session-specific work is gated by native_active (journal group 0).
 #ifndef _WIN64
 static int hooks_apply32_contexts(void);
 static DWORD WINAPI coop_dvar_thread(LPVOID unused);
@@ -7513,8 +7560,7 @@ static int hooks_apply32(void)
 	hooks_installed = 1;
 	jgroup = 0;
 	uint8_t *site = base + RVA_BEGIN_FRAME_CALL;
-	if (!jhook_call(site, (void *)begin_frame_hook, (void **)&begin_frame_original) ||
-	    !jhook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {
+	if (!jhook_call(site, (void *)begin_frame_hook, (void **)&begin_frame_original) || !cg_draw_install()) {
 		log_printf("native: unexpected code at the cgame draw or its begin-frame call, the 32-bit split screen is off");
 		return 0;
 	}
@@ -7541,8 +7587,7 @@ static int hooks_apply(void)
 		contexts_install();
 	if (cfg("logcbuf", 0) && !jhook_function(base + 0x1ee890, cbuf_bytes, sizeof(cbuf_bytes), cbuf_hook, (void **)&cbuf_original))
 		log_printf("native: Cbuf_AddText bytes differ");
-	if (!jhook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) ||
-	    !jhook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {
+	if (!jhook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) || !cg_draw_install()) {
 		log_printf("native: unexpected code at the cgame draw or begin frame, the split screen is off");
 		return 0;
 	}
@@ -7695,6 +7740,10 @@ void native_install(void)
 	lstrcatA(path, "mw2coop\\settings.ini");
 	lstrcpyA(settings_path, path);
 	base = (uint8_t *)GetModuleHandleA(NULL);
+	if (cg_draw_install())
+		log_printf("native: full-window aspect correction hook on");
+	else
+		log_printf("native: full-window aspect correction hook not installed");
 #ifndef _WIN64
 	// the 32-bit port is switched on piece by piece: experiment=2 (alternate frames, compositor), then players=2 with experiment=5 (two client contexts)
 	if (cfg("players", 0) < 2 && cfg("experiment", 0) == 2) {
