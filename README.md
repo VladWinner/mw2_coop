@@ -86,7 +86,7 @@ Modern Warfare 2 Enhanced grows into an improvement mod for the original game, n
 5. **Partner:** accept the host's Steam invite, or Campaign → join a game, then pick it from the list or type the host's address.
 6. Both press **Ready**, the host presses **Start**.
 
-> **Nightly builds:** every night a test build of `main` (64-bit, 32-bit and iw4x-sp archives) is published as the pre-release [nightly](https://github.com/stxlvn/mw2_enhanced/releases/tag/nightly), replacing the previous one. It is only compiled, not played: back up your `mw2coop` folder and `winmm.dll` first, and expect bugs.
+> **Nightly builds:** with every new commit on `main` a test build (64-bit, 32-bit and iw4x-sp archives) is published as the pre-release [nightly](https://github.com/stxlvn/mw2_enhanced/releases/tag/nightly), replacing the previous one. It is only compiled, not played: back up your `mw2coop` folder and `winmm.dll` first, and expect bugs.
 
 **Split screen on one PC:** Campaign → Split screen. Each player presses a button on the device he will play on (the cards Alpha and Bravo show it), then Start. The gamepad layout and options are in `INSTALL.txt`.
 

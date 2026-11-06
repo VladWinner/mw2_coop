@@ -1,17 +1,18 @@
 name: Nightly build
 
-# Builds the 64-bit, 32-bit and iw4x-sp archives from main every night and publishes them as the rolling
-# pre-release "nightly" (the previous nightly is replaced). Skips the night when main has not moved.
+# Builds the 64-bit, 32-bit and iw4x-sp archives from main on EVERY new commit pushed to main (and on demand)
+# and publishes them as the rolling pre-release "nightly" (the previous build is replaced). A run that finds
+# main still at the commit of the published build (a manual run without "force") builds nothing.
 # Needs no game files: the build is the same tools/make_release.sh that makes the real releases.
 # NOT done here: tools/check_patches.py (it needs the game's extracted scripts, which are not in this repo),
 # so a nightly can carry a patch that does not apply: run the check locally before relying on one.
 on:
-  schedule:
-    - cron: "17 0 * * *"   # 00:17 UTC
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       force:
-        description: "Build even if main has not changed since the last nightly"
+        description: "Build even if main is still at the commit of the published build"
         type: boolean
         default: false
 
@@ -42,7 +43,7 @@ jobs:
           fetch-depth: 0
           ref: main
 
-      - name: Has main moved since the last nightly?
+      - name: Has main moved since the published build?
         id: moved
         env:
           FORCE: ${{ inputs.force }}
@@ -52,7 +53,7 @@ jobs:
           echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "short=${head:0:7}" >> "$GITHUB_OUTPUT"
           if [ "$head" = "$last" ] && [ "$FORCE" != "true" ]; then
-            echo "main is still at the last nightly ($head): nothing to build"
+            echo "main is still at the published build ($head): nothing to build"
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
