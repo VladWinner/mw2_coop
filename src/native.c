@@ -4817,7 +4817,9 @@ typedef struct {
 	uint8_t *item;
 	float was[3], now[3];	// rect: x, y, w
 	float cwas[3], cnow[3]; // rectClient (the one the HUD is drawn from: the menu's place plus this): x, y, w
-	uint8_t was_av, now_av;
+	uint8_t was_ah, now_ah, cwas_ah, cnow_ah;
+	uint8_t was_av, now_av, cwas_av, now_av_client;
+	uint8_t center_hint;
 	float was_scale, now_scale;
 } hud_slot_t;
 static hud_slot_t hud_slots[64];
@@ -4939,17 +4941,28 @@ static void hud_apply(void)
 			float *rc = (float *)(items[i] + ITEM_RECT);
 			s->item = items[i];
 			s->was[0] = rc[0], s->was[1] = rc[1], s->was[2] = rc[2];
+			s->was_ah = items[i][ITEM_RECT_ALIGN_H];
 			s->was_av = items[i][ITEM_RECT_ALIGN_V];
 			s->was_scale = *(float *)(items[i] + ITEM_TEXT_SCALE);
 			s->now[0] = rc[0] + mv->dx, s->now[1] = rc[1] + mv->dy, s->now[2] = mv->w > 0 ? mv->w : rc[2];
 			float *cl = (float *)(items[i] + ITEM_RECT_CLIENT);
 			s->cwas[0] = cl[0], s->cwas[1] = cl[1], s->cwas[2] = cl[2];
+			s->cwas_ah = items[i][ITEM_RECT_CLIENT + 0x10];
+			s->cwas_av = items[i][ITEM_RECT_CLIENT + 0x11];
+			s->now_ah = s->was_ah;
+			s->cnow_ah = s->cwas_ah;
 			s->cnow[0] = cl[0] + mv->dx, s->cnow[1] = cl[1] + mv->dy, s->cnow[2] = mv->w > 0 ? mv->w : cl[2];
 			if (!strcmp(hud_moves[m].menu, "cursorhints") || !strcmp(hud_moves[m].menu, "mantlehint")) { // QA ([native] hintdx=<units>): where the hints land for a given shift
 				s->now[0] += (float)cfg("hintdx", 0);
 				s->cnow[0] += (float)cfg("hintdx", 0);
+				s->center_hint = 1;
+				s->now_ah = s->cnow_ah = menu[ITEM_RECT_ALIGN_H];
+				s->now_av = s->now_av_client = menu[ITEM_RECT_ALIGN_V];
+			} else {
+				s->center_hint = 0;
+				s->now_av = mv->align_v >= 0 ? (uint8_t)mv->align_v : s->was_av;
+				s->now_av_client = s->now_av;
 			}
-			s->now_av = mv->align_v >= 0 ? (uint8_t)mv->align_v : s->was_av;
 			s->now_scale = mv->scale > 0 ? mv->scale : s->was_scale;
 		}
 		moved_menus++;
@@ -4959,6 +4972,36 @@ static void hud_apply(void)
 	if (!logged++)
 		log_printf("native: hudss: the HUD is laid out as in the console's split screen (%d items of %d menus)", hud_nslots, moved_menus);
 }
+// Keep cursor/mantle hint items aligned to their parent menus on both axes. The engine may
+// rebuild rectClient while reopening a menu, so reapply these four bytes without moving the rect.
+static void hud_hint_align_write(hud_slot_t *s)
+{
+	if (!s || !s->item || !s->center_hint)
+		return;
+	uint8_t *item = s->item;
+	if (item[ITEM_RECT_ALIGN_H] == s->was_ah || item[ITEM_RECT_ALIGN_H] == s->now_ah)
+		item[ITEM_RECT_ALIGN_H] = s->now_ah;
+	if (item[ITEM_RECT_CLIENT + 0x10] == s->cwas_ah || item[ITEM_RECT_CLIENT + 0x10] == s->cnow_ah)
+		item[ITEM_RECT_CLIENT + 0x10] = s->cnow_ah;
+	if (item[ITEM_RECT_ALIGN_V] == s->was_av || item[ITEM_RECT_ALIGN_V] == s->now_av)
+		item[ITEM_RECT_ALIGN_V] = s->now_av;
+	if (item[ITEM_RECT_CLIENT + 0x11] == s->cwas_av || item[ITEM_RECT_CLIENT + 0x11] == s->now_av_client)
+		item[ITEM_RECT_CLIENT + 0x11] = s->now_av_client;
+}
+static void hud_hint_align_restore(hud_slot_t *s)
+{
+	if (!s || !s->item || !s->center_hint)
+		return;
+	uint8_t *item = s->item;
+	if (item[ITEM_RECT_ALIGN_H] == s->now_ah)
+		item[ITEM_RECT_ALIGN_H] = s->was_ah;
+	if (item[ITEM_RECT_CLIENT + 0x10] == s->cnow_ah)
+		item[ITEM_RECT_CLIENT + 0x10] = s->cwas_ah;
+	if (item[ITEM_RECT_ALIGN_V] == s->now_av)
+		item[ITEM_RECT_ALIGN_V] = s->was_av;
+	if (item[ITEM_RECT_CLIENT + 0x11] == s->now_av_client)
+		item[ITEM_RECT_CLIENT + 0x11] = s->cwas_av;
+}
 // every frame while split: the layout is (re)written where an item still has the full screen values (the engine lays a menu out again when it opens it)
 static void hud_write(void)
 {
@@ -4967,13 +5010,14 @@ static void hud_write(void)
 		float *rc = (float *)(s->item + ITEM_RECT), *cl = (float *)(s->item + ITEM_RECT_CLIENT);
 		if (near_f(cl[0], s->cwas[0]) && near_f(cl[1], s->cwas[1])) {
 			cl[0] = s->cnow[0], cl[1] = s->cnow[1], cl[2] = s->cnow[2];
-			s->item[ITEM_RECT_CLIENT + 0x11] = s->now_av;
+			s->item[ITEM_RECT_CLIENT + 0x11] = s->center_hint ? s->now_av_client : s->now_av;
 			*(float *)(s->item + ITEM_TEXT_SCALE) = s->now_scale;
 		}
 		if (near_f(rc[0], s->was[0]) && near_f(rc[1], s->was[1])) {
 			rc[0] = s->now[0], rc[1] = s->now[1], rc[2] = s->now[2];
 			s->item[ITEM_RECT_ALIGN_V] = s->now_av;
 		}
+		hud_hint_align_write(s);
 	}
 }
 static void hud_restore(void)
@@ -4983,15 +5027,44 @@ static void hud_restore(void)
 		float *rc = (float *)(s->item + ITEM_RECT), *cl = (float *)(s->item + ITEM_RECT_CLIENT);
 		if (near_f(cl[0], s->cnow[0]) && near_f(cl[1], s->cnow[1])) {
 			cl[0] = s->cwas[0], cl[1] = s->cwas[1], cl[2] = s->cwas[2];
-			s->item[ITEM_RECT_CLIENT + 0x11] = s->was_av;
+			s->item[ITEM_RECT_CLIENT + 0x11] = s->center_hint ? s->cwas_av : s->was_av;
 			*(float *)(s->item + ITEM_TEXT_SCALE) = s->was_scale;
 		}
 		if (near_f(rc[0], s->now[0]) && near_f(rc[1], s->now[1])) {
 			rc[0] = s->was[0], rc[1] = s->was[1], rc[2] = s->was[2];
 			s->item[ITEM_RECT_ALIGN_V] = s->was_av;
 		}
+		hud_hint_align_restore(s);
 	}
 	hud_applied = 0;
+}
+/* The stock cursor/mantle hint menus are centered, but item and rectClient can retain
+ * stale edge alignment after the engine rebuilds a menu. Keep their alignment equal to
+ * the parent menu without changing any rectangle coordinates or sizes. */
+static void hud_hint_single_tick(void)
+{
+	static const char *const names[] = {"cursorhints", "mantlehint"};
+	for (int k = 0; k < 2; k++) {
+		int count = 0;
+		uint8_t *menu = hud_menu(names[k], &count);
+		if (!menu || count <= 0 || count > 4)
+			continue;
+		uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+		uint8_t *item = items ? items[0] : NULL;
+		if (!item)
+			continue;
+		uint8_t parent_h = menu[ITEM_RECT_ALIGN_H];
+		uint8_t parent_v = menu[ITEM_RECT_ALIGN_V];
+		uint8_t *item_h = item + ITEM_RECT_ALIGN_H;
+		uint8_t *item_v = item + ITEM_RECT_ALIGN_V;
+		uint8_t *client_h = item + ITEM_RECT_CLIENT + 0x10;
+		uint8_t *client_v = item + ITEM_RECT_CLIENT + 0x11;
+		if (parent_h != 2 || parent_v != 2 || (*item_h != 0 && *item_h != 2) || (*client_h != 0 && *client_h != 2) ||
+		    *item_v > 2 || *client_v > 2)
+			continue; // only stock/default hint alignments are corrected
+		*item_h = *client_h = parent_h;
+		*item_v = *client_v = parent_v;
+	}
 }
 static void hud_layout_tick(int split)
 {
@@ -5035,8 +5108,11 @@ static void hud_layout_tick(int split)
 					}
 			}
 		}
-	} else if (hud_applied)
-		hud_restore();
+	} else {
+		if (hud_applied)
+			hud_restore();
+		hud_hint_single_tick();
+	}
 }
 
 static void place_pop(void)
