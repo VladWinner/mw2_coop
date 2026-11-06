@@ -25,6 +25,10 @@
 //              Run with MW2COOP_MID "!trace <rva>" for seteqbands/setreverb/deactivateeq/deactivatereverb/playlocalsound to see who calls them and how often (Vlad: sound stutters after a partner is downed)
 //   failspinkill - failspin, but both players really die (the death view) instead of the scripted fail; frames fk-N while they die
 //   failspindown - player 2 is downed (shellshock, prone), 5 s later the mission fails; a frame every 0.5 s from each machine: fd-N (does the downed view turn during the fail?)
+//   killp2 - player 2 only gets the engine's kill (100000 MOD_SUICIDE, what Vlad's log shows right before his downed camera tumbled); frames kp-N every second for 25 s: does his view tumble?
+//   cookfrag - (native split, any level) player 2 holds his frag button (his pad through mw2coop_qa_pad2) for 8 s: the grenade cooks too long (Vlad's log: press frag, 4.1 s later 100000 MOD_SUICIDE, then his downed camera tumbled); frames ck-N every second for 30 s
+//   downnone - player 2 has NO weapon in his hands (Vlad's log: w none) and goes down (stance prone); frames dn-N every second for 30 s: does his downed view tumble without a viewmodel?
+//   hitdown - player 2 goes down, then player 1 hits him 10 times a second for 12 s (Vlad's clip: player 1 held his attack on the downed Bravo for 18 s and his camera tumbled); frames hd-N every 0.5 s
 //   allyrestore - (any level with a start point) the allies' places are snapshotted, one ally's recorded place is moved 1500 units away, the mission is failed: after the restart that ally must be at the recorded place (maps/_mw2coop restore_ally_positions)
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
@@ -281,6 +285,18 @@ main()
 			break;
 		case "failspindown":
 			failspindown();
+			break;
+		case "killp2":
+			killp2();
+			break;
+		case "cookfrag":
+			cookfrag();
+			break;
+		case "downnone":
+			downnone();
+			break;
+		case "hitdown":
+			hitdown();
 			break;
 		case "downaudio":
 			downaudio();
@@ -2231,6 +2247,78 @@ framesevery()
 		wait 1;
 		SetDvar( "mw2coop_qa_shot", "fe-" + i );
 		report( "frame " + i + ": p1 " + vec_int( level.player.origin ) + " linked " + level.player IsLinked() + " alive " + IsAlive( level.player ) + ", p2 " + vec_int( level.player2.origin ) + " linked " + level.player2 IsLinked() );
+	}
+	report( "done" );
+}
+
+hitdown()
+{
+	level.mw2coop_no_follow = true;
+	wait 6;
+	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	wait 3;
+	report( "player 2 down " + level.player2 ent_flag( "coop_downed" ) + ", p1 hits him" );
+	for ( i = 0; i < 40; i++ )
+	{
+		if ( i >= 6 && i < 30 )
+			for ( k = 0; k < 5; k++ )
+			{
+				level.player2 DoDamage( 14, level.player.origin, level.player );
+				wait 0.1;
+			}
+		else
+			wait 0.5;
+		SetDvar( "mw2coop_qa_shot", "hd-" + i );
+		report( "hit " + i + ": p2 hp " + level.player2.health + " down " + level.player2 ent_flag( "coop_downed" ) + " yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " pitch " + int( level.player2 GetPlayerAngles()[ 0 ] ) + " roll " + int( level.player2 GetPlayerAngles()[ 2 ] ) );
+	}
+	report( "done" );
+}
+
+downnone()
+{
+	level.mw2coop_no_follow = true;
+	wait 6;
+	level.player2 TakeAllWeapons();
+	wait 1;
+	report( "player 2 has weapon " + level.player2 GetCurrentWeapon() + " and goes down" );
+	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	for ( i = 0; i < 32; i++ )
+	{
+		SetDvar( "mw2coop_qa_shot", "dn-" + i );
+		report( "none " + i + ": p2 hp " + level.player2.health + " down " + level.player2 ent_flag( "coop_downed" ) + " weapon " + level.player2 GetCurrentWeapon() + " stance " + level.player2 GetStance() + " yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " pitch " + int( level.player2 GetPlayerAngles()[ 0 ] ) );
+		wait 1;
+	}
+	report( "done" );
+}
+
+cookfrag()
+{
+	level.mw2coop_no_follow = true;
+	wait 6;
+	report( "player 2 holds frag, hp " + level.player2.health + " weapon " + level.player2 GetCurrentWeapon() + " frags " + level.player2 GetWeaponAmmoClip( "fraggrenade" ) );
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 512 0 0 0" );
+	for ( i = 0; i < 32; i++ )
+	{
+		if ( i == 9 )
+			SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+		SetDvar( "mw2coop_qa_shot", "ck-" + i );
+		report( "cook " + i + ": p2 hp " + level.player2.health + " alive " + isalive( level.player2 ) + " down " + level.player2 ent_flag( "coop_downed" ) + " yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " pitch " + int( level.player2 GetPlayerAngles()[ 0 ] ) + " roll " + int( level.player2 GetPlayerAngles()[ 2 ] ) + " stance " + level.player2 GetStance() );
+		wait 1;
+	}
+	report( "done" );
+}
+
+killp2()
+{
+	level.mw2coop_no_follow = true;
+	wait 8;
+	report( "player 2 gets Kill(), hp " + level.player2.health );
+	level.player2 Kill( level.player2.origin, level.player );
+	for ( i = 0; i < 26; i++ )
+	{
+		SetDvar( "mw2coop_qa_shot", "kp-" + i );
+		report( "kill " + i + ": p2 hp " + level.player2.health + " alive " + isalive( level.player2 ) + " down " + level.player2 ent_flag( "coop_downed" ) + " yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " pitch " + int( level.player2 GetPlayerAngles()[ 0 ] ) + " roll " + int( level.player2 GetPlayerAngles()[ 2 ] ) + " stance " + level.player2 GetStance() );
+		wait 1;
 	}
 	report( "done" );
 }

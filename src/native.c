@@ -2898,7 +2898,31 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				   (double)s[6], (double)s[7], (double)s[8], (double)s[9], *(int *)(base + 0x422434));
 		}
 	}
-	if (CFG_ONCE("viewlog", 0) && ctx_on) {
+	if (CFG_ONCE("viewlog", 0) >= 2 && ctx_on) {
+		// viewlog=2 (2026-11-06, the downed player 2's camera tumbles on his screen while his server angles stand still): per context, a line whenever the cgame's
+		// player state pitch, yaw or roll moved by more than a degree since the last line, and one every ~10 s while still; no cap on draws, so a long session is covered
+		static float last[2][3];
+		static unsigned quiet[2], lines[2];
+#ifdef _WIN64
+		const uint8_t *ps = base + 0x422440;
+		int cgtime = *(int *)(base + 0x422434);
+#else
+		const uint8_t *ps = base + RVA_CL_PS; // (32 bits: the client block's copy, as the viewlog=1 lines do)
+		int cgtime = 0;
+#endif
+		float a[3] = {*(float *)(ps + 0x108), *(float *)(ps + 0x10c), *(float *)(ps + 0x110)};
+		int c = ctx_current & 1;
+		float dp = a[0] - last[c][0], dy = a[1] - last[c][1], dr = a[2] - last[c][2];
+		dy = fmodf(dy + 540.0f, 360.0f) - 180.0f;
+		if ((fabsf(dp) > 1.0f || fabsf(dy) > 1.0f || fabsf(dr) > 1.0f || ++quiet[c] >= 600) && lines[c] < 60000) {
+			quiet[c] = 0;
+			lines[c]++;
+			log_printf("native: view ctx %d pitch %.1f yaw %.1f roll %.1f (moved %.1f %.1f %.1f) cg.time %d", c, (double)a[0], (double)a[1], (double)a[2], (double)dp, (double)dy, (double)dr,
+				   cgtime);
+			memcpy(last[c], a, sizeof(a));
+		}
+	}
+	if (CFG_ONCE("viewlog", 0) == 1 && ctx_on) {
 		static unsigned vn;
 		if (++vn % 25 == 0 && vn < 20000) {
 #ifdef _WIN64
