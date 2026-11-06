@@ -19,6 +19,7 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
 //   heldweapons - (any level) the weapon each player holds in his hands, every 2 s for 40 s (player 2 must not stand with empty hands while player 1 holds one)
 //   gulagturn - (gulag, start "intro") player 2's view in the helicopter is turned to player 1 (what does his body look like from the next seat?); the angles of both and
@@ -263,6 +264,9 @@ main()
 		case "oilrig":
 		case "oilrig2":
 			oilrig();
+			break;
+		case "squadgather":
+			squadgather();
 			break;
 		case "airspeed":
 			airspeed();
@@ -2170,6 +2174,33 @@ takedown3()
 	flag_wait( "car_getting_shot" );
 	flag_wait( "start_chase" );
 	check( !isdefined( p2.mw2coop_shot ) && !isdefined( p1.mw2coop_shot ), "Makarov hit nobody" );
+	report( "done" );
+}
+
+squadgather()
+{
+	for ( round = 0; round < 3; round++ )
+	{
+		if ( round == 0 )
+			wait 3;
+		else
+			wait 7;
+		far = 0;
+		text = "";
+		foreach ( ai in GetAIArray( "allies" ) )
+		{
+			if ( !IsAlive( ai ) )
+				continue;
+			near = 99999;
+			foreach ( player in level.players )
+				if ( Distance2D( ai.origin, player.origin ) < near )
+					near = Distance2D( ai.origin, player.origin );
+			if ( near > 1500 )
+				far++;
+			text += ai.classname + "/" + isdefined( ai.script_noteworthy ) + ":" + int( near ) + " ";
+		}
+		report( "allies at " + ( round * 7 + 3 ) + " s, " + far + " farther than 1500 from every player: " + text );
+	}
 	report( "done" );
 }
 
