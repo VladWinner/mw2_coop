@@ -32,7 +32,8 @@
 //   oilrigladder - (oilrig, start "heli") where the ambush scaffolding's nodes and trigger are and where both players stand: the first look for the ladder (owner: the ladder does not work for player 2)
 //   oilrigclimb - (oilrig, start "heli") each player in turn stands at the foot of the ladder (1629 175 -1008, facing -y) and holds Forward for 8 s on his pad: how high does he get? (owner: the ladder does not work for player 2); frames lc1-N / lc2-N
 //   oilrigclimbp - the same in a network pair (qa_pair.sh oilrigclimbp heli 60 oilrig): each player's own machine presses Forward (press()), not a pad dvar
-//   oilrigclimbb - the split screen climb with the OTHER player standing at the top of the ladder (1629 95 -922), where the stock ambush has the first player wait: does the climber get stuck under / at him?
+//   oilrigclimbb - the split screen climb with the OTHER player standing at the top of the ladder (1629 118 -922, right at the exit), where the stock ambush has the first player wait: does the climber get stuck under / at him?
+//   oilrigwhere - (oilrig, any start) where both players stand and what they see 8 s after the start (frame ow-N): which part of the rig a start point is
 //   allyrestore - (any level with a start point) the allies' places are snapshotted, one ally's recorded place is moved 1500 units away, the mission is failed: after the restart that ally must be at the recorded place (maps/_mw2coop restore_ally_positions)
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
@@ -304,6 +305,9 @@ main()
 			break;
 		case "oilrigladder":
 			oilrigladder();
+			break;
+		case "oilrigwhere":
+			oilrigwhere();
 			break;
 		case "oilrigclimb":
 		case "oilrigclimbp":
@@ -2271,7 +2275,7 @@ oilrigclimb()
 	wait 4;
 	park = ( 1700, 30, -922 );
 	if ( GetDvar( "mw2coop_qa" ) == "oilrigclimbb" || GetDvar( "mw2coop_qa" ) == "oilrigclimbbp" )
-		park = ( 1629, 95, -922 );
+		park = ( 1629, 118, -922 );
 	for ( who = 1; who <= 2; who++ )
 	{
 		p = level.player;
@@ -2303,6 +2307,16 @@ oilrigclimb()
 		SetDvar( pad, "0 0 0 0 0 0 0 0" );
 		wait 2;
 	}
+	report( "done" );
+}
+
+oilrigwhere()
+{
+	level.mw2coop_no_follow = true;
+	wait 8;
+	report( "start " + GetDvar( "start" ) + ": p1 " + level.player.origin + " angles " + level.player GetPlayerAngles() + ", p2 " + level.player2.origin );
+	SetDvar( "mw2coop_qa_shot", "ow-" + GetDvar( "start" ) );
+	wait 1;
 	report( "done" );
 }
 
