@@ -19,6 +19,9 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   heldweapons - (any level) the weapon each player holds in his hands, every 2 s for 40 s (player 2 must not stand with empty hands while player 1 holds one)
+//   gulagturn - (gulag, start "intro") player 2's view in the helicopter is turned to player 1 (what does his body look like from the next seat?); the angles of both and
+//              of the helicopter are reported; frames come from MW2COOP_QA_CMDS shots
 //   oilrigdoors - (oilrig, start "rig") the lower hostage room has two doors (breach group 100): player 1 stands at one door, player 2 at the other, player 1
 //              presses Use (oilrigdoors2: player 2 presses; oilrigdoors3: both at the SAME door, the stock passive breacher). Both must breach, nobody dies, no hostage is killed
 //   takedown3 - player 2 ducks with REAL input: a network client presses his stance key (press(), mw2coop_bind +stance); takedown3s: split screen, his pad's B
@@ -259,6 +262,12 @@ main()
 		case "oilrig":
 		case "oilrig2":
 			oilrig();
+			break;
+		case "heldweapons":
+			heldweapons();
+			break;
+		case "gulagturn":
+			gulagturn();
 			break;
 		case "oilrigdoors":
 		case "oilrigdoors2":
@@ -2157,6 +2166,51 @@ takedown3()
 	flag_wait( "car_getting_shot" );
 	flag_wait( "start_chase" );
 	check( !isdefined( p2.mw2coop_shot ) && !isdefined( p1.mw2coop_shot ), "Makarov hit nobody" );
+	report( "done" );
+}
+
+heldweapons()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	empty = 0;
+	for ( i = 0; i < 20; i++ )
+	{
+		wait 2;
+		c1 = level.player GetCurrentWeapon();
+		c2 = level.player2 GetCurrentWeapon();
+		report( "t " + ( ( i + 1 ) * 2 ) + ": p1 holds " + c1 + " (" + level.player GetWeaponsListPrimaries().size + " primaries), p2 holds " + c2 + " (" + level.player2 GetWeaponsListPrimaries().size + " primaries)" );
+		if ( c1 != "none" && c2 == "none" )
+			empty++;
+	}
+	check( empty == 0, "player 2 never stood with empty hands while player 1 held a weapon (" + empty + " samples)" );
+	report( "done" );
+}
+
+// The Gulag fly-in: player 2 looks at player 1 (his view controller's target), the angles of the bodies are reported for a few seconds.
+gulagturn()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	p1 = level.player;
+	p2 = level.player2;
+	for ( t = 0; t < 30 && !isdefined( level.mw2coop_view_controller2 ); t += 0.25 )
+		wait 0.25;
+	check( isdefined( level.mw2coop_view_controller2 ), "player 2 has his own view controller in the helicopter" );
+	controller = level.mw2coop_view_controller2;
+	// his seat lets him turn about 40 degrees: wide limits, so that he can look at the player beside him
+	p2 Unlink();
+	p2 PlayerLinkToDelta( controller, "TAG_aim", 1, 170, 170, 80, 80, true );
+	controller ClearTargetEntity();
+	controller SetTargetEntity( p1 );
+	for ( i = 0; i < 12; i++ )
+	{
+		wait 1;
+		heli = level.player_heli;
+		hy = 0;
+		if ( isdefined( heli ) )
+			hy = heli.angles[ 1 ];
+		SetDvar( "mw2coop_qa_shot", "gt-" + i );
+		report( "heli yaw " + int( hy ) + ", p1 yaw " + int( p1 GetPlayerAngles()[ 1 ] ) + " origin " + vec_int( p1.origin ) + ", p2 yaw " + int( p2 GetPlayerAngles()[ 1 ] ) + " origin " + vec_int( p2.origin ) + ", p1 linked " + p1 IsLinked() + ", p2 linked " + p2 IsLinked() );
+	}
 	report( "done" );
 }
 

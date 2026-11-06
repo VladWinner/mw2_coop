@@ -874,11 +874,11 @@ standing_leader()
 }
 
 // Owner, 2026-11-04: the partner is brought to a checkpoint only when he is two checkpoints behind the
-// player who reached it. Each player's progress is the number of the last real checkpoint he reached
+// player who reached it (2026-11-06: five; a partner a few sections behind walks on, as the leader waits for him or he catches up). Each player's progress is the number of the last real checkpoint he reached
 // himself or came near (progress_watch), so a partner who is just a section behind walks on.
 checkpoint_lead()
 {
-	return 2;
+	return 5;
 }
 
 // A real checkpoint (not a developers' start, not the one the level began at) was reached: its number.
