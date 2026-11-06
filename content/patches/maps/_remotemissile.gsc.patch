@@ -16,3 +16,50 @@ SetSavedDvar( "cg_fov", 65 );
 @@@ to
 SetSavedDvar( "cg_fov", 65 ); maps\_mw2coop::fov_pilot( undefined );
 @@@ end
+
+2. The drone view's caption ("CAMERA: DRONE_011") and the notices under it ("MISSILE LAUNCHED", "MISSILE RELOADED IN")
+   are kept in the level variables level.text1 and level.text2: one slot for the whole level. With the laptop given to
+   both players, the second player to open the drone view replaced the first one's reference, so when they left the
+   view only the second player's caption was destroyed and the first player's stayed on his screen for good (an
+   owner's screenshot of the Wolverines! roof: "CAMERA: DRONE_011" over the rifle). Each caption and notice is kept on
+   the player it was made on (self.mw2coop_title, self.mw2coop_notice; every caller runs with the player as self).
+@@@ subst text_TitleCreate
+level.text1
+@@@ to
+self.mw2coop_title
+@@@ end
+@@@ subst text_TitleSetText
+level.text1
+@@@ to
+self.mw2coop_title
+@@@ end
+@@@ subst text_TitleFadeout
+level.text1
+@@@ to
+self.mw2coop_title
+@@@ end
+@@@ subst text_TitleDestroy
+level.text1
+@@@ to
+self.mw2coop_title
+@@@ end
+@@@ subst text_LabelCreate
+level.text2
+@@@ to
+self.mw2coop_notice
+@@@ end
+@@@ subst text_NoticeCreate
+level.text2
+@@@ to
+self.mw2coop_notice
+@@@ end
+@@@ subst text_NoticeFadeout
+level.text2
+@@@ to
+self.mw2coop_notice
+@@@ end
+@@@ subst text_NoticeDestroy
+level.text2
+@@@ to
+self.mw2coop_notice
+@@@ end
