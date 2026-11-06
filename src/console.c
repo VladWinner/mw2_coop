@@ -2312,11 +2312,25 @@ static void console_pause_queue(int paused)
 	game_cbuf_addtext(paused ? "cl_paused 1\n" : "cl_paused 0\n");
 }
 
+// A co-op session (network or split screen) runs on a simulation both players share: cl_paused 1 there freezes the partner or ends in the "no signal" disconnect, so Pause mode
+// does nothing while the game's dvar coop is 1.
+static int console_pause_blocked_by_coop(void)
+{
+	char v[8];
+	return game_dvar_raw("coop", v, sizeof(v)) && v[0] == '1';
+}
+
 static void console_pause_apply_mode(void)
 {
 	int paused = 0;
 	if (!is_open)
 		return;
+	if (InterlockedCompareExchange(&console_pause_mode, 0, 0) && console_pause_blocked_by_coop()) {
+		static LONG told;
+		if (!InterlockedExchange(&told, 1))
+			console_print_localized("Pause mode is off in a co-op session (it would stop the partner).", "Режим паузы выключен в кооперативной сессии (он остановил бы напарника).");
+		return;
+	}
 	if (InterlockedCompareExchange(&console_pause_mode, 0, 0)) {
 		if (!InterlockedCompareExchange(&console_pause_session_known, 0, 0)) {
 			if (!console_pause_read_state(&paused)) {
@@ -7300,9 +7314,24 @@ static void *game_device(void)
 #endif
 }
 
+// sv_cheats is switched on at the start only when settings.ini has [console] sv_cheats_default=1: it is not a default of the game, and cheats change what a campaign counts (review of the
+// console pull request, 2026-11-06: it was on for everybody).
+static int console_sv_cheats_default_wanted(void)
+{
+	static LONG decided = -1;
+	LONG v = InterlockedCompareExchange(&decided, -1, -1);
+	if (v == -1) {
+		v = console_settings_path_init() && GetPrivateProfileIntA("console", "sv_cheats_default", 0, console_settings_file) == 1;
+		InterlockedExchange(&decided, v);
+	}
+	return v != 0;
+}
+
 static void queue_default_sv_cheats(void)
 {
 	dvar_t *d;
+	if (!console_sv_cheats_default_wanted())
+		return;
 	LONG state = InterlockedCompareExchange(&auto_cheats_queued, 0, 0);
 	if (state == AUTO_CHEATS_USER_OVERRIDE || state == AUTO_CHEATS_PENDING)
 		return;
