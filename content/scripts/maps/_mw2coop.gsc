@@ -858,6 +858,16 @@ player_label( player )
 	return "player 2";
 }
 
+// True when any player has ai in his field of view (cosine of the half angle: level.cosine[ "60" ]). Level scripts that make allies hurry only out of sight ("slingshot": Wolverines' allies run at 2.5 times
+// the speed when the player does not see them) ask level.player alone: with the host ahead and the client trailing, they sprinted in front of the client's eyes.
+any_player_sees( ai, cosine )
+{
+	foreach ( player in level.players )
+		if ( IsAlive( player ) && within_fov( player.origin, player GetPlayerAngles(), ai.origin, cosine ) )
+			return true;
+	return false;
+}
+
 // A player stuck off the ground (not linked, not standing: fallen into the rock, left on a
 // ledge) while the other stands: the standing one leads. Else unknown.
 standing_leader()

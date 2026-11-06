@@ -23,3 +23,11 @@ self.favoriteenemy = level.player
 @@@ to
 self.favoriteenemy = maps\_mw2coop::seek_player( self.origin )
 @@@ end
+
+2. The allies' catch-up sprint (friendly_adjust_movement_speed / friendly_should_speed_up) runs only when the host cannot see the ally; with the host ahead and the client trailing the
+   allies sprinted past the client's eyes (an owner's report). Now no player may see them (maps\_mw2coop::any_player_sees).
+@@@ subst friendly_should_speed_up
+within_fov( level.player.origin, level.player getPlayerAngles(), self.origin, level.cosine[ "70" ] )
+@@@ to
+maps\_mw2coop::any_player_sees( self, level.cosine[ "70" ] )
+@@@ end

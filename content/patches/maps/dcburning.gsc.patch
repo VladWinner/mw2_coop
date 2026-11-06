@@ -64,3 +64,11 @@ level.blackhawk vehicle_delete();
 maps\_mw2coop_dcburning::partner_lets_go();
 	level.blackhawk vehicle_delete();
 @@@ end
+
+4. The allies' catch-up sprint (friendly_adjust_movement_speed / friendly_should_speed_up) runs only when the host cannot see the ally; with the host ahead and the client trailing the
+   allies sprinted past the client's eyes (an owner's report). Now no player may see them (maps\_mw2coop::any_player_sees).
+@@@ subst friendly_should_speed_up
+within_fov( level.player.origin, level.player getPlayerAngles(), self.origin, level.cosine[ "90" ] )
+@@@ to
+maps\_mw2coop::any_player_sees( self, level.cosine[ "90" ] )
+@@@ end

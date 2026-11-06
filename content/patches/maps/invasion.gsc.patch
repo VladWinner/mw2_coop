@@ -110,3 +110,11 @@ level.player maps\_remotemissile::give_remotemissile_weapon( "remote_missile_det
 	if ( maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) )
 		level.player2 maps\_remotemissile::give_remotemissile_weapon( "remote_missile_detonator" );
 @@@ end
+
+6. The allies' catch-up sprint (friendly_adjust_movement_speed: moveplaybackrate 2.5 while friendly_should_speed_up()) runs only when the host cannot see the ally. With the host
+   ahead and the client trailing, the allies sprinted past the client's eyes (an owner's report: "the slingshot"). Now every player has to be unable to see them.
+@@@ subst friendly_should_speed_up
+within_fov( level.player.origin, level.player getPlayerAngles(), self.origin, level.cosine[ "60" ] )
+@@@ to
+maps\_mw2coop::any_player_sees( self, level.cosine[ "60" ] )
+@@@ end
