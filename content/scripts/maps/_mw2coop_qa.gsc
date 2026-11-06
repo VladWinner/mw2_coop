@@ -30,6 +30,9 @@
 //   downnone - player 2 has NO weapon in his hands (Vlad's log: w none) and goes down (stance prone); frames dn-N every second for 30 s: does his downed view tumble without a viewmodel?
 //   hitdown - player 2 goes down, then player 1 hits him 10 times a second for 12 s (Vlad's clip: player 1 held his attack on the downed Bravo for 18 s and his camera tumbled); frames hd-N every 0.5 s
 //   oilrigladder - (oilrig, start "heli") where the ambush scaffolding's nodes and trigger are and where both players stand: the first look for the ladder (owner: the ladder does not work for player 2)
+//   oilrigclimb - (oilrig, start "heli") each player in turn stands at the foot of the ladder (1629 175 -1008, facing -y) and holds Forward for 8 s on his pad: how high does he get? (owner: the ladder does not work for player 2); frames lc1-N / lc2-N
+//   oilrigclimbp - the same in a network pair (qa_pair.sh oilrigclimbp heli 60 oilrig): each player's own machine presses Forward (press()), not a pad dvar
+//   oilrigclimbb - the split screen climb with the OTHER player standing at the top of the ladder (1629 95 -922), where the stock ambush has the first player wait: does the climber get stuck under / at him?
 //   allyrestore - (any level with a start point) the allies' places are snapshotted, one ally's recorded place is moved 1500 units away, the mission is failed: after the restart that ally must be at the recorded place (maps/_mw2coop restore_ally_positions)
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
@@ -301,6 +304,12 @@ main()
 			break;
 		case "oilrigladder":
 			oilrigladder();
+			break;
+		case "oilrigclimb":
+		case "oilrigclimbp":
+		case "oilrigclimbb":
+		case "oilrigclimbbp":
+			oilrigclimb();
 			break;
 		case "downaudio":
 			downaudio();
@@ -2251,6 +2260,48 @@ framesevery()
 		wait 1;
 		SetDvar( "mw2coop_qa_shot", "fe-" + i );
 		report( "frame " + i + ": p1 " + vec_int( level.player.origin ) + " linked " + level.player IsLinked() + " alive " + IsAlive( level.player ) + ", p2 " + vec_int( level.player2.origin ) + " linked " + level.player2 IsLinked() );
+	}
+	report( "done" );
+}
+
+oilrigclimb()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 4;
+	park = ( 1700, 30, -922 );
+	if ( GetDvar( "mw2coop_qa" ) == "oilrigclimbb" || GetDvar( "mw2coop_qa" ) == "oilrigclimbbp" )
+		park = ( 1629, 95, -922 );
+	for ( who = 1; who <= 2; who++ )
+	{
+		p = level.player;
+		o = level.player2;
+		pad = "mw2coop_qa_pad1";
+		if ( who == 2 )
+		{
+			p = level.player2;
+			o = level.player;
+			pad = "mw2coop_qa_pad2";
+		}
+		o SetOrigin( park );
+		p SetOrigin( ( 1629, 175, -1006 ) );
+		p SetPlayerAngles( ( 0, 270, 0 ) );
+		wait 1.5;
+		report( "player " + who + " at the foot: " + p.origin + " ladder flag " + flag( "player_on_ladder" ) );
+		net = ( GetDvar( "mw2coop_qa" ) == "oilrigclimbp" || GetDvar( "mw2coop_qa" ) == "oilrigclimbbp" );
+		if ( net )
+			press( p, "forward", 8000 );
+		else
+			SetDvar( pad, "0 32767 0 0 0 0 0 0" );
+		for ( i = 0; i < 16; i++ )
+		{
+			wait 0.5;
+			report( "player " + who + " t " + ( ( i + 1 ) * 0.5 ) + ": " + p.origin + " flag " + flag( "player_on_ladder" ) );
+			if ( i == 4 || i == 12 )
+				SetDvar( "mw2coop_qa_shot", "lc" + who + "-" + i );
+		}
+		SetDvar( pad, "0 0 0 0 0 0 0 0" );
+		wait 2;
 	}
 	report( "done" );
 }
