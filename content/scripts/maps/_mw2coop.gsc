@@ -728,12 +728,23 @@ checkpoint_wait( index, cp )
 	flag_wait( cp.flag );
 	if ( index <= level.mw2coop.checkpoint || level.mw2coop.failing )
 		return;
+	if ( just_started_at_checkpoint() )
+		return;
 	level.mw2coop.checkpoint = index;
 	SetDvar( "start", cp.start );
 	state( "checkpoint " + cp.start );
 	request( "checkpoint " + level.script + " " + cp.start );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
+}
+
+// True during the first seconds of a level that was started at a checkpoint (a restart after a failed mission, or a continued game). The start function sets the flags of the sections
+// before it, and the level's logic functions of the sections it skips return at once: the checkpoints they would mark are not reached by anybody. Owner's logs, 2026-11-05: a restart
+// at "massacre" took "gate" 0.45 s later, one at "solorun_rooftops" took "solorun_chopper" 1.3 s later, and the next death restarted there: on a checkpoint the players had never
+// reached. A level that began at its default start is not affected.
+just_started_at_checkpoint()
+{
+	return isdefined( level.start_point ) && level.start_point != "default" && GetTime() < 8000;
 }
 
 // Checkpoints for every level: a section of the level begins (the start point "name": its section
@@ -756,6 +767,11 @@ section_reached( name, leader )
 	level.mw2coop.section = index;
 	if ( start_is_dev( name ) || ( isdefined( level.start_point ) && level.start_point == name ) )
 		return;
+	if ( just_started_at_checkpoint() )
+	{
+		state( "checkpoint " + name + " not taken: " + GetTime() + " ms after the start at " + level.start_point + " (the start function's own flags and the sections it skips)" );
+		return;
+	}
 	rank = note_checkpoint_rank();
 	SetDvar( "start", name );
 	state( "checkpoint " + name + " (section " + index + ")" );
