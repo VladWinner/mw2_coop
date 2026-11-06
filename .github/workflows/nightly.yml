@@ -1,0 +1,122 @@
+name: Nightly build
+
+# Builds the 64-bit, 32-bit and iw4x-sp archives from main every night and publishes them as the rolling
+# pre-release "nightly" (the previous nightly is replaced). Skips the night when main has not moved.
+# Needs no game files: the build is the same tools/make_release.sh that makes the real releases.
+# NOT done here: tools/check_patches.py (it needs the game's extracted scripts, which are not in this repo),
+# so a nightly can carry a patch that does not apply: run the check locally before relying on one.
+on:
+  schedule:
+    - cron: "17 0 * * *"   # 00:17 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if main has not changed since the last nightly"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  # llvm-mingw, the toolchain build.sh uses, pinned by version and SHA-256 (release 20261006 of mstorsjo/llvm-mingw)
+  LLVM_MINGW_VERSION: "20261006"
+  LLVM_MINGW_SHA256: "5f9c6ed95b2d4bdb2869a488c5fd5857fbdabcf288a0aa3eb1da43f6a08d8ab4"
+
+jobs:
+  nightly:
+    # a fork does not publish nightlies
+    if: github.repository == 'stxlvn/mw2_enhanced'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write   # the release and its tag
+    steps:
+      - name: Check out main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Has main moved since the last nightly?
+        id: moved
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          head=$(git rev-parse HEAD)
+          last=$(git rev-parse -q --verify 'refs/tags/nightly^{commit}' || true)
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "short=${head:0:7}" >> "$GITHUB_OUTPUT"
+          if [ "$head" = "$last" ] && [ "$FORCE" != "true" ]; then
+            echo "main is still at the last nightly ($head): nothing to build"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install llvm-mingw (pinned)
+        if: steps.moved.outputs.build == 'true'
+        run: |
+          name="llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64"
+          curl -fsSL -o "$RUNNER_TEMP/llvm-mingw.tar.xz" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${name}.tar.xz"
+          echo "${LLVM_MINGW_SHA256}  $RUNNER_TEMP/llvm-mingw.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP"
+          echo "LLVM_MINGW=$RUNNER_TEMP/${name}" >> "$GITHUB_ENV"
+
+      - name: Build the three archives
+        if: steps.moved.outputs.build == 'true'
+        run: |
+          version="nightly-$(date -u +%Y%m%d)-${{ steps.moved.outputs.short }}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          sh tools/make_release.sh "$version"
+          sh tools/make_release.sh "$version" x86
+          sh tools/make_release.sh "$version" iw4x
+          ls -l dist/*.zip dist/*.sha256
+
+      - name: Release notes
+        if: steps.moved.outputs.build == 'true'
+        run: |
+          {
+            echo "Automatic build of \`main\` at commit ${{ steps.moved.outputs.head }} ($(date -u +%Y-%m-%d))."
+            echo
+            echo "**A nightly is a test build, not a release.** It is untested beyond compiling. Back up your \`mw2coop\` folder and \`winmm.dll\` before using it (see INSTALL.txt inside)."
+            echo
+            echo "- \`mw2coop-${VERSION}.zip\`: the 64-bit (current Steam) game"
+            echo "- \`mw2coop-${VERSION}-x86.zip\`: the older 32-bit game"
+            echo "- \`mw2coop-${VERSION}-iw4x.zip\`: the iw4x-sp client"
+            echo
+            echo "SHA-256 of each archive is in the \`.sha256\` file next to it."
+            echo
+            echo "### Changes not in a release yet"
+            echo
+            # the Unreleased section of the changelog (first 60 lines)
+            awk '/^## Unreleased/{f=1;next} /^## /{f=0} f' CHANGELOG.md | head -60
+          } > "$RUNNER_TEMP/notes.md"
+
+      - name: Keep the archives as a workflow artifact too
+        if: steps.moved.outputs.build == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.VERSION }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 14
+
+      - name: Replace the rolling "nightly" pre-release
+        if: steps.moved.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly \
+            --title "Nightly ${VERSION}" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --prerelease \
+            --target "${{ steps.moved.outputs.head }}" \
+            dist/*.zip dist/*.sha256
