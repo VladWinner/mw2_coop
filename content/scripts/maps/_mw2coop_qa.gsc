@@ -19,6 +19,7 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
 //   heldweapons - (any level) the weapon each player holds in his hands, every 2 s for 40 s (player 2 must not stand with empty hands while player 1 holds one)
 //   gulagturn - (gulag, start "intro") player 2's view in the helicopter is turned to player 1 (what does his body look like from the next seat?); the angles of both and
 //              of the helicopter are reported; frames come from MW2COOP_QA_CMDS shots
@@ -262,6 +263,9 @@ main()
 		case "oilrig":
 		case "oilrig2":
 			oilrig();
+			break;
+		case "airspeed":
+			airspeed();
 			break;
 		case "heldweapons":
 			heldweapons();
@@ -2169,6 +2173,32 @@ takedown3()
 	report( "done" );
 }
 
+// airspeed: (native split screen, airport) after the elevator both players walk forward on their pads for 6 s, 12 s after player 2 is let go: how far each got (the game
+// slows player 1 to the crew's pace; player 2 must not run away from him).
+airspeed()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	while ( !isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	while ( isdefined( level.mw2coop_elevator_node ) )
+		wait 0.5;
+	wait 12;
+	a1 = level.player.origin;
+	a2 = level.player2.origin;
+	t0 = GetTime();
+	SetDvar( "mw2coop_qa_pad1", "0 32767 0 0 0 0 0 0" );
+	SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 0" );
+	wait 6;
+	secs = ( GetTime() - t0 ) / 1000;
+	d1 = Distance2D( level.player.origin, a1 );
+	d2 = Distance2D( level.player2.origin, a2 );
+	SetDvar( "mw2coop_qa_pad1", "0 0 0 0 0 0 0 0" );
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	report( "airspeed: in " + secs + " s player 1 walked " + int( d1 ) + " units (" + int( d1 / secs ) + "/s), player 2 " + int( d2 ) + " units (" + int( d2 / secs ) + "/s)" );
+	report( "done" );
+}
+
 heldweapons()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
@@ -2178,9 +2208,25 @@ heldweapons()
 		wait 2;
 		c1 = level.player GetCurrentWeapon();
 		c2 = level.player2 GetCurrentWeapon();
-		report( "t " + ( ( i + 1 ) * 2 ) + ": p1 holds " + c1 + " (" + level.player GetWeaponsListPrimaries().size + " primaries), p2 holds " + c2 + " (" + level.player2 GetWeaponsListPrimaries().size + " primaries)" );
+		report( "t " + ( ( i + 1 ) * 2 ) + ": p1 holds " + c1 + " (" + level.player GetWeaponsListPrimaries().size + " primaries), p2 holds " + c2 + " (" + level.player2 GetWeaponsListPrimaries().size + " primaries), p2 linked " + level.player2 IsLinked() );
 		if ( c1 != "none" && c2 == "none" )
+		{
 			empty++;
+			if ( GetDvar( "mw2coop_qa_try" ) == "1" && empty == 12 )
+			{
+				p2 = level.player2;
+				report( "p2 state: linked " + p2 IsLinked() + ", stance " + p2 GetStance() + ", on ground " + p2 IsOnGround() + ", weapons " + p2 GetWeaponsListAll().size );
+				p2 EnableWeapons();
+				p2 SwitchToWeapon( c1 );
+				wait 0.6;
+				report( "after EnableWeapons + SwitchToWeapon: p2 holds " + p2 GetCurrentWeapon() );
+				p2 AllowFire( true );
+				p2 AllowADS( true );
+				p2 SwitchToWeapon( c1 );
+				wait 0.6;
+				report( "after AllowFire/ADS + SwitchToWeapon: p2 holds " + p2 GetCurrentWeapon() );
+			}
+		}
 	}
 	check( empty == 0, "player 2 never stood with empty hands while player 1 held a weapon (" + empty + " samples)" );
 	report( "done" );

@@ -82,3 +82,26 @@ is_default_start()
 @@@ to
 maps\_mw2coop::ending_goes_on()
 @@@ end
+
+5. Sprint is allowed and forbidden for every player with the host's walk speed (maps\_mw2coop_airport::all_allow_sprint), and the walk speed returns to normal for both with the level's
+   own release (blend_movespeedscale_custom( 100 ), patched in airport_code.gsc).
+@@@ subst basement_main
+level.player AllowSprint( true );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( true );
+@@@ end
+@@@ subst tarmac_team_settings
+level.player AllowSprint( true );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( true );
+@@@ end
+@@@ subst start_escape
+level.player AllowSprint( true );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( true );
+@@@ end
+@@@ subst start_escape
+level.player allowsprint( true );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( true );
+@@@ end

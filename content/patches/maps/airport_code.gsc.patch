@@ -151,3 +151,51 @@ mw2coop_target
 	thread maps\_mw2coop_airport::line_of_fire_kill( "massacre_line_of_fire_trig_final", "massacre_line_of_fire_done" );
 
 @@@ end
+
+6. The walk with Makarov's crew (the lobby, the stairs, the massacre): the speed the game gives player 1 (a blend to a slow walk, then a speed matched to the crew's) is given to
+   every player, and the cap of the matched speed is higher in co-op (an owner's report: the host could barely walk while player 2 ran; maps\_mw2coop_airport::all_move_speed, walk_cap).
+@@@ subst blend_movespeedscale_custom
+level.player SetMoveSpeedScale( player.baseline_speed );
+@@@ to
+maps\_mw2coop_airport::all_move_speed( player.baseline_speed );
+@@@ end
+@@@ subst player_dynamic_move_speed
+level.player SetMoveSpeedScale( ( level.player.adjusted_baseline ) );
+@@@ to
+maps\_mw2coop_airport::all_move_speed( level.player.adjusted_baseline );
+@@@ end
+@@@ subst player_dynamic_move_speed
+level.player AllowSprint( true );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( true );
+@@@ end
+@@@ subst player_dynamic_move_speed
+level.player AllowSprint( false );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( false );
+@@@ end
+@@@ subst player_dynamic_move_speed
+level.player.adjusted_baseline > 1.1
+@@@ to
+level.player.adjusted_baseline > maps\_mw2coop_airport::walk_cap()
+@@@ end
+@@@ subst player_dynamic_move_speed
+level.player.adjusted_baseline = 1.1;
+@@@ to
+level.player.adjusted_baseline = maps\_mw2coop_airport::walk_cap();
+@@@ end
+@@@ subst lobby_player_allow_sprint
+level.player AllowSprint( true );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( true );
+@@@ end
+@@@ subst gate_stairs_player_allow_sprint
+level.player AllowSprint( true );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( true );
+@@@ end
+@@@ subst player_init
+level.player AllowSprint( false );
+@@@ to
+maps\_mw2coop_airport::all_allow_sprint( false );
+@@@ end

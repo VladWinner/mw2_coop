@@ -137,6 +137,27 @@ player_name( player )
 	return "player 2";
 }
 
+// The walk with Makarov's crew (airport_code.gsc blend_movespeedscale_custom, player_dynamic_move_speed): the speed scale the game sets on player 1 goes to every player
+// (player 2 ran while the host could barely walk), and the cap of the speed matched to the crew's is 1.3 in co-op, 1.1 as in the original otherwise.
+all_move_speed( scale )
+{
+	foreach ( p in level.players )
+		p SetMoveSpeedScale( scale );
+}
+
+all_allow_sprint( on )
+{
+	foreach ( p in level.players )
+		p AllowSprint( on );
+}
+
+walk_cap()
+{
+	if ( coop() )
+		return 1.3;
+	return 1.1;
+}
+
 // player_loses_speed(): the player at the van slows down.
 slowed_players()
 {
