@@ -151,6 +151,13 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 	HRESULT hr;
 	int ex = 0;
 	IDirect3D9Ex *obj = NULL;
+	if (settings_borderless() && pp && !pp->Windowed) { // exclusive full screen: a device that can be lost, with the render thread stuck in d3d9.dll and a Reset on the way back when the window loses the focus
+		pp->Windowed = TRUE; // (the window the game made for it is a popup of the whole screen already)
+		pp->FullScreen_RefreshRateInHz = 0;
+		static LONG told;
+		if (!InterlockedExchange(&told, 1))
+			log_printf("d3dcap: [display] borderless: the full screen device is made a windowed one (%ux%u)", pp->BackBufferWidth, pp->BackBufferHeight);
+	}
 	if (use_ex && pp && out && SUCCEEDED(IDirect3D9_QueryInterface(d3d, &iid_d3d9ex, (void **)&obj)) && obj) {
 		D3DPRESENT_PARAMETERS asked = *pp; // a failed CreateDeviceEx can leave the parameters rewritten: the plain attempt gets what the game asked for
 		D3DDISPLAYMODEEX mode, *pmode = NULL;
@@ -294,7 +301,7 @@ void d3dcap_install(void)
 #endif
 #ifdef _WIN64
 	// the 64-bit build keeps its device in a global (native.c, shot.c): this file only has to make the extended one
-	if (!use_ex)
+	if (!use_ex && !settings_borderless())
 		return;
 	void **slot = find_import_slot(GetModuleHandleA(NULL), "d3d9.dll", "Direct3DCreate9");
 	DWORD old;

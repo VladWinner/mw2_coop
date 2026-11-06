@@ -36,6 +36,7 @@ static int hudtextscale = 50;
 static int nametagscale = 70;
 static int keepads_on = 1;
 static int d3d9ex_on = 0;
+static int borderless_on = 1;
 static char player_id[33];
 static char player_ini[MAX_PATH];
 
@@ -131,6 +132,7 @@ void settings_load(void)
 	hotguards_on = GetPrivateProfileIntA("native", "hotguards", 1, path) != 0;
 	keepads_on = GetPrivateProfileIntA("native", "keepads", 1, path) != 0;
 	d3d9ex_on = GetPrivateProfileIntA("display", "d3d9ex", 0, path) != 0;
+	borderless_on = GetPrivateProfileIntA("display", "borderless", 1, path) != 0;
 	hudtextscale = (int)GetPrivateProfileIntA("display", "hudtextscale", 50, path);
 	if (hudtextscale < 20 || hudtextscale > 200)
 		hudtextscale = 50;
@@ -198,6 +200,11 @@ int settings_keepads(void)
 int settings_d3d9ex(void)
 {
 	return d3d9ex_on;
+}
+
+int settings_borderless(void)
+{
+	return borderless_on;
 }
 
 int settings_hudtextscale(void)
