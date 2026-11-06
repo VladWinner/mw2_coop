@@ -1,6 +1,6 @@
 name: Nightly build
 
-# Builds the 64-bit, 32-bit and iw4x-sp archives from main on EVERY new commit pushed to main (and on demand)
+# Builds the 64-bit, 32-bit and iw4x-sp archives from main on every push to main that changes more than text files (README, CHANGELOG, docs, LICENSE are ignored), and on demand
 # and publishes them as the rolling pre-release "nightly" (the previous build is replaced). A run that finds
 # main still at the commit of the published build (a manual run without "force") builds nothing.
 # Needs no game files: the build is the same tools/make_release.sh that makes the real releases.
@@ -9,6 +9,11 @@ name: Nightly build
 on:
   push:
     branches: [main]
+    # a push that only edits text (README, CHANGELOG, docs, the licence) builds nothing; a push that also touches code or content does
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "LICENSE"
   workflow_dispatch:
     inputs:
       force:
