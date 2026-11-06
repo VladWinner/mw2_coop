@@ -19,6 +19,8 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   oilrigdoors - (oilrig, start "rig") the lower hostage room has two doors (breach group 100): player 1 stands at one door, player 2 at the other, player 1
+//              presses Use (oilrigdoors2: player 2 presses; oilrigdoors3: both at the SAME door, the stock passive breacher). Both must breach, nobody dies, no hostage is killed
 //   takedown3 - player 2 ducks with REAL input: a network client presses his stance key (press(), mw2coop_bind +stance); takedown3s: split screen, his pad's B
 //              through the dvar mw2coop_qa_pad2. Player 1 ducks through the notify. Makarov must not hit player 2 (Vlad's report: he could not duck)
 //   crashsite - (dcburning, start "crash") the same crash site at the end of dcburning
@@ -257,6 +259,11 @@ main()
 		case "oilrig":
 		case "oilrig2":
 			oilrig();
+			break;
+		case "oilrigdoors":
+		case "oilrigdoors2":
+		case "oilrigdoors3":
+			oilrigdoors();
 			break;
 		case "dcemp":
 		case "crashsite":
@@ -2150,6 +2157,110 @@ takedown3()
 	flag_wait( "car_getting_shot" );
 	flag_wait( "start_chase" );
 	check( !isdefined( p2.mw2coop_shot ) && !isdefined( p1.mw2coop_shot ), "Makarov hit nobody" );
+	report( "done" );
+}
+
+// Oil Rig, the lower hostage room: two doors, one player at each (see the list at the top). The stock co-op breach starts the other player's breach at his own door when he stands
+// in that door's volume (the player_breach function of the breach script, level.breach_groups).
+qa_stand_at_door( player, breach )
+{
+	// the door's use trigger needs the player inside it and looking at it: from the door volume's side, step toward the trigger until the player touches it
+	away = ( breach.door_volume.origin[ 0 ] - breach.trigger.origin[ 0 ], breach.door_volume.origin[ 1 ] - breach.trigger.origin[ 1 ], 0 );
+	away = VectorNormalize( away );
+	toward = ( 0 - away[ 0 ], 0 - away[ 1 ], 0 );
+	yaw = VectorToAngles( toward )[ 1 ];
+	foreach ( dist in strtok( "90 70 55 40 28 16 6", " " ) )
+	{
+		pos = breach.trigger.origin + away * int( dist );
+		floor = PlayerPhysicsTrace( ( pos[ 0 ], pos[ 1 ], breach.door_volume.origin[ 2 ] + 40 ), ( pos[ 0 ], pos[ 1 ], breach.door_volume.origin[ 2 ] - 200 ) );
+		player SetOrigin( floor );
+		player SetPlayerAngles( ( 0, yaw, 0 ) );
+		wait 0.25;
+		if ( player IsTouching( breach.trigger ) && player IsTouching( breach.door_volume ) )
+		{
+			report( player_name( player ) + " stands " + dist + " units from the door's trigger at " + vec_int( floor ) );
+			return;
+		}
+	}
+	report( player_name( player ) + " could not be placed inside both the trigger and the volume" );
+}
+
+qa_breach_watch()
+{
+	level.mw2coop_qa_breaching = 0;
+	for ( ;; )
+	{
+		level waittill( "breaching" );
+		level.mw2coop_qa_breaching++;
+		level.mw2coop_qa_breaching_time = GetTime();
+	}
+}
+
+oilrigdoors()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	p1 = level.player;
+	p2 = level.player2;
+	wait 4;
+	check( isdefined( level.breach_groups ) && isdefined( level.breach_groups[ 0 ] ) && isdefined( level.breach_groups[ 1 ] ), "the level has breaches 0 and 1" );
+	a = level.breach_groups[ 0 ];
+	b = level.breach_groups[ 1 ];
+	check( isdefined( a.door_volume.script_breachgroup ) && a.door_volume.script_breachgroup == b.door_volume.script_breachgroup, "breaches 0 and 1 are doors of one room (group " + a.door_volume.script_breachgroup + ")" );
+	report( "doors: 0 volume " + vec_int( a.door_volume.origin ) + " trigger " + vec_int( a.trigger.origin ) + ", 1 volume " + vec_int( b.door_volume.origin ) + " trigger " + vec_int( b.trigger.origin ) );
+	thread qa_breach_watch();
+	// the stealth part of the level (a patroller, the room's guards) fails the mission as soon as it notices a player: the bots are not seen
+	p1.ignoreme = true;
+	p2.ignoreme = true;
+	// the level's stealth monitor alerts every guard that can see level.player nearby (a patroller sees the door): switched off for the test
+	level notify( "oilrig_stealth_monitor_off" );
+	level.oilrigStealth = false;
+	scen = GetDvar( "mw2coop_qa" );
+	other_door = b;
+	if ( scen == "oilrigdoors3" )
+		other_door = a;
+	qa_stand_at_door( p1, a );
+	qa_stand_at_door( p2, other_door );
+	wait 1.5;
+	check( p1 IsTouching( a.door_volume ) && p2 IsTouching( other_door.door_volume ), "each player stands in his door's volume (p1 " + vec_int( p1.origin ) + ", p2 " + vec_int( p2.origin ) + ")" );
+	check( p1 IsTouching( a.trigger ) && p2 IsTouching( other_door.trigger ), "each player is inside his door's use trigger" );
+	presser = p1;
+	if ( scen == "oilrigdoors2" )
+		presser = p2;
+	for ( n = 0; n < 6 && level.mw2coop_qa_breaching == 0; n++ )
+	{
+		press( presser, "activate", 600 );
+		wait 1;
+	}
+	check( level.mw2coop_qa_breaching > 0, "a breach started (" + level.mw2coop_qa_breaching + " breaching notifies)" );
+	wait 1;
+	report( "during the breach: p1 linked " + p1 IsLinked() + ", p2 linked " + p2 IsLinked() + ", breaching notifies " + level.mw2coop_qa_breaching + ", enemies alive " + level.breachEnemies_alive );
+	check( p1 IsLinked() && p2 IsLinked(), "both players are in a breach animation" );
+	// the bots do not shoot, and the enemies execute the hostages seconds after the door goes (the slow motion makes the waits long): the room's enemies are killed for player 1 at once
+	killed = 0;
+	foreach ( ai in GetAIArray( "axis" ) )
+	{
+		if ( IsAlive( ai ) && ai IsTouching( a.room_volume ) )
+		{
+			ai DoDamage( ai.health + 500, p1.origin, p1 );
+			killed++;
+		}
+	}
+	report( "enemies in the room killed: " + killed + ", hostages left: " + GetAIArray( "neutral" ).size );
+	for ( t = 0; t < 30 && ( p1 IsLinked() || p2 IsLinked() ); t += 0.5 )
+		wait 0.5;
+	check( !p1 IsLinked() && !p2 IsLinked(), "both are free again after the breach (" + t + " s)" );
+	for ( i = 0; i < 16; i++ )
+	{
+		wait 0.5;
+		if ( i % 4 == 0 )
+			report( "after the breach: game time " + GetTime() + ", timescale " + GetDvar( "timescale" ) + ", p1 " + vec_int( p1.origin ) + ", p2 " + vec_int( p2.origin ) + ", failed " + flag( "oilrig_mission_failed" ) );
+	}
+	check( IsAlive( p1 ) && IsAlive( p2 ), "both alive" );
+	check( !flag( "oilrig_mission_failed" ), "the mission did not fail (a hostage was not killed)" );
+	check( a.room_volume.breached && b.room_volume.breached, "the room is breached" );
+	check( flag( a.room_volume.script_flag ), "the room is cleared (flag " + a.room_volume.script_flag + ")" );
+	report( "end: breaching notifies " + level.mw2coop_qa_breaching + ", p1 " + vec_int( p1.origin ) + " p2 " + vec_int( p2.origin ) );
 	report( "done" );
 }
 
