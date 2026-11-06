@@ -4636,6 +4636,16 @@ static void pad_frame_player(int pl, int play)
 				 *(unsigned *)(base + RVA_KEY_CATCHERS), p->forward, p->right, yaw_in, yaw, pitch_in, pitch, acc[1], acc[0], o.assist && !qa_noassist[pl], *(unsigned *)(base + RVA_PM_FLAGS));
 		}
 	}
+	if (pl == 1) { // player 2's hands are empty and a script asks for his weapon (maps\_mw2coop::sync_weapons): his client keeps its own weapon choice, so the script's SwitchToWeapon never
+		       // held (tester reports: "player 2 has no weapon until he presses 1 or Y"; QA heldweapons: his own pad Y fixed it at once): the pad's Y is pressed for him
+		char v[24];
+		static char last[24];
+		if (game_dvar_raw("mw2coop_p2_weapnext", v, sizeof(v)) && v[0] && strcmp(v, last)) {
+			snprintf(last, sizeof(last), "%s", v);
+			pad_action("weapnext");
+			log_printf("native: player 2's hands were empty: weapnext pressed for him (%s)", v);
+		}
+	}
 	static const struct {
 		WORD mask;
 		const char *hold;  // a held button (+/-)

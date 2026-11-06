@@ -2240,7 +2240,7 @@ heldweapons()
 		c1 = level.player GetCurrentWeapon();
 		c2 = level.player2 GetCurrentWeapon();
 		report( "t " + ( ( i + 1 ) * 2 ) + ": p1 holds " + c1 + " (" + level.player GetWeaponsListPrimaries().size + " primaries), p2 holds " + c2 + " (" + level.player2 GetWeaponsListPrimaries().size + " primaries), p2 linked " + level.player2 IsLinked() );
-		if ( c1 != "none" && c2 == "none" )
+		if ( c1 != "none" && c2 == "none" && !level.player2 IsLinked() )
 		{
 			empty++;
 			if ( GetDvar( "mw2coop_qa_try" ) == "1" && empty == 12 )
@@ -2256,6 +2256,12 @@ heldweapons()
 				p2 SwitchToWeapon( c1 );
 				wait 0.6;
 				report( "after AllowFire/ADS + SwitchToWeapon: p2 holds " + p2 GetCurrentWeapon() );
+				// the pad's Y (weapnext) on player 2's fake pad: what he does himself
+				SetDvar( "mw2coop_qa_pad2", "0 0 0 0 32768 0 0 0" );
+				wait 0.5;
+				SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+				wait 1;
+				report( "after his own weapnext (pad Y): p2 holds " + p2 GetCurrentWeapon() );
 			}
 		}
 	}
