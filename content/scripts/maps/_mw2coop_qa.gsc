@@ -23,6 +23,8 @@
 //   failspin - (split screen, any level) 12 s in the mission is failed (maps\_mw2coop::mission_failed); after the restart a frame every second for 20 s with player 2's yaw: does his half turn by itself (testers: after a failed mission his camera spins)?
 //   downaudio - (any level, split screen or pair) player 2 is downed for 20 s, then revived: the near-death sound filter (EQ/reverb flag) of each player every second.
 //              Run with MW2COOP_MID "!trace <rva>" for seteqbands/setreverb/deactivateeq/deactivatereverb/playlocalsound to see who calls them and how often (Vlad: sound stutters after a partner is downed)
+//   failspinkill - failspin, but both players really die (the death view) instead of the scripted fail; frames fk-N while they die
+//   failspindown - player 2 is downed (shellshock, prone), 5 s later the mission fails; a frame every 0.5 s from each machine: fd-N (does the downed view turn during the fail?)
 //   allyrestore - (any level with a start point) the allies' places are snapshotted, one ally's recorded place is moved 1500 units away, the mission is failed: after the restart that ally must be at the recorded place (maps/_mw2coop restore_ally_positions)
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
@@ -274,7 +276,11 @@ main()
 			framesevery();
 			break;
 		case "failspin":
+		case "failspinkill":
 			failspin();
+			break;
+		case "failspindown":
+			failspindown();
 			break;
 		case "downaudio":
 			downaudio();
@@ -2229,6 +2235,35 @@ framesevery()
 	report( "done" );
 }
 
+failspindown()
+{
+	level.mw2coop_no_follow = true;
+	if ( GetDvar( "mw2coop_qa_failed" ) == "1" )
+	{
+		wait 20;
+		report( "done" );
+		return;
+	}
+	wait 10;
+	SetDvar( "mw2coop_qa_failed", "1" );
+	report( "player 2 goes down" );
+	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	for ( i = 0; i < 10; i++ )
+	{
+		SetDvar( "mw2coop_qa_shot", "fd-" + i );
+		report( "down " + i + ": p2 yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " pitch " + int( level.player2 GetPlayerAngles()[ 0 ] ) + " roll " + int( level.player2 GetPlayerAngles()[ 2 ] ) );
+		wait 0.5;
+	}
+	report( "failing the mission now" );
+	level thread maps\_mw2coop::mission_failed();
+	for ( i = 10; i < 26; i++ )
+	{
+		SetDvar( "mw2coop_qa_shot", "fd-" + i );
+		report( "fail " + i + ": p2 yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " roll " + int( level.player2 GetPlayerAngles()[ 2 ] ) );
+		wait 0.5;
+	}
+}
+
 failspin()
 {
 	level.mw2coop_no_follow = true;
@@ -2237,7 +2272,7 @@ failspin()
 		wait 12;
 		SetDvar( "mw2coop_qa_failed", "1" );
 		report( "failing the mission now" );
-		if ( GetDvar( "mw2coop_qa_kill" ) == "1" )
+		if ( GetDvar( "mw2coop_qa_kill" ) == "1" || GetDvar( "mw2coop_qa" ) == "failspinkill" )
 		{
 			// both players really die (the scripted kill of a level: the death view, the downed state of player 2)
 			SetDvar( "mw2coop_god", "0" );
@@ -2250,8 +2285,18 @@ failspin()
 				p DisableInvulnerability();
 			}
 			level.player2 Kill( level.player2.origin );
-			wait 1;
+			for ( i = 0; i < 5; i++ )
+			{
+				SetDvar( "mw2coop_qa_shot", "fk-" + i );
+				wait 0.5;
+			}
 			level.player Kill( level.player.origin );
+			for ( i = 5; i < 20; i++ )
+			{
+				SetDvar( "mw2coop_qa_shot", "fk-" + i );
+				report( "death " + i + ": p2 yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " hp " + level.player2.health );
+				wait 0.5;
+			}
 		}
 		else
 			level thread maps\_mw2coop::mission_failed();
