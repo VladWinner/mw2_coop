@@ -21,6 +21,8 @@
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
 //   framesevery - (any level and start) a frame of both players (a composed one in split screen) every second for 40 s: mw2coop\shotse-<n>.bmp, with both players' positions in the report
 //   failspin - (split screen, any level) 12 s in the mission is failed (maps\_mw2coop::mission_failed); after the restart a frame every second for 20 s with player 2's yaw: does his half turn by itself (testers: after a failed mission his camera spins)?
+//   downaudio - (any level, split screen or pair) player 2 is downed for 20 s, then revived: the near-death sound filter (EQ/reverb flag) of each player every second.
+//              Run with MW2COOP_MID "!trace <rva>" for seteqbands/setreverb/deactivateeq/deactivatereverb/playlocalsound to see who calls them and how often (Vlad: sound stutters after a partner is downed)
 //   allyrestore - (any level with a start point) the allies' places are snapshotted, one ally's recorded place is moved 1500 units away, the mission is failed: after the restart that ally must be at the recorded place (maps/_mw2coop restore_ally_positions)
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
@@ -273,6 +275,9 @@ main()
 			break;
 		case "failspin":
 			failspin();
+			break;
+		case "downaudio":
+			downaudio();
 			break;
 		case "allyrestore":
 			allyrestore();
@@ -1026,6 +1031,29 @@ god()
 // Downs on Recruit (run with MW2COOP_GOD=0): the difficulty comes from the players' profiles,
 // so the scenario forces Recruit as the game's own level.forcedgameskill does. Player 2 is
 // downed, then player 1 after the grace time: both down fails the mission.
+downaudio()
+{
+	common_checks();
+	level.forcedgameskill = 0;
+	maps\_gameskill::setSkill( true );
+	wait 3;
+	report( "downaudio: player 2 goes down" );
+	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	for ( i = 0; i < 20; i++ )
+	{
+		wait 1;
+		report( "downaudio " + i + ": p1 red " + level.player ent_flag( "player_has_red_flashing_overlay" ) + " hp " + level.player.health + ", p2 red " + level.player2 ent_flag( "player_has_red_flashing_overlay" ) + " down " + level.player2 ent_flag( "coop_downed" ) + " hp " + level.player2.health );
+	}
+	level.player2 notify( "revive_success" );
+	level.player2 ent_flag_clear( "coop_downed" );
+	for ( i = 0; i < 6; i++ )
+	{
+		wait 1;
+		report( "downaudio after " + i + ": p1 red " + level.player ent_flag( "player_has_red_flashing_overlay" ) + ", p2 red " + level.player2 ent_flag( "player_has_red_flashing_overlay" ) );
+	}
+	report( "done" );
+}
+
 downs()
 {
 	common_checks();

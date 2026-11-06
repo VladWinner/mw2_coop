@@ -1549,3 +1549,12 @@ player_tag_ent()
 	}
 	return self.mw2coop_tag_ent;
 }
+
+// The player a sound filter (EQ, reverb) is for: the caller when it is a player (maps\_gameskill's near-death filter runs on the hurt
+// player), else the host (the level's own ambience). See patches/maps/_ambient.gsc.patch.
+sound_player( caller )
+{
+	if ( isdefined( caller ) && isplayer( caller ) )
+		return caller;
+	return level.player;
+}

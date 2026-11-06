@@ -1,0 +1,82 @@
+mw2coop patch for maps/_ambient.gsc (Modern Warfare 2, 64-bit Steam build)
+
+Near death a player gets the "deathsdoor" sound filter (EQ and reverb): maps\_gameskill's
+playerHealthRegen() runs maps\_ambient::use_eq_settings() and use_reverb_settings() as a thread
+ON THE HURT PLAYER, and player_recovers_from_red_flashing() puts the level's own filter back. The
+functions below however hard-code level.player (the host): when player 2 was hurt or downed, the
+HOST's sound got the filter (QA downaudio, builtin trace: seteqbands/setreverb on entity 0 from
+player 2's playerhealthregen), the "red flashing" guard looked at the host's flag only, and player 2
+himself heard nothing of it. The filter goes to the player the caller is (self), the level's own
+ambience (called with self = the level) still goes to level.player.
+@@@ replace
+deactivate_reverb()
+{
+@@@ with
+deactivate_reverb()
+{
+	snd_player = maps\_mw2coop::sound_player( self );
+@@@ end
+@@@ replace
+use_reverb_settings( track )
+{
+@@@ with
+use_reverb_settings( track )
+{
+	snd_player = maps\_mw2coop::sound_player( self );
+@@@ end
+@@@ replace
+use_eq_settings( track, eqIndex )
+{
+@@@ with
+use_eq_settings( track, eqIndex )
+{
+	snd_player = maps\_mw2coop::sound_player( self );
+@@@ end
+@@@ replace
+deactivate_index( eqIndex )
+{
+@@@ with
+deactivate_index( eqIndex )
+{
+	snd_player = maps\_mw2coop::sound_player( self );
+@@@ end
+@@@ subst deactivate_reverb
+level.player deactivatereverb
+@@@ to
+snd_player deactivatereverb
+@@@ end
+@@@ subst use_reverb_settings
+level.player ent_flag
+@@@ to
+snd_player ent_flag
+@@@ end
+@@@ subst use_reverb_settings
+level.player setReverb
+@@@ to
+snd_player setReverb
+@@@ end
+@@@ subst use_eq_settings
+level.player ent_flag
+@@@ to
+snd_player ent_flag
+@@@ end
+@@@ subst use_eq_settings
+level.player seteqbands
+@@@ to
+snd_player seteqbands
+@@@ end
+@@@ subst use_eq_settings
+level.player deactivateeq
+@@@ to
+snd_player deactivateeq
+@@@ end
+@@@ subst use_eq_settings
+level.player seteq
+@@@ to
+snd_player seteq
+@@@ end
+@@@ subst deactivate_index
+level.player deactivateeq
+@@@ to
+snd_player deactivateeq
+@@@ end
