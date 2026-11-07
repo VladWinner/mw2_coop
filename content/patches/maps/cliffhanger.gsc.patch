@@ -38,3 +38,15 @@ foreach ( mw2coop_player in level.players )
 		mw2coop_player.maxVisibleDist = 8000;
 	}
 @@@ end
+
+4. The "jump" start: the climb's death trigger and big jump work on the player (self), not on the level.
+@@@ subst start_jump
+thread maps\_climb::death_trigger();
+@@@ to
+level.player thread maps\_climb::death_trigger();
+@@@ end
+@@@ subst start_jump
+thread maps\_climb::player_big_jump();
+@@@ to
+level.player thread maps\_climb::player_big_jump();
+@@@ end

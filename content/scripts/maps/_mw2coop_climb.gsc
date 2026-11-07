@@ -493,7 +493,8 @@ teleport_to_cave()
 {
 	if ( !climb_coop() )
 	{
-		thread maps\_climb::teleport_to_cave();
+		// the patched climb functions work on self, which the original ran as level.player
+		level.player thread maps\_climb::teleport_to_cave();
 		return;
 	}
 	foreach ( player in level.players )
@@ -516,7 +517,8 @@ death_triggers()
 {
 	if ( !climb_coop() )
 	{
-		thread maps\_climb::death_trigger();
+		// on the player: the patched death_trigger scream and Kill() go to self (a thread on the level left single player without either)
+		level.player thread maps\_climb::death_trigger();
 		return;
 	}
 	foreach ( player in level.players )
