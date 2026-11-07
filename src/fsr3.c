@@ -1,0 +1,1179 @@
+// FSR 3 (AMD FidelityFX upscaler) on the game's frame, through Windows' Direct3D 9 on Direct3D 12 layer (settings.ini [display] d3d9on12, switched on by fsr3=1).
+//
+// What runs at each Present (after the mod's compositor, before the console):
+//   1. the back buffer (a Direct3D 9 surface) is unwrapped to its Direct3D 12 resource (IDirect3DDevice9On12::UnwrapUnderlyingResource) and copied into a texture of ours;
+//   2. FSR 3 is dispatched on a command list of ours with that texture as the color, a depth and a motion vector texture, a jitter, and an output texture;
+//   3. the output is copied back into the back buffer, the resource is returned to Direct3D 9 with a fence, so Direct3D 9 waits for it on the GPU.
+//
+// STATE OF THE WORK: the frame path. The depth is a texture of zeros, the motion vectors are zero and there is no camera jitter, the render size is the output size (1:1): this is the
+// plumbing proved, not yet an upscaler. The game's own depth (2 samples, not readable by shaders), the picture before the HUD, a jitter in the projection and motion vectors are
+// what a real FSR 3 picture needs (docs/upscaling-plan.md).
+//
+// AMD's loader DLL is loaded at run time from fsr3_dir (the SDK's DLLs are not shipped with the mod: third_party/fidelityfx/README.md).
+#define COBJMACROS
+#include <windows.h>
+#include <d3d9.h>
+#include <d3d12.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <string.h>
+
+#include "d3dcap.h"
+#include "fsr3.h"
+#include "log.h"
+#include "settings.h"
+#include "upscale.h"
+
+#include <d3dcompiler.h>
+#include "ffx_api.h"
+#include "ffx_upscale.h"
+#include "dx12/ffx_api_dx12.h"
+
+#define RING 3
+
+static struct {
+	int tried, ok;
+	HMODULE dll;
+	PfnFfxCreateContext create;
+	PfnFfxDestroyContext destroy;
+	PfnFfxDispatch dispatch;
+	PfnFfxQuery query;
+	int phase_count; // the jitter sequence length for this render/output size
+	ffxContext ctx;
+	ID3D12Device *dev;
+	ID3D12CommandQueue *queue;
+	ID3D12Fence *fence;
+	UINT64 fence_value;
+	HANDLE fence_event;
+	ID3D12CommandAllocator *alloc[RING];
+	UINT64 alloc_fence[RING];
+	ID3D12GraphicsCommandList *list;
+	ID3D12Resource *color, *output, *depth, *motion;
+	// the depth pass: the game's depth (multisampled, not readable by shaders) is copied into a readable texture and converted to the R32_FLOAT texture `depth`
+	ID3D12RootSignature *rs;
+	ID3D12PipelineState *pso_ms, *pso_1;
+	ID3D12RootSignature *rs_mv; // the motion vector pass: 20 root constants (reprojection matrix, depth range, jitter) + the depth SRV and motion UAV
+	ID3D12PipelineState *pso_mv;
+	ID3D12RootSignature *rs_comp; // the compose pass: FSR output + the game's own frame (for its HUD) -> final
+	ID3D12PipelineState *pso_comp;
+	ID3D12Resource *orig, *final;
+	ID3D12DescriptorHeap *heap;
+	UINT desc_inc;
+	ID3D12Resource *dcopy;
+	UINT dcopy_w, dcopy_h, dcopy_samples;
+	int depth_state_ok; // the R32_FLOAT texture: 0 = common (first frame), 1 = read state
+	int dcopy_state_ok;
+	int depth_log;
+	UINT w, h;   // the output (the back buffer)
+	UINT iw, ih; // the render size: what the game draws, in the top left of the back buffer
+	unsigned frame;
+	LARGE_INTEGER last_tick;
+	LARGE_INTEGER freq;
+} S;
+
+typedef struct {
+	HRESULT(STDMETHODCALLTYPE *qi)(void *, const GUID *, void **);
+	ULONG(STDMETHODCALLTYPE *addref)(void *);
+	ULONG(STDMETHODCALLTYPE *release)(void *);
+	HRESULT(STDMETHODCALLTYPE *get_device)(void *, const GUID *, void **);
+	HRESULT(STDMETHODCALLTYPE *unwrap)(void *, IDirect3DResource9 *, IUnknown *, const GUID *, void **);
+	HRESULT(STDMETHODCALLTYPE *give_back)(void *, IDirect3DResource9 *, UINT, UINT64 *, ID3D12Fence **);
+} on12_vtbl_t;
+
+static const GUID iid_on12 = {0xe7fda234, 0xb589, 0x4049, {0x94, 0x0d, 0x88, 0x78, 0x97, 0x75, 0x31, 0xc8}};
+static const GUID iid_resource = {0x696442be, 0xa72e, 0x4059, {0xbc, 0x79, 0x5b, 0x5c, 0x98, 0x04, 0x0f, 0xad}};
+static const GUID iid_fence = {0x0a753dcf, 0xc4d8, 0x4b91, {0xad, 0xf6, 0xbe, 0x5a, 0x60, 0xd9, 0x5a, 0x76}};
+static const GUID iid_allocator = {0x6102dee4, 0xaf59, 0x4b09, {0xb9, 0x99, 0xb4, 0x4d, 0x73, 0xf0, 0x9b, 0x24}};
+static const GUID iid_list = {0x5b160d0f, 0xac1b, 0x4185, {0x8b, 0xa8, 0xb3, 0xae, 0x42, 0xa5, 0xa4, 0x55}};
+
+int fsr3_enabled(void)
+{
+	return settings_fsr3();
+}
+
+static void message(uint32_t type, const wchar_t *text)
+{
+	log_printf("fsr3: ffx %s: %ls", type == FFX_API_MESSAGE_TYPE_ERROR ? "error" : "warning", text);
+}
+
+static ID3D12Resource *make_texture_ms(UINT w, UINT h, DXGI_FORMAT fmt, D3D12_RESOURCE_FLAGS flags, UINT samples)
+{
+	static const GUID iid = {0x696442be, 0xa72e, 0x4059, {0xbc, 0x79, 0x5b, 0x5c, 0x98, 0x04, 0x0f, 0xad}};
+	D3D12_HEAP_PROPERTIES hp;
+	D3D12_RESOURCE_DESC rd;
+	memset(&hp, 0, sizeof(hp));
+	memset(&rd, 0, sizeof(rd));
+	hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+	rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+	rd.Width = w;
+	rd.Height = h;
+	rd.DepthOrArraySize = 1;
+	rd.MipLevels = 1;
+	rd.Format = fmt;
+	rd.SampleDesc.Count = samples;
+	rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	rd.Flags = flags;
+	ID3D12Resource *res = NULL;
+	HRESULT hr = ID3D12Device_CreateCommittedResource(S.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, NULL, &iid, (void **)&res);
+	if (FAILED(hr))
+		log_printf("fsr3: texture %ux%u format %d: CreateCommittedResource hr %lx", w, h, (int)fmt, (unsigned long)hr);
+	return SUCCEEDED(hr) ? res : NULL;
+}
+
+static ID3D12Resource *make_texture(UINT w, UINT h, DXGI_FORMAT fmt, D3D12_RESOURCE_FLAGS flags)
+{
+	return make_texture_ms(w, h, fmt, flags, 1);
+}
+
+static struct FfxApiResource ffx_res(ID3D12Resource *r, UINT w, UINT h, uint32_t format, uint32_t usage, uint32_t state)
+{
+	struct FfxApiResource x;
+	memset(&x, 0, sizeof(x));
+	x.resource = r;
+	x.state = state;
+	x.description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
+	x.description.format = format;
+	x.description.width = w;
+	x.description.height = h;
+	x.description.depth = 1;
+	x.description.mipCount = 1;
+	x.description.flags = FFX_API_RESOURCE_FLAGS_NONE;
+	x.description.usage = usage;
+	return x;
+}
+
+static void wait_fence(UINT64 value)
+{
+	if (ID3D12Fence_GetCompletedValue(S.fence) < value) {
+		ID3D12Fence_SetEventOnCompletion(S.fence, value, S.fence_event);
+		WaitForSingleObject(S.fence_event, 2000);
+	}
+}
+
+static int build_depth_pass(void);
+static int build_compose_pass(void);
+static void next_jitter(void);
+
+// the DLL, the context and the objects that stay; w x h: the size of the back buffer
+static int setup(UINT w, UINT h)
+{
+	if (S.ok)
+		return 1;
+	if (S.tried)
+		return 0;
+	S.tried = 1;
+	S.dev = (ID3D12Device *)d3dcap_d3d12_device();
+	S.queue = (ID3D12CommandQueue *)d3dcap_d3d12_queue();
+	if (!S.dev || !S.queue) {
+		log_printf("fsr3: no Direct3D 12 device or queue (Direct3D 9 is not running on Direct3D 12): nothing to do");
+		return 0;
+	}
+	char path[MAX_PATH];
+	const char *dir = settings_fsr3_dir();
+	snprintf(path, sizeof(path), "%s\\amd_fidelityfx_loader_dx12.dll", dir);
+	SetDllDirectoryA(dir); // the loader finds the upscaler DLL next to itself
+	S.dll = LoadLibraryA(path);
+	SetDllDirectoryA(NULL);
+	if (!S.dll) {
+		log_printf("fsr3: %s could not be loaded (error %lu): set [display] fsr3_dir to the folder with AMD's FidelityFX DLLs", path, GetLastError());
+		return 0;
+	}
+	S.create = (PfnFfxCreateContext)(void *)GetProcAddress(S.dll, "ffxCreateContext");
+	S.destroy = (PfnFfxDestroyContext)(void *)GetProcAddress(S.dll, "ffxDestroyContext");
+	S.dispatch = (PfnFfxDispatch)(void *)GetProcAddress(S.dll, "ffxDispatch");
+	S.query = (PfnFfxQuery)(void *)GetProcAddress(S.dll, "ffxQuery");
+	if (!S.create || !S.destroy || !S.dispatch) {
+		log_printf("fsr3: the loader DLL lacks the C API functions");
+		return 0;
+	}
+	struct ffxCreateBackendDX12Desc backend;
+	memset(&backend, 0, sizeof(backend));
+	backend.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
+	backend.device = S.dev;
+	struct ffxCreateContextDescUpscale up;
+	memset(&up, 0, sizeof(up));
+	up.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+	up.header.pNext = &backend.header;
+	up.flags = FFX_UPSCALE_ENABLE_AUTO_EXPOSURE | FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE;
+	if (getenv("FSR3_DEBUGVIEW")) // QA: FSR 3 draws its own debug views into the output (proves that the output is what is shown)
+		up.flags |= FFX_UPSCALE_ENABLE_DEBUG_VISUALIZATION | FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
+	int rw = 0, rh = 0;
+	if (!upscale_internal_size(&rw, &rh) || rw <= 0 || rh <= 0 || (UINT)rw > w || (UINT)rh > h) {
+		rw = (int)w;
+		rh = (int)h;
+	}
+	S.iw = (UINT)rw;
+	S.ih = (UINT)rh;
+	up.maxRenderSize.width = S.iw;
+	up.maxRenderSize.height = S.ih;
+	up.maxUpscaleSize.width = w;
+	up.maxUpscaleSize.height = h;
+	up.fpMessage = message;
+	ffxReturnCode_t rc = S.create(&S.ctx, &up.header, NULL);
+	log_printf("fsr3: ffxCreateContext (%ux%u to %ux%u) -> %u (0 = OK)", S.iw, S.ih, w, h, (unsigned)rc);
+	if (rc != FFX_API_RETURN_OK)
+		return 0;
+	if (FAILED(ID3D12Device_CreateFence(S.dev, 0, D3D12_FENCE_FLAG_NONE, &iid_fence, (void **)&S.fence)))
+		return 0;
+	S.fence_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+	for (int i = 0; i < RING; i++)
+		if (FAILED(ID3D12Device_CreateCommandAllocator(S.dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &iid_allocator, (void **)&S.alloc[i])))
+			return 0;
+	if (FAILED(ID3D12Device_CreateCommandList(S.dev, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, S.alloc[0], NULL, &iid_list, (void **)&S.list)))
+		return 0;
+	ID3D12GraphicsCommandList_Close(S.list);
+	S.color = make_texture(S.iw, S.ih, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_NONE);
+	S.output = make_texture(w, h, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	S.depth = make_texture(S.iw, S.ih, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	S.motion = make_texture(S.iw, S.ih, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	S.orig = make_texture(w, h, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_NONE);
+	S.final = make_texture(w, h, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	if (!S.color || !S.output || !S.depth || !S.motion || !S.orig || !S.final)
+		return 0;
+	S.w = w;
+	S.h = h;
+	build_depth_pass();
+	QueryPerformanceFrequency(&S.freq);
+	S.ok = 1;
+	if (S.query) {
+		int32_t count = 0;
+		struct ffxQueryDescUpscaleGetJitterPhaseCount qp;
+		memset(&qp, 0, sizeof(qp));
+		qp.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTERPHASECOUNT;
+		qp.renderWidth = S.iw;
+		qp.displayWidth = w;
+		qp.pOutPhaseCount = &count;
+		if (S.query(&S.ctx, &qp.header) == FFX_API_RETURN_OK && count > 0)
+			S.phase_count = count;
+	}
+	next_jitter();
+	log_printf("fsr3: ready: render %ux%u -> output %ux%u (the game's depth, camera motion vectors, jitter phases %d)", S.iw, S.ih, w, h, S.phase_count);
+	return 1;
+}
+
+
+// ---------------------------------------------------------------------------------------------------- the depth pass
+static const char depth_cs_ms[] =
+	"Texture2DMS<float> src : register(t0);\n"
+	"RWTexture2D<float> dst : register(u0);\n"
+	"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)\n"
+	"{\n"
+	"  uint w, h, s;\n"
+	"  src.GetDimensions(w, h, s);\n"
+	"  if (id.x >= w || id.y >= h) return;\n"
+	"  dst[id.xy] = src.Load(int2(id.xy), 0);\n"
+	"}\n";
+static const char depth_cs_1[] =
+	"Texture2D<float> src : register(t0);\n"
+	"RWTexture2D<float> dst : register(u0);\n"
+	"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)\n"
+	"{\n"
+	"  uint w, h;\n"
+	"  src.GetDimensions(w, h);\n"
+	"  if (id.x >= w || id.y >= h) return;\n"
+	"  dst[id.xy] = src.Load(int3(id.xy, 0));\n"
+	"}\n";
+
+// motion vectors of the camera: from the depth, the reprojection matrix T (current clip space -> previous clip space, row-vector convention) and the jitter of this frame. The result is in render
+// pixels, from the current pixel to where the same surface point was in the previous frame, without any jitter (as FSR wants it).
+static const char mv_cs[] =
+	"cbuffer C : register(b0) { float4 T0; float4 T1; float4 T2; float4 T3; float4 P; float4 Q; };\n"
+	"Texture2D<float> depth : register(t0);\n"
+	"RWTexture2D<float2> mv : register(u0);\n"
+	"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)\n"
+	"{\n"
+	"  uint w, h;\n"
+	"  depth.GetDimensions(w, h);\n"
+	"  if (id.x >= w || id.y >= h) return;\n"
+	"  float z = (depth.Load(int3(id.xy, 0)) - P.x) * P.y;\n"
+	"  float2 ndc = float2((id.x + 0.5) / w * 2.0 - 1.0, 1.0 - (id.y + 0.5) / h * 2.0);\n"
+	"  ndc.x -= 2.0 * P.z / w;\n"
+	"  ndc.y += 2.0 * P.w / h;\n"
+	"  float4 v = float4(ndc, z, 1.0);\n"
+	"  float4 pc = v.x * T0 + v.y * T1 + v.z * T2 + v.w * T3;\n"
+	"  float2 r = float2(0.0, 0.0);\n"
+	"  if (pc.w > 1e-6) {\n"
+	"    float2 pn = pc.xy / pc.w;\n"
+	"    r = float2((pn.x - ndc.x) * 0.5 * w, -(pn.y - ndc.y) * 0.5 * h);\n"
+	"  }\n"
+	"  mv[id.xy] = r * Q.x;\n"
+	"}\n";
+
+typedef HRESULT(WINAPI *compile_t)(const void *, SIZE_T, const char *, const void *, void *, const char *, const char *, UINT, UINT, void **, void **);
+typedef HRESULT(WINAPI *serialize_rs_t)(const D3D12_ROOT_SIGNATURE_DESC *, int, void **, void **);
+
+static ID3D12PipelineState *make_compute_pso(compile_t compile, const char *src, ID3D12RootSignature *rs)
+{
+	static const GUID iid_pso = {0x765a30f3, 0xf624, 0x4c6f, {0xa8, 0x28, 0xac, 0xe9, 0x48, 0x62, 0x24, 0x45}};
+	void *code = NULL, *err = NULL;
+	HRESULT hr = compile(src, strlen(src), NULL, NULL, NULL, "main", "cs_5_0", 0, 0, &code, &err);
+	if (FAILED(hr) || !code) {
+		log_printf("fsr3: the depth shader did not compile (hr %lx): %.200s", (unsigned long)hr, err ? (const char *)((void *(*)(void *))(*(void ***)err)[3])(err) : "");
+		return NULL;
+	}
+	D3D12_COMPUTE_PIPELINE_STATE_DESC pd;
+	memset(&pd, 0, sizeof(pd));
+	pd.pRootSignature = rs;
+	pd.CS.pShaderBytecode = ((void *(*)(void *))(*(void ***)code)[3])(code);
+	pd.CS.BytecodeLength = ((SIZE_T(*)(void *))(*(void ***)code)[4])(code);
+	ID3D12PipelineState *pso = NULL;
+	hr = ID3D12Device_CreateComputePipelineState(S.dev, &pd, &iid_pso, (void **)&pso);
+	((ULONG(*)(void *))(*(void ***)code)[2])(code);
+	if (FAILED(hr))
+		log_printf("fsr3: CreateComputePipelineState hr %lx", (unsigned long)hr);
+	return SUCCEEDED(hr) ? pso : NULL;
+}
+
+static int build_depth_pass(void)
+{
+	static const GUID iid_rs = {0xc54a6b66, 0x72df, 0x4ee8, {0x8b, 0xe5, 0xa9, 0x46, 0xa1, 0x42, 0x92, 0x14}};
+	static const GUID iid_heap = {0x8efb471d, 0x616c, 0x4f49, {0x90, 0xf7, 0x12, 0x7b, 0xb7, 0x63, 0xfa, 0x51}};
+	HMODULE comp = LoadLibraryA("d3dcompiler_47.dll"), d12 = GetModuleHandleA("d3d12.dll");
+	compile_t compile = comp ? (compile_t)(void *)GetProcAddress(comp, "D3DCompile") : NULL;
+	serialize_rs_t serialize = d12 ? (serialize_rs_t)(void *)GetProcAddress(d12, "D3D12SerializeRootSignature") : NULL;
+	if (!compile || !serialize) {
+		log_printf("fsr3: no d3dcompiler_47 or D3D12SerializeRootSignature: no depth");
+		return 0;
+	}
+	D3D12_DESCRIPTOR_RANGE ranges[2];
+	memset(ranges, 0, sizeof(ranges));
+	ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	ranges[0].NumDescriptors = 1;
+	ranges[0].OffsetInDescriptorsFromTableStart = 0;
+	ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+	ranges[1].NumDescriptors = 1;
+	ranges[1].OffsetInDescriptorsFromTableStart = 1;
+	D3D12_ROOT_PARAMETER param;
+	memset(&param, 0, sizeof(param));
+	param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	param.DescriptorTable.NumDescriptorRanges = 2;
+	param.DescriptorTable.pDescriptorRanges = ranges;
+	param.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	D3D12_ROOT_SIGNATURE_DESC rd;
+	memset(&rd, 0, sizeof(rd));
+	rd.NumParameters = 1;
+	rd.pParameters = &param;
+	void *blob = NULL, *err = NULL;
+	HRESULT hr = serialize(&rd, 1 /* D3D_ROOT_SIGNATURE_VERSION_1_0 */, &blob, &err);
+	if (FAILED(hr) || !blob) {
+		log_printf("fsr3: D3D12SerializeRootSignature hr %lx", (unsigned long)hr);
+		return 0;
+	}
+	hr = ID3D12Device_CreateRootSignature(S.dev, 0, ((void *(*)(void *))(*(void ***)blob)[3])(blob), ((SIZE_T(*)(void *))(*(void ***)blob)[4])(blob), &iid_rs, (void **)&S.rs);
+	((ULONG(*)(void *))(*(void ***)blob)[2])(blob);
+	if (FAILED(hr))
+		return 0;
+	D3D12_DESCRIPTOR_HEAP_DESC hd;
+	memset(&hd, 0, sizeof(hd));
+	hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	hd.NumDescriptors = 8; // 0 depth SRV, 1 depth UAV (the depth pass), 2 depth SRV, 3 motion UAV (motion vectors), 4 output SRV, 5 own frame SRV, 6 final UAV (compose)
+	hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	if (FAILED(ID3D12Device_CreateDescriptorHeap(S.dev, &hd, &iid_heap, (void **)&S.heap)))
+		return 0;
+	S.desc_inc = ID3D12Device_GetDescriptorHandleIncrementSize(S.dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	S.pso_ms = make_compute_pso(compile, depth_cs_ms, S.rs);
+	S.pso_1 = make_compute_pso(compile, depth_cs_1, S.rs);
+	log_printf("fsr3: the depth pass is ready (multisampled shader %s, single sample shader %s)", S.pso_ms ? "ok" : "FAILED", S.pso_1 ? "ok" : "FAILED");
+	// the motion vector pass: its own root signature with 20 root constants and the same kind of descriptor table
+	D3D12_ROOT_PARAMETER mp[2];
+	memset(mp, 0, sizeof(mp));
+	mp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	mp[0].Constants.ShaderRegister = 0;
+	mp[0].Constants.Num32BitValues = 24;
+	mp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	mp[1] = param;
+	D3D12_ROOT_SIGNATURE_DESC md;
+	memset(&md, 0, sizeof(md));
+	md.NumParameters = 2;
+	md.pParameters = mp;
+	blob = NULL;
+	err = NULL;
+	hr = serialize(&md, 1, &blob, &err);
+	if (SUCCEEDED(hr) && blob) {
+		hr = ID3D12Device_CreateRootSignature(S.dev, 0, ((void *(*)(void *))(*(void ***)blob)[3])(blob), ((SIZE_T(*)(void *))(*(void ***)blob)[4])(blob), &iid_rs, (void **)&S.rs_mv);
+		((ULONG(*)(void *))(*(void ***)blob)[2])(blob);
+		if (SUCCEEDED(hr))
+			S.pso_mv = make_compute_pso(compile, mv_cs, S.rs_mv);
+	}
+	log_printf("fsr3: the motion vector pass is %s", S.pso_mv ? "ready" : "FAILED");
+	build_compose_pass();
+	return S.pso_ms && S.pso_1;
+}
+
+// the compose pass: the game's HUD is drawn in output-size space, around the corner that holds the 3D picture. The FSR output replaces the picture; whatever the game drew outside the corner
+// (bright enough not to be the faint bloom spill) is kept from the game's own frame, so the HUD stays at its native sharpness.
+static const char compose_cs[] =
+	"cbuffer C : register(b0) { uint iw; uint ih; uint2 pad; };\n"
+	"Texture2D<float4> fsr : register(t0);\n"
+	"Texture2D<float4> orig : register(t1);\n"
+	"RWTexture2D<float4> dst : register(u0);\n"
+	"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)\n"
+	"{\n"
+	"  uint w, h;\n"
+	"  fsr.GetDimensions(w, h);\n"
+	"  if (id.x >= w || id.y >= h) return;\n"
+	"  float4 f = fsr.Load(int3(id.xy, 0));\n"
+	"  float4 o = orig.Load(int3(id.xy, 0));\n"
+	"  bool outside = id.x >= iw || id.y >= ih;\n"
+	"  bool hud = outside && max(o.r, max(o.g, o.b)) > 0.12;\n"
+	"  dst[id.xy] = hud ? o : f;\n"
+	"}\n";
+
+static int build_compose_pass(void)
+{
+	static const GUID iid_rs = {0xc54a6b66, 0x72df, 0x4ee8, {0x8b, 0xe5, 0xa9, 0x46, 0xa1, 0x42, 0x92, 0x14}};
+	HMODULE comp = GetModuleHandleA("d3dcompiler_47.dll"), d12 = GetModuleHandleA("d3d12.dll");
+	compile_t compile = comp ? (compile_t)(void *)GetProcAddress(comp, "D3DCompile") : NULL;
+	serialize_rs_t serialize = d12 ? (serialize_rs_t)(void *)GetProcAddress(d12, "D3D12SerializeRootSignature") : NULL;
+	if (!compile || !serialize)
+		return 0;
+	D3D12_DESCRIPTOR_RANGE ranges[2];
+	memset(ranges, 0, sizeof(ranges));
+	ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	ranges[0].NumDescriptors = 2;
+	ranges[0].OffsetInDescriptorsFromTableStart = 0;
+	ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+	ranges[1].NumDescriptors = 1;
+	ranges[1].OffsetInDescriptorsFromTableStart = 2;
+	D3D12_ROOT_PARAMETER mp[2];
+	memset(mp, 0, sizeof(mp));
+	mp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	mp[0].Constants.Num32BitValues = 4;
+	mp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	mp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	mp[1].DescriptorTable.NumDescriptorRanges = 2;
+	mp[1].DescriptorTable.pDescriptorRanges = ranges;
+	mp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	D3D12_ROOT_SIGNATURE_DESC md;
+	memset(&md, 0, sizeof(md));
+	md.NumParameters = 2;
+	md.pParameters = mp;
+	void *blob = NULL, *err = NULL;
+	HRESULT hr = serialize(&md, 1, &blob, &err);
+	if (FAILED(hr) || !blob)
+		return 0;
+	hr = ID3D12Device_CreateRootSignature(S.dev, 0, ((void *(*)(void *))(*(void ***)blob)[3])(blob), ((SIZE_T(*)(void *))(*(void ***)blob)[4])(blob), &iid_rs, (void **)&S.rs_comp);
+	((ULONG(*)(void *))(*(void ***)blob)[2])(blob);
+	if (SUCCEEDED(hr))
+		S.pso_comp = make_compute_pso(compile, compose_cs, S.rs_comp);
+	log_printf("fsr3: the compose pass (keeps the game's HUD outside the picture) is %s", S.pso_comp ? "ready" : "FAILED");
+	return S.pso_comp != NULL;
+}
+
+// the game's depth surface at this Present, when it has the render size: the unwrapped resource (the caller returns it) and its description
+static IDirect3DSurface9 *g_world_ds; // this frame: the depth surface of the world pass
+static ID3D12Resource *depth_source(IDirect3DDevice9 *dev9, void *on12, IDirect3DSurface9 **surf, D3D12_RESOURCE_DESC *rd)
+{
+	on12_vtbl_t *vt = *(on12_vtbl_t **)on12;
+	*surf = NULL;
+	IDirect3DSurface9 *ds = NULL;
+	D3DSURFACE_DESC sd;
+	if (g_world_ds) {
+		ds = g_world_ds;
+		IDirect3DSurface9_AddRef(ds);
+	} else if (FAILED(IDirect3DDevice9_GetDepthStencilSurface(dev9, &ds)) || !ds) {
+		return NULL;
+	}
+	if (FAILED(IDirect3DSurface9_GetDesc(ds, &sd)) || sd.Width != S.iw || sd.Height != S.ih) {
+		if (S.depth_log++ < 3 && SUCCEEDED(IDirect3DSurface9_GetDesc(ds, &sd)))
+			log_printf("fsr3: the depth surface at Present is %ux%u, not the render size %ux%u: no depth this frame", sd.Width, sd.Height, S.iw, S.ih);
+		IDirect3DSurface9_Release(ds);
+		return NULL;
+	}
+	ID3D12Resource *res = NULL;
+	if (FAILED(vt->unwrap(on12, (IDirect3DResource9 *)ds, (IUnknown *)S.queue, &iid_resource, (void **)&res)) || !res) {
+		IDirect3DSurface9_Release(ds);
+		return NULL;
+	}
+	((D3D12_RESOURCE_DESC * (STDMETHODCALLTYPE *)(void *, D3D12_RESOURCE_DESC *))(*(void ***)res)[10])(res, rd); // ID3D12Resource::GetDesc
+	*surf = ds;
+	return res;
+}
+
+
+// ---------------------------------------------------------------------------------------------------- the camera: the game's view-projection matrix and the jitter
+// The game's vertex shaders take the view-projection matrix in c0..c3 (clip x, y, z, w are dot products of the vertex with c0, c1, c2, c3: weaponfov.c scales c0 and c1 for the weapon).
+static D3DVIEWPORT9 g_vp9;
+static HRESULT(STDMETHODCALLTYPE *g_vp_orig)(IDirect3DDevice9 *, const D3DVIEWPORT9 *);
+static HRESULT(STDMETHODCALLTYPE *g_vsc_orig)(IDirect3DDevice9 *, UINT, const float *, UINT);
+static int g_trace; // QA: FSR3_TRACE=n logs n viewport and view-projection events, starting at frame FSR3_TRACE_FROM
+static int g_trace_from, g_frame, g_armed;
+static int g_draws; // trace only: draw calls since the last logged event
+static int g_stretched;       // this frame: the game's post-process copy of the 3D picture is done (the next set of the back buffer as the render target starts its last pass: bloom and HUD)
+static int g_ran;             // this frame: FSR 3 has run
+static int g_vp_new_ok;
+static int fsr3_frame(IDirect3DDevice9 *dev9);
+
+// the jitter of the frame being drawn (pixels of the render size), applied to every perspective matrix the game uploads while the viewport has the render size, and passed to FSR at the Present
+static float g_jit_x, g_jit_y;
+static int g_jit_on = 1;      // QA: FSR3_NOJITTER=1 turns the jitter off
+static int g_bias_on;         // the texture LOD bias of the world pass is set
+static int g_mv_flip;         // QA: FSR3_MV_FLIP=1 negates the motion vectors (to test the sign)
+static float g_shake_amp;     // QA: FSR3_SHAKE=<percent of the screen width> sways the 3D picture sideways in a sine, with a depth-dependent shift (to test the motion vectors on a still scene)
+static float g_shake_x, g_shake_y;
+static int g_jit_flip;        // QA: FSR3_JITTER_FLIP bit 1 = mirror x, bit 2 = mirror y in the matrix (to test the sign)
+static int g_mv_on = 1;       // QA: FSR3_NOMV=1 leaves the motion vectors at zero
+static float g_vp_new[16];    // the world view-projection matrix uploaded in this frame (without jitter), as the game sent it: c0..c3
+
+static float g_vp_prev[16];   // the one of the previous frame
+static int g_vp_prev_ok;
+static float g_cam_minz, g_cam_maxz = 1.0f;
+static int g_jit_log, g_status_log, g_seq_log;
+static char g_vpseq[400];
+static UINT g_vpseq_last;
+static UINT sd_w(IDirect3DSurface9 *s)
+{
+	D3DSURFACE_DESC d;
+	return SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) ? d.Width : 0;
+}
+static UINT sd_h(IDirect3DSurface9 *s)
+{
+	D3DSURFACE_DESC d;
+	return SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) ? d.Height : 0;
+}
+
+static HRESULT(STDMETHODCALLTYPE *g_stretch_orig)(IDirect3DDevice9 *, IDirect3DSurface9 *, const RECT *, IDirect3DSurface9 *, const RECT *, D3DTEXTUREFILTERTYPE);
+static HRESULT(STDMETHODCALLTYPE *g_srt_orig)(IDirect3DDevice9 *, DWORD, IDirect3DSurface9 *);
+
+static void describe(IDirect3DSurface9 *s, char *out, size_t n)
+{
+	D3DSURFACE_DESC sd;
+	if (s && SUCCEEDED(IDirect3DSurface9_GetDesc(s, &sd)))
+		snprintf(out, n, "%ux%u fmt %d ms %d", sd.Width, sd.Height, (int)sd.Format, (int)sd.MultiSampleType);
+	else
+		snprintf(out, n, "none");
+}
+
+// The game believes its back buffer has the render size. With the back buffer enlarged to the output size, its post-process copy of the picture (StretchRect of the whole back buffer into a
+// render-size target) would squeeze the whole enlarged back buffer into the render size, shrinking the picture to render/output of its size. The copy takes the render-size corner instead.
+static HRESULT STDMETHODCALLTYPE hook_stretch9(IDirect3DDevice9 *dev, IDirect3DSurface9 *src, const RECT *sr, IDirect3DSurface9 *dst, const RECT *dr, D3DTEXTUREFILTERTYPE f)
+{
+	RECT corner;
+	if (S.ok && !sr && src && dst && (S.iw != S.w || S.ih != S.h)) {
+		D3DSURFACE_DESC a, b;
+		if (SUCCEEDED(IDirect3DSurface9_GetDesc(src, &a)) && SUCCEEDED(IDirect3DSurface9_GetDesc(dst, &b)) && a.Width == S.w && a.Height == S.h && b.Width == S.iw && b.Height == S.ih) {
+			corner.left = 0;
+			corner.top = 0;
+			corner.right = (LONG)S.iw;
+			corner.bottom = (LONG)S.ih;
+			sr = &corner;
+			g_stretched = 1;
+			static int told;
+			if (!told++)
+				log_printf("fsr3: the game's StretchRect of the whole %ux%u back buffer into a %ux%u target now copies the %ux%u corner", a.Width, a.Height, b.Width, b.Height, S.iw, S.ih);
+		}
+	}
+	if (g_trace > 0 && g_armed) {
+		char a[64], b[64];
+		describe(src, a, sizeof(a));
+		describe(dst, b, sizeof(b));
+		g_trace--;
+		log_printf("fsr3: trace: (draws before: %d) StretchRect %s [%ld,%ld,%ld,%ld] -> %s [%ld,%ld,%ld,%ld] filter %d", g_draws, a, sr ? sr->left : -1, sr ? sr->top : -1, sr ? sr->right : -1, sr ? sr->bottom : -1, b, dr ? dr->left : -1, dr ? dr->top : -1, dr ? dr->right : -1, dr ? dr->bottom : -1, (int)f);
+		g_draws = 0;
+	}
+	return g_stretch_orig(dev, src, sr, dst, dr, f);
+}
+
+static HRESULT(STDMETHODCALLTYPE *g_dp_orig)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, UINT);
+static HRESULT(STDMETHODCALLTYPE *g_dip_orig)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
+static HRESULT(STDMETHODCALLTYPE *g_dpup_orig)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, const void *, UINT);
+static HRESULT(STDMETHODCALLTYPE *g_dipup_orig)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void *, D3DFORMAT, const void *, UINT);
+static HRESULT STDMETHODCALLTYPE hook_dp9(IDirect3DDevice9 *d, D3DPRIMITIVETYPE t, UINT a, UINT b)
+{
+	g_draws++;
+	return g_dp_orig(d, t, a, b);
+}
+static HRESULT STDMETHODCALLTYPE hook_dip9(IDirect3DDevice9 *d, D3DPRIMITIVETYPE t, INT a, UINT b, UINT c, UINT e, UINT f)
+{
+	g_draws++;
+	return g_dip_orig(d, t, a, b, c, e, f);
+}
+static HRESULT STDMETHODCALLTYPE hook_dpup9(IDirect3DDevice9 *d, D3DPRIMITIVETYPE t, UINT a, const void *b, UINT c)
+{
+	g_draws++;
+	return g_dpup_orig(d, t, a, b, c);
+}
+static HRESULT STDMETHODCALLTYPE hook_dipup9(IDirect3DDevice9 *d, D3DPRIMITIVETYPE t, UINT a, UINT b, UINT c, const void *e, D3DFORMAT f, const void *g, UINT h)
+{
+	g_draws++;
+	return g_dipup_orig(d, t, a, b, c, e, f, g, h);
+}
+
+static HRESULT STDMETHODCALLTYPE hook_srt9(IDirect3DDevice9 *dev, DWORD idx, IDirect3DSurface9 *s)
+{
+	if (S.ok && g_stretched && !g_ran && idx == 0 && s && g_vp_new_ok) { // the game's last pass (the bloom and the HUD) is about to draw into the back buffer: upscale the 3D picture first, so both land on the upscaled picture
+		D3DSURFACE_DESC d;
+		if (SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) && d.Width == S.w && d.Height == S.h) {
+			g_ran = 1;
+			if (!fsr3_frame(dev))
+				g_ran = 0;
+		}
+	}
+	if (g_trace > 0 && g_armed && idx == 0) {
+		char a[64];
+		describe(s, a, sizeof(a));
+		g_trace--;
+		log_printf("fsr3: trace: (draws before: %d) SetRenderTarget %s", g_draws, a);
+		g_draws = 0;
+	}
+	return g_srt_orig(dev, idx, s);
+}
+
+static int is_perspective(const float *m)
+{
+	return fabsf(m[15]) < 1e-4f && (fabsf(m[12]) + fabsf(m[13]) + fabsf(m[14])) > 1e-4f;
+}
+
+static HRESULT STDMETHODCALLTYPE hook_viewport9(IDirect3DDevice9 *dev, const D3DVIEWPORT9 *vp)
+{
+	if (vp) {
+		g_vp9 = *vp;
+		if (S.ok && !g_world_ds && vp->Width == S.iw && vp->Height == S.ih && vp->MinZ > 0.0f) // the world pass: remember its depth surface (the bloom passes after it have another bound)
+			IDirect3DDevice9_GetDepthStencilSurface(dev, &g_world_ds);
+		if (S.ok && S.iw != S.w) { // a texture bias in the world pass: the textures are sampled for the output size, as upscalers ask (FSR 3: log2(render / output) - 1)
+			const int world = vp->Width == S.iw && vp->Height == S.ih;
+			if (world != g_bias_on) {
+				g_bias_on = world;
+				float bias = world ? (getenv("FSR3_LODBIAS") ? (float)atof(getenv("FSR3_LODBIAS")) : log2f((float)S.iw / (float)S.w) - 1.0f) : 0.0f;
+				DWORD bits;
+				memcpy(&bits, &bias, 4);
+				for (DWORD i = 0; i < 16; i++)
+					IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MIPMAPLODBIAS, bits);
+			}
+		}
+		if ((vp->Width << 16 | vp->Height) != g_vpseq_last && strlen(g_vpseq) < sizeof(g_vpseq) - 24) {
+			g_vpseq_last = vp->Width << 16 | vp->Height;
+			snprintf(g_vpseq + strlen(g_vpseq), 24, " %lux%lu", vp->Width, vp->Height);
+		}
+		if (g_trace && !g_armed && vp->Width > 100 && vp->Width < 1900 && g_frame >= g_trace_from)
+			g_armed = 1;
+		if (g_trace > 0 && g_armed) {
+			g_trace--;
+			log_printf("fsr3: trace: (draws before: %d) SetViewport %lu,%lu %lux%lu depth %g..%g", g_draws, vp->X, vp->Y, vp->Width, vp->Height, vp->MinZ, vp->MaxZ);
+			g_draws = 0;
+		}
+	}
+	return g_vp_orig(dev, vp);
+}
+
+static HRESULT STDMETHODCALLTYPE hook_constants9(IDirect3DDevice9 *dev, UINT start, const float *data, UINT count)
+{
+	if (S.ok && data && start == 0 && count >= 4 && count <= 32 && g_vp9.Width == S.iw && g_vp9.Height == S.ih && (fabsf(data[12]) + fabsf(data[13]) + fabsf(data[14])) > 1e-3f) {
+		float tmp[4 * 32];
+		memcpy(tmp, data, count * 16);
+		if (g_shake_amp != 0.0f) // QA camera sway: x_ndc += k * z_ndc in every 3D matrix (a shift that depends on depth, like parallax; the captured matrix has it too, so the vectors must follow)
+			for (int i = 0; i < 4; i++)
+				tmp[i] += g_shake_x * tmp[8 + i];
+		if (fabsf(data[15]) > 1e-3f) { // the world view-projection (it has a translation): remember it without the jitter, for the motion vectors
+			memcpy(g_vp_new, tmp, 64);
+			g_vp_new_ok = 1;
+			g_cam_minz = g_vp9.MinZ;
+			g_cam_maxz = g_vp9.MaxZ;
+		}
+		const float kx = (g_jit_flip & 1 ? -2.0f : 2.0f) * g_jit_x / (float)S.iw;
+		const float ky = (g_jit_flip & 2 ? 2.0f : -2.0f) * g_jit_y / (float)S.ih;
+		for (int i = 0; i < 4; i++) { // clip.xy += jitter * clip.w
+			tmp[i] += kx * tmp[12 + i];
+			tmp[4 + i] += ky * tmp[12 + i];
+		}
+		if (g_trace > 0 && g_armed) {
+			g_trace--;
+			log_printf("fsr3: trace: jittered %s matrix by %.3f,%.3f px (ndc %.5f,%.5f)", fabsf(data[15]) > 1e-3f ? "world" : "camera-relative", g_jit_x, g_jit_y, kx, ky);
+		}
+		return g_vsc_orig(dev, start, tmp, count);
+	}
+	if (g_trace > 0 && g_armed && data && start == 0 && count >= 4) {
+		g_trace--;
+		log_printf("fsr3: trace: frame %d consts %s viewport %lux%lu depth %g | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f", g_frame, is_perspective(data) ? "PERSP" : "other", g_vp9.Width, g_vp9.Height, g_vp9.MinZ, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]);
+	}
+	return g_vsc_orig(dev, start, data, count);
+}
+
+static void hook_device(IDirect3DDevice9 *dev9)
+{
+	static int done;
+	if (done)
+		return;
+	done = 1;
+	g_jit_on = getenv("FSR3_NOJITTER") ? 0 : 1;
+	g_mv_on = getenv("FSR3_NOMV") ? 0 : 1;
+	g_mv_flip = getenv("FSR3_MV_FLIP") ? 1 : 0;
+	g_shake_amp = getenv("FSR3_SHAKE") ? (float)atof(getenv("FSR3_SHAKE")) : 0.0f;
+	g_jit_flip = getenv("FSR3_JITTER_FLIP") ? atoi(getenv("FSR3_JITTER_FLIP")) : 0;
+	g_trace = getenv("FSR3_TRACE") ? atoi(getenv("FSR3_TRACE")) : 0;
+	g_trace_from = getenv("FSR3_TRACE_FROM") ? atoi(getenv("FSR3_TRACE_FROM")) : 0;
+	void **vt = *(void ***)dev9;
+	DWORD old;
+	if (VirtualProtect(&vt[47], sizeof(void *), PAGE_READWRITE, &old)) {
+		g_vp_orig = (HRESULT(STDMETHODCALLTYPE *)(IDirect3DDevice9 *, const D3DVIEWPORT9 *))vt[47];
+		vt[47] = (void *)hook_viewport9;
+		VirtualProtect(&vt[47], sizeof(void *), old, &old);
+	}
+	if (VirtualProtect(&vt[94], sizeof(void *), PAGE_READWRITE, &old)) {
+		g_vsc_orig = (HRESULT(STDMETHODCALLTYPE *)(IDirect3DDevice9 *, UINT, const float *, UINT))vt[94];
+		vt[94] = (void *)hook_constants9;
+		VirtualProtect(&vt[94], sizeof(void *), old, &old);
+	}
+	{
+		if (VirtualProtect(&vt[34], sizeof(void *), PAGE_READWRITE, &old)) {
+			g_stretch_orig = (HRESULT(STDMETHODCALLTYPE *)(IDirect3DDevice9 *, IDirect3DSurface9 *, const RECT *, IDirect3DSurface9 *, const RECT *, D3DTEXTUREFILTERTYPE))vt[34];
+			vt[34] = (void *)hook_stretch9;
+			VirtualProtect(&vt[34], sizeof(void *), old, &old);
+		}
+		if (g_trace) {
+			void *slots[4] = {(void *)hook_dp9, (void *)hook_dip9, (void *)hook_dpup9, (void *)hook_dipup9};
+			void **origs[4] = {(void **)&g_dp_orig, (void **)&g_dip_orig, (void **)&g_dpup_orig, (void **)&g_dipup_orig};
+			for (int i = 0; i < 4; i++)
+				if (VirtualProtect(&vt[81 + i], sizeof(void *), PAGE_READWRITE, &old)) {
+					*origs[i] = vt[81 + i];
+					vt[81 + i] = slots[i];
+					VirtualProtect(&vt[81 + i], sizeof(void *), old, &old);
+				}
+		}
+		if (VirtualProtect(&vt[37], sizeof(void *), PAGE_READWRITE, &old)) {
+			g_srt_orig = (HRESULT(STDMETHODCALLTYPE *)(IDirect3DDevice9 *, DWORD, IDirect3DSurface9 *))vt[37];
+			vt[37] = (void *)hook_srt9;
+			VirtualProtect(&vt[37], sizeof(void *), old, &old);
+		}
+	}
+	log_printf("fsr3: the device's SetViewport and SetVertexShaderConstantF are hooked (camera matrix and jitter)");
+}
+
+// the jitter of the next frame: the next point of FSR's sequence for this render/output size
+static void next_jitter(void)
+{
+	g_jit_x = g_jit_y = 0.0f;
+	if (!S.query || S.phase_count <= 0 || !g_jit_on)
+		return;
+	float x = 0.0f, y = 0.0f;
+	struct ffxQueryDescUpscaleGetJitterOffset q;
+	memset(&q, 0, sizeof(q));
+	q.header.type = FFX_API_QUERY_DESC_TYPE_UPSCALE_GETJITTEROFFSET;
+	q.index = (int32_t)(S.frame % (unsigned)S.phase_count);
+	q.phaseCount = S.phase_count;
+	q.pOutX = &x;
+	q.pOutY = &y;
+	if (S.query(&S.ctx, &q.header) == FFX_API_RETURN_OK) {
+		g_jit_x = x;
+		g_jit_y = y;
+	}
+}
+
+// inverse of a 4x4 matrix (Gauss-Jordan in double precision); 0 when it is singular
+static int invert4(const double *m, double *out)
+{
+	double a[4][8];
+	for (int r = 0; r < 4; r++)
+		for (int c = 0; c < 4; c++) {
+			a[r][c] = m[r * 4 + c];
+			a[r][4 + c] = r == c ? 1.0 : 0.0;
+		}
+	for (int col = 0; col < 4; col++) {
+		int piv = col;
+		for (int r = col + 1; r < 4; r++)
+			if (fabs(a[r][col]) > fabs(a[piv][col]))
+				piv = r;
+		if (fabs(a[piv][col]) < 1e-30)
+			return 0;
+		if (piv != col)
+			for (int c = 0; c < 8; c++) {
+				double t = a[col][c];
+				a[col][c] = a[piv][c];
+				a[piv][c] = t;
+			}
+		const double inv = 1.0 / a[col][col];
+		for (int c = 0; c < 8; c++)
+			a[col][c] *= inv;
+		for (int r = 0; r < 4; r++)
+			if (r != col) {
+				const double f = a[r][col];
+				if (f != 0.0)
+					for (int c = 0; c < 8; c++)
+						a[r][c] -= f * a[col][c];
+			}
+	}
+	for (int r = 0; r < 4; r++)
+		for (int c = 0; c < 4; c++)
+			out[r * 4 + c] = a[r][4 + c];
+	return 1;
+}
+
+// the game's c0..c3 (clip_i = ci . (x, y, z, 1)) as the matrix M of row-vector convention: clip = p * M, M[r][i] = ci[r]
+static void vp_to_matrix(const float *c, double *m)
+{
+	for (int r = 0; r < 4; r++)
+		for (int i = 0; i < 4; i++)
+			m[r * 4 + i] = c[i * 4 + r];
+}
+
+static void barrier(D3D12_RESOURCE_BARRIER *b, int *n, ID3D12Resource *r, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
+{
+	b[*n].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	b[*n].Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	b[*n].Transition.pResource = r;
+	b[*n].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	b[*n].Transition.StateBefore = before;
+	b[*n].Transition.StateAfter = after;
+	(*n)++;
+}
+
+// the upscale itself, run from the SetRenderTarget hook when the game's last pass (bloom and HUD) is about to start; 1 when it ran
+static int fsr3_frame(IDirect3DDevice9 *dev9)
+{
+	IDirect3DSurface9 *bb = NULL;
+	D3DSURFACE_DESC sd;
+	if (FAILED(IDirect3DDevice9_GetBackBuffer(dev9, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) || !bb)
+		return 0;
+	if (FAILED(IDirect3DSurface9_GetDesc(bb, &sd)) || !setup(sd.Width, sd.Height) || sd.Width != S.w || sd.Height != S.h || !g_vp_new_ok) {
+		IDirect3DSurface9_Release(bb);
+		return 0;
+	}
+	void *on12 = NULL;
+	if (FAILED(IDirect3DDevice9_QueryInterface(dev9, &iid_on12, &on12)) || !on12) {
+		IDirect3DSurface9_Release(bb);
+		return 0;
+	}
+	on12_vtbl_t *vt = *(on12_vtbl_t **)on12;
+	ID3D12Resource *bb12 = NULL;
+	HRESULT hr = vt->unwrap(on12, (IDirect3DResource9 *)bb, (IUnknown *)S.queue, &iid_resource, (void **)&bb12);
+	if (FAILED(hr) || !bb12) {
+		static int told;
+		if (!told++)
+			log_printf("fsr3: UnwrapUnderlyingResource hr %lx", (unsigned long)hr);
+		vt->release(on12);
+		IDirect3DSurface9_Release(bb);
+		return 0;
+	}
+
+	const unsigned slot = S.frame % RING;
+	wait_fence(S.alloc_fence[slot]);
+	ID3D12CommandAllocator_Reset(S.alloc[slot]);
+	ID3D12GraphicsCommandList_Reset(S.list, S.alloc[slot], NULL);
+
+	D3D12_RESOURCE_BARRIER b[8];
+	int n = 0;
+	const int first = S.frame == 0;
+
+	// the game's depth: copy it into a readable texture, convert it to R32_FLOAT (a compute pass); a texture of zeros when the game's is not available at this Present
+	IDirect3DSurface9 *dsurf = NULL;
+	D3D12_RESOURCE_DESC drd;
+	int depth_fresh = 0; // the depth texture holds this frame depth
+	ID3D12Resource *dsrc = S.rs ? depth_source(dev9, on12, &dsurf, &drd) : NULL;
+	if (dsrc && (drd.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || drd.Format == DXGI_FORMAT_R24G8_TYPELESS)) {
+		if (!S.dcopy || S.dcopy_w != drd.Width || S.dcopy_h != drd.Height || S.dcopy_samples != drd.SampleDesc.Count) {
+			if (S.dcopy)
+				ID3D12Resource_Release(S.dcopy);
+			S.dcopy = make_texture_ms((UINT)drd.Width, drd.Height, DXGI_FORMAT_R24G8_TYPELESS, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, drd.SampleDesc.Count);
+			S.dcopy_w = (UINT)drd.Width;
+			S.dcopy_h = drd.Height;
+			S.dcopy_samples = drd.SampleDesc.Count;
+			S.dcopy_state_ok = 0;
+			log_printf("fsr3: the game's depth: %llux%u, %u samples: a readable copy %s", (unsigned long long)drd.Width, drd.Height, drd.SampleDesc.Count, S.dcopy ? "made" : "FAILED");
+		}
+		if (S.dcopy) {
+			barrier(b, &n, S.dcopy, S.dcopy_state_ok ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+			barrier(b, &n, dsrc, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE);
+			barrier(b, &n, S.depth, S.depth_state_ok ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+			ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+			n = 0;
+			ID3D12GraphicsCommandList_CopyResource(S.list, S.dcopy, dsrc);
+			barrier(b, &n, dsrc, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
+			barrier(b, &n, S.dcopy, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+			ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+			n = 0;
+			S.dcopy_state_ok = 1;
+			// the views: the copy (t0) and the R32_FLOAT texture (u0)
+			D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+			D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+			((D3D12_CPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_CPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[9])(S.heap, &cpu);
+			((D3D12_GPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_GPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[10])(S.heap, &gpu);
+			D3D12_SHADER_RESOURCE_VIEW_DESC srv;
+			memset(&srv, 0, sizeof(srv));
+			srv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+			srv.Shader4ComponentMapping = 0x1688; // D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
+			if (drd.SampleDesc.Count > 1) {
+				srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DMS;
+			} else {
+				srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+				srv.Texture2D.MipLevels = 1;
+			}
+			ID3D12Device_CreateShaderResourceView(S.dev, S.dcopy, &srv, cpu);
+			D3D12_UNORDERED_ACCESS_VIEW_DESC uav;
+			memset(&uav, 0, sizeof(uav));
+			uav.Format = DXGI_FORMAT_R32_FLOAT;
+			uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+			cpu.ptr += S.desc_inc;
+			ID3D12Device_CreateUnorderedAccessView(S.dev, S.depth, NULL, &uav, cpu);
+			ID3D12DescriptorHeap *heaps[1] = {S.heap};
+			ID3D12GraphicsCommandList_SetDescriptorHeaps(S.list, 1, heaps);
+			ID3D12GraphicsCommandList_SetComputeRootSignature(S.list, S.rs);
+			ID3D12GraphicsCommandList_SetPipelineState(S.list, drd.SampleDesc.Count > 1 ? S.pso_ms : S.pso_1);
+			ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(S.list, 0, gpu);
+			ID3D12GraphicsCommandList_Dispatch(S.list, (S.iw + 7) / 8, (S.ih + 7) / 8, 1);
+			barrier(b, &n, S.depth, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+			ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+			n = 0;
+			S.depth_state_ok = 1;
+			depth_fresh = 1;
+		}
+	}
+	if (first) { // the first frame: the textures are in the common state; the constant ones go to the read state, the output to the UAV state
+		if (!S.depth_state_ok) { // no depth from the game yet: the texture of zeros is read as it is
+			barrier(b, &n, S.depth, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+			S.depth_state_ok = 1;
+		}
+		barrier(b, &n, S.motion, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		barrier(b, &n, S.orig, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		barrier(b, &n, S.final, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+	}
+	// the camera motion vectors: the game's depth and the matrix that takes this frame's clip space to the previous frame's (a compute pass)
+	const float jit_x = g_jit_x, jit_y = g_jit_y;
+	if (g_mv_on && depth_fresh && S.pso_mv && g_vp_new_ok && g_vp_prev_ok && g_cam_maxz > g_cam_minz) {
+		double mc[16], mp[16], ic[16], t[16];
+		vp_to_matrix(g_vp_new, mc);
+		vp_to_matrix(g_vp_prev, mp);
+		if (invert4(mc, ic)) {
+			for (int r = 0; r < 4; r++)
+				for (int c = 0; c < 4; c++) {
+					double s = 0.0;
+					for (int k = 0; k < 4; k++)
+						s += ic[r * 4 + k] * mp[k * 4 + c];
+					t[r * 4 + c] = s;
+				}
+			float vals[24] = {0};
+			for (int i = 0; i < 16; i++)
+				vals[i] = (float)t[i];
+			vals[16] = g_cam_minz;
+			vals[17] = 1.0f / (g_cam_maxz - g_cam_minz);
+			vals[18] = jit_x;
+			vals[19] = jit_y;
+			vals[20] = g_mv_flip ? -1.0f : 1.0f;
+			barrier(b, &n, S.motion, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+			ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+			n = 0;
+			D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+			D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+			((D3D12_CPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_CPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[9])(S.heap, &cpu);
+			((D3D12_GPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_GPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[10])(S.heap, &gpu);
+			cpu.ptr += 2 * S.desc_inc;
+			gpu.ptr += 2 * S.desc_inc;
+			D3D12_SHADER_RESOURCE_VIEW_DESC srv;
+			memset(&srv, 0, sizeof(srv));
+			srv.Format = DXGI_FORMAT_R32_FLOAT;
+			srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+			srv.Shader4ComponentMapping = 0x1688;
+			srv.Texture2D.MipLevels = 1;
+			ID3D12Device_CreateShaderResourceView(S.dev, S.depth, &srv, cpu);
+			D3D12_UNORDERED_ACCESS_VIEW_DESC uav;
+			memset(&uav, 0, sizeof(uav));
+			uav.Format = DXGI_FORMAT_R16G16_FLOAT;
+			uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+			cpu.ptr += S.desc_inc;
+			ID3D12Device_CreateUnorderedAccessView(S.dev, S.motion, NULL, &uav, cpu);
+			ID3D12DescriptorHeap *heaps[1] = {S.heap};
+			ID3D12GraphicsCommandList_SetDescriptorHeaps(S.list, 1, heaps);
+			ID3D12GraphicsCommandList_SetComputeRootSignature(S.list, S.rs_mv);
+			ID3D12GraphicsCommandList_SetPipelineState(S.list, S.pso_mv);
+			ID3D12GraphicsCommandList_SetComputeRoot32BitConstants(S.list, 0, 24, vals, 0);
+			ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(S.list, 1, gpu);
+			ID3D12GraphicsCommandList_Dispatch(S.list, (S.iw + 7) / 8, (S.ih + 7) / 8, 1);
+			barrier(b, &n, S.motion, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+			ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+			n = 0;
+			if (g_jit_log++ < 3)
+				log_printf("fsr3: motion vectors computed (jitter %.3f,%.3f px, depth range %g..%g, phases %d)", jit_x, jit_y, g_cam_minz, g_cam_maxz, S.phase_count);
+		}
+	}
+	// the game's whole frame (for its HUD, which the compose pass keeps)
+	barrier(b, &n, S.orig, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+	n = 0;
+	ID3D12GraphicsCommandList_CopyResource(S.list, S.orig, bb12);
+	barrier(b, &n, S.orig, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+	n = 0;
+	// the back buffer into the color texture
+	barrier(b, &n, S.color, first ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+	n = 0;
+	{ // the game's picture is in the top left of the back buffer
+		D3D12_TEXTURE_COPY_LOCATION dst, src;
+		D3D12_BOX box = {0, 0, 0, S.iw, S.ih, 1};
+		memset(&dst, 0, sizeof(dst));
+		memset(&src, 0, sizeof(src));
+		dst.pResource = S.color;
+		dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+		src.pResource = bb12;
+		src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+		ID3D12GraphicsCommandList_CopyTextureRegion(S.list, &dst, 0, 0, 0, &src, &box);
+	}
+	barrier(b, &n, S.color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+	n = 0;
+
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	float dt_ms = S.last_tick.QuadPart ? (float)((now.QuadPart - S.last_tick.QuadPart) * 1000.0 / (double)S.freq.QuadPart) : 16.6f;
+	S.last_tick = now;
+
+	struct ffxDispatchDescUpscale d;
+	memset(&d, 0, sizeof(d));
+	d.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
+	d.commandList = S.list;
+	d.color = ffx_res(S.color, S.iw, S.ih, FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+	d.depth = ffx_res(S.depth, S.iw, S.ih, FFX_API_SURFACE_FORMAT_R32_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+	d.motionVectors = ffx_res(S.motion, S.iw, S.ih, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+	d.output = ffx_res(S.output, S.w, S.h, FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
+	d.jitterOffset.x = jit_x;
+	d.jitterOffset.y = jit_y;
+	d.motionVectorScale.x = 1.0f;
+	d.motionVectorScale.y = 1.0f;
+	d.renderSize.width = S.iw;
+	d.renderSize.height = S.ih;
+	d.upscaleSize.width = S.w;
+	d.upscaleSize.height = S.h;
+	{ // FSR's own sharpening (RCAS): the soft look of an upscaled frame without it was reported as "soapy"
+		int sh = getenv("FSR3_SHARP") ? atoi(getenv("FSR3_SHARP")) : settings_fsr3_sharpness();
+		d.enableSharpening = sh > 0;
+		d.sharpness = (float)sh / 100.0f;
+	}
+	d.frameTimeDelta = dt_ms;
+	d.preExposure = 1.0f;
+	d.reset = first;
+	d.cameraNear = 4.0f;
+	d.cameraFar = 40000.0f;
+	d.cameraFovAngleVertical = 1.0f;
+	d.viewSpaceToMetersFactor = 0.0254f; // the game's units are inches
+	d.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
+	if (getenv("FSR3_DEBUGVIEW"))
+		d.flags |= FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW;
+	ffxReturnCode_t rc = S.dispatch(&S.ctx, &d.header);
+	static int dlog;
+	if (dlog++ < 3 || rc != FFX_API_RETURN_OK) {
+		static int bad;
+		if (rc == FFX_API_RETURN_OK || bad++ < 5)
+			log_printf("fsr3: ffxDispatch -> %u (0 = OK), frame time %.1f ms", (unsigned)rc, dt_ms);
+	}
+
+	if (rc == FFX_API_RETURN_OK && !getenv("FSR3_SKIPCOPY") && S.pso_comp && getenv("FSR3_COMPOSE")) { // the old way: the output into the back buffer after the HUD, the HUD kept from the game's own frame (QA: FSR3_COMPOSE=1)
+		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+		D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+		((D3D12_CPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_CPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[9])(S.heap, &cpu);
+		((D3D12_GPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_GPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[10])(S.heap, &gpu);
+		cpu.ptr += 4 * S.desc_inc;
+		gpu.ptr += 4 * S.desc_inc;
+		D3D12_SHADER_RESOURCE_VIEW_DESC srv;
+		memset(&srv, 0, sizeof(srv));
+		srv.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srv.Shader4ComponentMapping = 0x1688;
+		srv.Texture2D.MipLevels = 1;
+		ID3D12Device_CreateShaderResourceView(S.dev, S.output, &srv, cpu);
+		cpu.ptr += S.desc_inc;
+		ID3D12Device_CreateShaderResourceView(S.dev, S.orig, &srv, cpu);
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uav;
+		memset(&uav, 0, sizeof(uav));
+		uav.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+		cpu.ptr += S.desc_inc;
+		ID3D12Device_CreateUnorderedAccessView(S.dev, S.final, NULL, &uav, cpu);
+		const unsigned consts[4] = {S.iw, S.ih, 0, 0};
+		ID3D12DescriptorHeap *heaps[1] = {S.heap};
+		ID3D12GraphicsCommandList_SetDescriptorHeaps(S.list, 1, heaps);
+		ID3D12GraphicsCommandList_SetComputeRootSignature(S.list, S.rs_comp);
+		ID3D12GraphicsCommandList_SetPipelineState(S.list, S.pso_comp);
+		ID3D12GraphicsCommandList_SetComputeRoot32BitConstants(S.list, 0, 4, consts, 0);
+		ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(S.list, 1, gpu);
+		ID3D12GraphicsCommandList_Dispatch(S.list, (S.w + 7) / 8, (S.h + 7) / 8, 1);
+		barrier(b, &n, S.final, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		ID3D12GraphicsCommandList_CopyResource(S.list, bb12, S.final);
+		barrier(b, &n, S.final, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+	} else if (rc == FFX_API_RETURN_OK && !getenv("FSR3_SKIPCOPY")) { // no compose pass: the output as it is
+		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		ID3D12GraphicsCommandList_CopyResource(S.list, bb12, S.output);
+		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+	} else {
+		// FFX left the textures as they were declared: put the color texture back to where the next frame expects it (nothing to do: it is in the read state)
+	}
+	ID3D12GraphicsCommandList_Close(S.list);
+	ID3D12CommandList *lists[1] = {(ID3D12CommandList *)S.list};
+	ID3D12CommandQueue_ExecuteCommandLists(S.queue, 1, lists);
+	UINT64 value = ++S.fence_value;
+	ID3D12CommandQueue_Signal(S.queue, S.fence, value);
+	S.alloc_fence[slot] = value;
+	ID3D12Fence *fences[1] = {S.fence};
+	vt->give_back(on12, (IDirect3DResource9 *)bb, 1, &value, fences);
+	if (dsrc) {
+		vt->give_back(on12, (IDirect3DResource9 *)dsurf, 1, &value, fences);
+		ID3D12Resource_Release(dsrc);
+		IDirect3DSurface9_Release(dsurf);
+	}
+	ID3D12Resource_Release(bb12);
+	vt->release(on12);
+	IDirect3DSurface9_Release(bb);
+	S.frame++;
+	return 1;
+}
+
+void fsr3_present(IDirect3DDevice9 *dev9)
+{
+	if (!dev9 || !fsr3_enabled())
+		return;
+	hook_device(dev9);
+	g_frame++;
+	{
+		static char lastseq[400];
+		if (g_armed && strcmp(lastseq, g_vpseq) && g_seq_log++ < 30) {
+			log_printf("fsr3: viewports in frame %d:%s", g_frame, g_vpseq);
+			snprintf(lastseq, sizeof(lastseq), "%s", g_vpseq);
+		}
+	}
+	g_vpseq[0] = 0;
+	g_vpseq_last = 0;
+	{ // the set-up runs at every Present, so the hooks know the sizes before the first 3D frame
+		IDirect3DSurface9 *bb = NULL;
+		D3DSURFACE_DESC sd;
+		if (SUCCEEDED(IDirect3DDevice9_GetBackBuffer(dev9, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) {
+			if (SUCCEEDED(IDirect3DSurface9_GetDesc(bb, &sd)))
+				setup(sd.Width, sd.Height);
+			IDirect3DSurface9_Release(bb);
+		}
+	}
+	if (g_frame % 120 == 0 && g_status_log++ < 14)
+		log_printf("fsr3: status frame %d: set up for %ux%u (render %ux%u), upscaled this frame %d, vp %d prev %d", g_frame, S.w, S.h, S.iw, S.ih, g_ran, g_vp_new_ok, g_vp_prev_ok);
+	if (g_ran && g_vp_new_ok) { // this frame's matrix is the previous one of the next frame
+		memcpy(g_vp_prev, g_vp_new, sizeof(g_vp_prev));
+		g_vp_prev_ok = 1;
+	} else {
+		g_vp_prev_ok = 0; // no 3D view in this frame (menu, loading): no reprojection next frame
+	}
+	g_vp_new_ok = 0;
+	g_ran = 0;
+	g_stretched = 0;
+	if (g_world_ds) {
+		IDirect3DSurface9_Release(g_world_ds);
+		g_world_ds = NULL;
+	}
+	next_jitter();
+	if (g_shake_amp != 0.0f) { // the sway of the next frame: a sine of the clock, period 3 s
+		const float t = (float)(GetTickCount() % 3000) / 3000.0f * 6.2831853f;
+		g_shake_x = g_shake_amp * 0.01f * sinf(t);
+	}
+}

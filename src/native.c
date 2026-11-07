@@ -24,6 +24,11 @@
 #include "console.h"
 #include "control.h"
 #include "padopts.h"
+#include "gfxopts.h"
+#include "d3dcap.h"
+#include "upscale.h"
+#include "fsr3.h"
+#include "settings.h"
 #include "padglyphs.h"
 #include "rawinput.h"
 #include "weaponfov.h"
@@ -1251,6 +1256,7 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 		plog = cfg("presentlog", 0);
 	if (plog)
 		present_stat();
+	d3dcap_on12_probe(dev);
 	LONGLONG t0 = on ? perf_now() : 0;
 	before_present_inner(via, dev);
 	if (on) {
@@ -1258,6 +1264,8 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 		InterlockedIncrement(&perf_comp_n);
 	}
 	if (!skip_this_present) { // after the composed picture is made: the console and the QA frames are on what the player sees
+		upscale_present(dev); // the upscaled picture is what the console draws over
+		fsr3_present(dev);
 		console_present(via, dev);
 		shot_present_tick(dev);
 	}
@@ -5920,6 +5928,7 @@ static void client_frame_inner(void)
 		if (GetTickCount() - opts_at >= 1000) {
 			opts_at = GetTickCount();
 			padopts_tick();
+			gfxopts_tick();
 		}
 	}
 	if (!(mode >= 5 && ctx1_ready && split_on))
@@ -8261,7 +8270,7 @@ void native_install(void)
 	inputlog_open();
 	padglyphs_install(text_pad_player);
 #ifdef _WIN64
-	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0))
+	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0) || settings_upscale() || settings_fsr3())
 		CreateThread(NULL, 0, device_hooks_thread, NULL, 0, NULL);
 #endif
 #ifdef _WIN64

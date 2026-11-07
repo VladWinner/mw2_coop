@@ -37,6 +37,14 @@ static int nametagscale = 70;
 static int keepads_on = 1;
 static int d3d9ex_on = 0;
 static int borderless_on = 1;
+static int netguard_on = 1;
+static int d3d9on12_on = 0;
+static int d3d9on12_adapter = -1;
+static int fsr3_on;
+static char fsr3_dir_buf[MAX_PATH];
+static int upscale_on, upscale_w, upscale_h, upscale_sharp = 25, fsr3_sharp = 50;
+static int gp_fall_damage = -1, gp_jump_height, gp_gravity;
+static char discord_id[32];
 static char player_id[33];
 static char player_ini[MAX_PATH];
 
@@ -124,6 +132,22 @@ void settings_load(void)
 	else
 		log_printf("settings: bad port %u in settings.ini", p);
 	steam_relay = GetPrivateProfileIntA("network", "steam_relay", 0, path) != 0;
+	netguard_on = GetPrivateProfileIntA("network", "guard", 1, path) != 0;
+	d3d9on12_on = GetPrivateProfileIntA("display", "d3d9on12", 0, path) != 0;
+	d3d9on12_adapter = (int)GetPrivateProfileIntA("display", "d3d9on12_adapter", -1, path);
+	fsr3_on = GetPrivateProfileIntA("display", "fsr3", 0, path) != 0;
+	GetPrivateProfileStringA("display", "fsr3_dir", "", fsr3_dir_buf, sizeof(fsr3_dir_buf), path);
+	fsr3_sharp = (int)GetPrivateProfileIntA("display", "fsr3_sharpness", 50, path);
+	if (fsr3_sharp < 0 || fsr3_sharp > 100)
+		fsr3_sharp = 50;
+	if (fsr3_on)
+		d3d9on12_on = 1; // FSR 3 runs on the Direct3D 12 layer
+	upscale_on = GetPrivateProfileIntA("display", "upscale", 0, path) != 0;
+	upscale_w = (int)GetPrivateProfileIntA("display", "upscale_width", 0, path);
+	upscale_h = (int)GetPrivateProfileIntA("display", "upscale_height", 0, path);
+	upscale_sharp = (int)GetPrivateProfileIntA("display", "upscale_sharpness", 25, path);
+	if (upscale_sharp < 0 || upscale_sharp > 300)
+		upscale_sharp = 25;
 	fonts_on = GetPrivateProfileIntA("display", "fonts", 1, path) != 0;
 	fontmip_on = GetPrivateProfileIntA("display", "fontmip", 1, path) != 0;
 	darktitle_on = GetPrivateProfileIntA("display", "darktitle", 1, path) != 0;
@@ -139,6 +163,22 @@ void settings_load(void)
 	nametagscale = (int)GetPrivateProfileIntA("display", "nametagscale", 70, path);
 	if (nametagscale < 20 || nametagscale > 200)
 		nametagscale = 70;
+	// [gameplay]: options of the session, the same dvars the console sets (mw2coop_fall_damage, mw2coop_jump_height, mw2coop_gravity); the host's values go to the client with the launch
+	gp_fall_damage = (int)GetPrivateProfileIntA("gameplay", "fall_damage", -1, path);
+	if (gp_fall_damage != 0 && gp_fall_damage != 1)
+		gp_fall_damage = -1;
+	gp_jump_height = (int)GetPrivateProfileIntA("gameplay", "jump_height", 0, path);
+	if (gp_jump_height < 0 || gp_jump_height > 1000)
+		gp_jump_height = 0;
+	gp_gravity = (int)GetPrivateProfileIntA("gameplay", "gravity", 0, path);
+	if (gp_gravity < 0 || gp_gravity > 5000)
+		gp_gravity = 0;
+	GetPrivateProfileStringA("discord", "client_id", "", discord_id, sizeof(discord_id), path);
+	for (char *c = discord_id; *c; c++)
+		if (*c < '0' || *c > '9') {
+			discord_id[0] = 0;
+			break;
+		}
 	log_printf("settings: %s port %u, steam_relay %d, fonts %d, fontmip %d", path, (unsigned)port, steam_relay, fonts_on, fontmip_on);
 	voicefix_apply(path);
 	if (port != DEFAULT_PORT)
@@ -202,9 +242,79 @@ int settings_d3d9ex(void)
 	return d3d9ex_on;
 }
 
+int settings_d3d9on12_adapter(void)
+{
+	return d3d9on12_adapter;
+}
+
+int settings_upscale(void)
+{
+	return upscale_on;
+}
+
+int settings_upscale_width(void)
+{
+	return upscale_w;
+}
+
+int settings_upscale_height(void)
+{
+	return upscale_h;
+}
+
+int settings_upscale_sharpness(void)
+{
+	return upscale_sharp;
+}
+
+int settings_fsr3_sharpness(void)
+{
+	return fsr3_sharp;
+}
+
+int settings_fsr3(void)
+{
+	return fsr3_on;
+}
+
+const char *settings_fsr3_dir(void)
+{
+	return fsr3_dir_buf;
+}
+
+int settings_d3d9on12(void)
+{
+	return d3d9on12_on;
+}
+
+int settings_netguard(void)
+{
+	return netguard_on;
+}
+
 int settings_borderless(void)
 {
 	return borderless_on;
+}
+
+int settings_gameplay_fall_damage(void)
+{
+	return gp_fall_damage;
+}
+
+int settings_gameplay_jump_height(void)
+{
+	return gp_jump_height;
+}
+
+int settings_gameplay_gravity(void)
+{
+	return gp_gravity;
+}
+
+const char *settings_discord_id(void)
+{
+	return discord_id;
 }
 
 int settings_hudtextscale(void)

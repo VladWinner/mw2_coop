@@ -33,6 +33,7 @@
 #include "native.h"
 #include "padicon.h"
 #include "padopts.h"
+#include "gfxopts.h"
 #include "log.h"
 #include "settings.h"
 #include "upnp.h"
@@ -2570,6 +2571,7 @@ static void tick_f(void)
 	add_saves_menu();
 	add_partner_popups();
 	padopts_tick();
+	gfxopts_tick();
 	picking_tick();
 	unlock_missions_tick();
 	find_tick();

@@ -396,7 +396,8 @@ static void continue_f(void)
 }
 
 // Host dvars the client must match before the level loads (level scripts read them).
-static const char *const session_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos"};
+static const char *const session_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
+							  "mw2coop_fall_damage", "mw2coop_jump_height", "mw2coop_gravity"};
 #define SESSION_DVARS (int)(sizeof(session_dvars) / sizeof(session_dvars[0]))
 
 static const char *const skill_dvars[] = {"g_gameskill", "g_gameskill_player_1", "g_gameskill_player_2"};
@@ -501,7 +502,7 @@ int progress_on_packet(const char *buf, int len)
 	if (len < tl || memcmp(buf, tag, tl) != 0)
 		return 0;
 	menus_campaign_loading_begin();
-	char text[256];
+	char text[512];
 	int n = len - tl < (int)sizeof(text) - 1 ? len - tl : (int)sizeof(text) - 1;
 	memcpy(text, buf + tl, n);
 	text[n] = 0;

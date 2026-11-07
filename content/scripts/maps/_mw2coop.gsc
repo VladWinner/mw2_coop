@@ -99,6 +99,14 @@ main()
 	if ( getdvarint( "mw2coop_native_split" ) )
 		level.revive_hud_base_offset = 75;
 
+	// the debug tools of the developer console (dbg_ents, dbg_players, dbg_flags, dbg_ai) and the gameplay options, in any session
+	// for the Discord presence (src/discord.c)
+	if ( is_campaign_coop() )
+		SetDvar( "mw2coop_mode", "coop" );
+	else
+		SetDvar( "mw2coop_mode", "solo" );
+	thread maps\_mw2coop_dbg::start();
+
 	// QA of a level in single player (tools/qa_native.sh with MW2COOP_PLAIN=1): the climb scenario runs without a co-op session
 	if ( GetDvar( "mw2coop_qa" ) == "climbsolo" && !is_campaign_coop() )
 		thread maps\_mw2coop_qa::climbsolo();

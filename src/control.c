@@ -23,6 +23,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "console.h"
+#include "discord.h"
 #include "control.h"
 #include "game.h"
 #include "log.h"
@@ -34,6 +36,7 @@
 #include "party.h"
 #include "progress.h"
 #include "scrdebug.h"
+#include "settings.h"
 #include "shot.h"
 
 #define MAX_WATCH 24
@@ -90,7 +93,7 @@ static const char *watch_value(const char *name, char *buf, int size)
 // and set these dvars identically. mw2coop_state and mw2coop_qa_log are logged on both;
 // requests in mw2coop_cmd ("<what> @<time>") are carried out by the host only. In a split screen session the one process is the server: the lobby's party
 // is let go when the session starts, so its host flag is 0, and restarts, checkpoints and progress were dropped (a friendly killed: the mission never restarted).
-static char last_state[256], last_qa[256], last_cmd[256], last_shot[96];
+static char last_state[256], last_qa[256], last_cmd[256], last_shot[96], last_dbg[256];
 
 static void script_request(const char *cmd)
 {
@@ -132,7 +135,7 @@ static void script_request(const char *cmd)
 // as they exist (they keep 0x100, so script setdvar still works). The harness creates them
 // before the level starts, so both machines flag them before any script reads them.
 static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
-					   "mw2coop_qa", "mw2coop_qa_phase"};
+					   "mw2coop_qa", "mw2coop_qa_phase", "mw2coop_dbg_req"};
 
 static void sync_dvar_flags(void)
 {
@@ -212,6 +215,29 @@ static void bind_f(void)
 
 static cmd_function_t bind_cmd = {NULL, "mw2coop_bind", NULL, NULL, bind_f CMD_NODE_FLAG};
 
+// The debug tools: dbg_ents [filter], dbg_players, dbg_flags [filter], dbg_ai [filter] ask the level's script (maps\_mw2coop_dbg) for a list, which comes back into the console.
+// The request is "<counter> <command> <filter>" in mw2coop_dbg_req, so asking twice in a row is a new request.
+static void dbg_request(const char *what)
+{
+	static int counter;
+	char cmd[160], filter[96] = "";
+	const char *arg = game_cmd_argv(1);
+	for (const char *c = arg ? arg : ""; *c && strlen(filter) < sizeof(filter) - 1; c++)
+		if (*c != '"' && *c != ';' && *c != '\n' && *c != ' ')
+			filter[strlen(filter)] = *c;
+	snprintf(cmd, sizeof(cmd), "set mw2coop_dbg_req \"%d %s %s\"\n", ++counter, what, filter);
+	game_cbuf_addtext(cmd);
+	log_printf("control: debug request %s", cmd);
+}
+static void dbg_ents_f(void) { dbg_request("ents"); }
+static void dbg_players_f(void) { dbg_request("players"); }
+static void dbg_flags_f(void) { dbg_request("flags"); }
+static void dbg_ai_f(void) { dbg_request("ai"); }
+static cmd_function_t dbg_ents_cmd = {NULL, "dbg_ents", NULL, NULL, dbg_ents_f CMD_NODE_FLAG};
+static cmd_function_t dbg_players_cmd = {NULL, "dbg_players", NULL, NULL, dbg_players_f CMD_NODE_FLAG};
+static cmd_function_t dbg_flags_cmd = {NULL, "dbg_flags", NULL, NULL, dbg_flags_f CMD_NODE_FLAG};
+static cmd_function_t dbg_ai_cmd = {NULL, "dbg_ai", NULL, NULL, dbg_ai_f CMD_NODE_FLAG};
+
 // A QA scenario asks for a press with mw2coop_qa_press "<player 1|2> <button> <ms> <n>" (button
 // without the +, n counts the presses). Both machines run the scenario; the one whose own player
 // it is (the host plays player 1) holds the button down for ms (checked every 250 ms).
@@ -249,6 +275,93 @@ static void press_poll(void)
 	game_cbuf_addtext(cmd);
 }
 
+// settings.ini [gameplay]: the options the player wrote there become the session dvars once the dvar table exists (a value of the console, typed earlier, is kept)
+static void gameplay_apply_once(void)
+{
+	static int done;
+	char cmd[96], cur[32];
+	if (done || !game_find_dvar("sv_cheats"))
+		return;
+	done = 1;
+	int fall = settings_gameplay_fall_damage(), jump = settings_gameplay_jump_height(), grav = settings_gameplay_gravity();
+	if (fall >= 0 && !(game_dvar_raw("mw2coop_fall_damage", cur, sizeof(cur)) && cur[0])) {
+		snprintf(cmd, sizeof(cmd), "set mw2coop_fall_damage %d\n", fall);
+		game_cbuf_addtext(cmd);
+	}
+	if (jump > 0 && !(game_dvar_raw("mw2coop_jump_height", cur, sizeof(cur)) && cur[0])) {
+		snprintf(cmd, sizeof(cmd), "set mw2coop_jump_height %d\n", jump);
+		game_cbuf_addtext(cmd);
+	}
+	if (grav > 0 && !(game_dvar_raw("mw2coop_gravity", cur, sizeof(cur)) && cur[0])) {
+		snprintf(cmd, sizeof(cmd), "set mw2coop_gravity %d\n", grav);
+		game_cbuf_addtext(cmd);
+	}
+	if (fall >= 0 || jump > 0 || grav > 0)
+		log_printf("control: settings.ini [gameplay] fall_damage %d jump_height %d gravity %d", fall, jump, grav);
+}
+
+// The session's gameplay options (the dvars mw2coop_fall_damage / mw2coop_jump_height / mw2coop_gravity, the host's values reach the client with the launch): written into the engine's own dvars,
+// because a script may not set these in a co-op session (SetDvar / SetSavedDvar fail). An empty option leaves the game's value; a cleared one puts it back. The idea comes from H2-Mod's gameplay dvars.
+typedef struct {
+	const char *engine;  // the game's dvar
+	const char *option;  // the session dvar
+	int kind;            // 0: the option is "0" (off) -> value; 1: the option is a number -> that number
+	double value;
+	int have_orig;
+	double orig;
+} gameplay_target_t;
+
+static gameplay_target_t gameplay_targets[] = {
+	{"bg_fallDamageMinHeight", "mw2coop_fall_damage", 0, 9998, 0, 0},
+	{"bg_fallDamageMaxHeight", "mw2coop_fall_damage", 0, 9999, 0, 0},
+	{"jump_height", "mw2coop_jump_height", 1, 0, 0, 0},
+	{"g_gravity", "mw2coop_gravity", 1, 0, 0, 0},
+};
+
+static double dvar_number(const dvar_t *d)
+{
+	return d->type == DVAR_TYPE_INT ? (double)d->current.integer : (double)d->current.value;
+}
+
+static void dvar_set_number(dvar_t *d, double v)
+{
+	if (d->type == DVAR_TYPE_INT)
+		d->current.integer = d->latched.integer = (int32_t)v;
+	else
+		d->current.value = d->latched.value = (float)v;
+}
+
+static void gameplay_poll(void)
+{
+	for (size_t i = 0; i < sizeof(gameplay_targets) / sizeof(gameplay_targets[0]); i++) {
+		gameplay_target_t *t = &gameplay_targets[i];
+		dvar_t *d = game_find_dvar(t->engine);
+		char opt[32] = "";
+		double want = -1;
+		if (!d || (d->type != DVAR_TYPE_FLOAT && d->type != DVAR_TYPE_INT))
+			continue;
+		game_dvar_raw(t->option, opt, sizeof(opt));
+		if (t->kind == 0 && opt[0] == '0' && !opt[1])
+			want = t->value;
+		else if (t->kind == 1 && opt[0] >= '1' && opt[0] <= '9')
+			want = atoi(opt);
+		if (want >= 0) {
+			if (!t->have_orig) {
+				t->orig = dvar_number(d);
+				t->have_orig = 1;
+			}
+			if (dvar_number(d) != want) {
+				dvar_set_number(d, want);
+				log_printf("control: gameplay option %s=%s: %s %g -> %g", t->option, opt, t->engine, t->orig, want);
+			}
+		} else if (t->have_orig) {
+			dvar_set_number(d, t->orig);
+			t->have_orig = 0;
+			log_printf("control: gameplay option %s cleared: %s back to %g", t->option, t->engine, t->orig);
+		}
+	}
+}
+
 static void script_channel_poll(void)
 {
 	char v[256];
@@ -270,6 +383,17 @@ static void script_channel_poll(void)
 		log_printf("qa: %s", v);
 		lstrcpynA(last_qa, v, sizeof(last_qa));
 	}
+	// the debug tools (maps\_mw2coop_dbg): a script answers a dbg_* command with numbered lines "<n>|<text>" in mw2coop_dbg_out
+	if (game_dvar_raw("mw2coop_dbg_out", v, sizeof(v)) && v[0] && strcmp(v, last_dbg) != 0) {
+		lstrcpynA(last_dbg, v, sizeof(last_dbg));
+		const char *bar = strchr(v, '|');
+		const char *text = bar ? bar + 1 : v;
+		log_printf("dbg: %s", text);
+		console_print(text);
+	}
+	gameplay_apply_once();
+	gameplay_poll();
+	discord_poll();
 	if (game_dvar_raw("mw2coop_cmd", v, sizeof(v)) && v[0] && strcmp(v, last_cmd) != 0) {
 		lstrcpynA(last_cmd, v, sizeof(last_cmd));
 		script_request(v);
@@ -660,6 +784,10 @@ void control_start(void)
 	static char path[MAX_PATH];
 	hook_script_setdvar();
 	game_add_command(&bind_cmd);
+	game_add_command(&dbg_ents_cmd);
+	game_add_command(&dbg_players_cmd);
+	game_add_command(&dbg_flags_cmd);
+	game_add_command(&dbg_ai_cmd);
 	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
 	while (n > 0 && path[n - 1] != '\\')
 		n--;

@@ -7,6 +7,7 @@
 #   MW2COOP_LOBBY=1 the whole menu path: the split screen button, Continue, the players' devices (MW2COOP_PAD player 2's pad, MW2COOP_PAD0 player 1's, -1 the keyboard), Start
 #                   (the mission is the lobby's, not MW2COOP_MAP); frames of the lobby before and after: mw2coop\shots\lobby-a.bmp, lobby-b.bmp
 #   MW2COOP_LOBBY_EARLY / MW2COOP_LOBBY_EXTRA  console commands (";"-separated) before the split screen button / right after Continue (e.g. steamlobbycreatefail: a Steam lobby that failed)
+#   MW2COOP_R_FULLSCREEN=1 the game in exclusive full screen (default 0: windowed, which the QA runs need)
 #   MW2COOP_PLAIN=1 no native split screen at all: the game as it is (to see what the original draws)
 #   MW2COOP_MENU=1  the session is started the way the menu does it (console command mw2coop_native_launch), not by settings.ini; MW2COOP_PAD the second player's pad
 # Writes the copy's settings.ini and commands.txt, runs it, prints the native/split/crash lines and puts the composed frame in local/scratch/native-last.png.
@@ -37,7 +38,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 } > "$A/mw2coop/settings.ini"
 {
 	echo "set mw2coop_god 1"
-	echo "set r_fullscreen 0"
+	echo "set r_fullscreen ${MW2COOP_R_FULLSCREEN:-0}"
 	echo "set r_customMode \"$RES\""
 	[ -n "${MW2COOP_PRE:-}" ] && echo "$MW2COOP_PRE" | tr ';' '\n'
 	echo "!sleep 6000"
@@ -76,7 +77,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 } > "$A/mw2coop/commands.txt"
 # the window is made 1920x1080 at start: the config of the copy holds it (no vid_restart: it loses the mod's fonts)
 CFG=$A/players/config.cfg
-sed -i 's/^seta r_mode .*/seta r_mode "'"$RES"'"/; s/^seta r_customMode .*/seta r_customMode "'"$RES"'"/; s/^seta r_fullscreen .*/seta r_fullscreen "0"/; s/^seta vid_xpos .*/seta vid_xpos "'"${MW2COOP_XPOS:-0}"'"/; s/^seta vid_ypos .*/seta vid_ypos "0"/' "$CFG"
+sed -i 's/^seta r_mode .*/seta r_mode "'"$RES"'"/; s/^seta r_customMode .*/seta r_customMode "'"$RES"'"/; s/^seta r_fullscreen .*/seta r_fullscreen "${MW2COOP_R_FULLSCREEN:-0}"/; s/^seta vid_xpos .*/seta vid_xpos "'"${MW2COOP_XPOS:-0}"'"/; s/^seta vid_ypos .*/seta vid_ypos "0"/' "$CFG"
 # MW2COOP_DISPLAYMODE: "fullscreen", "windowed (no border)" (borderless: the monitor's rectangle) or "windowed" (the default of these runs)
 sed -i 's/^seta r_displayMode .*/seta r_displayMode "'"${MW2COOP_DISPLAYMODE:-windowed}"'"/' "$CFG"
 rm -f "$A/mw2coop/mw2coop.log" "$A/mw2coop"/shots/seq-*.bmp

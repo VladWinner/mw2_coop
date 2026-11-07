@@ -13,6 +13,8 @@
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
+#include <dxgi.h>
+#include <d3d12.h>
 #include <stdint.h>
 #include <string.h>
 #include <tlhelp32.h>
@@ -21,6 +23,7 @@
 #include "hook.h"
 #include "log.h"
 #include "settings.h"
+#include "upscale.h"
 
 #define VT_CREATE_DEVICE         16 // IDirect3D9::CreateDevice
 #define VT_CREATE_TEXTURE        23 // IDirect3DDevice9::CreateTexture ... CreateIndexBuffer
@@ -46,6 +49,8 @@ static get_proc_address_t getproc_orig;
 static create_device_t create_device_orig;
 static create_device_ex_t create_device_ex_orig;
 static void *volatile device;
+static IUnknown *volatile g_dev12;   // the Direct3D 12 device Direct3D 9 runs on (d3d9on12)
+static IUnknown *volatile g_queue12; // the direct command queue made for it: the upscalers wait on it, and Direct3D 9 resources are unwrapped against it
 static int use_ex;
 static UINT ex_version;
 
@@ -59,6 +64,82 @@ static LONG converted[5]; // managed resources turned into default-pool ones: te
 void *d3dcap_device(void)
 {
 	return InterlockedCompareExchangePointer((PVOID volatile *)&device, NULL, NULL);
+}
+
+void *d3dcap_d3d12_device(void)
+{
+	return g_dev12;
+}
+
+void *d3dcap_d3d12_queue(void)
+{
+	return g_queue12;
+}
+
+// Proof of the way to the upscalers (DLSS, FSR 3 need Direct3D 11 / 12 resources): the game's Direct3D 9 device on Direct3D 12 (IDirect3DDevice9On12) hands out the Direct3D 12 resource under a
+// Direct3D 9 surface. Logged once, at a Present: the back buffer and the depth buffer, if one is set then, as Direct3D 12 resources.
+typedef struct {
+	HRESULT(STDMETHODCALLTYPE *qi)(void *, const GUID *, void **);
+	ULONG(STDMETHODCALLTYPE *addref)(void *);
+	ULONG(STDMETHODCALLTYPE *release)(void *);
+	HRESULT(STDMETHODCALLTYPE *get_device)(void *, const GUID *, void **);
+	HRESULT(STDMETHODCALLTYPE *unwrap)(void *, IDirect3DResource9 *, IUnknown *, const GUID *, void **);
+	HRESULT(STDMETHODCALLTYPE *give_back)(void *, IDirect3DResource9 *, UINT, UINT64 *, void **);
+} on12_vtbl_t;
+
+static void probe_surface(void *on12, const char *what, IDirect3DSurface9 *surf)
+{
+	static const GUID iid_resource = {0x696442be, 0xa72e, 0x4059, {0xbc, 0x79, 0x5b, 0x5c, 0x98, 0x04, 0x0f, 0xad}};
+	on12_vtbl_t *vt = *(on12_vtbl_t **)on12;
+	D3DSURFACE_DESC sd;
+	if (!surf || FAILED(IDirect3DSurface9_GetDesc(surf, &sd))) {
+		log_printf("d3d9on12 probe: %s: none set", what);
+		return;
+	}
+	void *res = NULL;
+	HRESULT hr = vt->unwrap(on12, (IDirect3DResource9 *)surf, g_queue12, &iid_resource, &res);
+	if (SUCCEEDED(hr) && res) {
+		D3D12_RESOURCE_DESC rd;
+		((D3D12_RESOURCE_DESC * (STDMETHODCALLTYPE *)(void *, D3D12_RESOURCE_DESC *))(*(void ***)res)[10])(res, &rd); // ID3D12Resource::GetDesc, the struct through a hidden pointer
+		log_printf("d3d9on12 probe: %s: Direct3D 9 surface %ux%u format %d -> Direct3D 12 resource %llux%u format %d, %u samples, flags %x", what, sd.Width, sd.Height, (int)sd.Format,
+			   (unsigned long long)rd.Width, rd.Height, (int)rd.Format, rd.SampleDesc.Count, (unsigned)rd.Flags);
+		vt->give_back(on12, (IDirect3DResource9 *)surf, 0, NULL, NULL);
+		ID3D12Resource_Release((ID3D12Resource *)res);
+	} else {
+		log_printf("d3d9on12 probe: %s: %ux%u format %d: UnwrapUnderlyingResource hr %lx", what, sd.Width, sd.Height, (int)sd.Format, (unsigned long)hr);
+	}
+}
+
+void d3dcap_on12_probe(void *dev9)
+{
+	static const GUID iid_on12 = {0xe7fda234, 0xb589, 0x4049, {0x94, 0x0d, 0x88, 0x78, 0x97, 0x75, 0x31, 0xc8}};
+	static LONG done;
+	if (!dev9 || !g_queue12 || InterlockedExchange(&done, 1))
+		return;
+	void *on12 = NULL;
+	if (FAILED(IDirect3DDevice9_QueryInterface((IDirect3DDevice9 *)dev9, &iid_on12, &on12)) || !on12) {
+		log_printf("d3d9on12 probe: the device has no IDirect3DDevice9On12 (not running on Direct3D 12)");
+		return;
+	}
+	on12_vtbl_t *vt = *(on12_vtbl_t **)on12;
+	void *dev12 = NULL;
+	static const GUID iid_device = {0x189819f1, 0x1db6, 0x4b57, {0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7}};
+	HRESULT hr = vt->get_device(on12, &iid_device, &dev12);
+	log_printf("d3d9on12 probe: GetD3D12Device hr %lx device %p (ours %p)", (unsigned long)hr, dev12, (void *)g_dev12);
+	if (dev12)
+		IUnknown_Release((IUnknown *)dev12);
+	IDirect3DSurface9 *bb = NULL, *depth = NULL;
+	if (SUCCEEDED(IDirect3DDevice9_GetBackBuffer((IDirect3DDevice9 *)dev9, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) {
+		probe_surface(on12, "back buffer", bb);
+		IDirect3DSurface9_Release(bb);
+	}
+	if (SUCCEEDED(IDirect3DDevice9_GetDepthStencilSurface((IDirect3DDevice9 *)dev9, &depth)) && depth) {
+		probe_surface(on12, "depth buffer", depth);
+		IDirect3DSurface9_Release(depth);
+	} else {
+		log_printf("d3d9on12 probe: depth buffer: none set at Present");
+	}
+	vt->release(on12);
 }
 
 static void convert_logged(int kind, const char *what, unsigned a, unsigned b, unsigned fmt)
@@ -190,6 +271,34 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 	HRESULT hr;
 	int ex = 0;
 	IDirect3D9Ex *obj = NULL;
+	if (pp && (pp->hDeviceWindow || window)) {
+		HWND w = pp->hDeviceWindow ? pp->hDeviceWindow : window;
+		char cls[64] = "";
+		RECT wr, cr;
+		GetClassNameA(w, cls, sizeof(cls));
+		GetWindowRect(w, &wr);
+		GetClientRect(w, &cr);
+		log_printf("d3dcap: window %p class '%s' style %lx exstyle %lx window rect %ld,%ld %ldx%ld client %ldx%ld visible %d focus window %p thread %lu (this thread %lu)", (void *)w, cls,
+			   (unsigned long)GetWindowLongPtrA(w, GWL_STYLE), (unsigned long)GetWindowLongPtrA(w, GWL_EXSTYLE), wr.left, wr.top, wr.right - wr.left, wr.bottom - wr.top, cr.right, cr.bottom,
+			   IsWindowVisible(w), (void *)window, (unsigned long)GetWindowThreadProcessId(w, NULL), (unsigned long)GetCurrentThreadId());
+	}
+	if (pp)
+		log_printf("d3dcap: CreateDevice parameters: %ux%u format %d count %u multisample %d/%lu swap effect %d window %p windowed %d depth %d format %d flags %lx hz %u interval %u", pp->BackBufferWidth,
+			   pp->BackBufferHeight, (int)pp->BackBufferFormat, pp->BackBufferCount, (int)pp->MultiSampleType, (unsigned long)pp->MultiSampleQuality, (int)pp->SwapEffect, (void *)pp->hDeviceWindow,
+			   (int)pp->Windowed, (int)pp->EnableAutoDepthStencil, (int)pp->AutoDepthStencilFormat, (unsigned long)pp->Flags, pp->FullScreen_RefreshRateInHz, pp->PresentationInterval);
+	if (pp && pp->Windowed && settings_d3d9on12()) {
+		// A windowed swap chain of Direct3D 9 on Direct3D 12 shows a white or black picture above about 800x600 on the tested laptop (NVIDIA chip rendering, the other chip showing the
+		// display), whatever the window; the flip model of Direct3D 9Ex (FLIPEX, two back buffers) presents correctly (tools/on12test, 2026-11-07). A flip model back buffer cannot be
+		// multisampled: the game's 2x multisampling of the back buffer goes with it.
+		pp->SwapEffect = D3DSWAPEFFECT_FLIPEX;
+		if (pp->BackBufferCount < 2)
+			pp->BackBufferCount = 2;
+		pp->MultiSampleType = D3DMULTISAMPLE_NONE;
+		pp->MultiSampleQuality = 0;
+		log_printf("d3d9on12: windowed: flip model swap chain (FLIPEX, %u back buffers, not multisampled)", pp->BackBufferCount);
+	}
+	if (pp)
+		upscale_adjust_params(pp);
 	if (settings_borderless() && pp && !pp->Windowed) { // exclusive full screen: a device that can be lost, with the render thread stuck in d3d9.dll and a Reset on the way back when the window loses the focus
 		pp->Windowed = TRUE; // (the window the game made for it is a popup of the whole screen already)
 		pp->FullScreen_RefreshRateInHz = 0;
@@ -229,6 +338,8 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 	} else {
 		hr = create_device_orig(d3d, adapter, type, window, flags, pp, out);
 	}
+	if (SUCCEEDED(hr) && out && *out && pp && pp->Windowed && upscale_enabled())
+		upscale_device_made(pp->hDeviceWindow ? pp->hDeviceWindow : window);
 	if (SUCCEEDED(hr) && out && *out) {
 		InterlockedExchangePointer((PVOID volatile *)&device, *out);
 		log_printf("d3dcap: CreateDevice(adapter %u, type %d, window %p, flags %lx) -> device %p, vtable %p%s", adapter, (int)type, (void *)window,
@@ -285,9 +396,88 @@ static void hook_factory(IDirect3D9 *d3d)
 	}
 }
 
+// d3d9on12.h (the Windows SDK): the arguments of Direct3DCreate9On12
+typedef struct {
+	BOOL Enable9On12;
+	IUnknown *pD3D12Device;
+	IUnknown *pD3D12Queues[2];
+	UINT NumQueues;
+	UINT NodeMask;
+} d3d9on12_args_t;
+typedef IDirect3D9 *(WINAPI *create9on12_t)(UINT, d3d9on12_args_t *, UINT);
+typedef HRESULT(WINAPI *create9on12ex_t)(UINT, d3d9on12_args_t *, UINT, IDirect3D9Ex **);
+
+// The Direct3D 12 device Direct3D 9 runs on. Left to itself Direct3DCreate9On12 takes the first adapter, which on a laptop with two graphics chips is the NVIDIA one while the display is
+// wired to the other: a window above about 800x600 then shows a white or black picture (found with tools/on12test, 2026-11-07). The device is made on the adapter that has the
+// primary display attached (the first with an output), or [display] d3d9on12_adapter=<index>.
+static IUnknown *make_d3d12_device_for_display(void)
+{
+	typedef HRESULT(WINAPI * mkfac_t)(const GUID *, void **);
+	typedef HRESULT(WINAPI * mkdev_t)(IUnknown *, int, const GUID *, void **);
+	static const GUID iid_factory1 = {0x770aae78, 0xf26f, 0x4dba, {0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}};
+	static const GUID iid_device = {0x189819f1, 0x1db6, 0x4b57, {0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7}};
+	HMODULE dxgi = LoadLibraryA("dxgi.dll"), d12 = LoadLibraryA("d3d12.dll");
+	mkfac_t mkfac = dxgi ? (mkfac_t)(void *)GetProcAddress(dxgi, "CreateDXGIFactory1") : NULL;
+	mkdev_t mkdev = d12 ? (mkdev_t)(void *)GetProcAddress(d12, "D3D12CreateDevice") : NULL;
+	IDXGIFactory1 *fac = NULL;
+	IUnknown *dev12 = NULL;
+	if (!mkfac || !mkdev || FAILED(mkfac(&iid_factory1, (void **)&fac)) || !fac)
+		return NULL;
+	int want = settings_d3d9on12_adapter();
+	IDXGIAdapter1 *ad = NULL;
+	for (UINT i = 0; !dev12 && SUCCEEDED(IDXGIFactory1_EnumAdapters1(fac, i, &ad)); i++) {
+		DXGI_ADAPTER_DESC1 desc;
+		IDXGIAdapter1_GetDesc1(ad, &desc);
+		// does one of its outputs show the primary monitor (the one at 0,0, where the game's window opens)?
+		HMONITOR primary = MonitorFromPoint((POINT){0, 0}, MONITOR_DEFAULTTOPRIMARY);
+		int has_primary = 0, outputs = 0;
+		IDXGIOutput *out = NULL;
+		for (UINT o = 0; SUCCEEDED(IDXGIAdapter1_EnumOutputs(ad, o, &out)) && out; o++) {
+			DXGI_OUTPUT_DESC od;
+			if (SUCCEEDED(IDXGIOutput_GetDesc(out, &od))) {
+				outputs++;
+				if (od.AttachedToDesktop && od.Monitor == primary)
+					has_primary = 1;
+				log_printf("d3d9on12:   adapter %u output %u: %ls attached %d primary %d", i, o, od.DeviceName, (int)od.AttachedToDesktop, od.Monitor == primary);
+			}
+			IDXGIOutput_Release(out);
+		}
+		int pick = want >= 0 ? (int)i == want : (has_primary && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE));
+		log_printf("d3d9on12: adapter %u: %ls, %d outputs, primary monitor %d%s", i, desc.Description, outputs, has_primary, pick ? " <- used" : "");
+		if (pick && FAILED(mkdev((IUnknown *)ad, 0xb000 /* D3D_FEATURE_LEVEL_11_0 */, &iid_device, (void **)&dev12)))
+			dev12 = NULL;
+		if (pick && dev12) {
+			static const GUID iid_queue = {0x0ec870a6, 0x5d7e, 0x4c22, {0x8c, 0xfc, 0x5b, 0xaa, 0xe0, 0x76, 0x16, 0xed}};
+			D3D12_COMMAND_QUEUE_DESC qd;
+			memset(&qd, 0, sizeof(qd));
+			qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+			ID3D12CommandQueue *q = NULL;
+			if (SUCCEEDED(ID3D12Device_CreateCommandQueue((ID3D12Device *)dev12, &qd, &iid_queue, (void **)&q)) && q)
+				g_queue12 = (IUnknown *)q;
+		}
+		IDXGIAdapter1_Release(ad);
+	}
+	IDXGIFactory1_Release(fac);
+	return dev12;
+}
+
 static IDirect3D9 *WINAPI create9_hook(UINT version)
 {
 	IDirect3D9 *d3d = NULL;
+	if (!use_ex && settings_d3d9on12()) { // experimental, the plain interface: the game's Direct3D 9 on top of Direct3D 12
+		HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+		create9on12_t make = d3d9 ? (create9on12_t)(void *)GetProcAddress(d3d9, "Direct3DCreate9On12") : NULL;
+		d3d9on12_args_t args;
+		memset(&args, 0, sizeof(args));
+		args.Enable9On12 = TRUE;
+		args.pD3D12Device = g_dev12 = make_d3d12_device_for_display();
+		if (g_queue12) {
+			args.pD3D12Queues[0] = g_queue12;
+			args.NumQueues = 1;
+		}
+		d3d = make ? make(version, &args, 1) : NULL;
+		log_printf("d3d9on12: Direct3DCreate9On12(%u) -> %p%s", version, (void *)d3d, make ? "" : " (not exported by this d3d9.dll)");
+	}
 	if (use_ex) {
 		HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
 		create9ex_t make = create9ex_orig;
@@ -299,7 +489,25 @@ static IDirect3D9 *WINAPI create9_hook(UINT version)
 				InterlockedCompareExchangePointer((PVOID volatile *)&create9ex_orig, (PVOID)make, NULL);
 		}
 		IDirect3D9Ex *ex = NULL;
-		if (make && SUCCEEDED(make(version, &ex)) && ex) {
+		if (settings_d3d9on12()) { // Direct3D 9Ex on Direct3D 12
+			create9on12ex_t make12 = d3d9 ? (create9on12ex_t)(void *)GetProcAddress(d3d9, "Direct3DCreate9On12Ex") : NULL;
+			d3d9on12_args_t args;
+			memset(&args, 0, sizeof(args));
+			args.Enable9On12 = TRUE;
+			args.pD3D12Device = g_dev12 = make_d3d12_device_for_display();
+			if (g_queue12) {
+				args.pD3D12Queues[0] = g_queue12;
+				args.NumQueues = 1;
+			}
+			if (make12 && SUCCEEDED(make12(version, &args, 1, &ex)) && ex)
+				log_printf("d3d9on12: Direct3DCreate9On12Ex(%u) -> %p", version, (void *)ex);
+			else
+				ex = NULL;
+		}
+		if (ex) {
+			d3d = (IDirect3D9 *)ex;
+			ex_version = version;
+		} else if (make && SUCCEEDED(make(version, &ex)) && ex) {
 			d3d = (IDirect3D9 *)ex;
 			ex_version = version;
 			log_printf("d3d9ex: Direct3DCreate9Ex(%u) -> %p", version, (void *)ex);
@@ -525,7 +733,7 @@ void d3dcap_install(void)
 #ifdef MW2COOP_IW4X
 	use_ex = 0; // iw4x-sp keeps control of r_useD3D9Ex; we observe its factory without changing that setting
 #else
-	use_ex = settings_d3d9ex();
+	use_ex = settings_d3d9ex() || settings_d3d9on12(); // Direct3D 9 on Direct3D 12 is made through the Ex interface (the flip model swap chain needs it)
 #endif
 	HMODULE host = GetModuleHandleA(NULL);
 	int host_patched = patch_module_imports(host);

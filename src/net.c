@@ -14,6 +14,8 @@
 #include "game.h"
 #include "log.h"
 #include "net.h"
+#include "netguard.h"
+#include "settings.h"
 #include "menus.h"
 #include "progress.h"
 #include "steamnet.h"
@@ -205,7 +207,7 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 	// The party resends coopLaunch until the client acks it; the start packet goes along each time.
 	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) &&
 	    contains(buf, len, "coopLaunch")) {
-		char pkt[256];
+		char pkt[512];
 		int n = progress_launch_packet(pkt, sizeof(pkt));
 		log_packet("send", to, pkt, n);
 		send_to(s, pkt, n, flags, to, tolen);
@@ -294,6 +296,22 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 	int r = steamnet_receive(buf, len, from, fromlen);
 	if (r <= 0)
 		r = real_recvfrom(s, buf, len, flags, from, fromlen);
+	if (r > 0 && settings_netguard()) {
+		// packets no co-op session sends and the game would act on (netguard.c): the game never sees them
+		EnterCriticalSection(&peer_lock);
+		int known = peer_socket != INVALID_SOCKET;
+		LeaveCriticalSection(&peer_lock);
+		const char *why = netguard_check(buf, r, known, from_partner(from));
+		if (why) {
+			static volatile LONG dropped;
+			if (InterlockedIncrement(&dropped) <= 20)
+				log_packet("dropped", from, buf, r);
+			if (dropped <= 20)
+				log_printf("net: guard dropped a packet: %s", why);
+			WSASetLastError(WSAEWOULDBLOCK);
+			return SOCKET_ERROR;
+		}
+	}
 	if (r > 0) {
 		log_packet("recv", from, buf, r);
 		if (r > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) &&

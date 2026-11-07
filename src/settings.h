@@ -26,9 +26,33 @@ int settings_nametagscale(void);
 // settings.ini [display] d3d9ex (default 0 until tested, then 1): the game's Direct3D 9 is the extended one (Direct3DCreate9Ex, src/d3dcap.c): a window that loses the focus (Alt+Tab) does not lose the device,
 // so the render thread does not stop and a co-op partner is not left waiting. Not in the iw4x-sp profile (it has its own r_useD3D9Ex).
 int settings_d3d9ex(void);
+// settings.ini [network] guard (default 1): packets no co-op session sends (joinParty, rcon, a co-op command from a stranger, a map name with a command separator) are dropped before the game sees them (netguard.c); 0: the game sees everything.
+int settings_netguard(void);
+// settings.ini [display] d3d9on12 (default 0, experimental): the game's Direct3D 9 runs on Windows' Direct3D 12 (d3d9.dll Direct3DCreate9On12), the way to DX12 and, through D3D11On12, DX11 (d3dcap.c).
+int settings_d3d9on12(void);
+// settings.ini [display] fsr3 (default 0, experimental): FSR 3 on the game's frame (fsr3.c; switches d3d9on12 on); fsr3_dir: the folder with AMD's amd_fidelityfx_loader_dx12.dll.
+int settings_fsr3(void);
+const char *settings_fsr3_dir(void);
+// fsr3_sharpness (0-100, default 50): the sharpening FSR 3 applies to its output (0 = off).
+int settings_fsr3_sharpness(void);
+// settings.ini [display] upscale (default 0): the game renders at the size of its own video settings and is upscaled to upscale_width x upscale_height (FSR 1, upscale.c);
+// upscale_sharpness: the sharpening in hundredths of a stop of reduction (default 25; 0 = the strongest).
+int settings_upscale(void);
+int settings_upscale_width(void);
+int settings_upscale_height(void);
+int settings_upscale_sharpness(void);
+// settings.ini [display] d3d9on12_adapter (default -1: the adapter with the primary display attached): the graphics adapter index the Direct3D 12 device is made on.
+int settings_d3d9on12_adapter(void);
 // settings.ini [display] borderless (default 1): the game's exclusive full screen is made a window of the whole screen without a border (d3dcap.c).
 int settings_borderless(void);
 // settings.ini [native] keepads (default 1): the aim bit stays in the player's command while the Cliffhanger climb reads it (climbads.c).
 int settings_keepads(void);
+// settings.ini [gameplay] fall_damage (0 or 1, -1: the game's own), jump_height (1-1000, 0: the game's own), gravity (1-5000, 0: the game's own): set at start as the session dvars
+// mw2coop_fall_damage, mw2coop_jump_height, mw2coop_gravity (maps\_mw2coop_options).
+int settings_gameplay_fall_damage(void);
+int settings_gameplay_jump_height(void);
+int settings_gameplay_gravity(void);
+// settings.ini [discord] client_id: the id of a Discord application (digits); empty (the default): no Discord presence (discord.c).
+const char *settings_discord_id(void);
 // mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).
 const char *settings_player_id(void);
