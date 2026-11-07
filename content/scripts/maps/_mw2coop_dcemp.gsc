@@ -14,12 +14,24 @@ coop()
 	return maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 );
 }
 
-// iss_camera_setup(): player 2's camera floats beside player 1's and follows it.
+// iss_camera_setup(): player 2's camera floats beside player 1's and follows it. Both players' bodies and their
+// names are hidden in space: the two cameras float side by side, and each player saw the other one's body (and his
+// name) in the picture (testers, 2026-11-06). players_empaftermath() shows them again.
 partner_iss_camera( camera )
 {
 	if ( !coop() )
 		return;
 	p2 = level.player2;
+	level.player Hide();
+	p2 Hide();
+	SetDvar( "mw2coop_hide_names", "1" );
+	// nor the partner's marker (maps\_coop's green diamond at the screen edge): it showed in both views, in space too
+	level.mw2coop_iss_icon = false;
+	if ( flag_exist( "coop_show_constant_icon" ) && flag( "coop_show_constant_icon" ) )
+	{
+		level.mw2coop_iss_icon = true;
+		flag_clear( "coop_show_constant_icon" );
+	}
 	p2 AllowCrouch( false );
 	p2 AllowProne( false );
 	p2 FreezeControls( true );
@@ -65,6 +77,14 @@ emp_stance()
 // emp_main(): every player comes back from the white-out in his place in the wreck.
 players_empaftermath()
 {
+	if ( coop() )
+	{
+		level.player Show();
+		level.player2 Show();
+		SetDvar( "mw2coop_hide_names", "" );
+		if ( isdefined( level.mw2coop_iss_icon ) && level.mw2coop_iss_icon && flag_exist( "coop_show_constant_icon" ) )
+			flag_set( "coop_show_constant_icon" );
+	}
 	foreach ( player in maps\_mw2coop_crashsite::crash_players() )
 		player thread maps\dcemp::emp_empaftermath();
 	if ( coop() && isdefined( level.mw2coop_iss_camera ) )

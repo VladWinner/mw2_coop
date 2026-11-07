@@ -99,6 +99,10 @@ main()
 	if ( getdvarint( "mw2coop_native_split" ) )
 		level.revive_hud_base_offset = 75;
 
+	// QA of a level in single player (tools/qa_native.sh with MW2COOP_PLAIN=1): the climb scenario runs without a co-op session
+	if ( GetDvar( "mw2coop_qa" ) == "climbsolo" && !is_campaign_coop() )
+		thread maps\_mw2coop_qa::climbsolo();
+
 	if ( !is_campaign_coop() )
 		return;
 
@@ -852,12 +856,13 @@ restore_ally_positions()
 	if ( !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_start" ) != level.start_point )
 		return;
 	text = GetDvar( "mw2coop_cp_allies" );
-	if ( text == "" )
-		return;
 	wait 3.5;
 	used = [];
 	moved = 0;
-	foreach ( entry in StrTok( text, ";" ) )
+	entries = [];
+	if ( text != "" )
+		entries = StrTok( text, ";" );
+	foreach ( entry in entries )
 	{
 		parts = StrTok( entry, "|" );
 		if ( parts.size != 3 )
@@ -883,7 +888,44 @@ restore_ally_positions()
 			moved++;
 		}
 	}
-	state( "allies put back at the checkpoint " + level.start_point + ": " + moved + " of " + StrTok( text, ";" ).size + " moved" );
+	state( "allies put back at the checkpoint " + level.start_point + ": " + moved + " of " + entries.size + " moved" );
+	gather_far_allies();
+}
+
+// Allies that are still far from both players after a restart at a checkpoint: the start function placed the players at the checkpoint's spot and left the others where the level began, or the
+// checkpoint had recorded them already far behind (owner's logs of 2026-11-04: Wolverines! diner, vip_escort, Contingency ridge and base, Second Sun, Of One's Own Free Will: squads 3500 to
+// 9000 units from the players for minutes). Each is put on a path node near the nearest player, as a game's own autosave would have him there. 2500 units: squads spread out 1500 at most.
+// Allies in a vehicle are left alone. QA: allyfar.
+gather_far_allies()
+{
+	far = 0;
+	near = 0;
+	riding = 0;
+	text = "";
+	foreach ( ai in GetAIArray( "allies" ) )
+	{
+		if ( !IsAlive( ai ) )
+			continue;
+		if ( isdefined( ai.vehicle ) )
+		{
+			riding++;
+			continue;
+		}
+		anchor = seek_player( ai.origin );
+		if ( Distance( ai.origin, anchor.origin ) < 2500 )
+			continue;
+		far++;
+		nodes = GetNodesInRadius( anchor.origin, 500, 120, 200, "path" );
+		if ( nodes.size == 0 )
+		{
+			text += " " + ally_name( ai ) + " (no node)";
+			continue;
+		}
+		node = nodes[ RandomInt( nodes.size ) ];
+		ai ForceTeleport( node.origin, ( 0, node.angles[ 1 ], 0 ) );
+		near++;
+	}
+	state( "allies far from the players after the restart: " + far + ", put near them: " + near + ", in a vehicle: " + riding + text );
 }
 
 // --------------------------------------------------------------------------------------------
@@ -974,6 +1016,16 @@ any_player_sees( ai, cosine )
 {
 	foreach ( player in level.players )
 		if ( IsAlive( player ) && within_fov( player.origin, player GetPlayerAngles(), ai.origin, cosine ) )
+			return true;
+	return false;
+}
+
+// True when any player is touching the entity (a trigger or volume). Level scripts that keep an ally or a scene waiting "until the
+// player is out of the blast zone" ask level.player alone.
+any_player_touching( volume )
+{
+	foreach ( player in level.players )
+		if ( IsAlive( player ) && player IsTouching( volume ) )
 			return true;
 	return false;
 }

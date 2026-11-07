@@ -78,3 +78,42 @@ level.player
 @@@ to
 first
 @@@ end
+
+3. Stealth: both players get the level's stealth visibility (stance, movement, shadow); only player 1
+   had it, so the enemies saw player 2 from far away.
+@@@ subst start_default
+level.player stealth_default();
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player stealth_default();
+@@@ end
+@@@ subst start_road
+level.player stealth_default();
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player stealth_default();
+@@@ end
+@@@ subst start_rappel
+level.player stealth_default();
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player stealth_default();
+@@@ end
+@@@ subst start_barracks
+level.player stealth_default();
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player stealth_default();
+@@@ end
+@@@ subst start_steamroom
+level.player stealth_default();
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player stealth_default();
+@@@ end
+@@@ subst start_ledge
+level.player stealth_default();
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player stealth_default();
+@@@ end

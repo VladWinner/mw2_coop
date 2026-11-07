@@ -78,4 +78,11 @@ p.subst('rappel_guard1_kill_player', 'flag_wait( "rappel_end" );',
         'flag_wait( "rappel_end" );\n\tfirst = maps\\_mw2coop_cave::first_rappeller();')
 p.subst('rappel_guard1_kill_player', 'level.player', 'first')
 n += 1
+# stealth: the visibility (stance, movement, shadow) that sets what the enemies can see is made per player by stealth_default, which every start calls for level.player only:
+# player 2 had none and the enemies saw him from the engine's default distance (the owner's report: detected from far away)
+p.note("""{0}. Stealth: both players get the level's stealth visibility (stance, movement, shadow); only player 1
+   had it, so the enemies saw player 2 from far away.""".format(n + 1))
+for fn in ('start_default', 'start_road', 'start_rappel', 'start_barracks', 'start_steamroom', 'start_ledge'):
+    p.subst(fn, 'level.player stealth_default();', 'foreach ( mw2coop_player in level.players )\n\t\tmw2coop_player stealth_default();')
+n += 1
 p.write(name + '.patch', HEADER.format(name, TITLE))

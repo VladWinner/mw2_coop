@@ -31,3 +31,50 @@ within_fov( level.player.origin, level.player getPlayerAngles(), self.origin, le
 @@@ to
 maps\_mw2coop::any_player_sees( self, level.cosine[ "70" ] )
 @@@ end
+
+3. The Predator laptop (remote_missile_detonator): the level gives it to level.player only: the weapon, the d-pad slot
+   (SetActionSlot), has_remote_detonator, and the thread that raises the laptop, runs the drone and puts it away
+   (maps\_remotemissile::RemoteMissileDetonatorNotify). Player 2 only got a copy of the weapon from the loadout sync, with
+   none of that: with the laptop out he could neither use it nor switch to another weapon (testers, 2026-11-06; the same
+   bug as in Wolverines!). Player 2 gets the same in the three places the level hands it out.
+@@@ subst main
+level.player thread maps\_remotemissile::RemoteMissileDetonatorNotify();
+@@@ to
+level.player thread maps\_remotemissile::RemoteMissileDetonatorNotify();
+	if ( maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) )
+	{
+		level.player2.remotemissile_actionslot = 4;
+		level.player2 thread maps\_remotemissile::RemoteMissileDetonatorNotify();
+	}
+@@@ end
+@@@ subst first_uav_sequence
+level.player SetActionSlot( 4, "weapon", "remote_missile_detonator" );
+@@@ to
+level.player SetActionSlot( 4, "weapon", "remote_missile_detonator" );
+		if ( maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) )
+		{
+			level.player2.has_remote_detonator = true;
+			level.player2 giveWeapon( "remote_missile_detonator" );
+			level.player2 SetActionSlot( 4, "weapon", "remote_missile_detonator" );
+		}
+@@@ end
+@@@ subst spawn_second_uav
+level.player SetActionSlot( 4, "weapon", "remote_missile_detonator" );
+@@@ to
+level.player SetActionSlot( 4, "weapon", "remote_missile_detonator" );
+		if ( maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) )
+		{
+			level.player2 giveWeapon( "remote_missile_detonator" );
+			level.player2 SetActionSlot( 4, "weapon", "remote_missile_detonator" );
+		}
+@@@ end
+
+4. Stealth: both players get the level's stealth visibility (stance, movement, shadow): stealth_plugin_basic made it for
+   level.player only, so the enemies saw player 2 from far away (testers: "detected from a great distance"). Not run in
+   the game yet.
+@@@ subst main
+level.player stealth_plugin_basic();
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player stealth_plugin_basic();
+@@@ end

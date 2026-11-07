@@ -250,3 +250,17 @@ within_fov( level.player.origin, level.player getPlayerAngles(), self.origin, le
 @@@ to
 maps\_mw2coop::any_player_sees( self, level.cosine[ "60" ] )
 @@@ end
+
+10. The prisoner walk-off before the C4 ambush: the two hostages in the upper room are hidden and posed only while no player
+   looks at them (it waited for player 1's view alone: with him looking their way, and the client elsewhere, it never went on),
+   and the friendly plants his C4 once no player stands in the blast zone (it looked at player 1 alone).
+@@@ subst hostage_manhandle_sequence
+while ( within_fov( level.player getEye(), level.player getPlayerAngles(), aHostagesForSequence[ 0 ].origin, level.cosine[ "45" ] ) )
+@@@ to
+while ( maps\_mw2coop::any_player_sees( aHostagesForSequence[ 0 ], level.cosine[ "45" ] ) )
+@@@ end
+@@@ subst friendly_plant_c4
+while( level.player isTouching( safeVolume ) )
+@@@ to
+while( maps\_mw2coop::any_player_touching( safeVolume ) )
+@@@ end

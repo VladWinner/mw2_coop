@@ -63,3 +63,20 @@ level.text2
 @@@ to
 self.mw2coop_notice
 @@@ end
+
+3. The weapon to go back to after the laptop is remembered whenever a player's weapon changes (it was noted only when the
+   laptop is raised with the d-pad). A player whose laptop was raised any other way, or whose d-pad thread started late
+   (player 2 got the thread late in Contingency), had no last_weapon: putting the laptop away ended in a script error
+   (SwitchBackToMainWeapon compares the undefined value) and he stayed with the laptop in his hands.
+@@@ subst remotemissile_weapon_change
+self waittill( "weapon_change", weap );
+@@@ to
+self waittill( "weapon_change", weap );
+		if ( !is_remote_missile_weapon( weap ) && weap != "none" )
+			self.last_weapon = weap;
+@@@ end
+@@@ subst SwitchBackToMainWeapon_internal
+if ( self.last_weapon == weapon )
+@@@ to
+if ( isdefined( self.last_weapon ) && self.last_weapon == weapon )
+@@@ end

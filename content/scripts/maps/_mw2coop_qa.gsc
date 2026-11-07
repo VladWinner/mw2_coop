@@ -19,6 +19,11 @@
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
+//   heliend - (dcburning, start "heliride2", native split) the Black Hawk is hit (flag player_heli_22): frames he-N of both players every 0.5 s for 8 s
+//   crashdrift - (dcburning start "crash" / dcemp, pair) no input after the crash site fade-up: how far does each player drift in 24 s
+//   empinput - (dcemp, default start, pair) no input from the crash site to the street: origin, link and the movement input of both players every second
+//   crashwalk - (dcemp, default start, pair) real Forward/Back presses at the crash site once the scene lets the players move: can each player go back
+//   oilrigambush - (oilrig, start "heli", pair) hostages alive and the ambush flags every 2 s for 90 s
 //   framesevery - (any level and start) a frame of both players (a composed one in split screen) every second for 40 s: mw2coop\shotse-<n>.bmp, with both players' positions in the report
 //   failspin - (split screen, any level) 12 s in the mission is failed (maps\_mw2coop::mission_failed); after the restart a frame every second for 20 s with player 2's yaw: does his half turn by itself (testers: after a failed mission his camera spins)?
 //   downaudio - (any level, split screen or pair) player 2 is downed for 20 s, then revived: the near-death sound filter (EQ/reverb flag) of each player every second.
@@ -34,6 +39,10 @@
 //   oilrigclimbp - the same in a network pair (qa_pair.sh oilrigclimbp heli 60 oilrig): each player's own machine presses Forward (press()), not a pad dvar
 //   oilrigclimbb - the split screen climb with the OTHER player standing at the top of the ladder (1629 118 -922, right at the exit), where the stock ambush has the first player wait: does the climber get stuck under / at him?
 //   oilrigwhere - (oilrig, any start) where both players stand and what they see 8 s after the start (frame ow-N): which part of the rig a start point is
+//   issshots - (dcemp, default start, pair) frames of both machines every 3 s through the ISS scene and the EMP: the two floating cameras must not show the other player's body or name (owner, 2026-11-06)
+//   laptop2pair - (contingency, start "base", pair) the client (player 2) raises the Predator laptop (script switch) and puts it away with his stance key: his weapon after each
+//   javpair - (pair, dcburning start "crows_nest_armor") player 2 is given the Javelin and switches to it: frames of both machines before, 3 s and 10 s after (owner: the client's textures vanish when he picks up the Javelin)
+//   laptop2 - (contingency, start "ridge", native split with "p1pad=0;p0pad=1") player 2 gets the Predator laptop with the d-pad slot and the laptop thread; he raises it (d-pad right), then puts it away (Y): his weapon after each
 //   allyrestore - (any level with a start point) the allies' places are snapshotted, one ally's recorded place is moved 1500 units away, the mission is failed: after the restart that ally must be at the recorded place (maps/_mw2coop restore_ally_positions)
 //   squadgather - (any level, with a start point) how far the allies are from the nearest player 3 s and 14 s into the level: the squad is brought to player 1 after a restart at a checkpoint
 //   airspeed - (airport, native split) both walk forward on their pads for 6 s after the elevator: the distance each covers
@@ -281,6 +290,21 @@ main()
 		case "oilrig2":
 			oilrig();
 			break;
+		case "heliend":
+			heliend();
+			break;
+		case "crashdrift":
+			crashdrift();
+			break;
+		case "empinput":
+			empinput();
+			break;
+		case "crashwalk":
+			crashwalk();
+			break;
+		case "oilrigambush":
+			oilrigambush();
+			break;
 		case "framesevery":
 			framesevery();
 			break;
@@ -309,6 +333,18 @@ main()
 		case "oilrigwhere":
 			oilrigwhere();
 			break;
+		case "laptop2":
+			laptop2();
+			break;
+		case "javpair":
+			javpair();
+			break;
+		case "laptop2pair":
+			laptop2pair();
+			break;
+		case "issshots":
+			issshots();
+			break;
 		case "oilrigclimb":
 		case "oilrigclimbp":
 		case "oilrigclimbb":
@@ -326,6 +362,9 @@ main()
 			break;
 		case "airspeed":
 			airspeed();
+			break;
+		case "stealthp2":
+			stealthp2();
 			break;
 		case "heldweapons":
 			heldweapons();
@@ -2256,6 +2295,170 @@ takedown3()
 	report( "done" );
 }
 
+heliend_look( target )
+{
+	level endon( "mw2coop_qa_done" );
+	for ( n = 0; ; n++ )
+	{
+		// the missile hit narrows his view again (partner_holds_on): widen it
+		if ( n % 10 == 0 && isdefined( level.blackhawk ) )
+			self PlayerLinkToDelta( level.blackhawk, "tag_playerride", 1, 170, 170, 80, 80 );
+		dir = target.origin + ( 0, 0, 40 ) - self GetEye();
+		self SetPlayerAngles( VectorToAngles( dir ) );
+		wait 0.05;
+	}
+}
+
+heliend()
+{
+	// dcburning, start "heliride2": the Black Hawk is hit; what does each player see of the other afterwards
+	// (owner: player 2 still sees the gunner at the minigun). Frames he-N every 0.5 s.
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 5;
+	// player 2 looks at player 1 all the time (wide view limits, as gulagturn)
+	level.player2 Unlink();
+	level.player2 PlayerLinkToDelta( level.blackhawk, "tag_playerride", 1, 170, 170, 80, 80 );
+	level.player2 thread heliend_look( level.player );
+	wait 0.5;
+	SetDvar( "mw2coop_qa_shot", "he-pre" );
+	report( "before the hit: p1 " + vec_int( level.player.origin ) + " linked " + level.player IsLinked() + ", p2 " + vec_int( level.player2.origin ) + " linked " + level.player2 IsLinked() );
+	flag_set( "player_heli_22" );
+	for ( i = 0; i < 16; i++ )
+	{
+		wait 0.5;
+		SetDvar( "mw2coop_qa_shot", "he-" + i );
+		report( "frame " + i + ": p1 " + vec_int( level.player.origin ) + " linked " + level.player IsLinked() + ", p2 " + vec_int( level.player2.origin ) + " linked " + level.player2 IsLinked() );
+	}
+	report( "done" );
+}
+
+crashdrift()
+{
+	// the crash site (dcburning start "crash" or dcemp): nobody touches a key; where does each player go after the fade-up?
+	// (owner, 2026-11-06: the client is pushed forward constantly when the helicopter has crashed)
+	level.mw2coop_no_follow = true;
+	p1 = level.player;
+	p2 = level.player2;
+	flag_wait( "crash_fade_up" );
+	wait 3;
+	a1 = p1.origin;
+	a2 = p2.origin;
+	for ( i = 0; i < 12; i++ )
+	{
+		wait 2;
+		m1 = p1 GetNormalizedMovement();
+		m2 = p2 GetNormalizedMovement();
+		report( "t+" + ( 3 + 2 * i + 2 ) + ": p1 " + vec_int( p1.origin ) + " moved " + int( Distance( p1.origin, a1 ) ) + " linked " + p1 IsLinked() + " input " + m1[ 0 ] + " " + m1[ 1 ] + ", p2 " + vec_int( p2.origin ) + " moved " + int( Distance( p2.origin, a2 ) ) + " linked " + p2 IsLinked() + " input " + m2[ 0 ] + " " + m2[ 1 ] );
+	}
+	check( Distance( p1.origin, a1 ) < 60, "player 1 stays where he is without input (" + int( Distance( p1.origin, a1 ) ) + " units)" );
+	check( Distance( p2.origin, a2 ) < 60, "player 2 stays where he is without input (" + int( Distance( p2.origin, a2 ) ) + " units)" );
+	report( "done" );
+}
+
+empinput()
+{
+	// dcemp, whole sequence, nobody touches a key: both players' origin, link and the movement input the server sees, every second, until both are free
+	// (owner, 2026-11-06: between the white screens the player moves forward by himself and cannot go back)
+	level.mw2coop_no_follow = true;
+	p1 = level.player;
+	p2 = level.player2;
+	last1 = p1.origin;
+	last2 = p2.origin;
+	for ( i = 0; i < 200; i++ )
+	{
+		wait 1;
+		m1 = p1 GetNormalizedMovement();
+		m2 = p2 GetNormalizedMovement();
+		stage = "-";
+		if ( flag( "iss_fx" ) )
+			stage = "iss";
+		if ( flag( "iss_done" ) )
+			stage = "emp";
+		if ( flag( "emp_back_from_whiteout" ) )
+			stage = "back";
+		report( i + " " + stage + ": p1 " + vec_int( p1.origin ) + " step " + int( Distance( p1.origin, last1 ) ) + " linked " + p1 IsLinked() + " input " + m1[ 0 ] + " " + m1[ 1 ] + ", p2 " + vec_int( p2.origin ) + " step " + int( Distance( p2.origin, last2 ) ) + " linked " + p2 IsLinked() + " input " + m2[ 0 ] + " " + m2[ 1 ] );
+		last1 = p1.origin;
+		last2 = p2.origin;
+		if ( stage == "back" && !p1 IsLinked() && !p2 IsLinked() )
+			break;
+	}
+	report( "done" );
+}
+
+crashwalk_step( player, label )
+{
+	fwd = AnglesToForward( ( 0, player GetPlayerAngles()[ 1 ], 0 ) );
+	before = player.origin;
+	press( player, label, 1000 );
+	trace = "";
+	for ( k = 0; k < 10; k++ )
+	{
+		wait 0.25;
+		m = player GetNormalizedMovement();
+		e = player.origin - before;
+		trace += " " + int( e[ 0 ] * fwd[ 0 ] + e[ 1 ] * fwd[ 1 ] ) + "/" + m[ 0 ];
+	}
+	report( player_name( player ) + " " + label + " every 0.25 s (moved/input):" + trace );
+	wait 0.5;
+	d = player.origin - before;
+	along = int( d[ 0 ] * fwd[ 0 ] + d[ 1 ] * fwd[ 1 ] );
+	report( player_name( player ) + " " + label + ": moved " + along + " along his facing (total " + int( Distance2D( player.origin, before ) ) + ")" );
+	return along;
+}
+
+crashwalk()
+{
+	// dcemp, default start, pair: real key presses at the crash site (the cabin's movement grid) once the scene lets them move.
+	// (owner, 2026-11-06: the player moves forward by himself and cannot go back)
+	level.mw2coop_no_follow = true;
+	flag_wait( "redshirt_headshot" );
+	wait 4;
+	foreach ( player in level.players )
+	{
+		idle0 = player.origin;
+		idle = "";
+		for ( k = 0; k < 12; k++ )
+		{
+			wait 0.25;
+			idle += " " + int( Distance2D( player.origin, idle0 ) ) + "/" + player GetNormalizedMovement()[ 0 ];
+		}
+		report( player_name( player ) + " idle 3 s every 0.25 s (moved/input):" + idle );
+		f = crashwalk_step( player, "forward" );
+		b = crashwalk_step( player, "back" );
+		b2 = crashwalk_step( player, "back" );
+		check( b < 0 || b2 < 0, player_name( player ) + " can go back (forward " + f + ", back " + b + ", back again " + b2 + ")" );
+	}
+	report( "done" );
+}
+
+oilrigambush_flags()
+{
+	text = "";
+	foreach ( name in strtok( "upper_room_breached upper_room_cleared obj_c4_ambush_plant_given player_has_started_planting_c4 obj_c4_ambush_plant_complete ambush_c4_triggered player_looking_at_prisoner_sequence trig_prisoner_sequence_failsafe", " " ) )
+		if ( isdefined( level.flag[ name ] ) && flag( name ) )
+			text += " " + name;
+	return text;
+}
+
+oilrigambush()
+{
+	// oilrig, start "heli": the ambush room; what the hostages do and what the flags are, every 2 s (issue 9: hostages do not disappear and die when the bodies are blown up with C4)
+	level.mw2coop_no_follow = true;
+	for ( i = 0; i < 45; i++ )
+	{
+		wait 2;
+		civs = GetAIArray( "neutral" );
+		alive = 0;
+		hidden = 0;
+		foreach ( civ in civs )
+			if ( IsAlive( civ ) )
+				alive++;
+		report( "t " + ( i * 2 + 2 ) + ": hostages " + alive + ", p1 " + vec_int( level.player.origin ) + ", p2 " + vec_int( level.player2.origin ) + ", flags:" + oilrigambush_flags() );
+	}
+	report( "done" );
+}
+
 framesevery()
 {
 	level.mw2coop_no_follow = true;
@@ -2306,6 +2509,108 @@ oilrigclimb()
 		}
 		SetDvar( pad, "0 0 0 0 0 0 0 0" );
 		wait 2;
+	}
+	report( "done" );
+}
+
+laptop2()
+{
+	level.mw2coop_no_follow = true;
+	t = 0;
+	while ( !level.player2 HasWeapon( "remote_missile_detonator" ) && t < 90 )
+	{
+		wait 1;
+		t++;
+	}
+	report( "player 2 has the laptop: " + level.player2 HasWeapon( "remote_missile_detonator" ) + " after " + t + " s, p1 has it: " + level.player HasWeapon( "remote_missile_detonator" ) + ", p2 weapon " + level.player2 GetCurrentWeapon() + ", slot thread " + isdefined( level.player2.remotemissile_actionslot ) );
+	wait 8;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 8 0 0 0" );
+	wait 0.4;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	wait 3;
+	report( "after d-pad right: p2 weapon " + level.player2 GetCurrentWeapon() );
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 8 0 0 0" );
+	wait 0.4;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	wait 3;
+	report( "after d-pad right again: p2 weapon " + level.player2 GetCurrentWeapon() );
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 32768 0 0 0" );
+	wait 0.4;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	wait 3;
+	report( "after Y: p2 weapon " + level.player2 GetCurrentWeapon() );
+	report( "done" );
+}
+
+issshots()
+{
+	level.mw2coop_no_follow = true;
+	while ( !flag( "iss_fx" ) )
+		wait 0.5;
+	report( "iss started" );
+	for ( i = 0; i < 18; i++ )
+	{
+		stage = "-";
+		if ( flag( "iss_fx" ) )
+			stage = "iss";
+		if ( flag( "iss_done" ) )
+			stage = "emp";
+		if ( flag( "emp_back_from_whiteout" ) )
+			stage = "back";
+		qa_shot( "iss" + i + "-" + stage );
+		report( i + " " + stage + ": p1 " + vec_int( level.player.origin ) + " p2 " + vec_int( level.player2.origin ) + " hide_names " + GetDvar( "mw2coop_hide_names" ) );
+		wait 2.4;
+	}
+	report( "done" );
+}
+
+laptop2pair()
+{
+	level.mw2coop_no_follow = true;
+	t = 0;
+	while ( !level.player2 HasWeapon( "remote_missile_detonator" ) && t < 60 )
+	{
+		wait 1;
+		t++;
+	}
+	report( "player 2 has the laptop: " + level.player2 HasWeapon( "remote_missile_detonator" ) + " after " + t + " s, weapon " + level.player2 GetCurrentWeapon() );
+	wait 6;
+	level.player2 SwitchToWeapon( "remote_missile_detonator" );
+	wait 5;
+	report( "raised: p2 weapon " + level.player2 GetCurrentWeapon() + ", using_uav " + level.player2.using_uav + ", controlling " + isdefined( level.player2.is_controlling_UAV ) );
+	report( "last_weapon " + level.player2.last_weapon + ", primaries " + level.player2 GetWeaponsListPrimaries().size );
+	press( level.player2, "stance", 300 );
+	for ( k = 0; k < 8; k++ )
+	{
+		wait 1;
+		report( "after his stance key +" + k + " s: p2 weapon " + level.player2 GetCurrentWeapon() + ", using_uav " + level.player2.using_uav + ", controlling " + isdefined( level.player2.is_controlling_UAV ) + ", last_weapon " + level.player2.last_weapon );
+	}
+	report( "done" );
+}
+
+javpair()
+{
+	level.mw2coop_no_follow = true;
+	wait 12;
+	qa_shot( "jv-0" );
+	report( "before: p2 weapon " + level.player2 GetCurrentWeapon() + ", p2 at " + vec_int( level.player2.origin ) );
+	items = GetEntArray( "weapon_javelin_dcburn", "classname" );
+	report( "Javelin pickups: " + items.size );
+	if ( items.size == 0 )
+	{
+		report( "no Javelin pickup in this level start" );
+		report( "done" );
+		return;
+	}
+	report( "item at " + vec_int( items[ 0 ].origin ) );
+	level.player2 SetOrigin( items[ 0 ].origin + ( 0, 0, 8 ) );
+	wait 1;
+	press( level.player2, "activate", 700 );
+	for ( k = 1; k <= 6; k++ )
+	{
+		wait 1.5;
+		qa_shot( "jv-" + k );
+		report( "after " + k + ": p2 weapon " + level.player2 GetCurrentWeapon() + ", weapons " + level.player2 GetWeaponsListAll().size + ", at " + vec_int( level.player2.origin ) );
 	}
 	report( "done" );
 }
@@ -2581,6 +2886,28 @@ airspeed()
 	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
 	report( "airspeed: in " + secs + " s player 1 walked " + int( d1 ) + " units (" + int( d1 / secs ) + "/s), player 2 " + int( d2 ) + " units (" + int( d2 / secs ) + "/s)" );
 	report( "done" );
+}
+
+// Both players' stealth state: the levels made it for level.player only, so player 2 had no _stealth struct and the
+// engine's default sight distance (enemies saw him from far away).
+qa_vis( player )
+{
+	dist = player.maxVisibleDist;
+	if ( !isdefined( dist ) )
+		dist = "undefined";
+	return "stealth state " + isdefined( player._stealth ) + ", maxVisibleDist " + dist;
+}
+
+stealthp2()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	for ( i = 0; i < 6; i++ )
+	{
+		wait 2;
+		report( "t " + ( ( i + 1 ) * 2 ) + ": p1 " + qa_vis( level.player ) + " | p2 " + qa_vis( level.player2 ) );
+	}
+	check( isdefined( level.player2._stealth ), "player 2 has the stealth state" );
+	check( isdefined( level.player2.maxVisibleDist ) && level.player2.maxVisibleDist < 4000, "player 2's maxVisibleDist is the stealth value, not the default" );
 }
 
 heldweapons()
@@ -3613,6 +3940,13 @@ cptour()
 		wait 3;
 		check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
 		SetDvar( "mw2coop_qa_phase", "cpt:" + here + ":failed" );
+		tour_state( "before the failure" );
+		if ( here != "default" )
+		{
+			// as a real checkpoint of this section: its name and where the allies stand
+			SetDvar( "mw2coop_cp_start", here );
+			maps\_mw2coop::snapshot_allies();
+		}
 		report( "failing the mission at " + here );
 		level thread maps\_mw2coop::mission_failed();
 		wait 40;
@@ -3705,6 +4039,32 @@ tour_state( where )
 	// both riding something (separate vehicles, separate rigs) may be far apart; one riding and
 	// the other left behind may not (dcburning heliride2: player 2 stayed at the level start)
 	check( apart < 1500 || ( level.player IsLinked() && level.player2 IsLinked() ), "together " + where + " (" + apart + " units)" );
+	// the allies: how far each is from the nearest player (owner's logs of 2026-11-04: squads 3500 to 9000 units behind after a restart at a checkpoint)
+	count = 0;
+	far = 0;
+	worst = 0;
+	worst_name = "-";
+	foreach ( ai in GetAIArray( "allies" ) )
+	{
+		if ( !IsAlive( ai ) || isdefined( ai.vehicle ) )
+			continue;
+		// Wolverines: Raptor carries the president to the locker by a stock script, he is not a follower
+		if ( IsSubStr( maps\_mw2coop::ally_name( ai ), "vip_invasion" ) )
+			continue;
+		count++;
+		anchor = maps\_mw2coop::seek_player( ai.origin );
+		d = int( Distance( ai.origin, anchor.origin ) );
+		if ( d >= 2500 )
+			far++;
+		if ( d > worst )
+		{
+			worst = d;
+			worst_name = maps\_mw2coop::ally_name( ai );
+		}
+	}
+	report( where + ": allies " + count + ", farthest " + worst + " (" + worst_name + "), " + far + " at 2500 or more" );
+	if ( where == "after the restart" )
+		check( far == 0, "no ally 2500 or more units from the players " + where + " (" + far + " of " + count + ", farthest " + worst + " " + worst_name + ")" );
 }
 
 // the level's triggers 300 to 2500 units from player 1, nearest first: story triggers (they set a
@@ -4892,4 +5252,42 @@ speed()
 			rate = best.moveplaybackrate;
 		SetDvar( "mw2coop_qa_s", best GetEntityNumber() + " " + int( len ) + " " + rate );
 	}
+}
+
+// Cliffhanger climb in SINGLE PLAYER (mw2coop_qa climbsolo, run with MW2COOP_PLAIN=1; thread started by
+// maps\_mw2coop::main without a co-op session). Vlad, 2026-11-07: weapon given at the start, no death from
+// the fall, no scream. After the cave scene the player must hold only the ice picks; the fall (fade_to_death)
+// must run the whole death_trigger: black, then the mission fails ("ui_deadquote" set) or the player is killed.
+climbsolo()
+{
+	level.mw2coop_qa_n = 0;
+	while ( !flag_exist( "flyin_complete" ) )
+		wait 0.05;
+	// the cave scene (teleport_to_cave) sets the flag; if it never does, look anyway after 150 s
+	for ( i = 0; i < 150 && !flag( "flyin_complete" ); i++ )
+		wait 1;
+	report( "solo: flyin_complete " + flag( "flyin_complete" ) + " after " + i + " s" );
+	wait 4;
+	p = level.player;
+	list = p GetWeaponsListAll();
+	text = "";
+	foreach ( w in list )
+		text += w + " ";
+	report( "solo: current '" + p GetCurrentWeapon() + "' weapons [" + text + "] at " + vec_int( p.origin ) );
+	check( list.size == 1 && list[ 0 ] == level.ice_pick_viewweapon, "only the ice picks in hand at the start of the climb" );
+	SetDvar( "ui_deadquote", "" );
+	report( "solo: the fall: fade_to_death set" );
+	flag_set( "fade_to_death" );
+	alive = true;
+	for ( i = 0; i < 16; i++ )
+	{
+		wait 1;
+		if ( !IsAlive( p ) )
+			alive = false;
+		report( "solo: t " + ( i + 1 ) + " alive " + IsAlive( p ) + " deadquote '" + GetDvar( "ui_deadquote" ) + "'" );
+		if ( !alive || GetDvar( "ui_deadquote" ) != "" )
+			break;
+	}
+	check( !alive || GetDvar( "ui_deadquote" ) != "", "the fall killed the player or failed the mission" );
+	report( "done" );
 }
