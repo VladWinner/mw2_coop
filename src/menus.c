@@ -1276,10 +1276,88 @@ static void patch_lobby(int campaign)
 #define ASSET_TYPE_MATERIAL 5
 #define ITEM_BACKGROUND ITEM_BACKGROUND_PTR
 #define ITEM_MATERIAL_EXP ITEM_MATERIAL_EXP_PTR
+#ifdef _WIN64
+#define ITEM_STATIC_FLAGS 0x4c
+#else
+#define ITEM_STATIC_FLAGS 0x44
+#endif
+#define WINDOW_AUTOWRAPPED 0x00800000
 static uint8_t *pic_item, *name_item;
 static void *pic_native_material, *pic_native_exp, *name_native_exp;
 static const char *name_native_text;
-static char shown_map[64];
+static char shown_mission[128];
+static const char *shown_description;
+
+// Item 22 in coop_lobby is the native contextual-hint text item above the mission title and
+// picture. In the campaign lobby it becomes a multi-line mission-description panel; its original
+// text, expressions, geometry and flags return for Spec Ops.
+typedef struct {
+	uint8_t *item;
+	const char *text;
+	void *text_exp;
+	void *float_exps;
+	void *disabled_exp;
+	uint32_t visible_flags;
+	uint32_t static_flags;
+	float rect[4];
+	float client_rect[4];
+} LobbyDescriptionState;
+static LobbyDescriptionState lobby_description_state;
+
+static void patch_lobby_description(uint8_t *menu, int campaign, const char *description)
+{
+	int at = ui_item_index(menu, "description");
+	if (at < 0)
+		return;
+	uint8_t *item = (*(uint8_t ***)(menu + MENU_ITEMS))[at];
+	LobbyDescriptionState *state = &lobby_description_state;
+	if (item != state->item) {
+		state->item = item;
+		state->text = *(const char **)(item + ITEM_TEXT);
+		state->text_exp = *(void **)(item + ITEM_TEXT_EXP);
+		state->float_exps = *(void **)(item + ITEM_FLOAT_EXPS);
+		state->disabled_exp = *(void **)(item + ITEM_DISABLED_EXP);
+		state->visible_flags = *(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) & (WINDOW_VISIBLE | WINDOW_HASFOCUS);
+		state->static_flags = *(uint32_t *)(item + ITEM_STATIC_FLAGS);
+		memcpy(state->rect, item + ITEM_RECT, sizeof(state->rect));
+		memcpy(state->client_rect, item + ITEM_RECT_CLIENT_Y - 4, sizeof(state->client_rect));
+	}
+	if (!campaign) {
+		*(const char **)(item + ITEM_TEXT) = state->text;
+		*(void **)(item + ITEM_TEXT_EXP) = state->text_exp;
+		*(void **)(item + ITEM_FLOAT_EXPS) = state->float_exps;
+		*(void **)(item + ITEM_DISABLED_EXP) = state->disabled_exp;
+		memcpy(item + ITEM_RECT, state->rect, sizeof(state->rect));
+		memcpy(item + ITEM_RECT_CLIENT_Y - 4, state->client_rect, sizeof(state->client_rect));
+		uint32_t *flags = (uint32_t *)(item + ITEM_DYNAMIC_FLAGS);
+		*flags = (*flags & ~(WINDOW_VISIBLE | WINDOW_HASFOCUS)) | state->visible_flags;
+		*(uint32_t *)(item + ITEM_STATIC_FLAGS) = state->static_flags;
+		return;
+	}
+	if (!description || !description[0]) {
+		*(const char **)(item + ITEM_TEXT) = "";
+		*(void **)(item + ITEM_TEXT_EXP) = NULL;
+		*(void **)(item + ITEM_FLOAT_EXPS) = NULL;
+		*(void **)(item + ITEM_DISABLED_EXP) = NULL;
+		*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
+		*(uint32_t *)(item + ITEM_STATIC_FLAGS) &= ~WINDOW_AUTOWRAPPED;
+		return;
+	}
+	*(const char **)(item + ITEM_TEXT) = description; // already localized by localize_text()
+	*(void **)(item + ITEM_TEXT_EXP) = NULL;
+	*(void **)(item + ITEM_FLOAT_EXPS) = NULL; // do not gate the description on ui_hint_focus/startmatch
+	*(void **)(item + ITEM_DISABLED_EXP) = NULL;
+	*(uint32_t *)(item + ITEM_STATIC_FLAGS) |= WINDOW_AUTOWRAPPED;
+	float *rect = (float *)(item + ITEM_RECT);
+	float *client = (float *)(item + ITEM_RECT_CLIENT_Y - 4);
+	// Keep the bottom edge at the existing description slot; grow upward into the free area
+	// immediately above the mission name (20 px) and image, with the stock autowrap enabled.
+	rect[1] = state->rect[1] - 52.0f;
+	rect[3] = 72.0f;
+	client[1] = state->client_rect[1] - 52.0f;
+	client[3] = 72.0f;
+	*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) |= WINDOW_VISIBLE;
+}
 
 static void find_mission_items(uint8_t *menu)
 {
@@ -1302,11 +1380,15 @@ static void find_mission_items(uint8_t *menu)
 		pic_item = pic;
 		pic_native_material = *(void **)(pic + ITEM_BACKGROUND);
 		pic_native_exp = *(void **)(pic + ITEM_MATERIAL_EXP);
+		shown_mission[0] = 0;
+		shown_description = NULL;
 	}
 	if (name != name_item) {
 		name_item = name;
 		name_native_exp = *(void **)(name + ITEM_TEXT_EXP);
 		name_native_text = *(const char **)(name + ITEM_TEXT);
+		shown_mission[0] = 0;
+		shown_description = NULL;
 	}
 }
 
@@ -1333,48 +1415,91 @@ static void lobby_picture_shape(int square)
 static void patch_lobby_mission(uint8_t *menu, int campaign)
 {
 	find_mission_items(menu);
-	if (!pic_item || !name_item)
+	if (!pic_item || !name_item) {
+		patch_lobby_description(menu, campaign, NULL);
 		return;
+	}
 	lobby_picture_shape(campaign);
 	if (!campaign) {
 		*(void **)(pic_item + ITEM_MATERIAL_EXP) = pic_native_exp;
 		*(void **)(pic_item + ITEM_BACKGROUND) = pic_native_material;
 		*(void **)(name_item + ITEM_TEXT_EXP) = name_native_exp;
 		*(const char **)(name_item + ITEM_TEXT) = name_native_text;
-		shown_map[0] = 0;
+		patch_lobby_description(menu, 0, NULL);
+		shown_mission[0] = 0;
+		shown_description = NULL;
 		return;
 	}
-	char map[64] = "";
+
+	char map[64] = "", museum_mode[32] = "";
 	game_dvar_raw("coop_mapName", map, sizeof(map));
-	if (!map[0] || strcmp(map, shown_map) == 0)
+	if (!map[0]) {
+		patch_lobby_description(menu, 1, NULL);
+		shown_mission[0] = 0;
+		shown_description = NULL;
 		return;
-	lstrcpynA(shown_map, map, sizeof(shown_map));
-	// only the missions of the campaign list have a picture: asking the asset database for one
-	// that does not exist ("levelshot_mw2_ending") hung the game. The knife fight map (ending)
-	// shows Endgame's.
+	}
+	if (strcmp(map, "ending") == 0)
+		game_dvar_raw("ui_char_museum_mode", museum_mode, sizeof(museum_mode));
+
+	// Mission Select's MUSEUM entry uses the 'ending' map with ui_char_museum_mode=free.
+	// The selectable Endgame mission continues to use the original 'ending' -> 'af_chase'
+	// fallback; all other campaign mission mappings remain unchanged.
+	int museum = strcmp(map, "ending") == 0 && strcmp(museum_mode, "free") == 0;
+	const char *shown = museum ? "museum" : (strcmp(map, "ending") == 0 ? "af_chase" : map);
+	char identity[128];
+	snprintf(identity, sizeof(identity), "%s|%s", map, museum_mode);
+	if (strcmp(identity, shown_mission) == 0) {
+		// Menu setup/onOpen can overwrite the description item after the first lobby patch.
+		// Reapply the cached text on every tick instead of waiting for the mission to change.
+		patch_lobby_description(menu, 1, shown_description);
+		return;
+	}
+	lstrcpynA(shown_mission, identity, sizeof(shown_mission));
+
+	// Only campaign Mission Select entries have a known levelshot. The Museum material was
+	// confirmed in levels.menu as levelshot_mw2_museum; never look up levelshot_mw2_ending.
 	static const char *const listed[] = {"trainer", "roadkill", "cliffhanger", "airport", "favela", "invasion",
 		"favela_escape", "arcadia", "oilrig", "gulag", "dcburning", "contingency", "dcemp", "dc_whitehouse",
-		"estate", "boneyard", "af_caves", "af_chase"};
-	const char *shown = strcmp(map, "ending") == 0 ? "af_chase" : map;
+		"estate", "boneyard", "af_caves", "af_chase", "museum"};
 	int in_list = 0;
 	for (size_t i = 0; i < sizeof(listed) / sizeof(listed[0]); i++)
 		in_list |= strcmp(shown, listed[i]) == 0;
 	if (!in_list) {
+		shown_description = NULL;
+		patch_lobby_description(menu, 1, NULL);
 		log_printf("menus: no picture for '%s'", map);
 		return;
 	}
-	static char material[96], text[96];
+
+	static char material[96], text[96], desc_key[112];
 	snprintf(material, sizeof(material), "levelshot_mw2_%s", shown);
-	int n = snprintf(text, sizeof(text), "@MENU_SP_SP_");
-	for (const char *m = shown; *m && n < (int)sizeof(text) - 1; m++)
-		text[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
-	text[n] = 0;
+	if (museum) {
+		lstrcpynA(text, "MUSEUM", sizeof(text));
+		lstrcpynA(desc_key, "MW2COOP_MUSEUM_DESC", sizeof(desc_key));
+	} else {
+		int n = snprintf(text, sizeof(text), "@MENU_SP_SP_");
+		for (const char *m = shown; *m && n < (int)sizeof(text) - 1; m++)
+			text[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+		text[n] = 0;
+
+		int d = snprintf(desc_key, sizeof(desc_key), "MENU_SP_SP_");
+		for (const char *m = shown; *m && d < (int)sizeof(desc_key) - 6; m++)
+			desc_key[d++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+		snprintf(desc_key + d, sizeof(desc_key) - d, "_DESC");
+	}
+
+	const char *description = localize_text(desc_key);
+	shown_description = description;
+	patch_lobby_description(menu, 1, description);
 	typedef void *(*find_t)(int, const char *);
+	void *material_ptr = ((find_t)(base + RVA_DB_FIND_HEADER))(ASSET_TYPE_MATERIAL, material);
 	*(void **)(pic_item + ITEM_MATERIAL_EXP) = NULL;
-	*(void **)(pic_item + ITEM_BACKGROUND) = ((find_t)(base + RVA_DB_FIND_HEADER))(ASSET_TYPE_MATERIAL, material);
+	*(void **)(pic_item + ITEM_BACKGROUND) = material_ptr;
 	*(void **)(name_item + ITEM_TEXT_EXP) = NULL;
 	*(const char **)(name_item + ITEM_TEXT) = text;
-	log_printf("menus: lobby shows %s (%s)", material, text);
+	log_printf("menus: lobby shows %s (%s), description %s", material, text,
+		description ? "loaded" : "not available");
 }
 
 // Ready state: each PC sends its own to the partner every second while the lobby is open
