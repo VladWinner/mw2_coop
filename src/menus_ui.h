@@ -8,6 +8,7 @@
 #define MENU_ITEM_COUNT 0xbc
 #define MENU_ON_OPEN 0xe0
 #define MENU_ON_CLOSE 0xf0
+#define MENU_SOUND_LOOP 0x118 // const char *soundName (menu script property: soundLoop)
 #define MENU_ITEMS 0x168
 #define ITEM_RECT 0x08 // rectDef_t {x, y, w, h floats, horzAlign, vertAlign chars}
 #define ITEM_RECT_Y 0x0c
@@ -39,6 +40,7 @@
 #define MENU_ITEM_COUNT 0xac
 #define MENU_ON_OPEN 0xcc
 #define MENU_ON_CLOSE 0xd4
+#define MENU_SOUND_LOOP 0xe8 // const char *soundName (menu script property: soundLoop)
 #define MENU_ITEMS 0x118
 #define ITEM_RECT 0x04
 #define ITEM_RECT_Y 0x08

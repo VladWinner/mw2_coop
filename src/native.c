@@ -129,6 +129,8 @@ static uint8_t *base;
 #define WD_AIM_RANGE_ADS 0x430
 #define WD_AUTO_RANGE 0x428
 #define WEAPON_DEF(w) (((const uint8_t *(*)(int64_t))(base + 0x85850))(w))
+#define RVA_RENDER_WIDTH 0x4113720 // the active render/backbuffer dimensions
+#define RVA_RENDER_HEIGHT 0x4113724
 #define RVA_CG_ASPECT 0x43c640 // the cgame's aspect
 #define RVA_PIXEL_ASPECT 0x411373c // the pixel aspect of the 2D
 #define RVA_VIDEO_ASPECT 0x4113738
@@ -207,6 +209,8 @@ static uint8_t *base;
 #define WD_AIM_RANGE_ADS 0x2e8
 #define WD_AUTO_RANGE 0x2e0
 #define WEAPON_DEF(w) (*(const uint8_t *const *)(base + XR(0x1669d08) + (size_t)(w) * 4)) // the table of weapon def pointers
+#define RVA_RENDER_WIDTH XR(0x1c8ed9c) // the active render/backbuffer dimensions
+#define RVA_RENDER_HEIGHT XR(0x1c8eda0)
 #define RVA_CG_ASPECT XR(0x35f018)
 #define RVA_PIXEL_ASPECT XR(0x188edb8)
 #define RVA_VIDEO_ASPECT XR(0x188edb4)
@@ -396,6 +400,177 @@ static void comp_release(void)
 		IDirect3DPixelShader9_Release(dedupe_ps);
 	dedupe_ps = NULL;
 	dedupe_tried = 0;
+}
+
+// Observe Bink playback and identify its output quad through D3D resource identity.
+typedef struct {
+	unsigned int width;
+	unsigned int height;
+} bink_public_header_t;
+typedef void *(WINAPI *bink_open_t)(const char *, unsigned int);
+typedef int (WINAPI *bink_do_frame_t)(void *);
+typedef int (WINAPI *bink_copy_to_buffer_t)(void *, void *, int, unsigned int, unsigned int, unsigned int, unsigned int);
+typedef void (WINAPI *bink_close_t)(void *);
+static bink_open_t bink_open_original;
+static bink_do_frame_t bink_do_frame_original;
+static bink_copy_to_buffer_t bink_copy_to_buffer_original;
+static bink_close_t bink_close_original;
+static volatile LONG bink_open_handles;
+static volatile LONG bink_d3d_active;
+#define BINK_VIDEO_TEXTURES 8
+static struct {
+	volatile PVOID texture;
+	int scale;
+} bink_video_textures[BINK_VIDEO_TEXTURES];
+static volatile LONG bink_movie_width, bink_movie_height;
+static volatile LONG bink_fit_logged;
+static uintptr_t bink_movie_pixel_shader;
+static uintptr_t bink_movie_vertex_shader;
+static volatile LONG bink_movie_shader_known;
+static IDirect3DDevice9 *bink_fit_device;
+// Patch named Bink imports in every loaded client module. This avoids executable RVAs
+// and Bink-version-specific function prologues, and works for x86/x64/IW4x module layouts.
+static int bink_patch_module_import(HMODULE image, const char *symbol, void *replacement, void **original)
+{
+	if (!image || !symbol || !replacement || !original)
+		return 0;
+	uint8_t *module = (uint8_t *)image;
+	IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)module;
+	if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0)
+		return 0;
+	IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(module + dos->e_lfanew);
+	if (nt->Signature != IMAGE_NT_SIGNATURE)
+		return 0;
+	IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+	if (!dir->VirtualAddress || !dir->Size)
+		return 0;
+	int patched = 0;
+	IMAGE_IMPORT_DESCRIPTOR *imp = (IMAGE_IMPORT_DESCRIPTOR *)(module + dir->VirtualAddress);
+	for (; imp->Name; imp++) {
+		const char *dll = (const char *)(module + imp->Name);
+		if (lstrlenA(dll) < 4 || (dll[0] | 0x20) != 'b' || (dll[1] | 0x20) != 'i' || (dll[2] | 0x20) != 'n' || (dll[3] | 0x20) != 'k')
+			continue;
+		IMAGE_THUNK_DATA *iat = (IMAGE_THUNK_DATA *)(module + imp->FirstThunk);
+		IMAGE_THUNK_DATA *names = imp->OriginalFirstThunk ? (IMAGE_THUNK_DATA *)(module + imp->OriginalFirstThunk) : NULL;
+		HMODULE imported = GetModuleHandleA((const char *)(module + imp->Name));
+		void *exported = imported ? (void *)GetProcAddress(imported, symbol) : NULL;
+		for (; iat->u1.Function; iat++) {
+			int match = 0;
+			if (names && names->u1.AddressOfData) {
+				if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))
+					match = exported && (void *)(uintptr_t)iat->u1.Function == exported;
+				else {
+					IMAGE_IMPORT_BY_NAME *by_name = (IMAGE_IMPORT_BY_NAME *)(module + names->u1.AddressOfData);
+					match = lstrcmpA((const char *)by_name->Name, symbol) == 0;
+				}
+				names++;
+			} else {
+				match = exported && (void *)(uintptr_t)iat->u1.Function == exported;
+			}
+			if (!match)
+				continue;
+			void **slot = (void **)&iat->u1.Function;
+			DWORD old;
+			if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &old))
+				continue;
+			void *current = InterlockedCompareExchangePointer((PVOID volatile *)slot, NULL, NULL);
+			if (current != replacement && current) {
+				if (!*original)
+					*original = current;
+				InterlockedExchangePointer((PVOID volatile *)slot, replacement);
+				patched++;
+			}
+			DWORD ignored;
+			VirtualProtect(slot, sizeof(*slot), old, &ignored);
+		}
+	}
+	return patched;
+}
+
+static int bink_patch_import(const char *symbol, void *replacement, void **original)
+{
+	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+	if (snap == INVALID_HANDLE_VALUE)
+		return 0;
+	MODULEENTRY32 me;
+	memset(&me, 0, sizeof(me));
+	me.dwSize = sizeof(me);
+	int patched = 0;
+	if (Module32First(snap, &me)) {
+		do {
+			patched += bink_patch_module_import(me.hModule, symbol, replacement, original);
+		} while (Module32Next(snap, &me));
+	}
+	CloseHandle(snap);
+	return patched;
+}
+
+static void *WINAPI bink_open_hook(const char *name, unsigned int flags)
+{
+	void *handle = bink_open_original ? bink_open_original(name, flags) : NULL;
+	if (handle) {
+		const bink_public_header_t *movie = (const bink_public_header_t *)handle;
+		InterlockedExchange(&bink_movie_width, (LONG)movie->width);
+		InterlockedExchange(&bink_movie_height, (LONG)movie->height);
+		LONG count = InterlockedIncrement(&bink_open_handles);
+		if (count == 1) {
+			InterlockedExchange(&bink_d3d_active, 1);
+			for (int i = 0; i < BINK_VIDEO_TEXTURES; i++) {
+				InterlockedExchangePointer((PVOID volatile *)&bink_video_textures[i].texture, NULL);
+				bink_video_textures[i].scale = 0;
+			}
+			InterlockedExchange(&bink_fit_logged, 0);
+			bink_movie_pixel_shader = 0;
+			bink_movie_vertex_shader = 0;
+			InterlockedExchange(&bink_movie_shader_known, 0);
+		}
+	}
+	return handle;
+}
+
+static int WINAPI bink_do_frame_hook(void *handle)
+{
+	int result = bink_do_frame_original ? bink_do_frame_original(handle) : 0;
+	return result;
+}
+
+static int WINAPI bink_copy_to_buffer_hook(void *handle, void *dest, int pitch, unsigned int height, unsigned int x, unsigned int y, unsigned int flags)
+{
+	int result = bink_copy_to_buffer_original ? bink_copy_to_buffer_original(handle, dest, pitch, height, x, y, flags) : 0;
+	return result;
+}
+
+static void WINAPI bink_close_hook(void *handle)
+{
+	if (bink_close_original)
+		bink_close_original(handle);
+	if (handle) {
+		LONG count = InterlockedDecrement(&bink_open_handles);
+		if (count <= 0) {
+			InterlockedExchange(&bink_open_handles, 0);
+			InterlockedExchange(&bink_d3d_active, 0);
+			for (int i = 0; i < BINK_VIDEO_TEXTURES; i++) {
+				InterlockedExchangePointer((PVOID volatile *)&bink_video_textures[i].texture, NULL);
+				bink_video_textures[i].scale = 0;
+			}
+			InterlockedExchange(&bink_movie_width, 0);
+			InterlockedExchange(&bink_movie_height, 0);
+			InterlockedExchange(&bink_fit_logged, 0);
+			bink_movie_pixel_shader = 0;
+			bink_movie_vertex_shader = 0;
+			InterlockedExchange(&bink_movie_shader_known, 0);
+		}
+	}
+}
+
+static void bink_hooks_install(void)
+{
+	int open = bink_patch_import("BinkOpen", (void *)bink_open_hook, (void **)&bink_open_original);
+	int frame = bink_patch_import("BinkDoFrame", (void *)bink_do_frame_hook, (void **)&bink_do_frame_original);
+	int copy = bink_patch_import("BinkCopyToBuffer", (void *)bink_copy_to_buffer_hook, (void **)&bink_copy_to_buffer_original);
+	int close = bink_patch_import("BinkClose", (void *)bink_close_hook, (void **)&bink_close_original);
+	if (!open || (!frame && !copy) || !close)
+		log_printf("native: Bink 16:9 fitting unavailable: import hooks incomplete (Open %d, frame %d, Close %d)", open, frame + copy, close);
 }
 
 // The global texts (the objective, the subtitles, the title lines of an intro) are drawn by both contexts: in the bottom half they are left out where the two layers hold the same picture, in
@@ -1556,6 +1731,7 @@ static void layer_fix(IDirect3DDevice9 *dev)
 typedef HRESULT(STDMETHODCALLTYPE *set_rt_t)(IDirect3DDevice9 *, DWORD, IDirect3DSurface9 *);
 typedef HRESULT(STDMETHODCALLTYPE *clear_t)(IDirect3DDevice9 *, DWORD, const D3DRECT *, DWORD, D3DCOLOR, float, DWORD);
 typedef HRESULT(STDMETHODCALLTYPE *stretch_t)(IDirect3DDevice9 *, IDirect3DSurface9 *, const RECT *, IDirect3DSurface9 *, const RECT *, D3DTEXTUREFILTERTYPE);
+typedef HRESULT(STDMETHODCALLTYPE *update_texture_t)(IDirect3DDevice9 *, IDirect3DBaseTexture9 *, IDirect3DBaseTexture9 *);
 typedef HRESULT(STDMETHODCALLTYPE *viewport_t)(IDirect3DDevice9 *, const D3DVIEWPORT9 *);
 typedef HRESULT(STDMETHODCALLTYPE *dip_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
 typedef HRESULT(STDMETHODCALLTYPE *dp_t)(IDirect3DDevice9 *, D3DPRIMITIVETYPE, UINT, UINT);
@@ -1566,6 +1742,7 @@ typedef HRESULT(STDMETHODCALLTYPE *scene_t)(IDirect3DDevice9 *);
 static set_rt_t set_rt_orig;
 static clear_t clear_orig;
 static stretch_t stretch_orig;
+static update_texture_t update_texture_orig;
 static viewport_t viewport_orig;
 static dip_t dip_orig;
 static dp_t dp_orig;
@@ -1574,6 +1751,149 @@ static scissor_t scissor_orig;
 // the 3D itself is drawn over the whole picture and squeezed 2:1 into the half, so the rows of that rectangle are doubled for every full-size target but the 2D layer's (whose own
 // pixels are the half's), and the lens comes out as the square it is in the half. A lens rectangle is recognised as one that lies in the upper half of a full-size target.
 static volatile LONG rt_full; // the current render target (stage 0) is as big as the picture
+static int bink_track_video_texture(IDirect3DBaseTexture9 *texture, const D3DSURFACE_DESC *desc)
+{
+	if (!texture || !desc)
+		return 0;
+	UINT movie_w = (UINT)InterlockedCompareExchange(&bink_movie_width, 0, 0);
+	UINT movie_h = (UINT)InterlockedCompareExchange(&bink_movie_height, 0, 0);
+	int scale = 0;
+	if (desc->Width == movie_w && desc->Height == movie_h)
+		scale = 1;
+	else if (movie_w >= 2 && movie_h >= 2 && desc->Width == movie_w / 2 && desc->Height == movie_h / 2)
+		scale = 2;
+	else if (movie_w >= 4 && movie_h >= 4 && desc->Width == movie_w / 4 && desc->Height == movie_h / 4)
+		scale = 4;
+	if (!scale)
+		return 0;
+	for (int i = 0; i < BINK_VIDEO_TEXTURES; i++) {
+		PVOID current = InterlockedCompareExchangePointer((PVOID volatile *)&bink_video_textures[i].texture, NULL, NULL);
+		if (current == (PVOID)texture)
+			return 0;
+	}
+	for (int i = 0; i < BINK_VIDEO_TEXTURES; i++) {
+		if (InterlockedCompareExchangePointer((PVOID volatile *)&bink_video_textures[i].texture, (PVOID)(uintptr_t)1, NULL) == NULL) {
+			bink_video_textures[i].scale = scale;
+			InterlockedExchangePointer((PVOID volatile *)&bink_video_textures[i].texture, texture);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int bink_is_movie_quad(IDirect3DDevice9 *dev, UINT primitive, UINT primitive_count, const char *api)
+{
+	if (!InterlockedCompareExchange(&bink_d3d_active, 0, 0))
+		return 0;
+	static const DWORD sampler_stages[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+		D3DVERTEXTEXTURESAMPLER0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, D3DVERTEXTEXTURESAMPLER3};
+	int movie_quad = 0;
+	for (size_t i = 0; i < sizeof(sampler_stages) / sizeof(sampler_stages[0]); i++) {
+		DWORD stage = sampler_stages[i];
+		IDirect3DBaseTexture9 *tex = NULL;
+		if (FAILED(IDirect3DDevice9_GetTexture(dev, stage, &tex)) || !tex)
+			continue;
+		PVOID texture = (PVOID)tex;
+		for (int k = 0; k < BINK_VIDEO_TEXTURES; k++) {
+			PVOID movie_tex = InterlockedCompareExchangePointer((PVOID volatile *)&bink_video_textures[k].texture, NULL, NULL);
+			if (!movie_tex || movie_tex == (PVOID)(uintptr_t)1 || movie_tex != texture ||
+			    IDirect3DBaseTexture9_GetType(tex) != D3DRTYPE_TEXTURE)
+				continue;
+			if (stage < 16 && bink_video_textures[k].scale == 1 && primitive == D3DPT_TRIANGLELIST &&
+			    primitive_count == 2 && !strcmp(api, "DrawIndexedPrimitive")) {
+				IDirect3DPixelShader9 *ps = NULL;
+				IDirect3DVertexShader9 *vs = NULL;
+				if (SUCCEEDED(IDirect3DDevice9_GetPixelShader(dev, &ps)) && ps &&
+				    SUCCEEDED(IDirect3DDevice9_GetVertexShader(dev, &vs)) && vs) {
+					uintptr_t pixel_identity = (uintptr_t)ps;
+					uintptr_t vertex_identity = (uintptr_t)vs;
+					if (!InterlockedCompareExchange(&bink_movie_shader_known, 0, 0)) {
+						bink_movie_pixel_shader = pixel_identity;
+						bink_movie_vertex_shader = vertex_identity;
+						InterlockedExchange(&bink_movie_shader_known, 1);
+					}
+					if (pixel_identity == bink_movie_pixel_shader && vertex_identity == bink_movie_vertex_shader)
+						movie_quad = 1;
+				}
+				if (vs) IDirect3DVertexShader9_Release(vs);
+				if (ps) IDirect3DPixelShader9_Release(ps);
+			}
+		}
+		IDirect3DBaseTexture9_Release(tex);
+	}
+	return movie_quad;
+}
+
+// Fit the Bink draw into the current viewport. D3D9 maps clip-space vertex positions
+// through the viewport, so a temporary viewport affects only this draw call; subsequent
+// subtitle/UI draws see the exact viewport that was active before the movie quad.
+static int bink_fit_movie_viewport(IDirect3DDevice9 *dev, D3DVIEWPORT9 *saved, D3DVIEWPORT9 *fit_out)
+{
+	UINT movie_w = (UINT)InterlockedCompareExchange(&bink_movie_width, 0, 0);
+	UINT movie_h = (UINT)InterlockedCompareExchange(&bink_movie_height, 0, 0);
+	if (!movie_w || !movie_h || !viewport_orig || !saved || !fit_out ||
+	    FAILED(IDirect3DDevice9_GetViewport(dev, saved)) || !saved->Width || !saved->Height)
+		return 0;
+	D3DVIEWPORT9 fit = *saved;
+	double movie_aspect = (double)movie_w / (double)movie_h;
+	double viewport_aspect = (double)saved->Width / (double)saved->Height;
+	if (viewport_aspect > movie_aspect + 0.0001) {
+		UINT width = (UINT)((double)saved->Height * movie_aspect + 0.5);
+		if (!width || width > saved->Width)
+			return 0;
+		fit.X = saved->X + (saved->Width - width) / 2;
+		fit.Width = width;
+	} else if (viewport_aspect + 0.0001 < movie_aspect) {
+		UINT height = (UINT)((double)saved->Width / movie_aspect + 0.5);
+		if (!height || height > saved->Height)
+			return 0;
+		fit.Y = saved->Y + (saved->Height - height) / 2;
+		fit.Height = height;
+	} else {
+		return 0;
+	}
+	if (fit.X == saved->X && fit.Y == saved->Y && fit.Width == saved->Width && fit.Height == saved->Height)
+		return 0;
+	if (FAILED(viewport_orig(dev, &fit)))
+		return 0;
+	*fit_out = fit;
+	return 1;
+}
+
+// The movie is drawn over a screen that may already contain the preloaded menu/UI.
+// Clear only the left/right margins outside the fitted movie rectangle after restoring
+// the full viewport. Top/bottom letterboxing remains the game's responsibility. D3D9
+// Clear is clipped by the scissor state, so restore its exact enable value afterwards.
+static int bink_clear_movie_bars(IDirect3DDevice9 *dev, const D3DVIEWPORT9 *full, const D3DVIEWPORT9 *fit)
+{
+	if (!clear_orig || !full || !fit || !full->Width || !full->Height || fit->Y != full->Y || fit->Height != full->Height)
+		return 0; // only mask left/right side bars; top/bottom letterboxing remains the game's responsibility
+	uint64_t right64 = (uint64_t)full->X + full->Width;
+	uint64_t fit_right64 = (uint64_t)fit->X + fit->Width;
+	if (right64 > 0x7fffffffU || fit_right64 > right64 || fit->X < full->X || fit->X > right64)
+		return 0;
+	D3DRECT rects[2];
+	DWORD count = 0;
+	LONG left = (LONG)full->X, top = (LONG)full->Y;
+	LONG right = (LONG)right64, bottom = (LONG)((uint64_t)full->Y + full->Height);
+	LONG fit_left = (LONG)fit->X, fit_right = (LONG)fit_right64;
+	if (fit_left > left)
+		rects[count++] = (D3DRECT){left, top, fit_left, bottom};
+	if (fit_right < right)
+		rects[count++] = (D3DRECT){fit_right, top, right, bottom};
+	if (!count)
+		return 0;
+	DWORD scissor = FALSE;
+	if (FAILED(IDirect3DDevice9_GetRenderState(dev, D3DRS_SCISSORTESTENABLE, &scissor)))
+		return 0;
+	if (scissor && FAILED(IDirect3DDevice9_SetRenderState(dev, D3DRS_SCISSORTESTENABLE, FALSE)))
+		return 0;
+	HRESULT hr = clear_orig(dev, count, rects, D3DCLEAR_TARGET, D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0);
+	if (scissor)
+		(void)IDirect3DDevice9_SetRenderState(dev, D3DRS_SCISSORTESTENABLE, scissor);
+	return SUCCEEDED(hr);
+}
+
 static HRESULT STDMETHODCALLTYPE t_scissor(IDirect3DDevice9 *dev, const RECT *r)
 {
 	RECT fixed;
@@ -1714,6 +2034,16 @@ static HRESULT STDMETHODCALLTYPE t_stretch(IDirect3DDevice9 *dev, IDirect3DSurfa
 	}
 	return stretch_orig(dev, a, ra, b, rb, f);
 }
+static HRESULT STDMETHODCALLTYPE t_update_texture(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *src, IDirect3DBaseTexture9 *dst)
+{
+	if (InterlockedCompareExchange(&bink_d3d_active, 0, 0) && dst &&
+	    IDirect3DBaseTexture9_GetType(dst) == D3DRTYPE_TEXTURE) {
+		D3DSURFACE_DESC desc;
+		if (SUCCEEDED(IDirect3DTexture9_GetLevelDesc((IDirect3DTexture9 *)dst, 0, &desc)))
+			(void)bink_track_video_texture(dst, &desc);
+	}
+	return update_texture_orig(dev, src, dst);
+}
 static HRESULT STDMETHODCALLTYPE t_viewport(IDirect3DDevice9 *dev, const D3DVIEWPORT9 *v)
 {
 	if (trace_on && v)
@@ -1727,13 +2057,31 @@ static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t
 		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
+	int movie_quad = bink_is_movie_quad(dev, (UINT)t, pc, "DrawIndexedPrimitive");
 #ifdef MW2COOP_IW4X
 	if (watermark_draw(dev, nv, pc)) {
 		layer_unfix(dev);
 		return D3D_OK;
 	}
 #endif
+	D3DVIEWPORT9 movie_viewport, fitted_viewport;
+	int viewport_changed = movie_quad && bink_fit_movie_viewport(dev, &movie_viewport, &fitted_viewport);
 	HRESULT hr = dip_orig(dev, t, bv, mi, nv, si, pc);
+	if (viewport_changed) {
+		HRESULT restore_hr = viewport_orig(dev, &movie_viewport);
+		int side_bars = fitted_viewport.Width < movie_viewport.Width;
+		int masked = side_bars && SUCCEEDED(hr) && SUCCEEDED(restore_hr) && bink_clear_movie_bars(dev, &movie_viewport, &fitted_viewport);
+		if (InterlockedCompareExchange(&bink_fit_logged, 1, 0) == 0) {
+			UINT movie_w = (UINT)InterlockedCompareExchange(&bink_movie_width, 0, 0);
+			UINT movie_h = (UINT)InterlockedCompareExchange(&bink_movie_height, 0, 0);
+			if (masked)
+				log_printf("native: Bink 16:9 fit and black side bars applied (%ux%u)", (unsigned)movie_w, (unsigned)movie_h);
+			else if (side_bars)
+				log_printf("native: Bink 16:9 fit applied; black side bars unavailable (%ux%u)", (unsigned)movie_w, (unsigned)movie_h);
+			else
+				log_printf("native: Bink 16:9 fit applied (%ux%u)", (unsigned)movie_w, (unsigned)movie_h);
+		}
+	}
 	layer_unfix(dev);
 	if (moved)
 		layer_back(dev);
@@ -1783,6 +2131,20 @@ static void trace_install(IDirect3DDevice9 *dev)
 	if (!end_scene_orig)
 		patch_slot(&vt[42], (void *)t_end, (void **)&end_scene_orig);
 	trace_dev = dev;
+}
+static int bink_fit_install(IDirect3DDevice9 *dev)
+{
+	if (!dev || !*(void ***)dev)
+		return 0;
+	void **vt = *(void ***)dev;
+	int ok = 0;
+	ok += patch_slot(&vt[31], (void *)t_update_texture, (void **)&update_texture_orig);
+	ok += patch_slot(&vt[43], (void *)t_clear, (void **)&clear_orig);
+	ok += patch_slot(&vt[47], (void *)t_viewport, (void **)&viewport_orig);
+	ok += patch_slot(&vt[82], (void *)t_dip, (void **)&dip_orig);
+	if (ok > 0)
+		bink_fit_device = dev;
+	return ok;
 }
 // called at each Present of the render thread: the frame after the 900th composed one is traced
 static void trace_present(void)
@@ -2101,6 +2463,31 @@ static DWORD WINAPI device_hooks_thread(LPVOID unused)
 	return 0;
 }
 
+// Cinematics use the captured D3D9 device on all supported clients. Keep this bootstrap
+// separate from device_hooks_thread(), which remains the existing weapon-FOV/Present path.
+static DWORD WINAPI bink_device_hooks_thread(LPVOID unused)
+{
+	(void)unused;
+	for (int i = 0; i < 600; i++) {
+		IDirect3DDevice9 *dev = (IDirect3DDevice9 *)d3dcap_device();
+		if (dev) {
+			Sleep(2000); // let Steam and graphics overlays finish wrapping the device
+			dev = (IDirect3DDevice9 *)d3dcap_device();
+			if (dev && cfg("filmfit", 1)) {
+				int installed = bink_fit_install(dev);
+				if (installed != 4)
+					log_printf("native: Bink aspect fit unavailable: D3D hooks incomplete (%d/4)", installed);
+			} else if (!dev) {
+				log_printf("native: Bink aspect fit unavailable: D3D9 device changed during hook setup");
+			}
+			return 0;
+		}
+		Sleep(100);
+	}
+	log_printf("native: Bink aspect fit unavailable: no D3D9 device captured");
+	return 0;
+}
+
 // vid_restart (and alt+enter, which runs it) destroys the D3D device and makes a new one. Our hooks sit on the d3d9 vtable slots; the Steam overlay hooks the new device again,
 // finds ours where its own should be and the two call each other until the stack is gone (0xc00000fd inside gameoverlayrenderer64, v0.6.0 report; reproduced here with a
 // split session). The same happens at the start when the hooks go in too early (see console.c), so the way out is the same: the hooks are taken out before the command
@@ -2121,15 +2508,18 @@ static void vid_restart_hook(void)
 		}
 	}
 	zones_pools_reset(); // the restart initialises the asset database again: the raised pool sizes of the co-op levels must not be what it builds from
-	if (the_device) {
+	if (the_device || bink_fit_device) {
 		log_printf("native: vid_restart: the device hooks are taken out, they go back on the new device");
 		comp_release();
 		slots_take_out();
 		nslots = 0;
 		the_device = NULL;
+		bink_fit_device = NULL;
 		comp_not_before = GetTickCount() + 4000;
 	}
 	vid_restart_original();
+	if (cfg("filmfit", 1))
+		CreateThread(NULL, 0, bink_device_hooks_thread, NULL, 0, NULL);
 }
 static void vid_restart_install(void)
 {
@@ -2159,6 +2549,31 @@ static unsigned cg_draw_count, hook_counts[8]; // QA counters: snapshot take, ps
 static int ctx_on;
 static float cg_aspect_saved;
 static int cg_aspect_have;
+
+// The engine's r_aspectRatio dvar selects a small set of display ratios. The cgame's FOV calculation
+// instead needs the actual active render dimensions, including arbitrary window sizes and ultrawide modes.
+static int cg_aspect_full_window_value(int width, int height, float *aspect)
+{
+	if (!aspect || width <= 0 || height <= 0)
+		return 0;
+	*aspect = (float)width / (float)height;
+	return 1;
+}
+static void cg_aspect_apply_full_window(void)
+{
+	static int logged_width, logged_height;
+	int width = *(int *)(base + RVA_RENDER_WIDTH);
+	int height = *(int *)(base + RVA_RENDER_HEIGHT);
+	float aspect;
+	if (!cg_aspect_full_window_value(width, height, &aspect))
+		return;
+	*(float *)(base + RVA_CG_ASPECT) = aspect;
+	if (width != logged_width || height != logged_height) {
+		logged_width = width;
+		logged_height = height;
+		log_printf("native: full-window cgame aspect %.4f from %dx%d", (double)aspect, width, height);
+	}
+}
 static float asp_saved[2];
 static int asp_have;
 static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the intro is over; before that there is one picture
@@ -2959,6 +3374,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		seq++;
 	}
+	int full_window = !mode || (native_active && (!split_on || !sw));
 	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
 		if (mode >= 5 && !split_on)
 			half_forget();
@@ -2970,11 +3386,15 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			memcpy(base + RVA_VIDEO_ASPECT, asp_saved, sizeof(asp_saved));
 			asp_have = 0;
 		}
+		if (full_window)
+			cg_aspect_apply_full_window();
 		cg_draw_original(local_client, a, b);
 		if (ctx_on)
 			ctx_after_draw();
 		return;
 	}
+	if (full_window)
+		cg_aspect_apply_full_window();
 	float saved[4];
 	memcpy(saved, sw, sizeof(saved));
 	if (mode >= 2 && mode <= 10) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
@@ -4817,7 +5237,9 @@ typedef struct {
 	uint8_t *item;
 	float was[3], now[3];	// rect: x, y, w
 	float cwas[3], cnow[3]; // rectClient (the one the HUD is drawn from: the menu's place plus this): x, y, w
-	uint8_t was_av, now_av;
+	uint8_t was_ah, now_ah, cwas_ah, cnow_ah;
+	uint8_t was_av, now_av, cwas_av, now_av_client;
+	uint8_t center_hint;
 	float was_scale, now_scale;
 } hud_slot_t;
 static hud_slot_t hud_slots[64];
@@ -4939,17 +5361,28 @@ static void hud_apply(void)
 			float *rc = (float *)(items[i] + ITEM_RECT);
 			s->item = items[i];
 			s->was[0] = rc[0], s->was[1] = rc[1], s->was[2] = rc[2];
+			s->was_ah = items[i][ITEM_RECT_ALIGN_H];
 			s->was_av = items[i][ITEM_RECT_ALIGN_V];
 			s->was_scale = *(float *)(items[i] + ITEM_TEXT_SCALE);
 			s->now[0] = rc[0] + mv->dx, s->now[1] = rc[1] + mv->dy, s->now[2] = mv->w > 0 ? mv->w : rc[2];
 			float *cl = (float *)(items[i] + ITEM_RECT_CLIENT);
 			s->cwas[0] = cl[0], s->cwas[1] = cl[1], s->cwas[2] = cl[2];
+			s->cwas_ah = items[i][ITEM_RECT_CLIENT + 0x10];
+			s->cwas_av = items[i][ITEM_RECT_CLIENT + 0x11];
+			s->now_ah = s->was_ah;
+			s->cnow_ah = s->cwas_ah;
 			s->cnow[0] = cl[0] + mv->dx, s->cnow[1] = cl[1] + mv->dy, s->cnow[2] = mv->w > 0 ? mv->w : cl[2];
 			if (!strcmp(hud_moves[m].menu, "cursorhints") || !strcmp(hud_moves[m].menu, "mantlehint")) { // QA ([native] hintdx=<units>): where the hints land for a given shift
 				s->now[0] += (float)cfg("hintdx", 0);
 				s->cnow[0] += (float)cfg("hintdx", 0);
+				s->center_hint = 1;
+				s->now_ah = s->cnow_ah = menu[ITEM_RECT_ALIGN_H];
+				s->now_av = s->now_av_client = menu[ITEM_RECT_ALIGN_V];
+			} else {
+				s->center_hint = 0;
+				s->now_av = mv->align_v >= 0 ? (uint8_t)mv->align_v : s->was_av;
+				s->now_av_client = s->now_av;
 			}
-			s->now_av = mv->align_v >= 0 ? (uint8_t)mv->align_v : s->was_av;
 			s->now_scale = mv->scale > 0 ? mv->scale : s->was_scale;
 		}
 		moved_menus++;
@@ -4959,6 +5392,36 @@ static void hud_apply(void)
 	if (!logged++)
 		log_printf("native: hudss: the HUD is laid out as in the console's split screen (%d items of %d menus)", hud_nslots, moved_menus);
 }
+// Keep cursor/mantle hint items aligned to their parent menus on both axes. The engine may
+// rebuild rectClient while reopening a menu, so reapply these four bytes without moving the rect.
+static void hud_hint_align_write(hud_slot_t *s)
+{
+	if (!s || !s->item || !s->center_hint)
+		return;
+	uint8_t *item = s->item;
+	if (item[ITEM_RECT_ALIGN_H] == s->was_ah || item[ITEM_RECT_ALIGN_H] == s->now_ah)
+		item[ITEM_RECT_ALIGN_H] = s->now_ah;
+	if (item[ITEM_RECT_CLIENT + 0x10] == s->cwas_ah || item[ITEM_RECT_CLIENT + 0x10] == s->cnow_ah)
+		item[ITEM_RECT_CLIENT + 0x10] = s->cnow_ah;
+	if (item[ITEM_RECT_ALIGN_V] == s->was_av || item[ITEM_RECT_ALIGN_V] == s->now_av)
+		item[ITEM_RECT_ALIGN_V] = s->now_av;
+	if (item[ITEM_RECT_CLIENT + 0x11] == s->cwas_av || item[ITEM_RECT_CLIENT + 0x11] == s->now_av_client)
+		item[ITEM_RECT_CLIENT + 0x11] = s->now_av_client;
+}
+static void hud_hint_align_restore(hud_slot_t *s)
+{
+	if (!s || !s->item || !s->center_hint)
+		return;
+	uint8_t *item = s->item;
+	if (item[ITEM_RECT_ALIGN_H] == s->now_ah)
+		item[ITEM_RECT_ALIGN_H] = s->was_ah;
+	if (item[ITEM_RECT_CLIENT + 0x10] == s->cnow_ah)
+		item[ITEM_RECT_CLIENT + 0x10] = s->cwas_ah;
+	if (item[ITEM_RECT_ALIGN_V] == s->now_av)
+		item[ITEM_RECT_ALIGN_V] = s->was_av;
+	if (item[ITEM_RECT_CLIENT + 0x11] == s->now_av_client)
+		item[ITEM_RECT_CLIENT + 0x11] = s->cwas_av;
+}
 // every frame while split: the layout is (re)written where an item still has the full screen values (the engine lays a menu out again when it opens it)
 static void hud_write(void)
 {
@@ -4967,13 +5430,14 @@ static void hud_write(void)
 		float *rc = (float *)(s->item + ITEM_RECT), *cl = (float *)(s->item + ITEM_RECT_CLIENT);
 		if (near_f(cl[0], s->cwas[0]) && near_f(cl[1], s->cwas[1])) {
 			cl[0] = s->cnow[0], cl[1] = s->cnow[1], cl[2] = s->cnow[2];
-			s->item[ITEM_RECT_CLIENT + 0x11] = s->now_av;
+			s->item[ITEM_RECT_CLIENT + 0x11] = s->center_hint ? s->now_av_client : s->now_av;
 			*(float *)(s->item + ITEM_TEXT_SCALE) = s->now_scale;
 		}
 		if (near_f(rc[0], s->was[0]) && near_f(rc[1], s->was[1])) {
 			rc[0] = s->now[0], rc[1] = s->now[1], rc[2] = s->now[2];
 			s->item[ITEM_RECT_ALIGN_V] = s->now_av;
 		}
+		hud_hint_align_write(s);
 	}
 }
 static void hud_restore(void)
@@ -4983,15 +5447,44 @@ static void hud_restore(void)
 		float *rc = (float *)(s->item + ITEM_RECT), *cl = (float *)(s->item + ITEM_RECT_CLIENT);
 		if (near_f(cl[0], s->cnow[0]) && near_f(cl[1], s->cnow[1])) {
 			cl[0] = s->cwas[0], cl[1] = s->cwas[1], cl[2] = s->cwas[2];
-			s->item[ITEM_RECT_CLIENT + 0x11] = s->was_av;
+			s->item[ITEM_RECT_CLIENT + 0x11] = s->center_hint ? s->cwas_av : s->was_av;
 			*(float *)(s->item + ITEM_TEXT_SCALE) = s->was_scale;
 		}
 		if (near_f(rc[0], s->now[0]) && near_f(rc[1], s->now[1])) {
 			rc[0] = s->was[0], rc[1] = s->was[1], rc[2] = s->was[2];
 			s->item[ITEM_RECT_ALIGN_V] = s->was_av;
 		}
+		hud_hint_align_restore(s);
 	}
 	hud_applied = 0;
+}
+/* The stock cursor/mantle hint menus are centered, but item and rectClient can retain
+ * stale edge alignment after the engine rebuilds a menu. Keep their alignment equal to
+ * the parent menu without changing any rectangle coordinates or sizes. */
+static void hud_hint_single_tick(void)
+{
+	static const char *const names[] = {"cursorhints", "mantlehint"};
+	for (int k = 0; k < 2; k++) {
+		int count = 0;
+		uint8_t *menu = hud_menu(names[k], &count);
+		if (!menu || count <= 0 || count > 4)
+			continue;
+		uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+		uint8_t *item = items ? items[0] : NULL;
+		if (!item)
+			continue;
+		uint8_t parent_h = menu[ITEM_RECT_ALIGN_H];
+		uint8_t parent_v = menu[ITEM_RECT_ALIGN_V];
+		uint8_t *item_h = item + ITEM_RECT_ALIGN_H;
+		uint8_t *item_v = item + ITEM_RECT_ALIGN_V;
+		uint8_t *client_h = item + ITEM_RECT_CLIENT + 0x10;
+		uint8_t *client_v = item + ITEM_RECT_CLIENT + 0x11;
+		if (parent_h != 2 || parent_v != 2 || (*item_h != 0 && *item_h != 2) || (*client_h != 0 && *client_h != 2) ||
+		    *item_v > 2 || *client_v > 2)
+			continue; // only stock/default hint alignments are corrected
+		*item_h = *client_h = parent_h;
+		*item_v = *client_v = parent_v;
+	}
 }
 static void hud_layout_tick(int split)
 {
@@ -5035,8 +5528,11 @@ static void hud_layout_tick(int split)
 					}
 			}
 		}
-	} else if (hud_applied)
-		hud_restore();
+	} else {
+		if (hud_applied)
+			hud_restore();
+		hud_hint_single_tick();
+	}
 }
 
 static void place_pop(void)
@@ -7533,7 +8029,20 @@ static int players_apply(int n)
 	return 1;
 }
 
-// The hooks of the client side: installed once, they pass everything through while native_active is 0 (journal group 0)
+// The cgame draw hook also applies the full-window aspect correction in ordinary one-viewport gameplay.
+// It is installed at startup and reused by the split-screen hook set if a local session is started later.
+static int cg_draw_install(void)
+{
+	if (cg_draw_original)
+		return 1;
+	int group = jgroup;
+	jgroup = 0;
+	int ok = jhook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original);
+	jgroup = group;
+	return ok && cg_draw_original != NULL;
+}
+
+// The client-side hooks stay installed; session-specific work is gated by native_active (journal group 0).
 #ifndef _WIN64
 static int hooks_apply32_contexts(void);
 static DWORD WINAPI coop_dvar_thread(LPVOID unused);
@@ -7547,8 +8056,7 @@ static int hooks_apply32(void)
 	hooks_installed = 1;
 	jgroup = 0;
 	uint8_t *site = base + RVA_BEGIN_FRAME_CALL;
-	if (!jhook_call(site, (void *)begin_frame_hook, (void **)&begin_frame_original) ||
-	    !jhook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {
+	if (!jhook_call(site, (void *)begin_frame_hook, (void **)&begin_frame_original) || !cg_draw_install()) {
 		log_printf("native: unexpected code at the cgame draw or its begin-frame call, the 32-bit split screen is off");
 		return 0;
 	}
@@ -7575,8 +8083,7 @@ static int hooks_apply(void)
 		contexts_install();
 	if (cfg("logcbuf", 0) && !jhook_function(base + 0x1ee890, cbuf_bytes, sizeof(cbuf_bytes), cbuf_hook, (void **)&cbuf_original))
 		log_printf("native: Cbuf_AddText bytes differ");
-	if (!jhook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) ||
-	    !jhook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {
+	if (!jhook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) || !cg_draw_install()) {
 		log_printf("native: unexpected code at the cgame draw or begin frame, the split screen is off");
 		return 0;
 	}
@@ -7729,6 +8236,17 @@ void native_install(void)
 	lstrcatA(path, "mw2coop\\settings.ini");
 	lstrcpyA(settings_path, path);
 	base = (uint8_t *)GetModuleHandleA(NULL);
+	if (cg_draw_install())
+		log_printf("native: full-window aspect correction hook on");
+	else
+		log_printf("native: full-window aspect correction hook not installed");
+	if (cfg("filmfit", 1)) {
+		log_printf("native: Bink 16:9 movie fitting enabled");
+		bink_hooks_install();
+		CreateThread(NULL, 0, bink_device_hooks_thread, NULL, 0, NULL);
+	} else {
+		log_printf("native: Bink 16:9 movie fitting disabled by settings");
+	}
 #ifndef _WIN64
 	// the 32-bit port is switched on piece by piece: experiment=2 (alternate frames, compositor), then players=2 with experiment=5 (two client contexts)
 	if (cfg("players", 0) < 2 && cfg("experiment", 0) == 2) {

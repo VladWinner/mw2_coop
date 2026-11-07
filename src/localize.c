@@ -2,7 +2,7 @@
 // its localized strings, which this build keeps in Windows-1251 (COOP_WAITINGFORPLAYER reads
 // ce e6 e8 e4 ...): a plain script string with Cyrillic shows as dots. So
 // DB_FindXAssetHeader(ASSET_TYPE_LOCALIZE_ENTRY, "MW2COOP_...") is answered here, in Russian
-// when the game is Russian (MENU_YES reads "Да"), else in English.
+// when the game's loc_language dvar is 6, else in English.
 //
 // DB_FindXAssetHeader (rva 0x0ef5d0) starts with three 5-byte moves that use no RIP-relative
 // address (mov [rsp+8],rbx / mov [rsp+10h],rbp / mov [rsp+18h],rsi); those 15 bytes are run from
@@ -30,7 +30,8 @@ typedef void *(*db_find_header_t)(int type, const char *name);
 
 #define ASSET_TYPE_FONT 24
 static db_find_header_t original;
-static int russian = -1;	// -1 unknown yet
+static volatile LONG russian = -1;	// -1 unknown; a negative result is rechecked while assets initialize
+static volatile LONG russian_probe_tick;
 
 typedef struct {
 	const char *name;
@@ -210,6 +211,10 @@ static const ModString strings[] = {
 	// НОВАЯ КАМПАНИЯ
 	{"MW2COOP_NEW_CAMPAIGN", "\xcd\xce\xc2\xc0\xdf \xca\xc0\xcc\xcf\xc0\xcd\xc8\xdf",
 	 "NEW CAMPAIGN"},
+	// Музей: bonus level description shown in the campaign co-op lobby
+	{"MW2COOP_MUSEUM_DESC",
+	 "\xc1\xee\xed\xf3\xf1\xed\xfb\xe9 \xf3\xf0\xee\xe2\xe5\xed\xfc: \xf1\xe2\xee\xe1\xee\xe4\xed\xee\xe5 \xe8\xf1\xf1\xeb\xe5\xe4\xee\xe2\xe0\xed\xe8\xe5 \xec\xf3\xe7\xe5\xff \xf1 \xfd\xea\xf1\xef\xee\xed\xe0\xf2\xe0\xec\xe8 \xea\xe0\xec\xef\xe0\xed\xe8\xe8.",
+	 "Bonus level: freely explore the museum and its campaign exhibits."},
 };
 #define STRING_COUNT (int)(sizeof(strings) / sizeof(strings[0]))
 
@@ -264,20 +269,49 @@ static FixedString fixed[] = {
 };
 #define FIXED_COUNT (int)(sizeof(fixed) / sizeof(fixed[0]))
 
-int localize_is_russian(void);
+static int probe_game_language(int retry_negative)
+{
+	LONG state = InterlockedCompareExchange(&russian, -1, -1);
+	if (state == 1 || (state == 0 && !retry_negative))
+		return state; // once Russian is present, or a caller only needs the cached answer
+
+	// loc_language is the game's language selector (6 = Russian). It may not be registered
+	// at the first asset lookup, so leave the result unknown and retry from later asset lookups.
+	// Keep Dvar_FindVar off the render path and throttle probes to once per second.
+	DWORD now = GetTickCount();
+	LONG last = InterlockedCompareExchange(&russian_probe_tick, 0, 0);
+	if ((DWORD)(now - (DWORD)last) < 1000)
+		return state > 0;
+	if (InterlockedCompareExchange(&russian_probe_tick, (LONG)now, last) != last)
+		return state > 0;
+
+	dvar_t *language = game_find_dvar("loc_language");
+	if (!language || (language->type != DVAR_TYPE_INT && language->type != DVAR_TYPE_ENUM))
+		return state > 0; // the dvar is not ready (or has an unexpected type); retry later
+
+	int value = language->current.integer;
+	int detected = value == 6;
+	LONG previous = InterlockedExchange(&russian, detected);
+	if (previous != detected)
+		log_printf("localize: game language %s (loc_language=%d)%s",
+			   detected ? "Russian" : "not Russian", value,
+			   detected ? "" : "; will recheck while assets load");
+	return detected;
+}
+
 static int game_is_russian(void)
 {
-	if (russian < 0) {
-		LocalizeEntry *yes = original(ASSET_TYPE_LOCALIZE_ENTRY, "MENU_YES");
-		russian = yes && yes->value && (unsigned char)yes->value[0] >= 0xc0;
-		log_printf("localize: game language %s", russian ? "Russian" : "not Russian, mod strings in English");
-	}
-	return russian;
+	return probe_game_language(0);
 }
 
 int localize_is_russian(void)
 {
 	return game_is_russian();
+}
+
+int localize_retry_language(void)
+{
+	return probe_game_language(1);
 }
 
 static const char *text_of(int i)
@@ -339,8 +373,11 @@ static void *find_header(int type, const char *name)
 			return clone;
 	}
 	void *found = original(type, name);
+	localize_retry_language(); // refresh an early fallback result from the asset-loading path, not the render thread
 	if (type == ASSET_TYPE_FONT)
 		fonts_seen(found, name, original);
+	else
+		fonts_retry(original); // catch localization/assets that become ready after the first font lookup
 	return found;
 }
 

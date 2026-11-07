@@ -110,12 +110,21 @@ int devices_menu_pad(void)
 	return assigned_dev[0] >= 0 ? (int)assigned_dev[0] : -1;
 }
 
+void devices_begin_assigned(int player0, int player1)
+{
+	if (player0 < DEVICE_NONE || player0 > 3)
+		player0 = DEVICE_NONE;
+	if (player1 < DEVICE_NONE || player1 > 3)
+		player1 = DEVICE_NONE;
+	LONG gen = InterlockedIncrement(&assign_gen);
+	InterlockedExchange(&assigned_dev[0], player0);
+	InterlockedExchange(&assigned_dev[1], player1);
+	CreateThread(NULL, 0, assign_thread, (LPVOID)(LONG_PTR)gen, 0, NULL);
+}
+
 void devices_begin(void)
 {
-	LONG gen = InterlockedIncrement(&assign_gen);
-	InterlockedExchange(&assigned_dev[0], DEVICE_NONE);
-	InterlockedExchange(&assigned_dev[1], DEVICE_NONE);
-	CreateThread(NULL, 0, assign_thread, (LPVOID)(LONG_PTR)gen, 0, NULL);
+	devices_begin_assigned(DEVICE_NONE, DEVICE_NONE);
 }
 
 void devices_end(void)

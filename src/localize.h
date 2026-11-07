@@ -2,8 +2,10 @@
 
 // Answers DB_FindXAssetHeader for the mod's own localized strings (&"MW2COOP_..." in scripts).
 void localize_install(void);
-// 1 when the game is the Russian one (its MENU_YES starts with a Cyrillic letter); asks the asset database on first use
+// 1 when the game's loc_language dvar is 6 (Russian).
 int localize_is_russian(void);
+// Recheck a cached non-Russian result from the asset-lookup path while localization loads.
+int localize_retry_language(void);
 
 // Show the text of string <name> (MW2COOP_...) wherever the menus show <alias>.
 void localize_select(const char *alias, const char *name);

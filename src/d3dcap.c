@@ -15,6 +15,7 @@
 #include <d3d9.h>
 #include <stdint.h>
 #include <string.h>
+#include <tlhelp32.h>
 
 #include "d3dcap.h"
 #include "hook.h"
@@ -30,6 +31,8 @@
 
 typedef IDirect3D9 *(WINAPI *create9_t)(UINT);
 typedef HRESULT(WINAPI *create9ex_t)(UINT, IDirect3D9Ex **);
+typedef FARPROC(WINAPI *get_proc_address_t)(HMODULE, LPCSTR);
+typedef HRESULT(STDMETHODCALLTYPE *create_device_ex_t)(IDirect3D9Ex *, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS *, D3DDISPLAYMODEEX *, IDirect3DDevice9Ex **);
 typedef HRESULT(STDMETHODCALLTYPE *create_device_t)(IDirect3D9 *, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS *, IDirect3DDevice9 **);
 typedef HRESULT(STDMETHODCALLTYPE *create_texture_t)(IDirect3DDevice9 *, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9 **, HANDLE *);
 typedef HRESULT(STDMETHODCALLTYPE *create_volume_t)(IDirect3DDevice9 *, UINT, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DVolumeTexture9 **, HANDLE *);
@@ -38,7 +41,10 @@ typedef HRESULT(STDMETHODCALLTYPE *create_vb_t)(IDirect3DDevice9 *, UINT, DWORD,
 typedef HRESULT(STDMETHODCALLTYPE *create_ib_t)(IDirect3DDevice9 *, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DIndexBuffer9 **, HANDLE *);
 
 static create9_t create9_orig;
+static create9ex_t create9ex_orig;
+static get_proc_address_t getproc_orig;
 static create_device_t create_device_orig;
+static create_device_ex_t create_device_ex_orig;
 static void *volatile device;
 static int use_ex;
 static UINT ex_version;
@@ -52,7 +58,7 @@ static LONG converted[5]; // managed resources turned into default-pool ones: te
 
 void *d3dcap_device(void)
 {
-	return device;
+	return InterlockedCompareExchangePointer((PVOID volatile *)&device, NULL, NULL);
 }
 
 static void convert_logged(int kind, const char *what, unsigned a, unsigned b, unsigned fmt)
@@ -142,8 +148,41 @@ static void hook_resource_creation(IDirect3DDevice9 *dev)
 	log_printf("d3d9ex: texture and buffer creation hooked (managed pool -> default pool, dynamic)");
 }
 
+static IDirect3D9 *WINAPI create9_hook(UINT version);
+static HRESULT WINAPI create9ex_hook(UINT version, IDirect3D9Ex **out);
+static FARPROC create9_hook_proc(void)
+{
+	create9_t typed = create9_hook;
+	FARPROC generic = NULL;
+	_Static_assert(sizeof(generic) == sizeof(typed), "Win32 function pointer sizes differ");
+	memcpy(&generic, &typed, sizeof(generic));
+	return generic;
+}
+static FARPROC create9ex_hook_proc(void)
+{
+	create9ex_t typed = create9ex_hook;
+	FARPROC generic = NULL;
+	_Static_assert(sizeof(generic) == sizeof(typed), "Win32 function pointer sizes differ");
+	memcpy(&generic, &typed, sizeof(generic));
+	return generic;
+}
+
 // IID_IDirect3D9Ex (the game makes more than one Direct3D object: the device is made through whichever of them it likes, so the object is asked, not compared)
 static const GUID iid_d3d9ex = {0x02177241, 0x69fc, 0x400c, {0x8f, 0xf1, 0x93, 0xa4, 0x4d, 0xf6, 0x86, 0x1d}};
+
+static create9_t plain_create9_factory(void)
+{
+	create9_t make = create9_orig;
+	if (!make) {
+		HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+		FARPROC proc = d3d9 ? (getproc_orig ? getproc_orig(d3d9, "Direct3DCreate9") : GetProcAddress(d3d9, "Direct3DCreate9")) : NULL;
+		if (proc)
+			memcpy(&make, &proc, sizeof(make));
+		if (make)
+			(void)InterlockedCompareExchangePointer((PVOID volatile *)&create9_orig, (PVOID)make, NULL);
+	}
+	return create9_orig ? create9_orig : make;
+}
 
 static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags, D3DPRESENT_PARAMETERS *pp,
 						     IDirect3DDevice9 **out)
@@ -180,7 +219,8 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 		} else {
 			log_printf("d3d9ex: CreateDeviceEx failed (hr %lx, %s, %ux%u at %u Hz format %d), the plain Direct3D 9 is used instead", (unsigned long)hr, pp->Windowed ? "windowed" : "fullscreen",
 				   pp->BackBufferWidth, pp->BackBufferHeight, pp->FullScreen_RefreshRateInHz, (int)pp->BackBufferFormat);
-			IDirect3D9 *plain = create9_orig ? create9_orig(ex_version) : NULL;
+			create9_t make_plain = plain_create9_factory();
+			IDirect3D9 *plain = make_plain ? make_plain(ex_version) : NULL;
 			*pp = asked;
 			hr = plain ? IDirect3D9_CreateDevice(plain, adapter, type, window, flags, pp, out) : D3DERR_NOTAVAILABLE;
 			if (plain)
@@ -190,7 +230,7 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 		hr = create_device_orig(d3d, adapter, type, window, flags, pp, out);
 	}
 	if (SUCCEEDED(hr) && out && *out) {
-		device = *out;
+		InterlockedExchangePointer((PVOID volatile *)&device, *out);
 		log_printf("d3dcap: CreateDevice(adapter %u, type %d, window %p, flags %lx) -> device %p, vtable %p%s", adapter, (int)type, (void *)window,
 			   (unsigned long)flags, (void *)*out, *(void **)*out, ex ? " (Direct3D 9Ex)" : "");
 		if (ex)
@@ -201,12 +241,63 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 	return hr;
 }
 
+static void patch_factory_slot(void **vt, int index, void *hook, void **original)
+{
+	DWORD old, ignored;
+	if (!vt || !hook || !original || !VirtualProtect(&vt[index], sizeof(void *), PAGE_READWRITE, &old))
+		return;
+	void *current = InterlockedCompareExchangePointer((PVOID volatile *)&vt[index], NULL, NULL);
+	if (current != hook) {
+		if (!*original)
+			*original = current;
+		InterlockedExchangePointer((PVOID volatile *)&vt[index], hook);
+	}
+	VirtualProtect(&vt[index], sizeof(void *), old, &ignored);
+}
+
+static HRESULT STDMETHODCALLTYPE create_device_ex_hook(IDirect3D9Ex *d3d, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags,
+							D3DPRESENT_PARAMETERS *pp, D3DDISPLAYMODEEX *mode, IDirect3DDevice9Ex **out)
+{
+	HRESULT hr = create_device_ex_orig ? create_device_ex_orig(d3d, adapter, type, window, flags, pp, mode, out) : D3DERR_INVALIDCALL;
+	if (SUCCEEDED(hr) && out && *out) {
+		InterlockedExchangePointer((PVOID volatile *)&device, *out);
+		if (use_ex)
+			hook_resource_creation((IDirect3DDevice9 *)*out);
+		log_printf("d3dcap: CreateDeviceEx(adapter %u, type %d, window %p, flags %lx) -> device %p, vtable %p",
+			   adapter, (int)type, (void *)window, (unsigned long)flags, (void *)*out, *(void **)*out);
+	} else {
+		log_printf("d3dcap: CreateDeviceEx failed, hr %lx", (unsigned long)hr);
+	}
+	return hr;
+}
+
+static void hook_factory(IDirect3D9 *d3d)
+{
+	if (!d3d || !*(void ***)d3d)
+		return;
+	void **vt = *(void ***)d3d;
+	patch_factory_slot(vt, VT_CREATE_DEVICE, (void *)create_device_hook, (void **)&create_device_orig);
+	IDirect3D9Ex *ex = NULL;
+	if (SUCCEEDED(IDirect3D9_QueryInterface(d3d, &iid_d3d9ex, (void **)&ex)) && ex) {
+		void **exvt = *(void ***)ex;
+		patch_factory_slot(exvt, 20, (void *)create_device_ex_hook, (void **)&create_device_ex_orig); // IDirect3D9Ex::CreateDeviceEx
+		IDirect3D9Ex_Release(ex);
+	}
+}
+
 static IDirect3D9 *WINAPI create9_hook(UINT version)
 {
 	IDirect3D9 *d3d = NULL;
 	if (use_ex) {
 		HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
-		create9ex_t make = d3d9 ? (create9ex_t)(void *)GetProcAddress(d3d9, "Direct3DCreate9Ex") : NULL;
+		create9ex_t make = create9ex_orig;
+		if (!make && d3d9) {
+			FARPROC proc = getproc_orig ? getproc_orig(d3d9, "Direct3DCreate9Ex") : GetProcAddress(d3d9, "Direct3DCreate9Ex");
+			if (proc)
+				memcpy(&make, &proc, sizeof(make));
+			if (make)
+				InterlockedCompareExchangePointer((PVOID volatile *)&create9ex_orig, (PVOID)make, NULL);
+		}
 		IDirect3D9Ex *ex = NULL;
 		if (make && SUCCEEDED(make(version, &ex)) && ex) {
 			d3d = (IDirect3D9 *)ex;
@@ -216,37 +307,67 @@ static IDirect3D9 *WINAPI create9_hook(UINT version)
 			log_printf("d3d9ex: Direct3DCreate9Ex is not available, the plain Direct3D 9 is used");
 		}
 	}
-	if (!d3d)
+	if (!d3d && create9_orig)
 		d3d = create9_orig(version);
-	if (d3d && !create_device_orig) {
-		void **vt = *(void ***)d3d;
-		DWORD old;
-		if (VirtualProtect(&vt[VT_CREATE_DEVICE], sizeof(void *), PAGE_READWRITE, &old)) {
-			create_device_orig = (create_device_t)vt[VT_CREATE_DEVICE];
-			vt[VT_CREATE_DEVICE] = (void *)create_device_hook;
-			VirtualProtect(&vt[VT_CREATE_DEVICE], sizeof(void *), old, &old);
-			log_printf("d3dcap: Direct3DCreate9(%u) -> %p, CreateDevice hooked", version, (void *)d3d);
-		}
+	if (d3d) {
+		hook_factory(d3d);
+		log_printf("d3dcap: Direct3DCreate9(%u) -> %p, CreateDevice%s hooked", version, (void *)d3d,
+			   create_device_ex_orig ? "/CreateDeviceEx" : "");
 	}
 	return d3d;
 }
 
-#ifdef _WIN64
-// The import table entry of the exe that points at d3d9.dll's function: found by name in the exe's import directory
-static void **find_import_slot(HMODULE exe, const char *dll, const char *func)
+static HRESULT WINAPI create9ex_hook(UINT version, IDirect3D9Ex **out)
 {
-	uint8_t *base = (uint8_t *)exe;
+	HRESULT hr = create9ex_orig ? create9ex_orig(version, out) : D3DERR_NOTAVAILABLE;
+	if (SUCCEEDED(hr) && out && *out) {
+		hook_factory((IDirect3D9 *)*out);
+		log_printf("d3dcap: Direct3DCreate9Ex(%u) -> %p, CreateDeviceEx hooked", version, (void *)*out);
+	}
+	return hr;
+}
+
+static FARPROC WINAPI getproc_hook(HMODULE module, LPCSTR name)
+{
+	FARPROC result = getproc_orig ? getproc_orig(module, name) : NULL;
+	if (!result || !name || (uintptr_t)name <= 0xffff || module != GetModuleHandleA("d3d9.dll"))
+		return result;
+	if (!lstrcmpA(name, "Direct3DCreate9")) {
+		FARPROC wrapper = create9_hook_proc();
+		if (result != wrapper) {
+			(void)InterlockedCompareExchangePointer((PVOID volatile *)&create9_orig, (PVOID)result, NULL);
+			return wrapper;
+		}
+	} else if (!lstrcmpA(name, "Direct3DCreate9Ex")) {
+		FARPROC wrapper = create9ex_hook_proc();
+		if (result != wrapper) {
+			(void)InterlockedCompareExchangePointer((PVOID volatile *)&create9ex_orig, (PVOID)result, NULL);
+			return wrapper;
+		}
+	}
+	return result;
+}
+
+#ifdef _WIN64
+// Find a named import in the host PE without relying on the executable's layout.
+static void **find_import_slot(HMODULE image, const char *dll, const char *func)
+{
+	if (!image || !dll || !func)
+		return NULL;
+	uint8_t *base = (uint8_t *)image;
 	IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
-	if (dos->e_magic != IMAGE_DOS_SIGNATURE)
+	if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0)
 		return NULL;
 	IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+	if (nt->Signature != IMAGE_NT_SIGNATURE)
+		return NULL;
 	IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-	if (!dir->VirtualAddress)
+	if (!dir->VirtualAddress || !dir->Size)
 		return NULL;
 	for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir->VirtualAddress); d->Name; d++) {
-		if (lstrcmpiA((const char *)(base + d->Name), dll))
+		if (lstrcmpiA((const char *)(base + d->Name), dll) || !d->OriginalFirstThunk)
 			continue;
-		IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + (d->OriginalFirstThunk ? d->OriginalFirstThunk : d->FirstThunk));
+		IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + d->OriginalFirstThunk);
 		IMAGE_THUNK_DATA *thunk = (IMAGE_THUNK_DATA *)(base + d->FirstThunk);
 		for (; names->u1.AddressOfData; names++, thunk++) {
 			if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))
@@ -258,28 +379,135 @@ static void **find_import_slot(HMODULE exe, const char *dll, const char *func)
 	}
 	return NULL;
 }
-#else
-static void hook_create9(HMODULE d3d9);
+#endif
 
-// A client that maps the game itself (iw4x-sp) loads d3d9.dll after our DllMain: watch for it, a millisecond at a time, until the game has its device
-static DWORD WINAPI wait_for_d3d9(LPVOID unused)
+static int d3dcap_prefix_equal_i(const char *value, const char *prefix)
+{
+	if (!value || !prefix)
+		return 0;
+	while (*prefix) {
+		unsigned char a = (unsigned char)*value++, b = (unsigned char)*prefix++;
+		if (a >= 'A' && a <= 'Z') a = (unsigned char)(a + ('a' - 'A'));
+		if (b >= 'A' && b <= 'Z') b = (unsigned char)(b + ('a' - 'A'));
+		if (a != b)
+			return 0;
+	}
+	return 1;
+}
+
+static int patch_import_slot(void **slot, void *replacement, void **original)
+{
+	DWORD old, ignored;
+	if (!slot || !replacement || !original || !VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old))
+		return 0;
+	void *current = InterlockedCompareExchangePointer((PVOID volatile *)slot, NULL, NULL);
+	int patched = 0;
+	if (current && current != replacement) {
+		(void)InterlockedCompareExchangePointer((PVOID volatile *)original, current, NULL);
+		InterlockedExchangePointer((PVOID volatile *)slot, replacement);
+		patched = 1;
+	}
+	VirtualProtect(slot, sizeof(void *), old, &ignored);
+	return patched;
+}
+
+static int patch_module_imports(HMODULE image)
+{
+	if (!image)
+		return 0;
+	uint8_t *base = (uint8_t *)image;
+	IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+	if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0)
+		return 0;
+	IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+	if (nt->Signature != IMAGE_NT_SIGNATURE)
+		return 0;
+	IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+	if (!dir->VirtualAddress || !dir->Size)
+		return 0;
+	int patched = 0;
+	for (IMAGE_IMPORT_DESCRIPTOR *imp = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir->VirtualAddress); imp->Name; imp++) {
+		const char *dll = (const char *)(base + imp->Name);
+		if (!lstrcmpiA(dll, "d3d9.dll")) {
+			if (!imp->OriginalFirstThunk)
+				continue; // no import names: do not infer an ordinal from its current pointer
+			IMAGE_THUNK_DATA *iat = (IMAGE_THUNK_DATA *)(base + imp->FirstThunk);
+			IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + imp->OriginalFirstThunk);
+			for (; iat->u1.Function && names->u1.AddressOfData; iat++, names++) {
+				if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))
+					continue;
+				IMAGE_IMPORT_BY_NAME *by_name = (IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData);
+				const char *name = (const char *)by_name->Name;
+				if (!lstrcmpA(name, "Direct3DCreate9"))
+					patched += patch_import_slot((void **)&iat->u1.Function, (void *)create9_hook_proc(), (void **)&create9_orig);
+				else if (!lstrcmpA(name, "Direct3DCreate9Ex"))
+					patched += patch_import_slot((void **)&iat->u1.Function, (void *)create9ex_hook_proc(), (void **)&create9ex_orig);
+			}
+		} else if (!lstrcmpiA(dll, "kernel32.dll") || !lstrcmpiA(dll, "kernelbase.dll") ||
+			   d3dcap_prefix_equal_i(dll, "api-ms-win-core-libraryloader-")) {
+			if (!imp->OriginalFirstThunk)
+				continue;
+			IMAGE_THUNK_DATA *iat = (IMAGE_THUNK_DATA *)(base + imp->FirstThunk);
+			IMAGE_THUNK_DATA *names = (IMAGE_THUNK_DATA *)(base + imp->OriginalFirstThunk);
+			for (; iat->u1.Function && names->u1.AddressOfData; iat++, names++) {
+				if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal))
+					continue;
+				IMAGE_IMPORT_BY_NAME *by_name = (IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData);
+				if (!lstrcmpA((const char *)by_name->Name, "GetProcAddress"))
+					patched += patch_import_slot((void **)&iat->u1.Function, (void *)getproc_hook, (void **)&getproc_orig);
+			}
+		}
+	}
+	return patched;
+}
+
+static int patch_loaded_module_imports(void)
+{
+	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+	if (snap == INVALID_HANDLE_VALUE)
+		return 0;
+	MODULEENTRY32 me;
+	memset(&me, 0, sizeof(me));
+	me.dwSize = sizeof(me);
+	int patched = 0;
+	if (Module32First(snap, &me)) {
+		do {
+			patched += patch_module_imports(me.hModule);
+		} while (Module32Next(snap, &me));
+	}
+	CloseHandle(snap);
+	return patched;
+}
+
+#ifndef _WIN64
+static void hook_create9(HMODULE d3d9);
+#endif
+
+static DWORD WINAPI wait_for_d3d9_capture(LPVOID unused)
 {
 	(void)unused;
-	for (int i = 0; i < 120000 && !create9_orig; i++) {
+	for (int i = 0; i < 1200 && !d3dcap_device(); i++) {
+		(void)patch_loaded_module_imports();
+#ifndef _WIN64
 		HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
-		if (d3d9) {
-			hook_create9(d3d9);
-			return 0;
-		}
-		Sleep(1);
+		if (d3d9 && !create9_orig)
+			hook_create9(d3d9); // preserve the known x86 export-detour fallback for late-loaded IW4x
+#endif
+		Sleep(100);
 	}
-	log_printf("d3dcap: d3d9.dll never loaded");
+	if (!d3dcap_device())
+		log_printf("d3dcap: timed out waiting for Direct3DCreate9/Ex device capture");
 	return 0;
 }
 
+#ifndef _WIN64
 static void hook_create9(HMODULE d3d9)
 {
-	uint8_t *fn = (uint8_t *)GetProcAddress(d3d9, "Direct3DCreate9");
+	static LONG attempted;
+	if (InterlockedCompareExchange(&attempted, 1, 0) != 0)
+		return;
+	FARPROC proc = getproc_orig ? getproc_orig(d3d9, "Direct3DCreate9") : GetProcAddress(d3d9, "Direct3DCreate9");
+	uint8_t *fn = (uint8_t *)proc;
 	if (!fn) {
 		log_printf("d3dcap: no Direct3DCreate9 in d3d9.dll");
 		return;
@@ -295,37 +523,34 @@ static void hook_create9(HMODULE d3d9)
 void d3dcap_install(void)
 {
 #ifdef MW2COOP_IW4X
-	use_ex = 0; // the iw4x-sp client has its own r_useD3D9Ex
+	use_ex = 0; // iw4x-sp keeps control of r_useD3D9Ex; we observe its factory without changing that setting
 #else
 	use_ex = settings_d3d9ex();
 #endif
+	HMODULE host = GetModuleHandleA(NULL);
+	int host_patched = patch_module_imports(host);
+	log_printf("d3dcap: host imports captured for cinematics: %d", host_patched);
 #ifdef _WIN64
-	// the 64-bit build keeps its device in a global (native.c, shot.c): this file only has to make the extended one
-	if (!use_ex && !settings_borderless())
-		return;
-	void **slot = find_import_slot(GetModuleHandleA(NULL), "d3d9.dll", "Direct3DCreate9");
-	DWORD old;
-	if (!slot) {
-		log_printf("d3d9ex: the exe has no import of Direct3DCreate9 from d3d9.dll: the plain Direct3D 9 stays");
-		use_ex = 0;
-		return;
+	// The original x64 path only installed this hook when d3d9ex was enabled. Cinematics
+	// also need the device in ordinary D3D9 mode, so the same wrapper now captures both.
+	void **slot = find_import_slot(host, "d3d9.dll", "Direct3DCreate9");
+	if (slot && !create9_orig) {
+		DWORD old;
+		if (VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old)) {
+			create9_orig = (create9_t)*slot;
+			*slot = (void *)create9_hook_proc();
+			DWORD ignored;
+			VirtualProtect(slot, sizeof(void *), old, &ignored);
+		}
 	}
-	if (!VirtualProtect(slot, sizeof(void *), PAGE_READWRITE, &old)) {
-		log_printf("d3d9ex: the import table entry cannot be written: the plain Direct3D 9 stays");
-		use_ex = 0;
-		return;
-	}
-	create9_orig = (create9_t)*slot;
-	*slot = (void *)create9_hook;
-	VirtualProtect(slot, sizeof(void *), old, &old);
-	log_printf("d3d9ex: the import of Direct3DCreate9 (entry %p) points at the extended Direct3D 9", (void *)slot);
 #else
 	HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
-	if (!d3d9) {
-		log_printf("d3dcap: d3d9.dll is not loaded yet, waiting for it");
-		CloseHandle(CreateThread(NULL, 0, wait_for_d3d9, NULL, 0, NULL));
-		return;
-	}
-	hook_create9(d3d9);
+	if (d3d9 && !create9_orig)
+		hook_create9(d3d9);
 #endif
+	HANDLE thread = CreateThread(NULL, 0, wait_for_d3d9_capture, NULL, 0, NULL);
+	if (thread)
+		CloseHandle(thread);
+	else
+		log_printf("d3dcap: could not start the device-capture worker");
 }

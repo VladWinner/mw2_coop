@@ -814,6 +814,43 @@ static void add_host_menu(void)
 
 static volatile LONG split_pending; // the lobby about to be hosted is a split screen one
 static volatile LONG split_mode;    // the lobby being hosted is a split screen one (the second player is on this PC, his process starts at Start)
+static volatile LONG split_lobby_returning; // the local campaign mission ended; listen is reopening its campaign lobby
+static volatile LONG split_lobby_return_tick;
+static volatile LONG split_lobby_return_attempts;
+static volatile LONG split_return_devices_valid;
+static int split_return_devices[2] = {DEVICE_NONE, DEVICE_NONE};
+static char split_return_map[64];
+
+// coop_lobby is reused from Special Ops. Give campaign sessions the same loop as the
+// single-player main menu, before listen activates the menu and starts its soundLoop.
+static uint8_t *lobby_music_seen;
+static const char *lobby_music_specops;
+static int lobby_music_saved;
+static void lobby_music_patch(int campaign)
+{
+	uint8_t *lobby = ui_find_menu("coop_lobby");
+	if (!lobby)
+		return;
+	const char **loop = (const char **)(lobby + MENU_SOUND_LOOP);
+	if (lobby != lobby_music_seen) {
+		lobby_music_seen = lobby;
+		lobby_music_specops = *loop;
+		lobby_music_saved = 1;
+	}
+	const char *wanted = lobby_music_specops;
+	if (campaign) {
+		uint8_t *main = ui_find_menu("main_text");
+		wanted = main ? *(const char **)(main + MENU_SOUND_LOOP) : NULL;
+		if (!wanted)
+			wanted = "music_mainmenu";
+	} else if (!lobby_music_saved) {
+		return;
+	}
+	if (*loop != wanted) {
+		*loop = wanted;
+		log_printf("menus: coop_lobby music set to %s", campaign ? "the single-player menu theme" : "the native Special Ops theme");
+	}
+}
 
 // mw2coop_host_menu: the campaign menu's button (split: the split screen button's, same popup)
 static void host_menu_open(int split)
@@ -942,6 +979,7 @@ static void host_lobby(const char *map)
 {
 	if (split_pending)
 		steam_lobby_fail_install();
+	lobby_music_patch(1); // listen activates coop_lobby immediately after mw2coop_online
 	char cmd[512];
 	snprintf(cmd, sizeof(cmd),
 		 "set arcademode 0\nset arcademode_full 0\nset solo_play 0\nset ui_skip_level_select 1\n"
@@ -952,7 +990,15 @@ static void host_lobby(const char *map)
 	game_cbuf_addtext(cmd);
 	if (InterlockedExchange(&split_pending, 0)) { // a split screen lobby: the second player presses a button on his device first
 		InterlockedExchange(&split_mode, 1);
-		devices_begin();
+		// On an automatic return, wait until listen has actually restored coop_lobby before
+		// restarting the device assignment thread. Starting it while stopListening/listen
+		// are still changing the UI can lose one player's device card.
+		if (InterlockedCompareExchange(&split_lobby_returning, 0, 0)) {
+			// The saved assignments remain valid until tick_f confirms the lobby is live.
+		} else if (InterlockedExchange(&split_return_devices_valid, 0))
+			devices_begin_assigned(split_return_devices[0], split_return_devices[1]);
+		else
+			devices_begin();
 	} else {
 		InterlockedExchange(&split_mode, 0);
 		devices_end();
@@ -1188,6 +1234,7 @@ static void patch_lobby(int campaign)
 	uint8_t *menu = ui_find_menu("coop_lobby");
 	if (!menu)
 		return;
+	lobby_music_patch(campaign);
 	int changed = 0;
 	for (size_t k = 0; k < sizeof(lobby_swaps) / sizeof(lobby_swaps[0]); k++) {
 		LobbySwap *w = &lobby_swaps[k];
@@ -1229,10 +1276,88 @@ static void patch_lobby(int campaign)
 #define ASSET_TYPE_MATERIAL 5
 #define ITEM_BACKGROUND ITEM_BACKGROUND_PTR
 #define ITEM_MATERIAL_EXP ITEM_MATERIAL_EXP_PTR
+#ifdef _WIN64
+#define ITEM_STATIC_FLAGS 0x4c
+#else
+#define ITEM_STATIC_FLAGS 0x44
+#endif
+#define WINDOW_AUTOWRAPPED 0x00800000
 static uint8_t *pic_item, *name_item;
 static void *pic_native_material, *pic_native_exp, *name_native_exp;
 static const char *name_native_text;
-static char shown_map[64];
+static char shown_mission[128];
+static const char *shown_description;
+
+// Item 22 in coop_lobby is the native contextual-hint text item above the mission title and
+// picture. In the campaign lobby it becomes a multi-line mission-description panel; its original
+// text, expressions, geometry and flags return for Spec Ops.
+typedef struct {
+	uint8_t *item;
+	const char *text;
+	void *text_exp;
+	void *float_exps;
+	void *disabled_exp;
+	uint32_t visible_flags;
+	uint32_t static_flags;
+	float rect[4];
+	float client_rect[4];
+} LobbyDescriptionState;
+static LobbyDescriptionState lobby_description_state;
+
+static void patch_lobby_description(uint8_t *menu, int campaign, const char *description)
+{
+	int at = ui_item_index(menu, "description");
+	if (at < 0)
+		return;
+	uint8_t *item = (*(uint8_t ***)(menu + MENU_ITEMS))[at];
+	LobbyDescriptionState *state = &lobby_description_state;
+	if (item != state->item) {
+		state->item = item;
+		state->text = *(const char **)(item + ITEM_TEXT);
+		state->text_exp = *(void **)(item + ITEM_TEXT_EXP);
+		state->float_exps = *(void **)(item + ITEM_FLOAT_EXPS);
+		state->disabled_exp = *(void **)(item + ITEM_DISABLED_EXP);
+		state->visible_flags = *(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) & (WINDOW_VISIBLE | WINDOW_HASFOCUS);
+		state->static_flags = *(uint32_t *)(item + ITEM_STATIC_FLAGS);
+		memcpy(state->rect, item + ITEM_RECT, sizeof(state->rect));
+		memcpy(state->client_rect, item + ITEM_RECT_CLIENT_Y - 4, sizeof(state->client_rect));
+	}
+	if (!campaign) {
+		*(const char **)(item + ITEM_TEXT) = state->text;
+		*(void **)(item + ITEM_TEXT_EXP) = state->text_exp;
+		*(void **)(item + ITEM_FLOAT_EXPS) = state->float_exps;
+		*(void **)(item + ITEM_DISABLED_EXP) = state->disabled_exp;
+		memcpy(item + ITEM_RECT, state->rect, sizeof(state->rect));
+		memcpy(item + ITEM_RECT_CLIENT_Y - 4, state->client_rect, sizeof(state->client_rect));
+		uint32_t *flags = (uint32_t *)(item + ITEM_DYNAMIC_FLAGS);
+		*flags = (*flags & ~(WINDOW_VISIBLE | WINDOW_HASFOCUS)) | state->visible_flags;
+		*(uint32_t *)(item + ITEM_STATIC_FLAGS) = state->static_flags;
+		return;
+	}
+	if (!description || !description[0]) {
+		*(const char **)(item + ITEM_TEXT) = "";
+		*(void **)(item + ITEM_TEXT_EXP) = NULL;
+		*(void **)(item + ITEM_FLOAT_EXPS) = NULL;
+		*(void **)(item + ITEM_DISABLED_EXP) = NULL;
+		*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
+		*(uint32_t *)(item + ITEM_STATIC_FLAGS) &= ~WINDOW_AUTOWRAPPED;
+		return;
+	}
+	*(const char **)(item + ITEM_TEXT) = description; // already localized by localize_text()
+	*(void **)(item + ITEM_TEXT_EXP) = NULL;
+	*(void **)(item + ITEM_FLOAT_EXPS) = NULL; // do not gate the description on ui_hint_focus/startmatch
+	*(void **)(item + ITEM_DISABLED_EXP) = NULL;
+	*(uint32_t *)(item + ITEM_STATIC_FLAGS) |= WINDOW_AUTOWRAPPED;
+	float *rect = (float *)(item + ITEM_RECT);
+	float *client = (float *)(item + ITEM_RECT_CLIENT_Y - 4);
+	// Keep the bottom edge at the existing description slot; grow upward into the free area
+	// immediately above the mission name (20 px) and image, with the stock autowrap enabled.
+	rect[1] = state->rect[1] - 52.0f;
+	rect[3] = 72.0f;
+	client[1] = state->client_rect[1] - 52.0f;
+	client[3] = 72.0f;
+	*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) |= WINDOW_VISIBLE;
+}
 
 static void find_mission_items(uint8_t *menu)
 {
@@ -1255,11 +1380,15 @@ static void find_mission_items(uint8_t *menu)
 		pic_item = pic;
 		pic_native_material = *(void **)(pic + ITEM_BACKGROUND);
 		pic_native_exp = *(void **)(pic + ITEM_MATERIAL_EXP);
+		shown_mission[0] = 0;
+		shown_description = NULL;
 	}
 	if (name != name_item) {
 		name_item = name;
 		name_native_exp = *(void **)(name + ITEM_TEXT_EXP);
 		name_native_text = *(const char **)(name + ITEM_TEXT);
+		shown_mission[0] = 0;
+		shown_description = NULL;
 	}
 }
 
@@ -1286,48 +1415,91 @@ static void lobby_picture_shape(int square)
 static void patch_lobby_mission(uint8_t *menu, int campaign)
 {
 	find_mission_items(menu);
-	if (!pic_item || !name_item)
+	if (!pic_item || !name_item) {
+		patch_lobby_description(menu, campaign, NULL);
 		return;
+	}
 	lobby_picture_shape(campaign);
 	if (!campaign) {
 		*(void **)(pic_item + ITEM_MATERIAL_EXP) = pic_native_exp;
 		*(void **)(pic_item + ITEM_BACKGROUND) = pic_native_material;
 		*(void **)(name_item + ITEM_TEXT_EXP) = name_native_exp;
 		*(const char **)(name_item + ITEM_TEXT) = name_native_text;
-		shown_map[0] = 0;
+		patch_lobby_description(menu, 0, NULL);
+		shown_mission[0] = 0;
+		shown_description = NULL;
 		return;
 	}
-	char map[64] = "";
+
+	char map[64] = "", museum_mode[32] = "";
 	game_dvar_raw("coop_mapName", map, sizeof(map));
-	if (!map[0] || strcmp(map, shown_map) == 0)
+	if (!map[0]) {
+		patch_lobby_description(menu, 1, NULL);
+		shown_mission[0] = 0;
+		shown_description = NULL;
 		return;
-	lstrcpynA(shown_map, map, sizeof(shown_map));
-	// only the missions of the campaign list have a picture: asking the asset database for one
-	// that does not exist ("levelshot_mw2_ending") hung the game. The knife fight map (ending)
-	// shows Endgame's.
+	}
+	if (strcmp(map, "ending") == 0)
+		game_dvar_raw("ui_char_museum_mode", museum_mode, sizeof(museum_mode));
+
+	// Mission Select's MUSEUM entry uses the 'ending' map with ui_char_museum_mode=free.
+	// The selectable Endgame mission continues to use the original 'ending' -> 'af_chase'
+	// fallback; all other campaign mission mappings remain unchanged.
+	int museum = strcmp(map, "ending") == 0 && strcmp(museum_mode, "free") == 0;
+	const char *shown = museum ? "museum" : (strcmp(map, "ending") == 0 ? "af_chase" : map);
+	char identity[128];
+	snprintf(identity, sizeof(identity), "%s|%s", map, museum_mode);
+	if (strcmp(identity, shown_mission) == 0) {
+		// Menu setup/onOpen can overwrite the description item after the first lobby patch.
+		// Reapply the cached text on every tick instead of waiting for the mission to change.
+		patch_lobby_description(menu, 1, shown_description);
+		return;
+	}
+	lstrcpynA(shown_mission, identity, sizeof(shown_mission));
+
+	// Only campaign Mission Select entries have a known levelshot. The Museum material was
+	// confirmed in levels.menu as levelshot_mw2_museum; never look up levelshot_mw2_ending.
 	static const char *const listed[] = {"trainer", "roadkill", "cliffhanger", "airport", "favela", "invasion",
 		"favela_escape", "arcadia", "oilrig", "gulag", "dcburning", "contingency", "dcemp", "dc_whitehouse",
-		"estate", "boneyard", "af_caves", "af_chase"};
-	const char *shown = strcmp(map, "ending") == 0 ? "af_chase" : map;
+		"estate", "boneyard", "af_caves", "af_chase", "museum"};
 	int in_list = 0;
 	for (size_t i = 0; i < sizeof(listed) / sizeof(listed[0]); i++)
 		in_list |= strcmp(shown, listed[i]) == 0;
 	if (!in_list) {
+		shown_description = NULL;
+		patch_lobby_description(menu, 1, NULL);
 		log_printf("menus: no picture for '%s'", map);
 		return;
 	}
-	static char material[96], text[96];
+
+	static char material[96], text[96], desc_key[112];
 	snprintf(material, sizeof(material), "levelshot_mw2_%s", shown);
-	int n = snprintf(text, sizeof(text), "@MENU_SP_SP_");
-	for (const char *m = shown; *m && n < (int)sizeof(text) - 1; m++)
-		text[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
-	text[n] = 0;
+	if (museum) {
+		lstrcpynA(text, "MUSEUM", sizeof(text));
+		lstrcpynA(desc_key, "MW2COOP_MUSEUM_DESC", sizeof(desc_key));
+	} else {
+		int n = snprintf(text, sizeof(text), "@MENU_SP_SP_");
+		for (const char *m = shown; *m && n < (int)sizeof(text) - 1; m++)
+			text[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+		text[n] = 0;
+
+		int d = snprintf(desc_key, sizeof(desc_key), "MENU_SP_SP_");
+		for (const char *m = shown; *m && d < (int)sizeof(desc_key) - 6; m++)
+			desc_key[d++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
+		snprintf(desc_key + d, sizeof(desc_key) - d, "_DESC");
+	}
+
+	const char *description = localize_text(desc_key);
+	shown_description = description;
+	patch_lobby_description(menu, 1, description);
 	typedef void *(*find_t)(int, const char *);
+	void *material_ptr = ((find_t)(base + RVA_DB_FIND_HEADER))(ASSET_TYPE_MATERIAL, material);
 	*(void **)(pic_item + ITEM_MATERIAL_EXP) = NULL;
-	*(void **)(pic_item + ITEM_BACKGROUND) = ((find_t)(base + RVA_DB_FIND_HEADER))(ASSET_TYPE_MATERIAL, material);
+	*(void **)(pic_item + ITEM_BACKGROUND) = material_ptr;
 	*(void **)(name_item + ITEM_TEXT_EXP) = NULL;
 	*(const char **)(name_item + ITEM_TEXT) = text;
-	log_printf("menus: lobby shows %s (%s)", material, text);
+	log_printf("menus: lobby shows %s (%s), description %s", material, text,
+		description ? "loaded" : "not available");
 }
 
 // Ready state: each PC sends its own to the partner every second while the lobby is open
@@ -1516,6 +1688,7 @@ void menus_split_changed(void)
 // The split screen's Start (src/native.c): the second player is on this PC, in this process. The lobby's party is let go, the game becomes a two local players game and the
 // mission the lobby shows starts as a normal level.
 static volatile LONG native_started; // tick count of the launch, for tick_f's check that the session ends
+static volatile LONG native_level_seen; // set by menus_poll while the server runs; tick_f is not queued during a level
 static void native_launch(void)
 {
 	if (native_split_active()) // a second press of Start while the mission loads
@@ -1535,7 +1708,12 @@ static void native_launch(void)
 		log_printf("menus: Start: the split screen could not be started");
 		return;
 	}
+	InterlockedExchange(&native_level_seen, 0);
 	log_printf("menus: Start: native split screen, mission '%s', player 1 on %d, player 2 on %d (-1 keyboard)", map, dev0, dev1);
+	lstrcpynA(split_return_map, map, sizeof(split_return_map));
+	split_return_devices[0] = dev0;
+	split_return_devices[1] = dev1;
+	InterlockedExchange(&split_return_devices_valid, 1);
 	devices_end();
 	InterlockedExchange(&split_mode, 0);
 	((void (*)(void))(base + RVA_PARTY_RESET))();
@@ -1549,20 +1727,32 @@ static void native_launch(void)
 // tick_f: the session ends once the game is back in the menus (or when the level never started)
 static void native_session_tick(void)
 {
-	static int level_seen;
 	if (!native_split_active() || !native_started) { // (a session the settings file started is not ours to end)
-		level_seen = 0;
+		InterlockedExchange(&native_level_seen, 0);
 		return;
 	}
 	char v[16] = "";
 	game_dvar_raw("sv_running", v, sizeof(v));
 	int running = v[0] == '1';
 	if (running)
-		level_seen = 1;
+		InterlockedExchange(&native_level_seen, 1); // fallback if a menu tick happens during level startup
+	int level_seen = InterlockedCompareExchange(&native_level_seen, 0, 0) != 0;
 	if ((level_seen && !running) || (!level_seen && GetTickCount() - (DWORD)native_started > 30000)) {
-		level_seen = 0;
+		int completed = level_seen && !running;
+		InterlockedExchange(&native_level_seen, 0);
 		InterlockedExchange(&native_started, 0);
 		native_split_stop();
+		if (completed && split_return_map[0]) {
+			InterlockedExchange(&split_lobby_return_tick, (LONG)GetTickCount());
+			InterlockedExchange(&split_lobby_return_attempts, 1);
+			InterlockedExchange(&split_lobby_returning, 1);
+			InterlockedExchange(&split_pending, 1);
+			host_lobby(split_return_map);
+			log_printf("menus: campaign mission ended; returning split screen to coop_lobby on '%s'", split_return_map);
+		} else {
+			InterlockedExchange(&split_return_devices_valid, 0);
+			split_return_map[0] = 0;
+		}
 	}
 }
 
@@ -1727,6 +1917,7 @@ static void add_partner_popups(void)
 // mw2coop_online: run by the campaign menu's co-op button before "listen" opens the lobby
 static void online_f(void)
 {
+	lobby_music_patch(1); // second chance before listen activates coop_lobby
 	char map[64] = "trainer", start[64] = "";
 	const char *chosen = game_cmd_argv(1);
 	continuing = 0;
@@ -2034,6 +2225,11 @@ static void specialops_write(int v)
 
 // at the launch (the host's Start, a client's launch from the party, the split screen): called by the code that launches, and by the thread below for the launch that is the engine's
 static volatile LONG specialops_forced; // from the launch to the end of the session the dvar is kept at 0 (the engine's co-op code may set it again)
+static volatile LONG campaign_lobby_return_queued;
+static volatile LONG campaign_lobby_return_pending;
+static volatile LONG campaign_mission_seen;
+static volatile LONG campaign_lobby_seen;
+static volatile LONG campaign_main_return_pending;
 static void campaign_loading_begin(void)
 {
 	dvar_t *d = game_find_dvar("specialops");
@@ -2266,6 +2462,11 @@ void menus_poll(void)
 	char v[8] = "", coop[8] = "";
 	game_dvar_raw("sv_running", v, sizeof(v));
 	game_dvar_raw("coop", coop, sizeof(coop));
+	// menus_poll runs on the control thread during a level; tick_f deliberately does not.
+	// Record the local mission here so tick_f can detect its end as soon as the menus return.
+	if (v[0] == '1' && InterlockedCompareExchange(&native_started, 0, 0) &&
+	    InterlockedExchange(&native_level_seen, 1) == 0)
+		log_printf("menus: local split mission server observed; return detection armed");
 	// hosting: the host's party is up (lobby), or a co-op level runs on the host
 	{ // QA: the UI state of local client 0 (1 main menu, 2 paused, 3 pregame, 6 briefing = the loading screen, 7 victory) and the client state: when does the briefing end?
 		static int last_ui = -99, last_cls = -99;
@@ -2291,19 +2492,57 @@ void menus_poll(void)
 			last_ui = ui, last_cls = cls;
 		}
 	}
-	upnp_want(base[RVA_PARTY_IS_HOST] && (base[RVA_PARTY_ACTIVE] || (v[0] == '1' && coop[0] == '1')));
-	{ // the loading screen's look: the campaign's while a campaign co-op or split screen game is being set up or played (Spec Ops' lobby and levels keep theirs)
-		static int sticky, was_running;
+	{ // campaign co-op mission exit: the engine may choose main_specops because coop_lobby is shared with Special Ops
 		char mapn[64] = "";
 		game_dvar_raw("coop_mapName", mapn, sizeof(mapn));
 		int campaign = base[RVA_PARTY_ACTIVE] && mapn[0] && strncmp(mapn, "so_", 3) != 0;
-		if (was_running && v[0] != '1')
-			sticky = 0; // the level is over
-		else if (campaign || native_split_active() || specialops_forced)
+		int ui = *(volatile int *)(base + RVA_UI_STATE);
+		if (campaign && ui == 0x0b)
+			InterlockedExchange(&campaign_lobby_seen, 1);
+		if (campaign && v[0] == '1')
+			InterlockedExchange(&campaign_mission_seen, 1);
+		if (campaign && campaign_mission_seen && v[0] != '1' && ui == 0x0e) {
+			if (InterlockedCompareExchange(&campaign_lobby_return_queued, 1, 0) == 0)
+				InterlockedExchange(&campaign_lobby_return_pending, 1);
+		} else if (!campaign || ui != 0x0e || v[0] == '1') {
+			InterlockedExchange(&campaign_lobby_return_queued, 0);
+			InterlockedExchange(&campaign_lobby_return_pending, 0);
+		}
+		// Leaving the campaign lobby through leave_lobby_warning takes the engine's
+		// shared Special Ops exit path. If no campaign level just ended, that path
+		// must land on the single-player main menu instead of main_specops.
+		if (campaign_lobby_seen && !campaign_mission_seen && v[0] != '1' && ui == 0x0e) {
+			InterlockedExchange(&campaign_main_return_pending, 1);
+			InterlockedExchange(&campaign_lobby_seen, 0);
+		} else if (ui == 1) {
+			InterlockedExchange(&campaign_lobby_seen, 0);
+		}
+		if (!campaign || ui == 0x0b)
+			InterlockedExchange(&campaign_mission_seen, 0);
+	}
+	upnp_want(base[RVA_PARTY_IS_HOST] && (base[RVA_PARTY_ACTIVE] || (v[0] == '1' && coop[0] == '1')));
+	{ // the loading screen's look: the campaign's while a campaign co-op or split screen game is being set up or played (Spec Ops' lobby and levels keep theirs)
+		static int sticky;
+		char mapn[64] = "";
+		game_dvar_raw("coop_mapName", mapn, sizeof(mapn));
+		int campaign = base[RVA_PARTY_ACTIVE] && mapn[0] && strncmp(mapn, "so_", 3) != 0;
+		int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
+		if (campaign || native_split_active() || split_lobby_returning || (specialops_forced && v[0] == '1'))
 			sticky = 1;
-		else if (base[RVA_PARTY_ACTIVE])
-			sticky = 0; // a Spec Ops lobby
-		was_running = v[0] == '1';
+		else
+			sticky = 0; // a Spec Ops lobby, or the player has left the campaign lobby
+		if ((!campaign || lobby_ui != 0x0b) && split_lobby_returning &&
+			   GetTickCount() - (DWORD)InterlockedCompareExchange(&split_lobby_return_tick, 0, 0) > 20000) {
+			InterlockedExchange(&split_lobby_returning, 0); // don't keep the campaign dvar forced if listen failed
+			InterlockedExchange(&split_lobby_return_tick, 0);
+			InterlockedExchange(&split_lobby_return_attempts, 0);
+			InterlockedExchange(&split_return_devices_valid, 0);
+			InterlockedExchange(&split_mode, 0);
+			InterlockedExchange(&split_pending, 0);
+			devices_end();
+			split_return_map[0] = 0;
+			log_printf("menus: split campaign lobby return timed out; leaving the menu state as the game chose it");
+		}
 		InterlockedExchange(&campaign_session, sticky);
 		if (!sticky)
 			campaign_loading_end();
@@ -2335,7 +2574,37 @@ static void tick_f(void)
 	unlock_missions_tick();
 	find_tick();
 	int campaign = campaign_lobby();
+	int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
 	patch_lobby(campaign);
+	if (campaign && lobby_ui == 0x0b && InterlockedCompareExchange(&split_lobby_returning, 0, 0)) {
+		// The lobby is now live: restore both device cards once, against the final menu.
+		if (InterlockedExchange(&split_return_devices_valid, 0))
+			devices_begin_assigned(split_return_devices[0], split_return_devices[1]);
+		InterlockedExchange(&split_lobby_returning, 0);
+		InterlockedExchange(&split_lobby_return_tick, 0);
+		InterlockedExchange(&split_lobby_return_attempts, 0);
+		log_printf("menus: split campaign lobby restored with the original device assignments");
+	} else if ((!campaign || lobby_ui != 0x0b) && InterlockedCompareExchange(&split_lobby_returning, 0, 0) &&
+		   GetTickCount() - (DWORD)InterlockedCompareExchange(&split_lobby_return_tick, 0, 0) > 1200 &&
+		   InterlockedCompareExchange(&split_lobby_return_attempts, 0, 0) < 3) {
+		LONG attempt = InterlockedIncrement(&split_lobby_return_attempts);
+		InterlockedExchange(&split_pending, 1);
+		host_lobby(split_return_map);
+		InterlockedExchange(&split_lobby_return_tick, (LONG)GetTickCount());
+		log_printf("menus: split campaign lobby listen retry %ld/3", attempt);
+	}
+	if (InterlockedExchange(&campaign_main_return_pending, 0)) {
+		game_cbuf_addtext("openmenu main_text\n");
+		log_printf("menus: campaign lobby exit routed to main_text");
+	}
+	if (InterlockedExchange(&campaign_lobby_return_pending, 0)) {
+		if (campaign && *(volatile int *)(base + RVA_UI_STATE) == 0x0e) {
+			lobby_music_patch(1);
+			game_cbuf_addtext("openmenu coop_lobby\n");
+			log_printf("menus: campaign party returned to main_specops; reopening coop_lobby");
+		} else
+			InterlockedExchange(&campaign_lobby_return_queued, 0);
+	}
 	access_tick(campaign, base[RVA_PARTY_IS_HOST]);
 	firewall_tick(campaign && base[RVA_PARTY_IS_HOST] && !split_mode); // the second player is on this PC: nothing to let in
 	if (!campaign) {
