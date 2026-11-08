@@ -34,6 +34,10 @@ int settings_d3d9on12(void);
 // 64-bit build only: always 0 in the 32-bit and iw4x builds (AMD's DLLs are 64-bit only).
 int settings_fsr3(void);
 const char *settings_fsr3_dir(void);
+// settings.ini [display] dlss (default 0, experimental): NVIDIA's DLSS Super Resolution instead of FSR 3 on the same frame path (it also makes settings_fsr3() 1); dlss_dir: the folder with
+// mw2coop_dlss.dll (src/dlss, the bridge to NVIDIA's SDK) and nvngx_dlss.dll. 64-bit build only.
+int settings_dlss(void);
+const char *settings_dlss_dir(void);
 // fsr3_sharpness (0-100, default 60): the sharpening FSR 3 applies to its output (0 = off).
 int settings_fsr3_sharpness(void);
 // fsr3_refine (default 1): how FSR 3 gets motion for what moves on its own (soldiers, the weapon): 0 = the camera's motion only, 1 = strict image-based correction (near, clearly
