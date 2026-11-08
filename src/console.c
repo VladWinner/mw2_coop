@@ -7327,9 +7327,23 @@ static int console_sv_cheats_default_wanted(void)
 	return v != 0;
 }
 
+// sv_cheats is a dvar the player may change (`sv_cheats 1`, `set sv_cheats 1`, the dvar list): the game registers it INIT/ROM (read-only after the start) and `seta` adds ARCHIVE, which would write
+// the value into the config and bring cheats back at the next start. The flags are taken off whenever the dvar is found with them (the game can register it again), whatever
+// [console] sv_cheats_default says; the value itself is not touched here.
+static void console_sv_cheats_unprotect(void)
+{
+	const LONG mask = (LONG)(CONSOLE_DVAR_INIT_FLAG | DVAR_ROM_FLAG | DVAR_ARCHIVE_FLAG);
+	dvar_t *d = game_find_dvar("sv_cheats");
+	if (!d || d->type != DVAR_TYPE_BOOL || !(d->flags & (uint32_t)mask))
+		return;
+	LONG old_flags = InterlockedAnd((volatile LONG *)&d->flags, ~mask);
+	log_printf("console: sv_cheats is a changeable, unsaved dvar (flags 0x%08x -> 0x%08x)", (unsigned)old_flags, (unsigned)d->flags);
+}
+
 static void queue_default_sv_cheats(void)
 {
 	dvar_t *d;
+	console_sv_cheats_unprotect();
 	if (!console_sv_cheats_default_wanted())
 		return;
 	LONG state = InterlockedCompareExchange(&auto_cheats_queued, 0, 0);

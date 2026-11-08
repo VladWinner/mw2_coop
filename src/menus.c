@@ -1076,6 +1076,115 @@ static int campaign_lobby(void)
 	return v[0] && strncmp(v, "so_", 3) != 0;
 }
 
+// Leaving the campaign lobby: coop_lobby is the Special Ops lobby, and its "leave" popup (leave_lobby_warning) sends the player on to main_specops. Where that is done by a menu script
+// ("open" "main_specops"), the script is changed here for as long as the lobby holds a campaign mission, so the player lands on main_text (the engine's other way out, by the UI
+// state, is caught in menus_poll). The native scripts are put back for a Spec Ops lobby. The first time the popup is seen its items are logged, to see what the game really runs.
+typedef struct {
+	MenuEventHandler *handler;
+	void *native;
+} LeaveSwap;
+static LeaveSwap leave_swaps[24];
+static int leave_swap_count, leave_swapped, leave_logged;
+static uint8_t *leave_menu_seen;
+
+// a copy of the script with every "main_specops" (quoted) replaced by "main_text"; NULL when it has none
+static char *leave_script_copy(const char *src)
+{
+	static const char from[] = "\"main_specops\"", to[] = "\"main_text\"";
+	if (!strstr(src, from))
+		return NULL;
+	size_t cap = strlen(src) + 1;
+	char *out = HeapAlloc(GetProcessHeap(), 0, cap);
+	if (!out)
+		return NULL;
+	size_t n = 0;
+	while (*src) {
+		if (!strncmp(src, from, sizeof(from) - 1)) {
+			memcpy(out + n, to, sizeof(to) - 1);
+			n += sizeof(to) - 1;
+			src += sizeof(from) - 1;
+		} else
+			out[n++] = *src++;
+	}
+	out[n] = 0;
+	return out;
+}
+
+static void leave_walk(MenuEventHandlerSet *set, int depth)
+{
+	if (!set || IsBadReadPtr(set, sizeof(*set)) || depth > 4 || set->count < 1 || set->count > 24 || IsBadReadPtr(set->handlers, set->count * sizeof(void *)))
+		return;
+	for (int i = 0; i < set->count; i++) {
+		MenuEventHandler *h = set->handlers[i];
+		if (!h || IsBadReadPtr(h, sizeof(*h)))
+			continue;
+		if (h->type == 0) {
+			if (!h->data || IsBadStringPtrA((const char *)h->data, 8) || leave_swap_count >= (int)(sizeof(leave_swaps) / sizeof(leave_swaps[0])))
+				continue;
+			char *copy = leave_script_copy((const char *)h->data);
+			if (!copy)
+				continue;
+			leave_swaps[leave_swap_count].handler = h;
+			leave_swaps[leave_swap_count].native = h->data;
+			leave_swap_count++;
+			h->data = copy;
+#ifdef _WIN64
+		} else if (h->type == 1 && h->data && !IsBadReadPtr(h->data, 16)) { // if (expression, set): the layout is not known, a readable set at either place is followed
+			leave_walk(*(MenuEventHandlerSet **)h->data, depth + 1);
+			leave_walk(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1);
+		} else if (h->type == 2 && h->data) {
+			leave_walk((MenuEventHandlerSet *)h->data, depth + 1);
+#endif
+		}
+	}
+}
+
+static void leave_warning_patch(int campaign)
+{
+	uint8_t *menu = ui_find_menu("leave_lobby_warning");
+	if (menu != leave_menu_seen) { // a new menu (the zone was reloaded): its scripts are the native ones
+		leave_menu_seen = menu;
+		leave_swap_count = 0;
+		leave_swapped = 0;
+	}
+	if (!menu)
+		return;
+	if (!campaign && leave_swapped) {
+		for (int i = 0; i < leave_swap_count; i++)
+			if (!IsBadWritePtr(leave_swaps[i].handler, sizeof(MenuEventHandler)))
+				leave_swaps[i].handler->data = leave_swaps[i].native;
+		leave_swap_count = 0;
+		leave_swapped = 0;
+		log_printf("menus: leave_lobby_warning: the native scripts are back");
+		return;
+	}
+	if (!campaign || leave_swapped)
+		return;
+	if (!leave_logged) {
+		leave_logged = 1;
+		int count = *(int *)(menu + MENU_ITEM_COUNT);
+		uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+		log_printf("menus: leave_lobby_warning has %d item(s)", count);
+		for (int i = 0; i < count && i < 24; i++) {
+			const char *name = *(const char **)items[i];
+			log_printf("menus: leave_lobby_warning[%d] %s", i, name && !IsBadStringPtrA(name, 40) ? name : "-");
+#ifdef _WIN64
+			log_handler_set("action", *(MenuEventHandlerSet **)(items[i] + ITEM_ACTION), 0);
+#endif
+		}
+	}
+	for (int e = 0; e < 4; e++) // onOpen, onCloseRequest, onClose, onESC: four pointers in a row in both layouts
+		leave_walk(*(MenuEventHandlerSet **)(menu + MENU_ON_OPEN + e * (int)sizeof(void *)), 0);
+	{
+		int count = *(int *)(menu + MENU_ITEM_COUNT);
+		uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+		for (int i = 0; i < count && i < 24; i++)
+			leave_walk(*(MenuEventHandlerSet **)(items[i] + ITEM_ACTION), 0);
+	}
+	leave_swapped = 1;
+	log_printf("menus: leave_lobby_warning: %d script(s) now open main_text instead of main_specops", leave_swap_count);
+}
+
 // Items changed while the lobby holds a campaign mission; the native values are kept to switch
 // back for Spec Ops.
 typedef struct {
@@ -2231,6 +2340,8 @@ static volatile LONG campaign_lobby_return_pending;
 static volatile LONG campaign_mission_seen;
 static volatile LONG campaign_lobby_seen;
 static volatile LONG campaign_main_return_pending;
+static volatile LONG campaign_main_route_tick; // when main_text was last asked for, 0 when not waiting for it
+static volatile LONG campaign_main_route_tries;
 static void campaign_loading_begin(void)
 {
 	dvar_t *d = game_find_dvar("specialops");
@@ -2518,6 +2629,20 @@ void menus_poll(void)
 		} else if (ui == 1) {
 			InterlockedExchange(&campaign_lobby_seen, 0);
 		}
+		// The engine can still be opening main_specops when main_text is asked for, and then main_specops ends up on top: while the UI state stays on it, ask once more.
+		{
+			LONG asked = InterlockedCompareExchange(&campaign_main_route_tick, 0, 0);
+			if (asked && ui != 0x0e) {
+				InterlockedExchange(&campaign_main_route_tick, 0);
+				InterlockedExchange(&campaign_main_route_tries, 0);
+			} else if (asked && v[0] != '1' && GetTickCount() - (DWORD)asked > 1500 && InterlockedCompareExchange(&campaign_main_route_tries, 0, 0) < 2) {
+				InterlockedExchange(&campaign_main_return_pending, 1);
+				InterlockedExchange(&campaign_main_route_tick, (LONG)GetTickCount());
+			} else if (asked && GetTickCount() - (DWORD)asked > 6000) {
+				InterlockedExchange(&campaign_main_route_tick, 0);
+				InterlockedExchange(&campaign_main_route_tries, 0);
+			}
+		}
 		if (!campaign || ui == 0x0b)
 			InterlockedExchange(&campaign_mission_seen, 0);
 	}
@@ -2578,6 +2703,7 @@ static void tick_f(void)
 	int campaign = campaign_lobby();
 	int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
 	patch_lobby(campaign);
+	leave_warning_patch(campaign);
 	if (campaign && lobby_ui == 0x0b && InterlockedCompareExchange(&split_lobby_returning, 0, 0)) {
 		// The lobby is now live: restore both device cards once, against the final menu.
 		if (InterlockedExchange(&split_return_devices_valid, 0))
@@ -2597,7 +2723,9 @@ static void tick_f(void)
 	}
 	if (InterlockedExchange(&campaign_main_return_pending, 0)) {
 		game_cbuf_addtext("openmenu main_text\n");
-		log_printf("menus: campaign lobby exit routed to main_text");
+		LONG tries = InterlockedIncrement(&campaign_main_route_tries);
+		InterlockedExchange(&campaign_main_route_tick, (LONG)GetTickCount() | 1);
+		log_printf("menus: campaign lobby exit routed to main_text (ui state %d, try %ld)", *(volatile int *)(base + RVA_UI_STATE), (long)tries);
 	}
 	if (InterlockedExchange(&campaign_lobby_return_pending, 0)) {
 		if (campaign && *(volatile int *)(base + RVA_UI_STATE) == 0x0e) {
