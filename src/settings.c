@@ -140,6 +140,15 @@ void settings_load(void)
 	fsr3_sharp = (int)GetPrivateProfileIntA("display", "fsr3_sharpness", 60, path);
 	if (fsr3_sharp < 0 || fsr3_sharp > 100)
 		fsr3_sharp = 60;
+#ifndef _WIN64
+	// AMD's FidelityFX DLLs (the FSR 3 loader and upscaler) exist only for 64-bit Windows, and a 32-bit game (the official
+	// 32-bit build, iw4x) cannot load a 64-bit DLL: LoadLibrary failed with error 193 and the log blamed fsr3_dir. FSR 3 is
+	// off in these builds, and it does not switch the Direct3D 12 layer on; FSR 1 ([display] upscale=1) works in them.
+	if (fsr3_on) {
+		log_printf("settings: [display] fsr3=1 ignored: FSR 3 works only in the 64-bit build (AMD's FidelityFX DLLs are 64-bit only); FSR 1 ([display] upscale=1) works in this build");
+		fsr3_on = 0;
+	}
+#endif
 	if (fsr3_on)
 		d3d9on12_on = 1; // FSR 3 runs on the Direct3D 12 layer
 	upscale_on = GetPrivateProfileIntA("display", "upscale", 0, path) != 0;

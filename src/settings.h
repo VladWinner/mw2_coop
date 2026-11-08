@@ -31,6 +31,7 @@ int settings_netguard(void);
 // settings.ini [display] d3d9on12 (default 0, experimental): the game's Direct3D 9 runs on Windows' Direct3D 12 (d3d9.dll Direct3DCreate9On12), the way to DX12 and, through D3D11On12, DX11 (d3dcap.c).
 int settings_d3d9on12(void);
 // settings.ini [display] fsr3 (default 0, experimental): FSR 3 on the game's frame (fsr3.c; switches d3d9on12 on); fsr3_dir: the folder with AMD's amd_fidelityfx_loader_dx12.dll.
+// 64-bit build only: always 0 in the 32-bit and iw4x builds (AMD's DLLs are 64-bit only).
 int settings_fsr3(void);
 const char *settings_fsr3_dir(void);
 // fsr3_sharpness (0-100, default 60): the sharpening FSR 3 applies to its output (0 = off).
