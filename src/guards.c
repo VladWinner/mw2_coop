@@ -15,6 +15,8 @@
 #include "settings.h"
 #include "log.h"
 
+static volatile LONG cache_generation;
+
 #ifdef _WIN64
 static uint8_t *base;
 static void *(*wdef_original)(uint64_t);
@@ -35,7 +37,7 @@ static _Thread_local struct {
 } spans;
 static LONGLONG qpc_ms;
 
-static int readable(const void *p, size_t n)
+static LONGLONG readable_now(void)
 {
 	if (!qpc_ms) {
 		LARGE_INTEGER f;
@@ -44,9 +46,14 @@ static int readable(const void *p, size_t n)
 	}
 	LARGE_INTEGER now;
 	QueryPerformanceCounter(&now);
-	if (now.QuadPart - spans.stamp > qpc_ms) {
+	return now.QuadPart;
+}
+
+static int readable_at(const void *p, size_t n, LONGLONG now)
+{
+	if (now - spans.stamp > qpc_ms) {
 		spans.n = 0;
-		spans.stamp = now.QuadPart;
+		spans.stamp = now;
 	}
 	uintptr_t from = (uintptr_t)p, to = from + n;
 	for (int i = 0; i < spans.n; i++)
@@ -73,13 +80,78 @@ static int readable(const void *p, size_t n)
 	return 1;
 }
 
+static int readable(const void *p, size_t n)
+{
+	return readable_at(p, n, readable_now());
+}
+
+// Weapon definitions and their slot arrays are zone assets. Their memory-region mapping stays valid for
+// the lifetime of the loaded zones; zones.c advances cache_generation before a level-zone rebuild or
+// vid_restart. Unlike the renderer owner check below, this per-entity path therefore needs no clock read
+// or 1 ms expiry on every weapon lookup. A cache miss still goes through VirtualQuery before any read.
+#define ZONE_READABLE_SPANS 8
+static _Thread_local struct {
+	uintptr_t lo[ZONE_READABLE_SPANS], hi[ZONE_READABLE_SPANS];
+	int n, next;
+	uintptr_t last_lo, last_hi;
+	LONG generation;
+} zone_spans;
+static void zone_spans_refresh(void)
+{
+	LONG generation = __atomic_load_n(&cache_generation, __ATOMIC_RELAXED);
+	if (zone_spans.generation != generation) {
+		zone_spans.generation = generation;
+		zone_spans.n = 0;
+		zone_spans.next = 0;
+		zone_spans.last_lo = zone_spans.last_hi = 0;
+	}
+}
+static int zone_readable(const void *p, size_t n)
+{
+	uintptr_t from = (uintptr_t)p, to = from + n;
+	if (from >= zone_spans.last_lo && to <= zone_spans.last_hi)
+		return 1;
+	for (int i = 0; i < zone_spans.n; i++)
+		if (from >= zone_spans.lo[i] && to <= zone_spans.hi[i]) {
+			zone_spans.last_lo = zone_spans.lo[i];
+			zone_spans.last_hi = zone_spans.hi[i];
+			return 1;
+		}
+	const uint8_t *at = p;
+	size_t left = n;
+	while (left) {
+		MEMORY_BASIC_INFORMATION mbi;
+		if (!VirtualQuery(at, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+			return 0;
+		size_t room = (size_t)((const uint8_t *)mbi.BaseAddress + mbi.RegionSize - at);
+		if (room >= left) {
+			if (at == (const uint8_t *)p) {
+				int slot = zone_spans.n < ZONE_READABLE_SPANS ? zone_spans.n++ : (zone_spans.next++ % ZONE_READABLE_SPANS);
+				zone_spans.lo[slot] = (uintptr_t)mbi.BaseAddress;
+				zone_spans.hi[slot] = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+				zone_spans.last_lo = zone_spans.lo[slot];
+				zone_spans.last_hi = zone_spans.hi[slot];
+			}
+			return 1;
+		}
+		at += room;
+		left -= room;
+	}
+	return 1;
+}
+
 static void *wdef_hook(uint64_t index)
 {
 	void *def = wdef_original(index);
-	if (def && readable((const uint8_t *)def + 0x2e0, 8)) { // (zone memory is 4-byte aligned: no alignment test)
-		void *slots = *(void **)((const uint8_t *)def + 0x2e0);
-		if (slots && readable(slots, sizeof(wdef_empty_slots)))
-			return def;
+	if (def) {
+		zone_spans_refresh();
+		// This lookup runs on entity draws. The zone-generation cache avoids a QPC sample and two
+		// 1 ms expiry checks per entity; level-zone reload / vid_restart invalidates it explicitly.
+		if (zone_readable((const uint8_t *)def + 0x2e0, 8)) { // (zone memory is 4-byte aligned: no alignment test)
+			void *slots = *(void **)((const uint8_t *)def + 0x2e0);
+			if (slots && zone_readable(slots, sizeof(wdef_empty_slots)))
+				return def;
+		}
 	}
 	static LONG logged;
 	if (InterlockedIncrement(&logged) <= 8)
@@ -89,6 +161,12 @@ static void *wdef_hook(uint64_t index)
 }
 #endif
 
+// Invalidate the renderer-table fast path before level-zone teardown / rebuild. The counter is
+// shared across builds; only the official x64 client has the entity-table cache that reads it.
+void guards_invalidate_caches(void)
+{
+	InterlockedIncrement(&cache_generation);
+}
 
 // Dvars the game does not keep in its config but should (v0.6.0 report): the ARCHIVE flag (bit 0) makes the config writer save them. com_maxfps is registered early; the lookup
 // is repeated for a while in case it is not there yet when the mod starts.
@@ -130,16 +208,35 @@ static DWORD WINAPI saved_dvars_thread(LPVOID unused)
 
 #ifdef _WIN64
 // rva 0x2a70: (index & 0xffffffff) * 0x3c + *(*(base + 0x4115920) + 0x168), the table of 0x3c-byte entries that the entity code (0x9ed44: the case of the per-client entity switch that
-// adds a weapon / model effect) takes one from. The global is zero once the renderer's device data is gone (the level shut down while the client frame was still adding entities:
-// v0.6.0 crash at iw4sp.exe+0x2a7d, read of 0x168). A zero entry makes the caller (0x2a90: "if (entry->count == 0) return") do nothing.
+// adds a weapon / model effect) takes one from. The renderer owner (`g`) and its table pointer are stable between level-zone loads; the global becomes zero when renderer device data
+// is gone (the level shut down while the client frame was still adding entities: v0.6.0 crash at iw4sp.exe+0x2a7d, read of 0x168). Cache the table for that lifetime instead of calling
+// QueryPerformanceCounter and scanning the readable spans for every entity. Invalidate before a new zone load and vid_restart; a null owner still immediately returns the empty entry.
+// A zero entry makes the caller (0x2a90: "if (entry->count == 0) return") do nothing.
 static uint8_t empty_entry[0x40];
+static _Thread_local LONG table_cache_generation;
+static _Thread_local uint8_t *table_cache_owner;
+static _Thread_local uint8_t *table_cache;
 static intptr_t table_entry_guarded(uint64_t index)
 {
+	LONG generation = __atomic_load_n(&cache_generation, __ATOMIC_RELAXED);
+	if (table_cache_generation != generation) {
+		table_cache_generation = generation;
+		table_cache_owner = NULL;
+		table_cache = NULL;
+	}
 	uint8_t *g = *(uint8_t **)(base + 0x4115920);
-	uint8_t *table = g && readable(g + 0x168, 8) ? *(uint8_t **)(g + 0x168) : NULL;
-	if (!table)
+	if (!g) {
+		table_cache_owner = NULL;
+		table_cache = NULL;
 		return (intptr_t)empty_entry;
-	return (intptr_t)(table + (index & 0xffffffffu) * 0x3c);
+	}
+	if (g != table_cache_owner || !table_cache) {
+		table_cache_owner = g;
+		table_cache = readable(g + 0x168, 8) ? *(uint8_t **)(g + 0x168) : NULL;
+	}
+	if (!table_cache)
+		return (intptr_t)empty_entry;
+	return (intptr_t)(table_cache + (index & 0xffffffffu) * 0x3c);
 }
 static const uint8_t table_entry_bytes[21] = {0x8b, 0xc1, 0x48, 0x8b, 0x0d, 0xa7, 0x2e, 0x11, 0x04, 0x48, 0x6b, 0xc0, 0x3c, 0x48, 0x03, 0x81, 0x68, 0x01, 0x00, 0x00, 0xc3};
 #endif

@@ -422,6 +422,15 @@ static bink_copy_to_buffer_t bink_copy_to_buffer_original;
 static bink_close_t bink_close_original;
 static volatile LONG bink_open_handles;
 static volatile LONG bink_d3d_active;
+
+// Bink Open/Close publish this aligned flag with InterlockedExchange. The render hooks read it
+// for every indexed draw (including ordinary gameplay), so use a relaxed atomic load rather than
+// InterlockedCompareExchange, which emits a locked read-modify-write even though nothing changes.
+static int bink_d3d_is_active(void)
+{
+	return __atomic_load_n(&bink_d3d_active, __ATOMIC_RELAXED) != 0;
+}
+
 #define BINK_VIDEO_TEXTURES 8
 static struct {
 	volatile PVOID texture;
@@ -1156,16 +1165,21 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 		static int on = -1;
 		static LARGE_INTEGER freq, last;
 		static unsigned logged;
-		if (on < 0)
-			on = cfg("hitchlog", 0), QueryPerformanceFrequency(&freq);
-		LARGE_INTEGER now;
-		QueryPerformanceCounter(&now);
-		if (on && last.QuadPart && logged < 100) {
-			double ms = (double)(now.QuadPart - last.QuadPart) * 1000.0 / (double)freq.QuadPart;
-			if (ms > 150.0)
-				logged++, log_printf("native: hitch %.0f ms before composed frame %ld (half %d)", ms, (long)pops, half);
+		if (on < 0) {
+			on = cfg("hitchlog", 0);
+			if (on)
+				QueryPerformanceFrequency(&freq);
 		}
-		last = now;
+		if (on) {
+			LARGE_INTEGER now;
+			QueryPerformanceCounter(&now);
+			if (last.QuadPart && logged < 100) {
+				double ms = (double)(now.QuadPart - last.QuadPart) * 1000.0 / (double)freq.QuadPart;
+				if (ms > 150.0)
+					logged++, log_printf("native: hitch %.0f ms before composed frame %ld (half %d)", ms, (long)pops, half);
+			}
+			last = now;
+		}
 	}
 	compose(dev, half);
 	skip_rotation(dev);
@@ -1248,13 +1262,8 @@ static void present_stat(void)
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
 	skip_this_present = 0;
-	static int on = -1;
-	if (on < 0)
-		on = cfg("perflog", 0);
-	static int plog = -1;
-	if (plog < 0)
-		plog = cfg("presentlog", 0);
-	if (plog)
+	int on = CFG_ONCE("perflog", 0);
+	if (CFG_ONCE("presentlog", 0))
 		present_stat();
 	d3dcap_on12_probe(dev);
 	LONGLONG t0 = on ? perf_now() : 0;
@@ -1791,7 +1800,7 @@ static int bink_track_video_texture(IDirect3DBaseTexture9 *texture, const D3DSUR
 
 static int bink_is_movie_quad(IDirect3DDevice9 *dev, UINT primitive, UINT primitive_count, const char *api)
 {
-	if (!InterlockedCompareExchange(&bink_d3d_active, 0, 0))
+	if (!bink_d3d_is_active())
 		return 0;
 	static const DWORD sampler_stages[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
 		D3DVERTEXTEXTURESAMPLER0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, D3DVERTEXTEXTURESAMPLER3};
@@ -2044,7 +2053,7 @@ static HRESULT STDMETHODCALLTYPE t_stretch(IDirect3DDevice9 *dev, IDirect3DSurfa
 }
 static HRESULT STDMETHODCALLTYPE t_update_texture(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *src, IDirect3DBaseTexture9 *dst)
 {
-	if (InterlockedCompareExchange(&bink_d3d_active, 0, 0) && dst &&
+	if (bink_d3d_is_active() && dst &&
 	    IDirect3DBaseTexture9_GetType(dst) == D3DRTYPE_TEXTURE) {
 		D3DSURFACE_DESC desc;
 		if (SUCCEEDED(IDirect3DTexture9_GetLevelDesc((IDirect3DTexture9 *)dst, 0, &desc)))
@@ -2117,7 +2126,7 @@ static HRESULT STDMETHODCALLTYPE t_begin(IDirect3DDevice9 *dev)
 static HRESULT STDMETHODCALLTYPE t_end(IDirect3DDevice9 *dev)
 {
 	HRESULT result = end_scene_orig(dev);
-	if (InterlockedCompareExchange(&present_hooks_pending, 0, 0) && comp_hook(dev))
+	if (__atomic_load_n(&present_hooks_pending, __ATOMIC_RELAXED) && comp_hook(dev))
 		InterlockedExchange(&present_hooks_pending, 0);
 	if (trace_on)
 		trace_event("EndScene");
@@ -2617,7 +2626,7 @@ static void scan_place(void)
 	return; // QA scan of the 64-bit placement array
 #endif
 	static int done;
-	if (done || !cfg("scanplace", 0))
+	if (done || !CFG_ONCE("scanplace", 0))
 		return;
 	done = 1;
 	uint8_t *lo = base, *hi = base + ((IMAGE_NT_HEADERS64 *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew))->OptionalHeader.SizeOfImage;
@@ -3280,37 +3289,40 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		static unsigned watch_n, watch_logs;
 		static int watch_bad;
 		if (++watch_n % 30 == 0) {
-			char v[96];
-			float bx, by, bz;
-			int linked, stance;
-			if (game_dvar_raw("mw2coop_p2pos", v, sizeof(v)) && sscanf(v, "%f %f %f %d %d", &bx, &by, &bz, &linked, &stance) == 5) {
+			char enabled[8] = "";
+			if (game_dvar_raw("mw2coop_diagnostics", enabled, sizeof(enabled)) && enabled[0] == '1') {
+				char v[96];
+				float bx, by, bz;
+				int linked, stance;
+				if (game_dvar_raw("mw2coop_p2pos", v, sizeof(v)) && sscanf(v, "%f %f %f %d %d", &bx, &by, &bz, &linked, &stance) == 5) {
 #ifdef _WIN64
-				const uint8_t *ps = base + 0x422440;
+					const uint8_t *ps = base + 0x422440;
 #else
-				const uint8_t *ps = base + RVA_CL_PS;
+					const uint8_t *ps = base + RVA_CL_PS;
 #endif
-				float cx = *(const float *)(ps + 0x1c), cy = *(const float *)(ps + 0x20), cz = *(const float *)(ps + 0x24);
-				float dx = cx - bx, dy = cy - by, dz = cz - bz;
-				int off = dx * dx + dy * dy > 48.0f * 48.0f || dz * dz > 64.0f * 64.0f;
-				// the body is a sample up to half a second old: while the view is moving (about 150 units a second walking out of the airport elevator, QA 2026-11-02:
-				// a false "57 apart" for 0.4 s) only a still view can be judged
-				static float lcx, lcy, lcz;
-				if ((cx - lcx) * (cx - lcx) + (cy - lcy) * (cy - lcy) + (cz - lcz) * (cz - lcz) > 4.0f)
-					off = 0;
-				lcx = cx;
-				lcy = cy;
-				lcz = cz;
-				static int first_look;
-				if (!first_look++)
-					log_printf("native: camera watch running: player 2's view %.1f %.1f %.1f, his body %.1f %.1f %.1f", (double)cx, (double)cy, (double)cz, (double)bx, (double)by, (double)bz);
-				if (off && ++watch_bad == 2 && watch_logs < 40) {
-					watch_logs++;
-					log_printf("native: CAMERA MISMATCH: player 2's view at %.1f %.1f %.1f, his body at %.1f %.1f %.1f (%.0f apart), linked %d, stance %d", (double)cx, (double)cy, (double)cz,
-						   (double)bx, (double)by, (double)bz, (double)sqrtf(dx * dx + dy * dy + dz * dz), linked, stance);
-				} else if (!off) {
-					if (watch_bad >= 2)
-						log_printf("native: camera is back with player 2's body");
-					watch_bad = 0;
+					float cx = *(const float *)(ps + 0x1c), cy = *(const float *)(ps + 0x20), cz = *(const float *)(ps + 0x24);
+					float dx = cx - bx, dy = cy - by, dz = cz - bz;
+					int off = dx * dx + dy * dy > 48.0f * 48.0f || dz * dz > 64.0f * 64.0f;
+					// the body is a sample up to half a second old: while the view is moving (about 150 units a second walking out of the airport elevator, QA 2026-11-02:
+					// a false "57 apart" for 0.4 s) only a still view can be judged
+					static float lcx, lcy, lcz;
+					if ((cx - lcx) * (cx - lcx) + (cy - lcy) * (cy - lcy) + (cz - lcz) * (cz - lcz) > 4.0f)
+						off = 0;
+					lcx = cx;
+					lcy = cy;
+					lcz = cz;
+					static int first_look;
+					if (!first_look++)
+						log_printf("native: camera watch running: player 2's view %.1f %.1f %.1f, his body %.1f %.1f %.1f", (double)cx, (double)cy, (double)cz, (double)bx, (double)by, (double)bz);
+					if (off && ++watch_bad == 2 && watch_logs < 40) {
+						watch_logs++;
+						log_printf("native: CAMERA MISMATCH: player 2's view at %.1f %.1f %.1f, his body at %.1f %.1f %.1f (%.0f apart), linked %d, stance %d", (double)cx, (double)cy, (double)cz,
+							   (double)bx, (double)by, (double)bz, (double)sqrtf(dx * dx + dy * dy + dz * dz), linked, stance);
+					} else if (!off) {
+						if (watch_bad >= 2)
+							log_printf("native: camera is back with player 2's body");
+						watch_bad = 0;
+					}
 				}
 			}
 		}
@@ -3736,10 +3748,12 @@ static void ctx_wait_workers(void)
 	if (!on)
 		return;
 	void (*wait_type)(int) = (void (*)(int))(base + RVA_WAIT_TYPE);
-	LONGLONG t0 = perf_now();
+	int perf_on = CFG_ONCE("perflog", 0);
+	LONGLONG t0 = perf_on ? perf_now() : 0;
 	for (int t = 0; t <= 18; t++)
 		wait_type(t);
-	perf_wait += perf_now() - t0;
+	if (perf_on)
+		perf_wait += perf_now() - t0;
 }
 
 static struct {
@@ -3797,7 +3811,8 @@ static void ctx_swap_mask(int to, unsigned mask)
 		return;
 	}
 	ctx_wait_workers();
-	LONGLONG t0 = perf_now();
+	int perf_on = CFG_ONCE("perflog", 0);
+	LONGLONG t0 = perf_on ? perf_now() : 0;
 	static int fx_on = -1;
 	if (fx_on < 0)
 		fx_on = cfg("fxsplit", 1);
@@ -3850,8 +3865,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 		}
 	}
 #endif
-	perf_copy += perf_now() - t0;
-	InterlockedIncrement(&perf_swaps);
+	if (perf_on) {
+		perf_copy += perf_now() - t0;
+		InterlockedIncrement(&perf_swaps);
+	}
 	ctx_current = to;
 }
 
@@ -4116,6 +4133,7 @@ static void hang_dump(const char *why)
 // the stall (and once more at three times as long): where the engine spends a hitch. At most 80 per session.
 static volatile DWORD stall_tid;
 static volatile LONGLONG stall_frame_t;
+static int stall_watch_active;
 static DWORD WINAPI stall_watch_thread(LPVOID p)
 {
 	const LONGLONG limit = (LONGLONG)(intptr_t)p;
@@ -4179,7 +4197,8 @@ static void cg_init_all_hook(void)
 		int stall_ms = cfg("stallwatch", 0);
 		if (!stall_started && stall_ms > 0) {
 			stall_started = 1;
-			CreateThread(NULL, 0, stall_watch_thread, (LPVOID)(intptr_t)stall_ms, 0, NULL);
+			if (CreateThread(NULL, 0, stall_watch_thread, (LPVOID)(intptr_t)stall_ms, 0, NULL))
+				stall_watch_active = 1;
 		}
 		hang_frames = 0;
 		hang_init_tick = GetTickCount();
@@ -5807,6 +5826,7 @@ static void client_frame_hook(void)
 static void client_frame_inner(void)
 {
 	static unsigned frame;
+	static int fov = -1; // shared by the fixed-fov and fov-scale paths below; never reread settings.ini per frame
 	{
 		static int seen;
 		static DWORD last;
@@ -5826,11 +5846,10 @@ static void client_frame_inner(void)
 		return;
 	}
 	frame_bottom = 0;
-	stall_tid = GetCurrentThreadId(), stall_frame_t = perf_now(); // (the QA stall watch)
+	if (stall_watch_active)
+		stall_tid = GetCurrentThreadId(), stall_frame_t = perf_now(); // (the QA stall watch)
 	static LONGLONG perf_prev, perf_start;
-	static int perf_on = -1;
-	if (perf_on < 0)
-		perf_on = cfg("perflog", 0);
+	int perf_on = CFG_ONCE("perflog", 0);
 	if (perf_on) {
 		LONGLONG now = perf_now();
 		if (perf_prev) {
@@ -5912,7 +5931,6 @@ static void client_frame_inner(void)
 	uint8_t *np_dvar = *(uint8_t **)(base + RVA_NOPREDICT_DVAR); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
 	{ // [native] fov=<degrees>: the cg_fov (rva 0x51e1a8 holds the dvar; the angle across a 4:3 picture, 65 by default) while the picture is split: each half is a band of the full
 	  // view (mode 6), so the field is widened to make up for the half height
-		static int fov = -1;
 		static float fov_saved = -1;
 		if (fov < 0)
 			fov = cfg("fov", (mode >= 8) ? 0 : 85); // 0 (mode 8 and up): the console's way, cg_fovScale 0.75 (below)
@@ -5939,7 +5957,7 @@ static void client_frame_inner(void)
 			fovscale = cfg("fovscale", 75);
 		if (!scale_dvar)
 			scale_dvar = game_find_dvar("cg_fovScale");
-		if (fovscale > 0 && cfg("fov", 0) == 0 && scale_dvar && scale_dvar->type == DVAR_TYPE_FLOAT) {
+		if (fovscale > 0 && fov == 0 && scale_dvar && scale_dvar->type == DVAR_TYPE_FLOAT) {
 			if (split_on) {
 				if (scale_saved < 0)
 					scale_saved = scale_dvar->current.value;
@@ -6003,10 +6021,12 @@ static void client_frame_inner(void)
 	if (nogun && gun_dvar)
 		*(int *)(gun_dvar + 0x10) = 1;
 	pad_frame_player(0, 1);
-	{
+	if (CFG_ONCE("perflog", 0)) {
 		LONGLONG t0 = perf_now();
 		body_dobj_sync();
 		perf_sync += perf_now() - t0;
+	} else {
+		body_dobj_sync();
 	}
 	if (native_active && CFG_ONCE("clocklog", 0)) { // QA: the game's clock (QA scenario clock) against the wall clock: milliseconds of game time per wall second
 		static DWORD wall0;
@@ -6059,7 +6079,7 @@ static float wait_alpha_hook(int lc)
 #endif
 	}
 	// Both players are on this PC: nobody waits for the other (the message showed while level loading, until context 1's client state caught up, 2026-10-29: owner). [native] waitmsg=1 shows it again.
-	if (native_active && !cfg("waitmsg", 0))
+	if (native_active && !CFG_ONCE("waitmsg", 0))
 		return 0.0f;
 	return a;
 }
@@ -6227,7 +6247,8 @@ static void server_step_inner(void)
 #ifdef _WIN64
 	slice_step_note();
 #endif
-	LONGLONG t0 = perf_now();
+	int perf_on = CFG_ONCE("perflog", 0);
+	LONGLONG t0 = perf_on ? perf_now() : 0;
 	float npc_before[2] = {0, 0};
 	if (CFG_ONCE("npclog", 0) && npc_pick >= 0 && npc_goff >= 0) {
 		const uint8_t *g = base + RVA_GENTITIES + (size_t)npc_pick * GENT_SIZE;
@@ -6239,23 +6260,33 @@ static void server_step_inner(void)
 		server_step_original();
 		svslice_now();
 		if (native_active) {
-			LONGLONG t1 = perf_now();
-			aim_targets_update();
-			perf_aim += perf_now() - t1;
+			if (perf_on) {
+				LONGLONG t1 = perf_now();
+				aim_targets_update();
+				perf_aim += perf_now() - t1;
+			} else {
+				aim_targets_update();
+			}
 		}
 		ctx_swap_hand(1);
-		perf_step += perf_now() - t0;
+		if (perf_on)
+			perf_step += perf_now() - t0;
 		npc_step_note(npc_before, 1);
 		return;
 	}
 	server_step_original();
 	svslice_now();
 	if (native_active) {
-		LONGLONG t1 = perf_now();
-		aim_targets_update();
-		perf_aim += perf_now() - t1;
+		if (perf_on) {
+			LONGLONG t1 = perf_now();
+			aim_targets_update();
+			perf_aim += perf_now() - t1;
+		} else {
+			aim_targets_update();
+		}
 	}
-	perf_step += perf_now() - t0;
+	if (perf_on)
+		perf_step += perf_now() - t0;
 	npc_step_note(npc_before, 0);
 }
 
@@ -6388,10 +6419,9 @@ void native_unswap_entities(void)
 	entities_swapped = 0;
 }
 // Lag fix ([native] lagfix=1, default 1): the other local player's body is drawn from the cgame's entity, which comes through the server's snapshot and its
-// interpolation (measured ~125 ms behind the player's own view). Both players are on this PC, so his body is turned to his own view yaw of this very moment:
-// the yaw accumulators (block +0x60) of both contexts are kept for a moment, the fixed offset between a context's accumulator and its entity's yaw is tracked by
-// pairing the entity's (late) yaw with the accumulator of 125 ms before, and the entity's yaw fields (floats 10, 42 and 73: current state, next state, lerp) are
-// replaced for the draw and put back after it.
+// interpolation (measured ~125 ms behind the player's own view). Both players are on this PC, so his body is turned to his own view yaw of this very moment.
+// The default [native] psyaw=1 reads that yaw directly from the owner's playerState. The older accumulator-history / tracked-offset estimate remains available
+// as [native] psyaw=0; position extrapolation ([native] lagpos=1) is independent. The entity's yaw fields (floats 10, 42 and 73) are replaced for the draw.
 // Context 1's own entity table holds player 2's data in both slots 0 and 1 (swaplog), so player 1's body was never drawn in the bottom half and player 2's own body
 // was (from inside, late behind the camera). Context 0's entity 0 is player 1's valid data: it is copied here at the start of context 0's draw and put into slot 1
 // for context 1's draw ([native] p0copy=0 turns it off).
@@ -6404,10 +6434,15 @@ static float lag_offset[2];
 static int lag_offset_set[2];
 static double lag_now(void)
 {
-	LARGE_INTEGER f, c;
-	QueryPerformanceFrequency(&f);
+	static LONGLONG frequency;
+	if (!frequency) {
+		LARGE_INTEGER f;
+		if (QueryPerformanceFrequency(&f))
+			frequency = f.QuadPart;
+	}
+	LARGE_INTEGER c;
 	QueryPerformanceCounter(&c);
-	return (double)c.QuadPart / (double)f.QuadPart;
+	return frequency > 0 ? (double)c.QuadPart / (double)frequency : 0.0;
 }
 static float lag_acc_of(int k)
 {
@@ -6439,13 +6474,27 @@ static float lag_acc_at(int k, double t)
 }
 static void lag_record(void)
 {
-	if (lag_hist_n && fabs(lag_hist[(lag_hist_n - 1) % LAG_HIST].t - lag_now()) < 0.0005)
+	double now = lag_now();
+	if (lag_hist_n && fabs(lag_hist[(lag_hist_n - 1) % LAG_HIST].t - now) < 0.0005)
 		return;
 	unsigned at = lag_hist_n % LAG_HIST;
-	lag_hist[at].t = lag_now();
+	lag_hist[at].t = now;
 	lag_hist[at].acc[0] = lag_acc_of(0);
 	lag_hist[at].acc[1] = lag_acc_of(1);
 	lag_hist_n++;
+}
+static int lag_history_needed(void)
+{
+	static int on = -1, ps_yaw = -1;
+	if (!native_active)
+		return 0;
+	if (on < 0) {
+		on = cfg("lagfix", 1);
+		ps_yaw = CFG_ONCE("psyaw", 1);
+	}
+	// Keep the legacy history only for psyaw=0, or while player 2's client block is not ready
+	// and the old accumulator path is still needed as a fallback.
+	return on && (!ps_yaw || (ctx_current == 0 && !ctx_store[1][5]));
 }
 // the entity of the OTHER player (index 1 in both contexts: context 1's list has the two traded); k is the player whose body it is.
 // Yaw: replaced by the owner's own view yaw of this moment (offset tracked). Position: the interpolated origin (floats 63..65, and its copies 6..8 and 32..34)
@@ -6457,37 +6506,45 @@ static unsigned lag_pos_n[2];
 static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 {
 	*applied = 0;
-	static int on = -1, pos_on = -1;
+	static int on = -1, pos_on = -1, ps_yaw = -1;
 	if (on < 0) {
 		on = cfg("lagfix", 1);
 		pos_on = cfg("lagpos", 0); // not verified yet (players did not walk in the tests)
+		ps_yaw = CFG_ONCE("psyaw", 1);
 	}
 	// only while a split screen session runs: the hooks stay in place afterwards and must not touch a normal game's entities (review 2026-10-28)
-	if (!on || !native_active || n != (ctx_current == 0 ? 1 : 0) || lag_hist_n < 8)
+	if (!on || !native_active || n != (ctx_current == 0 ? 1 : 0))
+		return;
+	const uint8_t *ps = ctx_current == k ? base + RVA_CL_PS : (ctx_store[k][5] ? ctx_store[k][5] + CL_BLOCK_PS : NULL);
+	// psyaw=1 is the default and takes the exact view yaw from playerState. In that mode the accumulator history/offset is only a fallback while player 2's client block is unavailable.
+	if (!ps_yaw && lag_hist_n < 8)
+		return;
+	if (ps_yaw && !ps && lag_hist_n < 8)
 		return;
 	float *e = (float *)(base + RVA_CENT + (size_t)n * CENT_SIZE);
 	const int yidx[3] = {CF_YAW0, CF_YAW1, CF_YAW2}, pidx[3] = {CF_ORG0, CF_ORG1, CF_ORG2};
-	double now = lag_now();
+	double now = 0.0;
 	float seen = e[CF_YAW2];
-	float measured = lag_wrap(seen - lag_acc_at(k, now - 0.125));
-	if (!lag_offset_set[k]) {
-		lag_offset[k] = measured;
-		lag_offset_set[k] = 1;
+	float fresh;
+	if (ps_yaw && ps) {
+		fresh = *(const float *)(ps + 0x10c);
 	} else {
-		lag_offset[k] += 0.05f * lag_wrap(measured - lag_offset[k]);
-	}
-	// the yaw the player himself looks along: his own playerState's view yaw (+0x10c; pitch +0x108, roll +0x110) in the other context's client block. The entity
-	// state of a player keeps the yaw it spawned with here, so the body faced another way than its camera (Vlad's report); the old fix (view accumulator +
-	// a tracked offset to that frozen yaw) kept the error ([native] psyaw=0 goes back to it)
-	float fresh = lag_wrap(lag_acc_of(k) + lag_offset[k]);
-	if (CFG_ONCE("psyaw", 1)) {
-		const uint8_t *ps = ctx_current == k ? base + RVA_CL_PS : (ctx_store[k][5] ? ctx_store[k][5] + CL_BLOCK_PS : NULL);
-		if (ps)
-			fresh = *(const float *)(ps + 0x10c);
+		now = lag_now();
+		float measured = lag_wrap(seen - lag_acc_at(k, now - 0.125));
+		if (!lag_offset_set[k]) {
+			lag_offset[k] = measured;
+			lag_offset_set[k] = 1;
+		} else {
+			lag_offset[k] += 0.05f * lag_wrap(measured - lag_offset[k]);
+		}
+		// Legacy route retained for [native] psyaw=0: view accumulator plus the tracked offset to the entity yaw.
+		fresh = lag_wrap(lag_acc_of(k) + lag_offset[k]);
 	}
 	fresh = lag_wrap(fresh + (float)CFG_ONCE("lagtest", 0)); // lagtest: a QA turn to see that the draw uses these fields
 	float ex[3] = {0, 0, 0};
 	if (pos_on) {
+		if (!now)
+			now = lag_now();
 		unsigned at = lag_pos_n[k] % LAG_POS_N;
 		float *lp = &e[63];
 		// a jump (teleport, level change) starts the window again
@@ -7242,7 +7299,7 @@ static void add_entity_hook(int n)
 					log_printf("native: p0log ctx1 draws entity0: ok %d copied %d pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x | own p2 pos %.1f %.1f", p0_ent_ok, p0copy, (double)((const float *)e)[CF_ORG2], (double)((const float *)e)[CF_ORG2 + 1], (double)((const float *)e)[CF_ORG2 + 2],
 						   (double)((const float *)e)[CF_YAW2], e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS), *(const unsigned *)(e + CENT_VALID), (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460));
 			}
-			if (n == 0)
+			if (n == 0 && lag_history_needed())
 				lag_record();
 			lag_fix_yaw(n, 0, sv, &ap); // player 0's body in context 1's picture (his entity sits at index 1 after the swap)
 			add_entity_original(n);
@@ -7261,7 +7318,8 @@ static void add_entity_hook(int n)
 		if (n == 0) {
 			memcpy(p0_ent, base + RVA_CENT, sizeof(p0_ent));
 			p0_ent_ok = 1;
-			lag_record();
+			if (lag_history_needed())
+				lag_record();
 			if (CFG_ONCE("p0log", 0)) { // what context 0's draw hands over as player 1's entity
 				static unsigned cl0;
 				if (++cl0 % 10 == 0 && cl0 < 30000)
@@ -7331,7 +7389,7 @@ void snd_note(const char **alias)
 	int c = ctx_current & 1;
 	InterlockedIncrement(&snd_counts[c]);
 	const char *name = alias ? *alias : NULL;
-	if (!name || cfg("sndcount", 0) < 2)
+	if (!name || CFG_ONCE("sndcount", 0) < 2)
 		return;
 	for (int i = 0; i < 512; i++) {
 		if (snd_names[i].name == name) {
@@ -7536,8 +7594,14 @@ static void aim_targets_update(void)
 #endif
 	for (int i = 0; i < count; i++) {
 		uint8_t *ent = base + RVA_GENTITIES + (size_t)i * GENT_SIZE;
+		// Most slots are empty or are not actors. Do not fetch their sentient pointer until these
+		// cheap byte checks pass; this loop scans the whole entity table after every server step.
+		if (!ent[0xac] || !ent[0xb0] || ent[0] != 13) {
+			seen[i] = 0;
+			continue;
+		}
 		const uint8_t *sentient = *(uint8_t **)(ent + GENT_SENTIENT);
-		if (CFG_ONCE("aalog", 0) && ent[0xac] && ent[0xb0] && ent[0] == 13 && sentient && i < 2048) { // QA: the teams of the actors seen, once each
+		if (CFG_ONCE("aalog", 0) && sentient && i < 2048) { // QA: the teams of the actors seen, once each
 			static unsigned char logged[8];
 			int tm = *(const int *)(sentient + SENT_TEAM) & 7;
 			if (!logged[tm]) {
@@ -7546,7 +7610,7 @@ static void aim_targets_update(void)
 			}
 		}
 		// only the player's enemies (the axis team, 1): an ally in the list ran the check on him, and Price was not drawn (owner, Contingency, 2026-10-29)
-		if (!ent[0xac] || !ent[0xb0] || ent[0] != 13 || *(int *)(ent + GENT_HEALTH) <= 0 || !sentient || *(const int *)(sentient + SENT_TEAM) != 1) {
+		if (*(int *)(ent + GENT_HEALTH) <= 0 || !sentient || *(const int *)(sentient + SENT_TEAM) != 1) {
 			seen[i] = 0;
 			continue;
 		}

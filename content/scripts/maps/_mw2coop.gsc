@@ -143,12 +143,19 @@ main()
 	flag_init( "mw2coop_regrouped" );
 	thread regroup_after_start();
 	thread follow_leader_teleports();
-	thread camera_probe();
+	// These are QA diagnostics, not gameplay systems. The recorder polls both players' buttons
+	// and movement state every 50 ms and writes a detailed session trace; the camera probe feeds
+	// the native camera-mismatch logger. Enable both before loading a mission with
+	// `set mw2coop_diagnostics 1`; normal play does not create either thread.
+	if ( GetDvar( "mw2coop_diagnostics" ) == "1" )
+	{
+		thread camera_probe();
+		thread maps\_mw2coop_rec::start();	// what both players do and where they are, into mw2coop.log
+	}
 	set_bodies();
 	thread sync_weapons();
 	thread track_checkpoints();
 	thread maps\_mw2coop_checkpoints::watch_flags();
-	thread maps\_mw2coop_rec::start();	// what both players do and where they are, into mw2coop.log
 	thread watch_failure();
 	if ( god_mode_on() )
 		thread god_mode();

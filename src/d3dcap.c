@@ -114,7 +114,10 @@ void d3dcap_on12_probe(void *dev9)
 {
 	static const GUID iid_on12 = {0xe7fda234, 0xb589, 0x4049, {0x94, 0x0d, 0x88, 0x78, 0x97, 0x75, 0x31, 0xc8}};
 	static LONG done;
-	if (!dev9 || !g_queue12 || InterlockedExchange(&done, 1))
+	// before_present calls this every frame: once the probe has run, avoid a locked RMW on every Present.
+	if (!dev9 || !g_queue12 || __atomic_load_n(&done, __ATOMIC_RELAXED))
+		return;
+	if (InterlockedCompareExchange(&done, 1, 0))
 		return;
 	void *on12 = NULL;
 	if (FAILED(IDirect3DDevice9_QueryInterface((IDirect3DDevice9 *)dev9, &iid_on12, &on12)) || !on12) {
