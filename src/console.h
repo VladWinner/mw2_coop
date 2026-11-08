@@ -9,7 +9,7 @@
 // The selected layout, UI language and Pause mode are persisted in mw2coop\settings.ini as [console] layout=enhanced|legacy, language=auto|en|ru and pause_mode=0|1. Pause mode is off by default; when enabled, opening the console pauses with cl_paused 1 and closing it returns to 0 only if the game was not already paused. While open, the console captures mouse input so menu cursors do not move behind the overlay.
 // When Pause mode itself pauses a previously running game, paint a large subdued "|| Game pause activated" watermark behind the output. Favorite dvar values use the shared typed formatter, including FLOAT2/FLOAT3/FLOAT4 and colour vectors.
 // Bare dvar writes use `seta`; successful changes stay silent, and failed or deferred changes show a warning.
-// The direct BOOL sv_cheats command is retained; a separate internal command enables it at startup.
+// sv_cheats is a changeable dvar that is never saved to the config (the game's INIT/ROM and the seta ARCHIVE flags are taken off it), whether or not [console] sv_cheats_default switches it on at the start; the direct BOOL sv_cheats command is retained.
 void console_install(void);
 // A line of output for the panel (any thread). Engine output is added the same way once the print function is hooked.
 void console_print(const char *text);
