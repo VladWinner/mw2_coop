@@ -345,14 +345,29 @@ static ID3D12PipelineState *make_compute_pso(compile_t compile, const char *src,
 // previous one (smear, blocks, "grain"). Pass A (one thread per 8x8 block): where the previous picture, moved by the camera vector, does not match the current one, search the previous picture for the
 // block (+-16 px, then one pixel finer) and keep the vector when it matches clearly better. Pass B (per pixel): of the camera vector and the vectors of the 3x3 neighbouring blocks, take the one
 // whose 3x3 window of the current picture is best explained by the previous one. Compared in luma, with the difference of the two frames' jitter taken into account.
+//
+// Strict mode (the default; owner, 2026-11-08: "the picture ripples in the distance", "still blurry"; other projects that guess motion from the picture report the same on fine detail,
+// see the notes): the picture alone cannot tell motion from the jitter's aliasing on distant fine detail, so a vector is only taken where all of these hold: the nearest surface of the
+// block is nearer than `dgate` (the depth buffer value of a distance, ~75 m: farther away a walking soldier moves under a pixel a frame anyway), the match is clearly better than the
+// camera's (`ratio`) and good in itself (`absmax`), and the vector differs from the camera's by at least `minmag` pixels (no sub-pixel vectors). Classic mode: dgate 2, ratio 0.6, no
+// absolute limit, no minimum, quarter-pixel refinement.
 #define HLSL(...) #__VA_ARGS__
 static const char rf_common[] = HLSL(
-	cbuffer C : register(b0) { uint iw; uint ih; float jcx; float jcy; float jpx; float jpy; float thr; float pad; };
+	cbuffer C : register(b0) { uint iw; uint ih; float jcx; float jcy; float jpx; float jpy; float thr; float pad; float dgate; float ratio; float absmax; float minmag; };
 	Texture2D<float4> cur : register(t0);
 	Texture2D<float4> prv : register(t1);
 	Texture2D<float2> cam : register(t2);
+	Texture2D<float> dep : register(t3);
 	RWTexture2D<uint> blk : register(u0);
 	RWTexture2D<float2> outmv : register(u1);
+	float nearest(int2 org)
+	{
+		float d = 2.0;
+		for (int y = 0; y < 8; y += 4)
+			for (int x = 0; x < 8; x += 4)
+				d = min(d, dep.Load(int3(clamp(org + int2(x, y), int2(0, 0), int2(iw - 1, ih - 1)), 0)));
+		return d;
+	}
 	float lum(float4 c) { return dot(c.rgb, float3(0.299, 0.587, 0.114)); }
 	float curL(int2 p) { p = clamp(p, int2(0, 0), int2(iw - 1, ih - 1)); return lum(cur.Load(int3(p, 0))); }
 	float prvL(int2 p) { p = clamp(p, int2(0, 0), int2(iw - 1, ih - 1)); return lum(prv.Load(int3(p, 0))); }
@@ -406,8 +421,9 @@ static const char rf_a_main[] = HLSL(
 		float2 jd = float2(jpx - jcx, jpy - jcy);
 		float2 mvc = cam.Load(int3(min(org + 4, int2(iw - 1, ih - 1)), 0));
 		int2 base = int2(round(mvc + jd));
-		float sad0 = sadb(org, mvc + jd);
 		uint res = 0xFFFFFFFF;
+		if (nearest(org) >= dgate) { blk[id.xy] = res; return; }
+		float sad0 = sadb(org, mvc + jd);
 		if (sad0 > thr) {
 			float best = sad4(org, base);
 			int2 bestr = int2(0, 0);
@@ -426,9 +442,11 @@ static const char rf_a_main[] = HLSL(
 						if (c < best) { best = c; bestr = r; }
 					}
 			}
-			if (best < 0.6 * sad0) {
+			if (best < ratio * sad0 && best < absmax) {
 				float2 cand = float2(base + bestr) - jd;
-				res = f32tof16(cand.x) | (f32tof16(cand.y) << 16);
+				float2 dv = abs(cand - mvc);
+				if (max(dv.x, dv.y) >= minmag)
+					res = f32tof16(cand.x) | (f32tof16(cand.y) << 16);
 			}
 		}
 		blk[id.xy] = res;
@@ -451,6 +469,7 @@ static const char rf_b_main[] = HLSL(
 		float2 jd = float2(jpx - jcx, jpy - jcy);
 		float2 mvc = cam.Load(int3(id.xy, 0));
 		float2 best = mvc;
+		if (dep.Load(int3(id.xy, 0)) >= dgate) { outmv[id.xy] = mvc; return; }
 		uint bw = (iw + 7) / 8;
 		uint bh = (ih + 7) / 8;
 		int2 b = int2(id.xy / 8);
@@ -469,7 +488,7 @@ static const char rf_b_main[] = HLSL(
 					if (v != 0xFFFFFFFF) {
 						float2 cand = float2(f16tof32(v & 0xFFFF), f16tof32(v >> 16));
 						float e = err(int2(id.xy), cand, jd);
-						if (e < be * 0.75 - 0.002) { be = e; best = cand; dyn = true; }
+						if (e < be * 0.75 - 0.002 && e < absmax) { be = e; best = cand; dyn = true; }
 					}
 				}
 			if (dyn && pad > 0.5) {
@@ -497,16 +516,16 @@ static int build_refine_pass(compile_t compile, serialize_rs_t serialize)
 	D3D12_DESCRIPTOR_RANGE ranges[2];
 	memset(ranges, 0, sizeof(ranges));
 	ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-	ranges[0].NumDescriptors = 3;
+	ranges[0].NumDescriptors = 4; // t0 this frame, t1 the previous frame, t2 the camera vectors, t3 the depth
 	ranges[0].OffsetInDescriptorsFromTableStart = 0;
 	ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
 	ranges[1].NumDescriptors = 2;
-	ranges[1].OffsetInDescriptorsFromTableStart = 3;
+	ranges[1].OffsetInDescriptorsFromTableStart = 4;
 	D3D12_ROOT_PARAMETER rp[2];
 	memset(rp, 0, sizeof(rp));
 	rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 	rp[0].Constants.ShaderRegister = 0;
-	rp[0].Constants.Num32BitValues = 8;
+	rp[0].Constants.Num32BitValues = 12;
 	rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 	rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
 	rp[1].DescriptorTable.NumDescriptorRanges = 2;
@@ -715,6 +734,8 @@ static HRESULT(STDMETHODCALLTYPE *g_vsc_orig)(IDirect3DDevice9 *, UINT, const fl
 static int g_trace; // QA: FSR3_TRACE=n logs n viewport and view-projection events, starting at frame FSR3_TRACE_FROM
 static int g_trace_from, g_frame, g_armed;
 static int g_saw_world_vp; // a viewport of the world pass (render size, depth range from 1/64) was set in this frame
+static int g_bias_switches; // this frame's switches of the texture bias (into or out of the world pass), 16 SetSamplerState calls each
+static double g_bias_sw_sum;
 static int g_autotrace;     // the frames traced because a 3D frame had no world matrix (3 at most)
 static int g_draws; // trace only: draw calls since the last logged event
 static int g_stretched;       // this frame: the game's post-process copy of the 3D picture is done (the next set of the back buffer as the render target starts its last pass: bloom and HUD)
@@ -885,13 +906,20 @@ static HRESULT STDMETHODCALLTYPE hook_viewport9(IDirect3DDevice9 *dev, const D3D
 			g_saw_world_vp = 1;
 		if (S.ok && !g_world_ds && vp->Width == S.iw && vp->Height == S.ih && vp->MinZ > 0.0f) // the world pass: remember its depth surface (the bloom passes after it have another bound)
 			IDirect3DDevice9_GetDepthStencilSurface(dev, &g_world_ds);
-		if (S.ok && S.iw != S.w) { // a texture bias in the world pass: the textures are sampled for the output size, as upscalers ask (FSR 3: log2(render / output) - 1)
+		static int no_bias = -1;
+		static const char *env_bias;
+		if (no_bias < 0) { // QA: FSR3_NOBIAS=1 sets no texture bias at all (the 16 SetSamplerState calls at every switch into and out of the world pass are left out: frame time test)
+			no_bias = getenv("FSR3_NOBIAS") != NULL;
+			env_bias = getenv("FSR3_LODBIAS");
+		}
+		if (S.ok && S.iw != S.w && !no_bias) { // a texture bias in the world pass: the textures are sampled for the output size, as upscalers ask (FSR 3: log2(render / output) - 1)
 			const int world = vp->Width == S.iw && vp->Height == S.ih;
 			if (world != g_bias_on) {
 				g_bias_on = world;
+				g_bias_switches++;
 				float set_bias = 0.0f;
 				const int have_set = settings_fsr3_lodbias(&set_bias);
-				float bias = world ? (g_sw_bias < 999.0f ? g_sw_bias : getenv("FSR3_LODBIAS") ? (float)atof(getenv("FSR3_LODBIAS")) : have_set ? set_bias : log2f((float)S.iw / (float)S.w) - 1.0f) : 0.0f;
+				float bias = world ? (g_sw_bias < 999.0f ? g_sw_bias : env_bias ? (float)atof(env_bias) : have_set ? set_bias : log2f((float)S.iw / (float)S.w) - 1.0f) : 0.0f;
 				DWORD bits;
 				memcpy(&bits, &bias, 4);
 				for (DWORD i = 0; i < 16; i++)
@@ -984,8 +1012,8 @@ static void hook_device(IDirect3DDevice9 *dev9)
 	g_jit_on = getenv("FSR3_NOJITTER") ? 0 : 1;
 	g_mv_on = getenv("FSR3_NOMV") ? 0 : 1;
 	g_sweep = getenv("FSR3_SWEEP") != NULL;
-	g_refine = getenv("FSR3_NOREFINE") ? 0 : 1;
-	g_subpx = getenv("FSR3_NOSUBPX") ? 0 : 1;
+	g_refine = getenv("FSR3_NOREFINE") ? 0 : getenv("FSR3_RF_MODE") ? atoi(getenv("FSR3_RF_MODE")) : settings_fsr3_refine();
+	g_subpx = getenv("FSR3_NOSUBPX") ? 0 : getenv("FSR3_SUBPX") ? 1 : g_refine == 2; // quarter-pixel search only in the classic mode: sub-pixel vectors from noisy fine detail ripple
 	g_mv_flip = getenv("FSR3_MV_FLIP") ? 1 : 0;
 	g_shake_amp = getenv("FSR3_SHAKE") ? (float)atof(getenv("FSR3_SHAKE")) : 0.0f;
 	g_jit_flip = getenv("FSR3_JITTER_FLIP") ? atoi(getenv("FSR3_JITTER_FLIP")) : 0;
@@ -1109,6 +1137,7 @@ static void barrier(D3D12_RESOURCE_BARRIER *b, int *n, ID3D12Resource *r, D3D12_
 
 // The camera of the world pass, read from its view-projection matrix (rows c0..c3 of clip = ci . (x, y, z, 1), see hook_constants9): with w = the depth along the view, tan(vertical half fov) =
 // |row3| / |row1|, and clip.z / w = A + B / w with A = |row2| / |row3|, B = c2.w - A * c3.w gives near = -B / A and far = -B / (A - 1) (in units of w). 0 when the matrix is not a perspective one.
+static float g_cam_a, g_cam_bw; // set by camera_from_matrix: depth buffer value = g_cam_a + g_cam_bw / distance (the refinement's distance gate)
 static int camera_from_matrix(const float *m, float *vfov, float *znear, float *zfar)
 {
 	const float *r1 = m + 4, *r2 = m + 8, *r3 = m + 12;
@@ -1121,6 +1150,8 @@ static int camera_from_matrix(const float *m, float *vfov, float *znear, float *
 	if (r2[0] * r3[0] + r2[1] * r3[1] + r2[2] * r3[2] < 0.0f)
 		a = -a;
 	const float bb = m[11] - a * m[15];
+	g_cam_a = a;
+	g_cam_bw = bb / l3;
 	*vfov = 2.0f * atanf(l3 / l1);
 	static int told;
 	if (told++ < 2)
@@ -1707,6 +1738,9 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		cpu.ptr += S.desc_inc;
 		srv.Format = DXGI_FORMAT_R16G16_FLOAT;
 		ID3D12Device_CreateShaderResourceView(S.dev, S.motion, &srv, cpu);
+		srv.Format = DXGI_FORMAT_R32_FLOAT;
+		cpu.ptr += S.desc_inc;
+		ID3D12Device_CreateShaderResourceView(S.dev, S.depth, &srv, cpu);
 		D3D12_UNORDERED_ACCESS_VIEW_DESC uav;
 		memset(&uav, 0, sizeof(uav));
 		uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
@@ -1718,15 +1752,26 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		ID3D12Device_CreateUnorderedAccessView(S.dev, S.motion2, NULL, &uav, cpu);
 		const float jsign = getenv("FSR3_RF_JFLIP") ? -1.0f : 1.0f;
 		const float thr = getenv("FSR3_RF_THR") ? (float)atof(getenv("FSR3_RF_THR")) : 0.03f;
-		const float cvals[8] = {0, 0, jit_x * jsign, jit_y * jsign, g_pjit_x * jsign, g_pjit_y * jsign, thr, g_subpx ? 1.0f : 0.0f};
-		unsigned ci[8];
+		// mode 2 (classic): every block may take a vector; mode 1 (strict): near, clearly better, good in itself, at least minmag pixels off the camera's (see rf_common)
+		float dgate = 2.0f, ratio = 0.6f, absmax = 1e9f, minmag = 0.0f;
+		if (g_refine == 1) {
+			ratio = getenv("FSR3_RF_RATIO") ? (float)atof(getenv("FSR3_RF_RATIO")) : 0.4f;
+			absmax = getenv("FSR3_RF_ABS") ? (float)atof(getenv("FSR3_RF_ABS")) : 0.045f;
+			minmag = getenv("FSR3_RF_MINMAG") ? (float)atof(getenv("FSR3_RF_MINMAG")) : 1.5f;
+			const float dist = getenv("FSR3_RF_DIST") ? (float)atof(getenv("FSR3_RF_DIST")) : 3000.0f; // game units (inches): ~75 m
+			float vf, zn, zf;
+			if (g_vp_new_ok && dist > 0.0f && g_cam_maxz > g_cam_minz && camera_from_matrix(g_vp_new, &vf, &zn, &zf))
+				dgate = (g_cam_a + g_cam_bw / dist - g_cam_minz) / (g_cam_maxz - g_cam_minz); // the same mapping as the depth pass
+		}
+		const float cvals[12] = {0, 0, jit_x * jsign, jit_y * jsign, g_pjit_x * jsign, g_pjit_y * jsign, thr, g_subpx ? 1.0f : 0.0f, dgate, ratio, absmax, minmag};
+		unsigned ci[12];
 		memcpy(ci, cvals, sizeof(ci));
 		ci[0] = S.iw;
 		ci[1] = S.ih;
 		ID3D12DescriptorHeap *heaps[1] = {S.heap};
 		ID3D12GraphicsCommandList_SetDescriptorHeaps(S.list, 1, heaps);
 		ID3D12GraphicsCommandList_SetComputeRootSignature(S.list, S.rs_rf);
-		ID3D12GraphicsCommandList_SetComputeRoot32BitConstants(S.list, 0, 8, ci, 0);
+		ID3D12GraphicsCommandList_SetComputeRoot32BitConstants(S.list, 0, 12, ci, 0);
 		ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(S.list, 1, gpu);
 		ID3D12GraphicsCommandList_SetPipelineState(S.list, S.pso_rfa);
 		ID3D12GraphicsCommandList_Dispatch(S.list, (bw + 7) / 8, (bh + 7) / 8, 1);
@@ -1744,7 +1789,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		mv_tex = S.motion2;
 		static int told;
 		if (!told++)
-			log_printf("fsr3: motion refinement on (blocks %ux%u, jitter now %.3f,%.3f previous %.3f,%.3f)", bw, bh, jit_x, jit_y, g_pjit_x, g_pjit_y);
+			log_printf("fsr3: motion refinement on, %s (blocks %ux%u, jitter now %.3f,%.3f previous %.3f,%.3f; distance gate depth %.5f, ratio %.2f, absolute limit %.3f, minimum %.1f px, quarter pixels %d)", g_refine == 1 ? "strict" : "classic", bw, bh, jit_x, jit_y, g_pjit_x, g_pjit_y, dgate, ratio, absmax, minmag, g_subpx);
 	}
 
 	LARGE_INTEGER now;
@@ -1974,16 +2019,19 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 	if (g_ran) {
 		g_diag_frames++;
 		g_jit_upl_sum += g_jit_uploads;
+		g_bias_sw_sum += g_bias_switches;
 		if (g_vp_distinct > 1)
 			g_multi_frames++;
 		if (g_diag_frames >= 600) {
-			log_printf("fsr3: of %d upscaled frames %d had more than one world matrix; jittered matrix uploads %.1f per frame", g_diag_frames, g_multi_frames, g_jit_upl_sum / g_diag_frames);
+			log_printf("fsr3: of %d upscaled frames %d had more than one world matrix; jittered matrix uploads %.1f per frame; texture bias switches %.1f per frame", g_diag_frames, g_multi_frames,
+					   g_jit_upl_sum / g_diag_frames, g_bias_sw_sum / g_diag_frames);
 			g_diag_frames = g_multi_frames = 0;
-			g_jit_upl_sum = 0.0;
+			g_jit_upl_sum = g_bias_sw_sum = 0.0;
 		}
 	}
 	g_jit_uploads = 0;
 	g_vp_distinct = 0;
+	g_bias_switches = 0;
 	if (g_ran && g_vp_new_ok) { // this frame's matrix is the previous one of the next frame
 		memcpy(g_vp_prev, g_vp_new, sizeof(g_vp_prev));
 		g_vp_prev_ok = 1;
@@ -2011,14 +2059,26 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 			float bias;
 			int sharp, jit, mv, rf, sp;
 		} var_all[] = {
-			{"default", 1000.0f, -1, 1, 1, 1, 1},
-			{"norefine", 1000.0f, -1, 1, 1, 0, 1},
-			{"nosubpx", 1000.0f, -1, 1, 1, 1, 0},
-			{"sharp70", 1000.0f, 70, 1, 1, 1, 1},
-			{"sharp85", 1000.0f, 85, 1, 1, 1, 1},
-			{"bias-1.0", -1.0f, -1, 1, 1, 1, 1},
-			{"bias-2.0", -2.0f, -1, 1, 1, 1, 1},
-			{"nojitter", 1000.0f, -1, 0, 1, 1, 1},
+			{"default", 1000.0f, -1, 1, 1, 1, 0},
+			{"classic", 1000.0f, -1, 1, 1, 2, 1},
+			{"norefine", 1000.0f, -1, 1, 1, 0, 0},
+			{"sharp70", 1000.0f, 70, 1, 1, 1, 0},
+			{"sharp85", 1000.0f, 85, 1, 1, 1, 0},
+			{"bias-1.0", -1.0f, -1, 1, 1, 1, 0},
+			{"bias-2.0", -2.0f, -1, 1, 1, 1, 0},
+			{"nojitter", 1000.0f, -1, 0, 1, 1, 0},
+		};
+		// FSR3_SWEEP=refine: how FSR gets motion for what moves by itself (owner, 2026-11-08: "the picture ripples in the distance"): the strict correction (the default), the
+		// camera's motion alone, the classic correction (every block, quarter pixels), and the strict one with quarter pixels; rf = fsr3_refine mode, sp = quarter pixels
+		static const struct {
+			const char *name;
+			float bias;
+			int sharp, jit, mv, rf, sp;
+		} var_refine[] = {
+			{"strict", 1000.0f, -1, 1, 1, 1, 0},
+			{"camera", 1000.0f, -1, 1, 1, 0, 0},
+			{"classic", 1000.0f, -1, 1, 1, 2, 1},
+			{"strict_subpx", 1000.0f, -1, 1, 1, 1, 1},
 		};
 		// FSR3_SWEEP=grain: the texture bias and the sharpening, which trade grain (shimmer on MW2's sharp alpha-tested grass and fences) against softness (owner,
 		// 2026-11-08: "soft and grainy"); AMD's bias for 1.5x is -1.58 and its docs say to back off for high-frequency content
@@ -2027,22 +2087,24 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 			float bias;
 			int sharp, jit, mv, rf, sp;
 		} var_grain[] = {
-			{"b-1.58_s60", -1.585f, 60, 1, 1, 1, 1},
-			{"b-1.0_s60", -1.0f, 60, 1, 1, 1, 1},
-			{"b-0.58_s60", -0.585f, 60, 1, 1, 1, 1},
-			{"b-1.58_s30", -1.585f, 30, 1, 1, 1, 1},
-			{"b-1.0_s30", -1.0f, 30, 1, 1, 1, 1},
-			{"b-0.58_s30", -0.585f, 30, 1, 1, 1, 1},
-			{"b-0.58_s0", -0.585f, 0, 1, 1, 1, 1},
+			{"b-1.58_s60", -1.585f, 60, 1, 1, 1, 0},
+			{"b-1.0_s60", -1.0f, 60, 1, 1, 1, 0},
+			{"b-0.58_s60", -0.585f, 60, 1, 1, 1, 0},
+			{"b-1.58_s30", -1.585f, 30, 1, 1, 1, 0},
+			{"b-1.0_s30", -1.0f, 30, 1, 1, 1, 0},
+			{"b-0.58_s30", -0.585f, 30, 1, 1, 1, 0},
+			{"b-0.58_s0", -0.585f, 0, 1, 1, 1, 0},
 		};
-		const int grain = !strcmp(getenv("FSR3_SWEEP"), "grain");
-		const int nvar = grain ? (int)(sizeof(var_grain) / sizeof(var_grain[0])) : (int)(sizeof(var_all) / sizeof(var_all[0]));
+		const char *sweep_kind = getenv("FSR3_SWEEP");
+		const int grain = !strcmp(sweep_kind, "grain");
+		const int refine = !strcmp(sweep_kind, "refine");
+		const int nvar = grain ? (int)(sizeof(var_grain) / sizeof(var_grain[0])) : refine ? (int)(sizeof(var_refine) / sizeof(var_refine[0])) : (int)(sizeof(var_all) / sizeof(var_all[0]));
 		const int idx = (int)((S.frame - 300) / 120) % nvar;
 		const struct {
 			const char *name;
 			float bias;
 			int sharp, jit, mv, rf, sp;
-		} *var = grain ? (const void *)var_grain : (const void *)var_all;
+		} *var = grain ? (const void *)var_grain : refine ? (const void *)var_refine : (const void *)var_all;
 		if (idx != g_sw_idx) {
 			g_sw_idx = idx;
 			g_sw_name = var[idx].name;

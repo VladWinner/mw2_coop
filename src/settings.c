@@ -43,6 +43,7 @@ static int d3d9on12_adapter = -1;
 static int fsr3_on;
 static char fsr3_dir_buf[MAX_PATH];
 static int upscale_on, upscale_w, upscale_h, upscale_sharp = 25, fsr3_sharp = 60;
+static int fsr3_refine = 1;
 static int fsr3_bias_set;
 static float fsr3_bias;
 static int gp_fall_damage = -1, gp_jump_height, gp_gravity;
@@ -142,6 +143,9 @@ void settings_load(void)
 	fsr3_sharp = (int)GetPrivateProfileIntA("display", "fsr3_sharpness", 60, path);
 	if (fsr3_sharp < 0 || fsr3_sharp > 100)
 		fsr3_sharp = 60;
+	fsr3_refine = (int)GetPrivateProfileIntA("display", "fsr3_refine", 1, path);
+	if (fsr3_refine < 0 || fsr3_refine > 2)
+		fsr3_refine = 1;
 	{ // fsr3_lodbias: the texture LOD bias of the world pass with FSR 3 (empty: AMD's log2(render / output) - 1, -1.58 for 1280x720 -> 1920x1080)
 		char b[32] = "";
 		GetPrivateProfileStringA("display", "fsr3_lodbias", "", b, sizeof(b), path);
@@ -289,6 +293,11 @@ int settings_upscale_sharpness(void)
 int settings_fsr3_sharpness(void)
 {
 	return fsr3_sharp;
+}
+
+int settings_fsr3_refine(void)
+{
+	return fsr3_refine;
 }
 
 int settings_fsr3_lodbias(float *bias)

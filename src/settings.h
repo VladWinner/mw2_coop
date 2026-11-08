@@ -36,6 +36,9 @@ int settings_fsr3(void);
 const char *settings_fsr3_dir(void);
 // fsr3_sharpness (0-100, default 60): the sharpening FSR 3 applies to its output (0 = off).
 int settings_fsr3_sharpness(void);
+// fsr3_refine (default 1): how FSR 3 gets motion for what moves on its own (soldiers, the weapon): 0 = the camera's motion only, 1 = strict image-based correction (near, clearly
+// matching blocks only), 2 = the classic correction (every block; guesses motion from the jitter's aliasing on distant fine detail).
+int settings_fsr3_refine(void);
 // fsr3_lodbias (empty by default: AMD's log2(render / output) - 1): the texture LOD bias of the world pass with FSR 3; 1 and the value when set.
 int settings_fsr3_lodbias(float *bias);
 // settings.ini [display] upscale (default 0): the game renders at the size of its own video settings and is upscaled to upscale_width x upscale_height (FSR 1, upscale.c);
