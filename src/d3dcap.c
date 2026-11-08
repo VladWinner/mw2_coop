@@ -265,7 +265,30 @@ static create9_t plain_create9_factory(void)
 	return create9_orig ? create9_orig : make;
 }
 
-static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags, D3DPRESENT_PARAMETERS *pp,
+// The game makes more than one Direct3D object, and an object's vtable is not necessarily the table of the first one: each patched slot keeps the function it had, and the hook calls the
+// original of the table of the object it was called on (a single global original, taken from the first object, was called with the second object: CreateDevice failed with
+// E_OUTOFMEMORY or the game crashed, 2026-11-07).
+#define FACTORY_ORIGINALS 16
+static struct {
+	void **vt;
+	int index;
+	void *orig;
+} factory_originals[FACTORY_ORIGINALS];
+static volatile LONG factory_original_count;
+
+static void *factory_original(void *object, int index, void *fallback)
+{
+	void **vt = object ? *(void ***)object : NULL;
+	LONG n = factory_original_count;
+	if (n > FACTORY_ORIGINALS)
+		n = FACTORY_ORIGINALS;
+	for (LONG i = 0; vt && i < n; i++)
+		if (factory_originals[i].vt == vt && factory_originals[i].index == index)
+			return factory_originals[i].orig;
+	return fallback;
+}
+
+static HRESULT STDMETHODCALLTYPE create_device_hook_outer(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags, D3DPRESENT_PARAMETERS *pp,
 						     IDirect3DDevice9 **out)
 {
 	HRESULT hr;
@@ -336,7 +359,8 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 				IDirect3D9_Release(plain); // a device keeps the object alive
 		}
 	} else {
-		hr = create_device_orig(d3d, adapter, type, window, flags, pp, out);
+		create_device_t real = (create_device_t)factory_original(d3d, VT_CREATE_DEVICE, (void *)create_device_orig);
+		hr = real ? real(d3d, adapter, type, window, flags, pp, out) : D3DERR_NOTAVAILABLE;
 	}
 	if (SUCCEEDED(hr) && out && *out && pp && pp->Windowed && upscale_enabled())
 		upscale_device_made(pp->hDeviceWindow ? pp->hDeviceWindow : window);
@@ -352,6 +376,21 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 	return hr;
 }
 
+static __thread int in_create_device;
+
+static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags, D3DPRESENT_PARAMETERS *pp,
+						     IDirect3DDevice9 **out)
+{
+	if (in_create_device) { // d3d9 calls a patched slot again from inside CreateDevice (another object's table): pass it on, the outer call does the work
+		create_device_t inner = (create_device_t)factory_original(d3d, VT_CREATE_DEVICE, (void *)create_device_orig);
+		return inner ? inner(d3d, adapter, type, window, flags, pp, out) : D3DERR_NOTAVAILABLE;
+	}
+	in_create_device = 1;
+	HRESULT hr = create_device_hook_outer(d3d, adapter, type, window, flags, pp, out);
+	in_create_device = 0;
+	return hr;
+}
+
 static void patch_factory_slot(void **vt, int index, void *hook, void **original)
 {
 	DWORD old, ignored;
@@ -359,6 +398,12 @@ static void patch_factory_slot(void **vt, int index, void *hook, void **original
 		return;
 	void *current = InterlockedCompareExchangePointer((PVOID volatile *)&vt[index], NULL, NULL);
 	if (current != hook) {
+		LONG slot = InterlockedIncrement(&factory_original_count) - 1;
+		if (slot < FACTORY_ORIGINALS) {
+			factory_originals[slot].vt = vt;
+			factory_originals[slot].index = index;
+			factory_originals[slot].orig = current;
+		}
 		if (!*original)
 			*original = current;
 		InterlockedExchangePointer((PVOID volatile *)&vt[index], hook);
@@ -369,7 +414,8 @@ static void patch_factory_slot(void **vt, int index, void *hook, void **original
 static HRESULT STDMETHODCALLTYPE create_device_ex_hook(IDirect3D9Ex *d3d, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags,
 							D3DPRESENT_PARAMETERS *pp, D3DDISPLAYMODEEX *mode, IDirect3DDevice9Ex **out)
 {
-	HRESULT hr = create_device_ex_orig ? create_device_ex_orig(d3d, adapter, type, window, flags, pp, mode, out) : D3DERR_INVALIDCALL;
+	create_device_ex_t real = (create_device_ex_t)factory_original(d3d, 20, (void *)create_device_ex_orig);
+	HRESULT hr = real ? real(d3d, adapter, type, window, flags, pp, mode, out) : D3DERR_INVALIDCALL;
 	if (SUCCEEDED(hr) && out && *out) {
 		InterlockedExchangePointer((PVOID volatile *)&device, *out);
 		if (use_ex)
@@ -619,7 +665,7 @@ static int patch_import_slot(void **slot, void *replacement, void **original)
 	return patched;
 }
 
-static int patch_module_imports(HMODULE image)
+static int patch_module_imports_unchecked(HMODULE image)
 {
 	if (!image)
 		return 0;
@@ -666,6 +712,21 @@ static int patch_module_imports(HMODULE image)
 			}
 		}
 	}
+	return patched;
+}
+
+// The module list changes under the scanner: a module can unload between the snapshot and the read, or a region is not readable (an access violation in the scanner thread was seen with
+// d3d9ex=1, 2026-11-07). The module is pinned with a reference count while its imports are read, and the header is read only where the memory is committed and readable.
+static int patch_module_imports(HMODULE image)
+{
+	MEMORY_BASIC_INFORMATION mbi;
+	HMODULE pinned = NULL;
+	if (!image || !GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCSTR)image, &pinned) || !pinned)
+		return 0;
+	int patched = 0;
+	if (VirtualQuery(pinned, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+		patched = patch_module_imports_unchecked(pinned);
+	FreeLibrary(pinned);
 	return patched;
 }
 
