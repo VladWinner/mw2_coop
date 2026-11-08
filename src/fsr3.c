@@ -31,6 +31,10 @@
 #include "ffx_upscale.h"
 #include "dx12/ffx_api_dx12.h"
 
+// getenv() walks the whole environment block on every call: the QA knobs of the per-frame code are read once (the environment does not change while the game runs)
+#define ENV_HAS(name) __extension__({ static signed char has_ = -1; if (has_ < 0) has_ = getenv(name) != NULL; has_; })
+#define ENV_NUM(name, def) __extension__({ static float num_; static signed char got_; if (!got_) { const char *e_ = getenv(name); num_ = e_ ? (float)atof(e_) : (def); got_ = 1; } num_; })
+
 #define RING 3
 
 static struct {
@@ -835,7 +839,7 @@ static int g_jit_on = 1;      // QA: FSR3_NOJITTER=1 turns the jitter off
 static int g_bias_on;         // the texture LOD bias of the world pass is set
 static int g_mv_flip;         // QA: FSR3_MV_FLIP=1 negates the motion vectors (to test the sign)
 static float g_shake_amp;     // QA: FSR3_SHAKE=<percent of the screen width> sways the 3D picture sideways in a sine, with a depth-dependent shift (to test the motion vectors on a still scene)
-static float g_shake_x, g_shake_y;
+static float g_shake_x;
 static int g_jit_flip;        // QA: FSR3_JITTER_FLIP bit 1 = mirror x, bit 2 = mirror y in the matrix (to test the sign)
 static int g_mv_on = 1;       // QA: FSR3_NOMV=1 leaves the motion vectors at zero
 // QA sweep (FSR3_SWEEP=1, with FSR3_METRIC=1): every 120 frames the next variant of the settings below is used and, after 60 frames to settle, measured for 60 (metric_finish logs one line)
@@ -868,16 +872,6 @@ static float g_cam_minz, g_cam_maxz = 1.0f;
 static int g_jit_log, g_status_log, g_seq_log;
 static char g_vpseq[400];
 static UINT g_vpseq_last;
-static UINT sd_w(IDirect3DSurface9 *s)
-{
-	D3DSURFACE_DESC d;
-	return SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) ? d.Width : 0;
-}
-static UINT sd_h(IDirect3DSurface9 *s)
-{
-	D3DSURFACE_DESC d;
-	return SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) ? d.Height : 0;
-}
 
 static HRESULT(STDMETHODCALLTYPE *g_stretch_orig)(IDirect3DDevice9 *, IDirect3DSurface9 *, const RECT *, IDirect3DSurface9 *, const RECT *, D3DTEXTUREFILTERTYPE);
 static HRESULT(STDMETHODCALLTYPE *g_srt_orig)(IDirect3DDevice9 *, DWORD, IDirect3DSurface9 *);
@@ -971,7 +965,7 @@ static HRESULT STDMETHODCALLTYPE hook_srt9(IDirect3DDevice9 *dev, DWORD idx, IDi
 	// no world matrix in this frame: the camera-relative one (FSR3_NOREL=1: not, FSR does not run then). Only at the point where FSR runs: normal frames upload a
 	// camera-relative matrix early (before the world matrix), and taking it at any earlier render target switch marked them camera-relative (QA 2026-11-08)
 	const int at_last_pass = S.ok && g_stretched && !g_ran && idx == 0 && s;
-	if (at_last_pass && !g_vp_new_ok && g_vp_rel_ok && !getenv("FSR3_NOREL")) {
+	if (at_last_pass && !g_vp_new_ok && g_vp_rel_ok && !ENV_HAS("FSR3_NOREL")) {
 		D3DSURFACE_DESC rd;
 		if (SUCCEEDED(IDirect3DSurface9_GetDesc(s, &rd)) && rd.Width == S.w && rd.Height == S.h) {
 			memcpy(g_vp_new, g_vp_rel, sizeof(g_vp_new));
@@ -1873,15 +1867,15 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		uav.Format = DXGI_FORMAT_R16G16_FLOAT;
 		cpu.ptr += S.desc_inc;
 		ID3D12Device_CreateUnorderedAccessView(S.dev, S.motion2, NULL, &uav, cpu);
-		const float jsign = getenv("FSR3_RF_JFLIP") ? -1.0f : 1.0f;
-		const float thr = getenv("FSR3_RF_THR") ? (float)atof(getenv("FSR3_RF_THR")) : 0.03f;
+		const float jsign = ENV_HAS("FSR3_RF_JFLIP") ? -1.0f : 1.0f;
+		const float thr = ENV_NUM("FSR3_RF_THR", 0.03f);
 		// mode 2 (classic): every block may take a vector; mode 1 (strict): near, clearly better, good in itself, at least minmag pixels off the camera's (see rf_common)
 		float dgate = 2.0f, ratio = 0.6f, absmax = 1e9f, minmag = 0.0f;
 		if (g_refine == 1) {
-			ratio = getenv("FSR3_RF_RATIO") ? (float)atof(getenv("FSR3_RF_RATIO")) : 0.4f;
-			absmax = getenv("FSR3_RF_ABS") ? (float)atof(getenv("FSR3_RF_ABS")) : 0.045f;
-			minmag = getenv("FSR3_RF_MINMAG") ? (float)atof(getenv("FSR3_RF_MINMAG")) : 1.5f;
-			const float dist = getenv("FSR3_RF_DIST") ? (float)atof(getenv("FSR3_RF_DIST")) : 3000.0f; // game units (inches): ~75 m
+			ratio = ENV_NUM("FSR3_RF_RATIO", 0.4f);
+			absmax = ENV_NUM("FSR3_RF_ABS", 0.045f);
+			minmag = ENV_NUM("FSR3_RF_MINMAG", 1.5f);
+			const float dist = ENV_NUM("FSR3_RF_DIST", 3000.0f); // game units (inches): ~75 m
 			float vf, zn, zf;
 			if (g_vp_new_ok && dist > 0.0f && g_cam_maxz > g_cam_minz && camera_from_matrix(g_vp_new, &vf, &zn, &zf))
 				dgate = (g_cam_a + g_cam_bw / dist - g_cam_minz) / (g_cam_maxz - g_cam_minz); // the same mapping as the depth pass
@@ -1937,7 +1931,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	d.upscaleSize.width = S.w;
 	d.upscaleSize.height = S.h;
 	{ // FSR's own sharpening (RCAS): the soft look of an upscaled frame without it was reported as "soapy"
-		int sh = g_sw_sharp >= 0 ? g_sw_sharp : getenv("FSR3_SHARP") ? atoi(getenv("FSR3_SHARP")) : settings_fsr3_sharpness();
+		int sh = g_sw_sharp >= 0 ? g_sw_sharp : ENV_HAS("FSR3_SHARP") ? (int)ENV_NUM("FSR3_SHARP", 0) : settings_fsr3_sharpness();
 		d.enableSharpening = sh > 0;
 		d.sharpness = (float)sh / 100.0f;
 	}
@@ -1948,7 +1942,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		static unsigned resets;
 		char why[160] = "first frame";
 		int reset = first;
-		if (!first && !getenv("FSR3_NORESET")) {
+		if (!first && !ENV_HAS("FSR3_NORESET")) {
 			if (!g_vp_prev_ok) {
 				reset = 1;
 				snprintf(why, sizeof(why), "no 3D view in the frame before (menu, loading screen, film)");
@@ -1968,7 +1962,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	{ // the real camera of this frame (the fixed numbers above are the fallback)
 		float vfov = 0, zn = 0, zf = 0;
 		static int told;
-		if (g_vp_new_ok && !getenv("FSR3_FIXEDCAM") && camera_from_matrix(g_vp_new, &vfov, &zn, &zf)) {
+		if (g_vp_new_ok && !ENV_HAS("FSR3_FIXEDCAM") && camera_from_matrix(g_vp_new, &vfov, &zn, &zf)) {
 			d.cameraNear = zn;
 			d.cameraFar = zf;
 			d.cameraFovAngleVertical = vfov;
@@ -1980,7 +1974,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	}
 	d.viewSpaceToMetersFactor = 0.0254f; // the game's units are inches
 	d.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
-	if (getenv("FSR3_DEBUGVIEW"))
+	if (ENV_HAS("FSR3_DEBUGVIEW"))
 		d.flags |= FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW;
 	if (ts_on)
 		ts_mark(slot, 2);
@@ -2017,7 +2011,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		g_pjit_x = jit_x;
 		g_pjit_y = jit_y;
 	}
-	if (rc == FFX_API_RETURN_OK && !getenv("FSR3_SKIPCOPY") && S.pso_comp && getenv("FSR3_COMPOSE")) { // the old way: the output into the back buffer after the HUD, the HUD kept from the game's own frame (QA: FSR3_COMPOSE=1)
+	if (rc == FFX_API_RETURN_OK && !ENV_HAS("FSR3_SKIPCOPY") && S.pso_comp && ENV_HAS("FSR3_COMPOSE")) { // the old way: the output into the back buffer after the HUD, the HUD kept from the game's own frame (QA: FSR3_COMPOSE=1)
 		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
 		n = 0;
@@ -2058,7 +2052,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		barrier(b, &n, S.final, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
 		n = 0;
-	} else if (rc == FFX_API_RETURN_OK && !getenv("FSR3_SKIPCOPY")) { // no compose pass: the output as it is
+	} else if (rc == FFX_API_RETURN_OK && !ENV_HAS("FSR3_SKIPCOPY")) { // no compose pass: the output as it is
 		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
 		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
 		n = 0;
@@ -2147,7 +2141,7 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 	// buffer stays the target and the game's composite pass draws its own render-size picture into the corner (owner's screenshots 2026-11-08: the 1280x720 picture in a corner; FSR run at
 	// the first draw after the copy left the corner showing the un-upscaled picture over the upscaled one). So the frame is upscaled at the Present: the whole back buffer corner, the
 	// game's composite and its HUD with it (the HUD is then as soft as the picture). FSR3_NOLATE=1: not.
-	if (S.ok && g_stretched && !g_ran && g_vp_new_ok && !getenv("FSR3_NOLATE")) {
+	if (S.ok && g_stretched && !g_ran && g_vp_new_ok && !ENV_HAS("FSR3_NOLATE")) {
 		static int told;
 		g_ran = 1;
 		if (!fsr3_frame(dev9))

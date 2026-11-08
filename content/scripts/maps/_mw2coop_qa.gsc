@@ -3059,6 +3059,14 @@ oilrigdoors()
 	presser = p1;
 	if ( scen == "oilrigdoors2" )
 		presser = p2;
+	// the lower breach is armed by the level only after the railing patroller is dead (a friendly kills him on his own schedule): wait for the flags instead of pressing early
+	// the bots are teleported, they never walk through the triggers that a player passes: set the same flags (the friendly then executes the patroller)
+	flag_set( "player_at_lower_breach" );
+	flag_set( "player_alerted_railing" );
+	for ( t = 0; t < 90 && !( flag( "player_at_lower_breach" ) && flag( "railing_patroller_dead" ) ); t += 0.5 )
+		wait 0.5;
+	report( "flags after " + t + " s: player_at_lower_breach " + flag( "player_at_lower_breach" ) + ", railing_patroller_dead " + flag( "railing_patroller_dead" ) );
+	wait 3;
 	for ( n = 0; n < 6 && level.mw2coop_qa_breaching == 0; n++ )
 	{
 		press( presser, "activate", 600 );
@@ -3082,6 +3090,8 @@ oilrigdoors()
 	for ( t = 0; t < 30 && ( p1 IsLinked() || p2 IsLinked() ); t += 0.5 )
 		wait 0.5;
 	check( !p1 IsLinked() && !p2 IsLinked(), "both are free again after the breach (" + t + " s)" );
+	report( "weapons after the breach: p1 " + p1 GetCurrentWeapon() + ", p2 " + p2 GetCurrentWeapon() );
+	check( p1 GetCurrentWeapon() != "none" && p2 GetCurrentWeapon() != "none", "both hold a weapon after the breach (Smelt1993, issue 9: a player without a weapon in hand at the breach)" );
 	for ( i = 0; i < 16; i++ )
 	{
 		wait 0.5;
