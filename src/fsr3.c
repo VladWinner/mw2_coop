@@ -823,6 +823,26 @@ static HRESULT STDMETHODCALLTYPE hook_stretch9(IDirect3DDevice9 *dev, IDirect3DS
 			if (!told++)
 				log_printf("fsr3: the game's StretchRect of the whole %ux%u back buffer into a %ux%u target now copies the %ux%u corner", a.Width, a.Height, b.Width, b.Height, S.iw, S.ih);
 		}
+	} else if (S.ok && !sr && src && dst && !g_stretched) {
+		// render size = output size (FSR as anti-aliasing only): the same copy of the whole back buffer into a target of the same size, nothing to correct. Its sizes cannot tell it from
+		// other copies, so the source must be the swap chain's own back buffer. It marks the end of the 3D picture: the next set of the back buffer as the render target starts the last
+		// pass (bloom, HUD), where FSR runs. (Before, "the back buffer was set as the render target" alone counted at this size: FSR ran at the first such switch of a frame, before the
+		// world was drawn, with a camera-relative matrix, and dropped its history in every frame: QA 2026-11-08.)
+		D3DSURFACE_DESC a, b;
+		if (SUCCEEDED(IDirect3DSurface9_GetDesc(src, &a)) && SUCCEEDED(IDirect3DSurface9_GetDesc(dst, &b)) && a.Width == S.w && a.Height == S.h && b.Width == S.iw && b.Height == S.ih) {
+			IDirect3DSurface9 *bb = NULL;
+			static int told, told_other;
+			if (SUCCEEDED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && bb) {
+				if (bb == src) {
+					g_stretched = 1;
+					if (!told++)
+						log_printf("fsr3: the game's StretchRect of the whole %ux%u back buffer into a %ux%u target (render size = output size) marks the start of the last pass", a.Width, a.Height, b.Width, b.Height);
+				} else if (told_other++ < 3) {
+					log_printf("fsr3: a StretchRect of the whole %ux%u surface into a %ux%u target: the source is not the back buffer (not the last pass's cue)", a.Width, a.Height, b.Width, b.Height);
+				}
+				IDirect3DSurface9_Release(bb);
+			}
+		}
 	}
 	if (g_trace > 0 && g_armed) {
 		char a[64], b[64];
@@ -864,7 +884,7 @@ static HRESULT STDMETHODCALLTYPE hook_srt9(IDirect3DDevice9 *dev, DWORD idx, IDi
 {
 	// no world matrix in this frame: the camera-relative one (FSR3_NOREL=1: not, FSR does not run then). Only at the point where FSR runs: normal frames upload a
 	// camera-relative matrix early (before the world matrix), and taking it at any earlier render target switch marked them camera-relative (QA 2026-11-08)
-	const int at_last_pass = S.ok && (g_stretched || S.iw == S.w) && !g_ran && idx == 0 && s;
+	const int at_last_pass = S.ok && g_stretched && !g_ran && idx == 0 && s;
 	if (at_last_pass && !g_vp_new_ok && g_vp_rel_ok && !getenv("FSR3_NOREL")) {
 		D3DSURFACE_DESC rd;
 		if (SUCCEEDED(IDirect3DSurface9_GetDesc(s, &rd)) && rd.Width == S.w && rd.Height == S.h) {
@@ -930,7 +950,7 @@ static HRESULT STDMETHODCALLTYPE hook_viewport9(IDirect3DDevice9 *dev, const D3D
 			g_vpseq_last = vp->Width << 16 | vp->Height;
 			snprintf(g_vpseq + strlen(g_vpseq), 24, " %lux%lu", vp->Width, vp->Height);
 		}
-		if (g_trace && !g_armed && vp->Width > 100 && vp->Width < 1900 && g_frame >= g_trace_from)
+		if (g_trace && !g_armed && vp->Width > 100 && (vp->Width < 1900 || S.iw == S.w) && g_frame >= g_trace_from)
 			g_armed = 1;
 		if (g_trace > 0 && g_armed) {
 			g_trace--;
@@ -2016,6 +2036,11 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 		log_printf("fsr3: frame %d drew the world pass but no world view-projection matrix was caught: the next frame is traced", g_frame);
 	}
 	g_saw_world_vp = 0;
+	{ // a frame with a world matrix in which FSR did not run: the last pass was not found (no post-process copy of the back buffer, or its source was not the back buffer)
+		static int nolast;
+		if (S.ok && g_vp_new_ok && !g_ran && nolast++ < 5)
+			log_printf("fsr3: frame %d: a world matrix was caught but FSR did not run (the post-process copy of the back buffer was %s)", g_frame, g_stretched ? "seen, but no render target set of the back buffer followed" : "not seen");
+	}
 	if (g_ran) {
 		g_diag_frames++;
 		g_jit_upl_sum += g_jit_uploads;
