@@ -119,6 +119,7 @@ main()
 	level.mw2coop.completing = false;
 	level.mw2coop.checkpoint = -1;
 	level.mw2coop.section = -1;	// index in level.start_functions of the furthest section reached
+	level.mw2coop.started = GetTime();	// the level's first frame (began_with_level)
 	if ( !isdefined( level.mw2coop_weapon_sync ) )
 		level.mw2coop_weapon_sync = "leader";	// "leader": player 1's changes go to player 2; "both": gains go both ways; "own": each player takes his own (only the start's weapons are copied)
 	if ( !isdefined( level.mw2coop_own_weapons ) )
@@ -780,31 +781,74 @@ just_started_at_checkpoint()
 	return isdefined( level.start_point ) && level.start_point != "default" && GetTime() < 8000;
 }
 
+// The first 3 s of the level, whatever start it began at: no player reaches a section that soon.
+began_with_level()
+{
+	return isdefined( level.mw2coop.started ) && GetTime() - level.mw2coop.started < 3000;
+}
+
+// A start point's index in level.start_functions (the last entry of that name, as level.start_arrays keeps), undefined when the level has none of that name.
+section_index( name )
+{
+	index = undefined;
+	foreach ( i, start in level.start_functions )
+		if ( start[ "name" ] == name )
+			index = i;
+	return index;
+}
+
+// The index of the start point the level began at; -1 for the default start or before it is chosen.
+start_section_index()
+{
+	if ( !isdefined( level.start_point ) )
+		return -1;
+	index = section_index( level.start_point );
+	if ( !isdefined( index ) )
+		return -1;
+	return index;
+}
+
 // Checkpoints for every level: a section of the level begins (the start point "name": its section
 // function in maps\_load::handle_starts, or the level's own section handler, patched): it becomes
 // the co-op checkpoint, so a failed mission restarts there instead of at the level's beginning, as
 // a single player autosave would let him go on. Only forward, only real start points (not the
 // developers' test starts, start_is_dev), and not the start point the level began at.
 // leader: the player who got there (a checkpoint flag's trigger he touched); undefined when not
-// known.
-section_reached( name, leader )
+// known. by_table: true when a flag or a place of maps\_mw2coop_checkpoints marked it, undefined when the section began (maps\_load::handle_starts,
+// a level's section handler).
+section_reached( name, leader, by_table )
 {
 	if ( !is_campaign_coop() || !isdefined( level.mw2coop ) || level.mw2coop.failing || level.mw2coop.completing )
 		return;
-	index = undefined;
-	foreach ( i, start in level.start_functions )
-		if ( start[ "name" ] == name )
-			index = i;
-	if ( !isdefined( index ) || index <= level.mw2coop.section )
+	name = ToLower( name );	// as maps\_utility::add_start keeps the names
+	// a section that begins before the players get there is marked by its flag or place only (maps\_mw2coop_checkpoints::late_sections)
+	if ( !isdefined( by_table ) && is_in_array( maps\_mw2coop_checkpoints::late_sections( level.script ), name ) )
+	{
+		state( "checkpoint " + name + ": its section began, its flag or place will mark it" );
 		return;
-	level.mw2coop.section = index;
-	if ( start_is_dev( name ) || ( isdefined( level.start_point ) && level.start_point == name ) )
+	}
+	index = section_index( name );
+	// only forward, and not the start point the level began at or one before it (a start point without a section function of its own is not entered by handle_starts)
+	if ( !isdefined( index ) || index <= level.mw2coop.section || index <= start_section_index() )
 		return;
+	// A section entered with the level is not one anybody reached, and it does not count as passed (a later flag of the level may still mark it): handle_starts() enters the first
+	// section whose function waits as soon as the ones before it return, and in Endgame the boat sections' functions are empty (::empty), so the last one, boatdrive_end, was
+	// entered in the level's first frame and every failed boat ride restarted at the end of the chase (issue #16; QA cptour log: "checkpoint boatdrive_end (section 6)"
+	// 0.04 s after the start). Roadkill: riverbank's function only starts threads, so "convoy" (the foot of the stairs up to the roof fight) was taken at once and a death
+	// at the riverbank restarted past the opening scene. A restart at a checkpoint skips sections the same way (just_started_at_checkpoint).
+	if ( began_with_level() )
+	{
+		state( "checkpoint " + name + " not taken: its section began " + ( GetTime() - level.mw2coop.started ) + " ms after the level's start (the sections before it return at once)" );
+		return;
+	}
 	if ( just_started_at_checkpoint() )
 	{
 		state( "checkpoint " + name + " not taken: " + GetTime() + " ms after the start at " + level.start_point + " (the start function's own flags and the sections it skips)" );
 		return;
 	}
+	level.mw2coop.section = index;
+	if ( start_is_dev( name ) )
+		return;
 	rank = note_checkpoint_rank();
 	SetDvar( "start", name );
 	state( "checkpoint " + name + " (section " + index + ")" );

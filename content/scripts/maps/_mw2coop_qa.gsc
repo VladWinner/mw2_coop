@@ -74,6 +74,15 @@
 //   boat     - (af_chase, default start) the Endgame boat chase: player 1 boards and drives,
 //              player 2 rides as the gunner beside Price; the bot drives after the enemy boat.
 //              boat2: player 2 boards first and drives
+//   boatcp   - (af_chase, default start) Endgame's checkpoints (issue #16): none with the level's
+//              start; boarding, the cave exit, the middle of the lake, the rapids, the river below
+//              them and the boarding scene ahead are taken in order (the boat is put at each start
+//              point's place); a failure in the middle of the lake restarts there with both players
+//              in the boat and the later ones are still taken; a failure at the end restarts there
+//   cpwalk   - (a level with flags or places in maps\_mw2coop_checkpoints, any start) no
+//              checkpoint with the level's start; in the order of their sections player 1 is put on
+//              each flag's trigger (a flag no map trigger sets is set) or just past each place, and
+//              its start point must become the checkpoint
 //   buttons  - (any map) real input: each player's own machine presses Forward and Use (press()),
 //              he walks forward and the server sees his Use button, not the other player's
 //   pickups  - (trainer; start "", "frag" or "pit") each player takes his own weapons off the
@@ -404,6 +413,12 @@ main()
 		case "boat":
 		case "boat2":
 			boat();
+			break;
+		case "boatcp":
+			boatcp();
+			break;
+		case "cpwalk":
+			cpwalk();
 			break;
 		case "lineoffire":
 			lineoffire();
@@ -3647,6 +3662,284 @@ boat()
 	check( IsAlive( other ) && other IsLinked(), "the passenger rode along" );
 	check( price_turns == 0, "Price stayed on his tube the whole ride (" + price_turns + " samples off it)" );
 	report( "done" );
+}
+
+// --------------------------------------------------------------------------------------------
+// Endgame's checkpoints (issue #16; maps\_mw2coop_checkpoints af_chase). The bot does not drive (the QA autopilot made the game run at a tenth of its
+// speed after a minute): the players' boat is put at each start point's place, a little past it, and the level's trigger for that checkpoint is set
+// off if the boat did not touch it (their places against the start points: map data, in the table's notes). Run 1 (default start): no checkpoint
+// with the level's start, boarding, the cave exit, the middle of the lake, then the mission is failed; run 2 (the restart there): the boat and
+// both players are back, no other checkpoint with the restart, the rapids, the river below them, the boarding scene, failed again; run 3: the
+// restart at the end of the chase. Phases: "boatcp:start", "boatcp:mid", "boatcp:end".
+boatcp_order()
+{
+	return strtok( "boatdrive_begin boatdrive_lake boatdrive_lake_mid boatdrive_rapids boatdrive_below_rapids boatdrive_end", " " );
+}
+
+boatcp()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	order = boatcp_order();
+	phase = GetDvar( "mw2coop_qa_phase" );
+	thread boatcp_no_escape();
+	if ( phase == "boatcp:mid" || phase == "boatcp:end" )
+	{
+		want = "boatdrive_lake_mid";
+		if ( phase == "boatcp:end" )
+			want = "boatdrive_end";
+		check( level.start_point == want, "the failure restarted at " + want + " (start point " + level.start_point + ")" );
+		for ( t = 0; t < 10 && !flag( "player_on_boat" ); t += 0.25 )
+			wait 0.25;
+		check( flag( "player_on_boat" ), "on the boat after the restart" );
+		for ( t = 0; t < 7 && !isdefined( level.mw2coop_boat_seat ); t += 0.25 )
+			wait 0.25;
+		other = maps\_mw2coop::other_player( level.mw2coop_lead );
+		check( level.player IsLinked() && level.player2 IsLinked() && Distance( other.origin, level.players_boat.origin ) < 150, "both players in the boat (" + int( Distance( other.origin, level.players_boat.origin ) ) + " units from it)" );
+		wait 4;
+		check( GetDvar( "start" ) == want, "no other checkpoint with the restart (start '" + short_start() + "')" );
+		if ( phase == "boatcp:end" )
+		{
+			SetDvar( "mw2coop_qa_phase", "done" );
+			report( "done" );
+			return;
+		}
+		ok = boatcp_step( "boatdrive_rapids", "rapids_start_position", "rapids_trigger", undefined );
+		if ( ok )
+			ok = boatcp_step( "boatdrive_below_rapids", "below_rapids_start_position", "on_river_trigger", undefined );
+		if ( ok )
+			ok = boatcp_step( "boatdrive_end", "end_start_position", undefined, "player_in_sight_of_boarding" );
+		if ( !ok )
+		{
+			SetDvar( "mw2coop_qa_phase", "done" );
+			report( "done" );
+			return;
+		}
+		boatcp_fail( "boatcp:end", "at the end of the chase" );
+		return;
+	}
+	if ( phase != "" )
+	{
+		report( "boatcp: the level restarted at " + level.start_point + " in phase " + phase + " (the level's own failure): stopping" );
+		SetDvar( "mw2coop_qa_phase", "done" );
+		report( "done" );
+		return;
+	}
+	SetDvar( "mw2coop_qa_phase", "boatcp:start" );
+	wait 4;	// past the first 3 s, where no section is a checkpoint
+	check( !is_in_array( order, GetDvar( "start" ) ), "no checkpoint with the level's start (start '" + short_start() + "')" );
+	driver = level.player;
+	trigger = GetEnt( "boat_mount", "targetname" );
+	driver SetOrigin( PlayerPhysicsTrace( trigger.origin + ( 0, 0, 40 ), trigger.origin - ( 0, 0, 200 ) ) );
+	for ( t = 0; t < 3 && !flag( "player_on_boat" ); t += 0.25 )
+		wait 0.25;
+	if ( !flag( "player_on_boat" ) )
+		trigger notify( "trigger", driver );
+	for ( t = 0; t < 10 && !flag( "player_on_boat" ); t += 0.25 )
+		wait 0.25;
+	check( flag( "player_on_boat" ), "on the boat" );
+	wait 0.5;
+	check( GetDvar( "start" ) == "boatdrive_begin", "checkpoint boatdrive_begin on boarding (start '" + short_start() + "')" );
+	for ( t = 0; t < 7 && !isdefined( level.mw2coop_boat_seat ); t += 0.25 )
+		wait 0.25;
+	wait 2;
+	ok = boatcp_step( "boatdrive_lake", "lake_start_pose", "end_caves_trigger", undefined );
+	if ( ok )
+		ok = boatcp_step( "boatdrive_lake_mid", "lake_mid_start_pose", undefined, undefined );
+	if ( !ok )
+	{
+		SetDvar( "mw2coop_qa_phase", "done" );
+		report( "done" );
+		return;
+	}
+	boatcp_fail( "boatcp:mid", "in the middle of the lake" );
+}
+
+// The players' boat to 300 units past the start point's place (struct pose), along its heading; then, if the checkpoint has not come within
+// 2 s, the level's trigger is set off (by targetname, or the flag trigger of flag_name). True when the checkpoint came.
+boatcp_step( name, pose, trigger_name, flag_name )
+{
+	spot = getstruct( pose, "targetname" );
+	if ( !isdefined( spot ) )
+	{
+		check( false, "the place " + pose + " of " + name );
+		return false;
+	}
+	yaw = spot.angles[ 1 ];
+	to = spot.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 300;
+	level.players_boat Vehicle_Teleport( to, ( 0, yaw, 0 ) );
+	report( "boat put 300 units past " + pose + " at " + vec_int( to ) + " (game time " + GetTime() + ")" );
+	for ( t = 0; t < 2 && GetDvar( "start" ) != name; t += 0.25 )
+		wait 0.25;
+	how = "by the place";
+	if ( GetDvar( "start" ) != name )
+	{
+		trigger = undefined;
+		if ( isdefined( trigger_name ) )
+			trigger = GetEnt( trigger_name, "targetname" );
+		else if ( isdefined( flag_name ) )
+			foreach ( candidate in GetEntArray( "trigger_multiple_flag_set", "classname" ) )
+				if ( isdefined( candidate.script_flag ) && candidate.script_flag == flag_name )
+					trigger = candidate;
+		if ( isdefined( trigger ) )
+		{
+			how = "by its trigger, set off";
+			trigger notify( "trigger", level.mw2coop_lead );
+		}
+		for ( t = 0; t < 3 && GetDvar( "start" ) != name; t += 0.25 )
+			wait 0.25;
+	}
+	ok = GetDvar( "start" ) == name;
+	check( ok, "checkpoint " + name + " " + how + " (boat at " + vec_int( level.players_boat.origin ) + ", start '" + short_start() + "')" );
+	return ok;
+}
+
+boatcp_fail( next_phase, where )
+{
+	SetDvar( "mw2coop_qa_phase", next_phase );
+	wait 2;
+	report( "failing the mission " + where );
+	level thread maps\_mw2coop::mission_failed();
+	wait 40;
+	report( "FAIL no restart 40 s after the failure" );
+}
+
+// Shepherd's boat drops a crumb on its path every so often (af_chase_code::enemy_chase_boat_breadcrumb); the mission fails once the oldest crumb
+// the players' boat has not passed is older than the limit (10 s). Crumbs older than 6 s are dropped here, so the list stays short and the bot's
+// slow boat never trails too far. (Raising the limit instead let the list grow without end: the level walks it every frame, and after two
+// minutes a frame took 0.9 s and both copies froze.)
+boatcp_no_escape()
+{
+	level endon( "mw2coop_level_end" );
+	for ( ;; )
+	{
+		if ( isdefined( level.breadcrumb ) && level.breadcrumb.size )
+		{
+			keep = [];
+			foreach ( crumb in level.breadcrumb )
+				if ( GetTime() - crumb.spawn_time < 6000 )
+					keep[ keep.size ] = crumb;
+			level.breadcrumb = keep;
+		}
+		wait 0.25;
+	}
+}
+
+// cpwalk: (a level with flags or places in maps\_mw2coop_checkpoints, any start) no checkpoint with the level's start; then, in the order of
+// their sections, player 1 is put on each flag's trigger (a flag set only by a level script is set) or just past each place, and its start
+// point must become the checkpoint. It checks the table and maps\_mw2coop::section_reached, not the level's own way there.
+cpwalk()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 4;
+	// a level begun at a checkpoint takes none in its first 8 s (maps\_mw2coop::just_started_at_checkpoint)
+	while ( isdefined( level.start_point ) && level.start_point != "default" && GetTime() < 8500 )
+		wait 0.25;
+	// the table's flags and places of this level after the start point it began at, in the order of their sections
+	entries = [];
+	foreach ( p in maps\_mw2coop_checkpoints::table( level.script ) )
+		entries[ entries.size ] = cpwalk_entry( "flag", p[ 0 ], p[ 1 ] );
+	foreach ( p in maps\_mw2coop_checkpoints::places( level.script ) )
+		entries[ entries.size ] = cpwalk_entry( "place", p[ 0 ], p[ 1 ] );
+	names = [];
+	foreach ( e in entries )
+		names[ names.size ] = e.start;
+	check( !is_in_array( names, GetDvar( "start" ) ), "no checkpoint with the level's start (start '" + short_start() + "')" );
+	for ( i = 0; i < entries.size; i++ )
+		for ( j = i + 1; j < entries.size; j++ )
+			if ( entries[ j ].index < entries[ i ].index )
+			{
+				e = entries[ i ];
+				entries[ i ] = entries[ j ];
+				entries[ j ] = e;
+			}
+	floor_index = maps\_mw2coop::start_section_index();
+	foreach ( e in entries )
+		if ( e.index < 0 )
+			check( false, "the table's start point " + e.start + " (" + e.kind + " " + e.key + ") is one of the level's start points" );
+	triggers = array_combine( GetEntArray( "trigger_multiple_flag_set_touching", "classname" ), GetEntArray( "trigger_multiple_flag_set", "classname" ) );
+	foreach ( e in entries )
+	{
+		if ( e.index <= floor_index )
+			continue;
+		// a scene holding player 1 (a vehicle, a rig) ends first
+		for ( t = 0; t < 90 && level.player IsLinked(); t += 0.5 )
+			wait 0.5;
+		label = e.kind + " " + e.key;
+		if ( e.kind == "place" )
+		{
+			spot = maps\_mw2coop_checkpoints::place_of( e.key );
+			if ( !isdefined( spot ) )
+			{
+				check( false, "the place " + e.key + " of " + e.start + " is in the level" );
+				continue;
+			}
+			yaw = 0;
+			if ( isdefined( spot.angles ) )
+				yaw = spot.angles[ 1 ];
+			to = spot.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 120;
+			level.player SetOrigin( PlayerPhysicsTrace( to + ( 0, 0, 48 ), to - ( 0, 0, 256 ) ) );
+			label = "player 1 just past the place " + e.key;
+		}
+		else
+		{
+			trigger = undefined;
+			foreach ( candidate in triggers )
+				if ( isdefined( candidate.script_flag ) && candidate.script_flag == e.key )
+					trigger = candidate;
+			if ( isdefined( trigger ) && isdefined( trigger.spawnflags ) && ( trigger.spawnflags & 8 ) )
+			{
+				// a trigger only AI set off (spawnflags NOTPLAYER: Wolverines!' president in the meat locker): the flag itself
+				flag_set( e.key );
+				label = "flag " + e.key + " set (its trigger is for AI only)";
+			}
+			else if ( isdefined( trigger ) )
+			{
+				level.player SetOrigin( PlayerPhysicsTrace( trigger.origin + ( 0, 0, 48 ), trigger.origin - ( 0, 0, 256 ) ) );
+				label = "player 1 on the trigger of " + e.key;
+			}
+			else
+			{
+				// set by the level's own script (Endgame's boarding, No Russian's end of the massacre): the flag itself
+				flag_set( e.key );
+				label = "flag " + e.key + " set (no map trigger sets it)";
+			}
+		}
+		for ( t = 0; t < 5 && GetDvar( "start" ) != e.start; t += 0.25 )
+			wait 0.25;
+		// the teleport may land outside a trigger's volume (only its centre is known): then the flag itself, so the table is still checked
+		if ( GetDvar( "start" ) != e.start && e.kind == "flag" && !flag( e.key ) )
+		{
+			report( "player 1 at " + vec_int( level.player.origin ) + " did not set off " + e.key + " (the teleport missed its trigger?): the flag is set" );
+			flag_set( e.key );
+			label = "flag " + e.key + " set after the missed trigger";
+			for ( t = 0; t < 5 && GetDvar( "start" ) != e.start; t += 0.25 )
+				wait 0.25;
+		}
+		check( GetDvar( "start" ) == e.start, label + " at " + vec_int( level.player.origin ) + ": checkpoint " + e.start + " (start '" + short_start() + "')" );
+		wait 1;
+	}
+	report( "done" );
+}
+
+cpwalk_entry( kind, key, start )
+{
+	e = SpawnStruct();
+	e.kind = kind;
+	e.key = key;
+	e.start = ToLower( start );	// maps\_utility::add_start lowers the names
+	e.index = maps\_mw2coop::section_index( e.start );
+	if ( !isdefined( e.index ) )
+		e.index = -1;
+	return e;
+}
+
+// the start dvar, short (at the default start it holds the list of all start points)
+short_start()
+{
+	s = GetDvar( "start" );
+	if ( s.size > 40 )
+		return GetSubStr( s, 0, 40 ) + "...";
+	return s;
 }
 
 // The level's loadout (maps\_loadout): player 2 has player 1's weapons and holds the same one.
