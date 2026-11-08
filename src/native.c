@@ -2569,10 +2569,27 @@ static int cg_aspect_full_window_value(int width, int height, float *aspect)
 }
 static void cg_aspect_apply_full_window(void)
 {
-	static int logged_width, logged_height;
+	static int logged_width, logged_height, refused;
+	// iw4x-sp: XR() gives 0 for an address tools/gen_addr159.py could not map (the render size is one): base + 0 is the exe's "MZ" header, read
+	// as 9460301x9460301, which made the cgame's aspect 1.0 and stretched the view across the window (owner's screenshot, 2026-11-08). Then, or
+	// for a size no window has, the game's own aspect stays.
+	if (!RVA_RENDER_WIDTH || !RVA_RENDER_HEIGHT || !RVA_CG_ASPECT) {
+		if (!refused) {
+			refused = 1;
+			log_printf("native: full-window aspect correction off: the render size's address is not known in this build");
+		}
+		return;
+	}
 	int width = *(int *)(base + RVA_RENDER_WIDTH);
 	int height = *(int *)(base + RVA_RENDER_HEIGHT);
 	float aspect;
+	if (width < 160 || height < 120 || width > 16384 || height > 16384) {
+		if (refused != 2) {
+			refused = 2;
+			log_printf("native: full-window aspect correction skipped: render size %dx%d is not a window size", width, height);
+		}
+		return;
+	}
 	if (!cg_aspect_full_window_value(width, height, &aspect))
 		return;
 	*(float *)(base + RVA_CG_ASPECT) = aspect;
