@@ -41,7 +41,9 @@ static int netguard_on = 1;
 static int d3d9on12_on = 0;
 static int d3d9on12_adapter = -1;
 static int fsr3_on;
+static int dlss_on;
 static char fsr3_dir_buf[MAX_PATH];
+static char dlss_dir_buf[MAX_PATH];
 static int upscale_on, upscale_w, upscale_h, upscale_sharp = 25, fsr3_sharp = 60;
 static int fsr3_refine = 1;
 static int fsr3_bias_set;
@@ -154,13 +156,21 @@ void settings_load(void)
 		if (fsr3_bias < -4.0f || fsr3_bias > 2.0f)
 			fsr3_bias_set = 0;
 	}
+	// dlss=1: NVIDIA's DLSS Super Resolution instead of FSR 3, through the same frame path (src/fsr3.c) and the Direct3D 12 layer. dlss_dir: the folder with mw2coop_dlss.dll (the bridge to
+	// NVIDIA's SDK, src/dlss) and NVIDIA's nvngx_dlss.dll; neither is shipped with the mod's open source (NVIDIA's license), see src/dlss/README.md. dlss wins over fsr3 when both are set.
+	dlss_on = GetPrivateProfileIntA("display", "dlss", 0, path) != 0;
+	GetPrivateProfileStringA("display", "dlss_dir", "", dlss_dir_buf, sizeof(dlss_dir_buf), path);
+	if (dlss_on)
+		fsr3_on = 1;
 #ifndef _WIN64
 	// AMD's FidelityFX DLLs (the FSR 3 loader and upscaler) exist only for 64-bit Windows, and a 32-bit game (the official
 	// 32-bit build, iw4x) cannot load a 64-bit DLL: LoadLibrary failed with error 193 and the log blamed fsr3_dir. FSR 3 is
 	// off in these builds, and it does not switch the Direct3D 12 layer on; FSR 1 ([display] upscale=1) works in them.
+	// The same for DLSS: NVIDIA's bridge DLL is 64-bit only.
 	if (fsr3_on) {
-		log_printf("settings: [display] fsr3=1 ignored: FSR 3 works only in the 64-bit build (AMD's FidelityFX DLLs are 64-bit only); FSR 1 ([display] upscale=1) works in this build");
+		log_printf("settings: [display] fsr3=1 / dlss=1 ignored: FSR 3 and DLSS work only in the 64-bit build (AMD's and NVIDIA's DLLs are 64-bit only); FSR 1 ([display] upscale=1) works in this build");
 		fsr3_on = 0;
+		dlss_on = 0;
 	}
 #endif
 	if (fsr3_on)
@@ -310,6 +320,16 @@ int settings_fsr3_lodbias(float *bias)
 int settings_fsr3(void)
 {
 	return fsr3_on;
+}
+
+int settings_dlss(void)
+{
+	return dlss_on;
+}
+
+const char *settings_dlss_dir(void)
+{
+	return dlss_dir_buf;
 }
 
 const char *settings_fsr3_dir(void)

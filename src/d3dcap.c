@@ -288,6 +288,16 @@ static void *factory_original(void *object, int index, void *fallback)
 	return fallback;
 }
 
+// Which graphics card the plain Direct3D 9 renders on (a laptop with two: on the owner's one the Direct3D 12 layer, which picks the NVIDIA card itself, ran at 15-18 ms a frame and the
+// plain Direct3D 9 at 28-43 ms, 2026-11-08). The description Direct3D 9 gives for the adapter the game opened is logged once per device.
+static void log_adapter(IDirect3D9 *d3d, UINT adapter)
+{
+	D3DADAPTER_IDENTIFIER9 id;
+	memset(&id, 0, sizeof(id));
+	if (d3d && SUCCEEDED(IDirect3D9_GetAdapterIdentifier(d3d, adapter, 0, &id)))
+		log_printf("d3dcap: adapter %u is '%s' (vendor %04lx device %04lx, driver %s)", adapter, id.Description, (unsigned long)id.VendorId, (unsigned long)id.DeviceId, id.Driver);
+}
+
 static HRESULT STDMETHODCALLTYPE create_device_hook_outer(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags, D3DPRESENT_PARAMETERS *pp,
 						     IDirect3DDevice9 **out)
 {
@@ -368,6 +378,7 @@ static HRESULT STDMETHODCALLTYPE create_device_hook_outer(IDirect3D9 *d3d, UINT 
 		InterlockedExchangePointer((PVOID volatile *)&device, *out);
 		log_printf("d3dcap: CreateDevice(adapter %u, type %d, window %p, flags %lx) -> device %p, vtable %p%s", adapter, (int)type, (void *)window,
 			   (unsigned long)flags, (void *)*out, *(void **)*out, ex ? " (Direct3D 9Ex)" : "");
+		log_adapter(d3d, adapter);
 		if (ex)
 			hook_resource_creation(*out);
 	} else {
@@ -422,6 +433,7 @@ static HRESULT STDMETHODCALLTYPE create_device_ex_hook(IDirect3D9Ex *d3d, UINT a
 			hook_resource_creation((IDirect3DDevice9 *)*out);
 		log_printf("d3dcap: CreateDeviceEx(adapter %u, type %d, window %p, flags %lx) -> device %p, vtable %p",
 			   adapter, (int)type, (void *)window, (unsigned long)flags, (void *)*out, *(void **)*out);
+		log_adapter((IDirect3D9 *)d3d, adapter);
 	} else {
 		log_printf("d3dcap: CreateDeviceEx failed, hr %lx", (unsigned long)hr);
 	}

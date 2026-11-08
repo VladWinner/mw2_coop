@@ -161,6 +161,88 @@ static int build_depth_pass(void);
 static int build_compose_pass(void);
 static void next_jitter(void);
 
+// ---------------------------------------------------------------------------------------------------- the DLSS backend ([display] dlss=1)
+// NVIDIA's DLSS Super Resolution, called through mw2coop_dlss.dll (src/dlss: our bridge, built apart from NVIDIA's SDK, whose license does not allow it into this open source repository).
+// It takes the place of FSR's dispatch with the same inputs (the color at render size, the game's depth mapped to 0..1, the motion vectors in render pixels without jitter, the jitter)
+// and the same output; everything before and after it (the camera, the jitter in the projection, the depth and vector passes, the history resets) is shared with FSR 3.
+typedef void (*dl_log_t)(const char *);
+static struct {
+	HMODULE dll;
+	int (*init)(void *, const wchar_t *, const wchar_t *, dl_log_t);
+	int (*create)(void *, unsigned, unsigned, unsigned, unsigned, unsigned);
+	int (*eval)(void *, void *, void *, void *, void *, float, float, int, float);
+	unsigned (*last)(void);
+	int feature; // the DLSS feature exists for S.iw x S.ih -> S.w x S.h
+} DL;
+
+static void dl_log(const char *m)
+{
+	log_printf("dlss: %s", m);
+}
+
+// the render size: what the game draws (the top left of the back buffer), or the output size when it asked for that itself (anti-aliasing only)
+static void pick_render_size(UINT w, UINT h)
+{
+	int rw = 0, rh = 0;
+	if (!upscale_internal_size(&rw, &rh) || rw <= 0 || rh <= 0 || (UINT)rw > w || (UINT)rh > h) {
+		rw = (int)w;
+		rh = (int)h;
+	}
+	S.iw = (UINT)rw;
+	S.ih = (UINT)rh;
+}
+
+static int dlss_setup(void)
+{
+	const char *dir = settings_dlss_dir();
+	char path[MAX_PATH];
+	snprintf(path, sizeof(path), "%s\\mw2coop_dlss.dll", dir);
+	SetDllDirectoryA(dir);
+	DL.dll = LoadLibraryA(path);
+	SetDllDirectoryA(NULL);
+	if (!DL.dll) {
+		log_printf("dlss: %s could not be loaded (error %lu): set [display] dlss_dir to the folder with mw2coop_dlss.dll and NVIDIA's nvngx_dlss.dll (src/dlss/README.md)", path, GetLastError());
+		return 0;
+	}
+	DL.init = (int (*)(void *, const wchar_t *, const wchar_t *, dl_log_t))(void *)GetProcAddress(DL.dll, "dlss_bridge_init");
+	DL.create = (int (*)(void *, unsigned, unsigned, unsigned, unsigned, unsigned))(void *)GetProcAddress(DL.dll, "dlss_bridge_create");
+	DL.eval = (int (*)(void *, void *, void *, void *, void *, float, float, int, float))(void *)GetProcAddress(DL.dll, "dlss_bridge_evaluate");
+	DL.last = (unsigned (*)(void))(void *)GetProcAddress(DL.dll, "dlss_bridge_last_result");
+	if (!DL.init || !DL.create || !DL.eval) {
+		log_printf("dlss: %s lacks the bridge functions", path);
+		return 0;
+	}
+	wchar_t wdir[MAX_PATH] = L"", wdata[MAX_PATH] = L"";
+	MultiByteToWideChar(CP_ACP, 0, dir, -1, wdir, MAX_PATH);
+	GetTempPathW(MAX_PATH, wdata);
+	if (!DL.init(S.dev, wdir, wdata, dl_log)) {
+		log_printf("dlss: NVIDIA's NGX could not be started or DLSS is not available on this GPU or driver (a GeForce RTX card and a current driver are needed); see the lines above");
+		return 0;
+	}
+	log_printf("dlss: NGX is up (%s)", path);
+	return 1;
+}
+
+// one DLSS evaluation on the open command list (the feature is created at the first one); 1 = ok
+static int dlss_dispatch(ID3D12Resource *motion, float jx, float jy, int reset, float dt_ms)
+{
+	static int bad;
+	if (!DL.feature) {
+		if (!DL.create(S.list, S.iw, S.ih, S.w, S.h, 0)) {
+			if (bad++ < 5)
+				log_printf("dlss: the feature could not be created (NGX result 0x%08x)", DL.last ? DL.last() : 0u);
+			return 0;
+		}
+		DL.feature = 1;
+	}
+	if (!DL.eval(S.list, S.color, S.depth, motion, S.output, jx, jy, reset, dt_ms)) {
+		if (bad++ < 5)
+			log_printf("dlss: evaluation failed (NGX result 0x%08x)", DL.last ? DL.last() : 0u);
+		return 0;
+	}
+	return 1;
+}
+
 // the DLL, the context and the objects that stay; w x h: the size of the back buffer
 static int setup(UINT w, UINT h)
 {
@@ -174,6 +256,12 @@ static int setup(UINT w, UINT h)
 	if (!S.dev || !S.queue) {
 		log_printf("fsr3: no Direct3D 12 device or queue (Direct3D 9 is not running on Direct3D 12): nothing to do");
 		return 0;
+	}
+	if (settings_dlss()) { // NVIDIA's DLSS instead of AMD's FSR 3: no AMD DLL, no FSR context; the rest of the set-up (command list, textures, passes) is shared
+		pick_render_size(w, h);
+		if (!dlss_setup())
+			return 0;
+		goto device_objects;
 	}
 	char path[MAX_PATH];
 	const char *dir = settings_fsr3_dir();
@@ -208,13 +296,7 @@ static int setup(UINT w, UINT h)
 		up.flags |= FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
 	if (getenv("FSR3_DEBUGVIEW")) // QA: FSR 3 draws its own debug views into the output (proves that the output is what is shown)
 		up.flags |= FFX_UPSCALE_ENABLE_DEBUG_VISUALIZATION | FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
-	int rw = 0, rh = 0;
-	if (!upscale_internal_size(&rw, &rh) || rw <= 0 || rh <= 0 || (UINT)rw > w || (UINT)rh > h) {
-		rw = (int)w;
-		rh = (int)h;
-	}
-	S.iw = (UINT)rw;
-	S.ih = (UINT)rh;
+	pick_render_size(w, h);
 	up.maxRenderSize.width = S.iw;
 	up.maxRenderSize.height = S.ih;
 	up.maxUpscaleSize.width = w;
@@ -224,6 +306,7 @@ static int setup(UINT w, UINT h)
 	log_printf("fsr3: ffxCreateContext (%ux%u to %ux%u) -> %u (0 = OK)", S.iw, S.ih, w, h, (unsigned)rc);
 	if (rc != FFX_API_RETURN_OK)
 		return 0;
+device_objects:
 	if (FAILED(ID3D12Device_CreateFence(S.dev, 0, D3D12_FENCE_FLAG_NONE, &iid_fence, (void **)&S.fence)))
 		return 0;
 	S.fence_event = CreateEventA(NULL, FALSE, FALSE, NULL);
@@ -249,7 +332,10 @@ static int setup(UINT w, UINT h)
 	build_depth_pass();
 	QueryPerformanceFrequency(&S.freq);
 	S.ok = 1;
-	if (S.query) {
+	if (settings_dlss()) { // DLSS asks for 8 * (output / render)^2 jitter phases (AMD's formula for FSR too)
+		const float sc = (float)w / (float)S.iw;
+		S.phase_count = (int)ceilf(8.0f * sc * sc);
+	} else if (S.query) {
 		int32_t count = 0;
 		struct ffxQueryDescUpscaleGetJitterPhaseCount qp;
 		memset(&qp, 0, sizeof(qp));
@@ -1076,12 +1162,29 @@ static void hook_device(IDirect3DDevice9 *dev9)
 	log_printf("fsr3: the device's SetViewport and SetVertexShaderConstantF are hooked (camera matrix and jitter)");
 }
 
-// the jitter of the next frame: the next point of FSR's sequence for this render/output size
+static float halton(unsigned index, unsigned base)
+{
+	float f = 1.0f, r = 0.0f;
+	while (index) {
+		f /= (float)base;
+		r += f * (float)(index % base);
+		index /= base;
+	}
+	return r;
+}
+
+// the jitter of the next frame: the next point of FSR's sequence for this render/output size (DLSS: the Halton sequence)
 static void next_jitter(void)
 {
 	g_jit_x = g_jit_y = 0.0f;
-	if (!S.query || S.phase_count <= 0 || !g_jit_on)
+	if ((!S.query && !settings_dlss()) || S.phase_count <= 0 || !g_jit_on)
 		return;
+	if (settings_dlss()) { // DLSS has no query for it: the Halton (2, 3) sequence, offsets in -0.5..0.5 render pixels, as FSR's
+		const unsigned idx = S.frame % (unsigned)S.phase_count + 1;
+		g_jit_x = halton(idx, 2) - 0.5f;
+		g_jit_y = halton(idx, 3) - 0.5f;
+		return;
+	}
 	float x = 0.0f, y = 0.0f;
 	struct ffxQueryDescUpscaleGetJitterOffset q;
 	memset(&q, 0, sizeof(q));
@@ -1881,14 +1984,18 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		d.flags |= FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW;
 	if (ts_on)
 		ts_mark(slot, 2);
-	ffxReturnCode_t rc = S.dispatch(&S.ctx, &d.header);
+	ffxReturnCode_t rc;
+	if (settings_dlss())
+		rc = dlss_dispatch(mv_tex, jit_x, jit_y, d.reset ? 1 : 0, dt_ms) ? FFX_API_RETURN_OK : FFX_API_RETURN_ERROR;
+	else
+		rc = S.dispatch(&S.ctx, &d.header);
 	if (ts_on)
 		ts_mark(slot, 3);
 	static int dlog;
 	if (dlog++ < 3 || rc != FFX_API_RETURN_OK) {
 		static int bad;
 		if (rc == FFX_API_RETURN_OK || bad++ < 5)
-			log_printf("fsr3: ffxDispatch -> %u (0 = OK), frame time %.1f ms", (unsigned)rc, dt_ms);
+			log_printf("fsr3: %s -> %u (0 = OK), frame time %.1f ms", settings_dlss() ? "DLSS evaluate" : "ffxDispatch", (unsigned)rc, dt_ms);
 	}
 
 	if (rc == FFX_API_RETURN_OK && metric_on()) {
@@ -2036,6 +2143,18 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 		log_printf("fsr3: frame %d drew the world pass but no world view-projection matrix was caught: the next frame is traced", g_frame);
 	}
 	g_saw_world_vp = 0;
+	// The last pass is normally found by the game setting the back buffer as the render target after its post-process copy (hook_srt9). In the sandstorm of Team Player it never does: the back
+	// buffer stays the target and the game's composite pass draws its own render-size picture into the corner (owner's screenshots 2026-11-08: the 1280x720 picture in a corner; FSR run at
+	// the first draw after the copy left the corner showing the un-upscaled picture over the upscaled one). So the frame is upscaled at the Present: the whole back buffer corner, the
+	// game's composite and its HUD with it (the HUD is then as soft as the picture). FSR3_NOLATE=1: not.
+	if (S.ok && g_stretched && !g_ran && g_vp_new_ok && !getenv("FSR3_NOLATE")) {
+		static int told;
+		g_ran = 1;
+		if (!fsr3_frame(dev9))
+			g_ran = 0;
+		else if (told++ < 5)
+			log_printf("fsr3: frame %d: FSR ran at the Present (the game set no render target after its post-process copy)", g_frame);
+	}
 	{ // a frame with a world matrix in which FSR did not run: the last pass was not found (no post-process copy of the back buffer, or its source was not the back buffer)
 		static int nolast;
 		if (S.ok && g_vp_new_ok && !g_ran && nolast++ < 5)
