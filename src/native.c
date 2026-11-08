@@ -4504,6 +4504,86 @@ static void server_cmds_hook(uintptr_t lc, int *msg)
 		ctx_swap_hand(was);
 }
 
+#ifdef _WIN64
+// The naked vision set for player 2 (Vlad, nightly 2026-11-08: Oil Rig, player 2's picture stayed underwater-blue while player 1's changed). Server commands reach context 0 only
+// (server_cmds_hook drops client 1's), and VisionSetNaked, a script function for everybody, is sent as the command "visionset_naked <name> <time>" that the cgame handles at rva 0xb4890
+// (the call of the apply function 0xbfd90 at 0xb592e). The script builtin is wrapped to note the names of the calls made for everybody; when the cgame of context 0 then applies such
+// a name, the same call runs again in context 1 (its own cgame block: its own time and vision state). VisionSetNakedForPlayer (the Predator's black flashes of the pilot) is no call
+// of the wrapped builtin, so it stays with the player it was made for. [native] visionfwd=0 turns it off.
+#define RVA_VISION_NAKED_CALL 0xb592e
+#define RVA_FN_VISIONSETNAKED_ENTRY 0x3c2c28
+#define RVA_CG_VISION_NAKED_NAME 0x43c0ac
+static uint64_t (*vision_apply_original)(uintptr_t, int, int, const char *, int);
+static void (*vision_global_original)(void);
+static struct {
+	char name[64];
+	int used;
+} vision_global[16];
+static unsigned vision_global_w;
+static int vision_forwarding;
+
+static void vision_global_wrap(void)
+{
+	const char *n = ((const char *(*)(unsigned))(base + RVA_SCR_GET_STRING))(0);
+	if (n && n[0]) {
+		unsigned i = vision_global_w++ & 15;
+		snprintf(vision_global[i].name, sizeof(vision_global[i].name), "%s", n);
+		vision_global[i].used = 1;
+	}
+	vision_global_original();
+}
+
+static uint64_t vision_apply_hook(uintptr_t lc, int type, int state, const char *name, int time)
+{
+	uint64_t r = vision_apply_original(lc, type, state, name, time);
+	if (ctx_on && ctx1_ready && ctx_current == 0 && !vision_forwarding && name && name[0]) {
+		for (int i = 0; i < 16; i++) {
+			if (!vision_global[i].used || strcmp(vision_global[i].name, name) != 0)
+				continue;
+			vision_global[i].used = 0;
+			char tmp[64];
+			snprintf(tmp, sizeof(tmp), "%s", name);
+			vision_forwarding = 1;
+			ctx_swap_hand(1);
+			char *live = (char *)(base + RVA_CG_VISION_NAKED_NAME);
+			snprintf(live, 64, "%s", tmp);
+			vision_apply_original(lc, type, state, live, time);
+			ctx_swap_hand(0);
+			vision_forwarding = 0;
+			static int told;
+			if (told++ < 30)
+				log_printf("native: vision: '%s' (%d s) for everybody also applied to player 2's screen", tmp, time);
+			break;
+		}
+	}
+	return r;
+}
+
+static void vision_forward_install(void)
+{
+	if (!cfg("visionfwd", 1))
+		return;
+	uint8_t *entry = base + RVA_FN_VISIONSETNAKED_ENTRY;
+	if (strcmp(*(const char **)entry, "visionsetnaked") != 0) {
+		log_printf("native: no visionsetnaked entry at rva 0x%x, player 2's vision does not follow", RVA_FN_VISIONSETNAKED_ENTRY);
+		return;
+	}
+	if (!jhook_call(base + RVA_VISION_NAKED_CALL, vision_apply_hook, (void **)&vision_apply_original)) {
+		log_printf("native: no call at the vision set apply, player 2's vision does not follow");
+		return;
+	}
+	void (**func)(void) = (void (**)(void))(entry + sizeof(char *));
+	vision_global_original = *func;
+	DWORD old;
+	VirtualProtect(func, sizeof(*func), PAGE_READWRITE, &old);
+	*func = vision_global_wrap;
+	VirtualProtect(func, sizeof(*func), old, &old);
+	log_printf("native: player 2's screen follows the vision sets the scripts set for everybody");
+}
+#else
+static void vision_forward_install(void) {}
+#endif
+
 // The server's snapshot message (entities, as shared lists) is parsed into the client's snapshot ring: once for each context, the message read again from its start.
 static void snapshot_msg_hook(void *msg, int time)
 {
@@ -7922,6 +8002,7 @@ static void contexts_install(void)
 	swap_entities = cfg("swapent", 0); // the old workaround for context 1's "mine" (superseded by ownfix, local_slot_hook)
 	skip_entity = cfg("skipent", 1); // context 1's own entity (player 2) is never drawn by the first pass either
 	log_entities = cfg("entdraw", 0);
+	vision_forward_install();
 	{
 		if (cfg("sndcount", 0)) {
 			static const uint8_t snd_play_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x18, 0x48, 0x89, 0x70, 0x20};

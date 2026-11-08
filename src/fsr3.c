@@ -2036,6 +2036,18 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 		log_printf("fsr3: frame %d drew the world pass but no world view-projection matrix was caught: the next frame is traced", g_frame);
 	}
 	g_saw_world_vp = 0;
+	// The last pass is normally found by the game setting the back buffer as the render target after its post-process copy (hook_srt9). In the sandstorm of Team Player it never does: the back
+	// buffer stays the target and the game's composite pass draws its own render-size picture into the corner (owner's screenshots 2026-11-08: the 1280x720 picture in a corner; FSR run at
+	// the first draw after the copy left the corner showing the un-upscaled picture over the upscaled one). So the frame is upscaled at the Present: the whole back buffer corner, the
+	// game's composite and its HUD with it (the HUD is then as soft as the picture). FSR3_NOLATE=1: not.
+	if (S.ok && g_stretched && !g_ran && g_vp_new_ok && !getenv("FSR3_NOLATE")) {
+		static int told;
+		g_ran = 1;
+		if (!fsr3_frame(dev9))
+			g_ran = 0;
+		else if (told++ < 5)
+			log_printf("fsr3: frame %d: FSR ran at the Present (the game set no render target after its post-process copy)", g_frame);
+	}
 	{ // a frame with a world matrix in which FSR did not run: the last pass was not found (no post-process copy of the back buffer, or its source was not the back buffer)
 		static int nolast;
 		if (S.ok && g_vp_new_ok && !g_ran && nolast++ < 5)
