@@ -1,6 +1,6 @@
 # Upscalers (DLSS, FSR 3) for MW2 Enhanced: what is known, what is missing
 
-Status 2026-11-07. Everything under "Verified" was run; everything under "Missing" is not built.
+Status 2026-11-08. Everything under "Verified" was run; everything under "Missing" is not built.
 
 ## The constraint
 
@@ -46,15 +46,20 @@ the game's next frames were black. Not done: split screen with it on, mouse scal
   in render pixels); a sub-pixel jitter (FSR's phase count and offsets, 18 phases at 1.5x) added to every matrix of the world pass; a texture LOD bias of log2(render/output) - 1 on the world pass's samplers;
   FSR's sharpening (`fsr3_sharpness`). Frames without a 3D view pass through untouched. The game's StretchRect of the whole enlarged back buffer into its 1280x720 target is redirected to copy the corner only.
   QA: FSR3_SHAKE sways every 3D matrix sideways with a depth-dependent shift (a static scene with known camera motion): correct vectors gave a clean sharp picture, none serrated edges, negated ones a blurry picture.
-  Not done: a real moving camera in a controllable level, vectors for moving characters and the weapon (camera motion only); the 2x multisampled back buffer is off in window mode;
+  Moving characters and the weapon (2026-11-08): the camera vectors alone smeared them (seen in the Trainer's opening scene), so two compute passes refine the vectors from the picture itself: per 8x8 block whose previous picture,
+  moved by the camera vector and the jitter difference, does not match the current one, a coarse-to-fine search of the previous picture (+-16 px); then per pixel the best of the camera vector and the vectors of the 3x3 neighbouring blocks, to a quarter pixel.
+  The depth given to FSR is mapped into the world viewport's range (the weapon is nearer and gets no camera motion) and the camera (vertical fov, near, far) is read from the world matrix (MW2: infinite far plane, near 4.0).
+  Measured on the RTX 3060 (Trainer, 1280x720 to 1920x1080, `FSR3_METRIC`/`FSR3_SWEEP`/`FSR3_DUMPAT` in src/fsr3.c): standing 8.1 ms per frame with and without the passes, turning and walking (SendInput driven) 8.5 against 8.3 ms;
+  captures: the soldiers are clean with the passes and smeared without them; the ground texture and the lamp posts match a native 1920x1080 render closely. A first version flagged still textured blocks (integer-rounded test) and cost 5.5 ms more.
+  Not done: the weapon in the hands (the Trainer starts without one), a long fight, other levels; the 2x multisampled back buffer is off in window mode;
   mouse scaling in menus, native split screen with it on, and the FSR 1 path (same StretchRect and 3D-frame issues) are unchecked. DLSS: probed only (dlssprobe), not wired to frames.
 
 ## Missing
 
 Readable depth, jitter, camera motion vectors, the library, the wiring, the render scale, HUD-free color (the upscale runs before the HUD) and sharpening are done for FSR 3 (see "Done" above). What is left:
 
-1. **Own motion vectors for moving characters and the weapon** (camera motion only today: they ghost).
-2. **A real moving-camera test** in a controllable level (the QA sway is a stand-in).
+1. **Exact motion vectors for moving characters and the weapon** (today they come from comparing the pictures, per block and per pixel: good in the Trainer, unchecked in fast action; a per-draw velocity from the skinned meshes' bone constants would be exact).
+2. **A longer moving-camera test with a weapon in the hands** (tools/qa_drive.ps1 drives the Trainer's start with SendInput: mouse turns, W, clicks; but there is no weapon yet).
 3. **Multisampled back buffer in window mode** (the flip model cannot have it).
 4. **DLSS** (NGX: probed, not wired), native split screen with an upscaler, menu mouse scaling, and the FSR 1 path in levels.
 

@@ -33,7 +33,7 @@ int settings_d3d9on12(void);
 // settings.ini [display] fsr3 (default 0, experimental): FSR 3 on the game's frame (fsr3.c; switches d3d9on12 on); fsr3_dir: the folder with AMD's amd_fidelityfx_loader_dx12.dll.
 int settings_fsr3(void);
 const char *settings_fsr3_dir(void);
-// fsr3_sharpness (0-100, default 50): the sharpening FSR 3 applies to its output (0 = off).
+// fsr3_sharpness (0-100, default 60): the sharpening FSR 3 applies to its output (0 = off).
 int settings_fsr3_sharpness(void);
 // settings.ini [display] upscale (default 0): the game renders at the size of its own video settings and is upscaled to upscale_width x upscale_height (FSR 1, upscale.c);
 // upscale_sharpness: the sharpening in hundredths of a stop of reduction (default 25; 0 = the strongest).

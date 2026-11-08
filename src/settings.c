@@ -42,7 +42,7 @@ static int d3d9on12_on = 0;
 static int d3d9on12_adapter = -1;
 static int fsr3_on;
 static char fsr3_dir_buf[MAX_PATH];
-static int upscale_on, upscale_w, upscale_h, upscale_sharp = 25, fsr3_sharp = 50;
+static int upscale_on, upscale_w, upscale_h, upscale_sharp = 25, fsr3_sharp = 60;
 static int gp_fall_damage = -1, gp_jump_height, gp_gravity;
 static char discord_id[32];
 static char player_id[33];
@@ -137,9 +137,9 @@ void settings_load(void)
 	d3d9on12_adapter = (int)GetPrivateProfileIntA("display", "d3d9on12_adapter", -1, path);
 	fsr3_on = GetPrivateProfileIntA("display", "fsr3", 0, path) != 0;
 	GetPrivateProfileStringA("display", "fsr3_dir", "", fsr3_dir_buf, sizeof(fsr3_dir_buf), path);
-	fsr3_sharp = (int)GetPrivateProfileIntA("display", "fsr3_sharpness", 50, path);
+	fsr3_sharp = (int)GetPrivateProfileIntA("display", "fsr3_sharpness", 60, path);
 	if (fsr3_sharp < 0 || fsr3_sharp > 100)
-		fsr3_sharp = 50;
+		fsr3_sharp = 60;
 	if (fsr3_on)
 		d3d9on12_on = 1; // FSR 3 runs on the Direct3D 12 layer
 	upscale_on = GetPrivateProfileIntA("display", "upscale", 0, path) != 0;

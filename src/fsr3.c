@@ -59,6 +59,11 @@ static struct {
 	ID3D12RootSignature *rs_comp; // the compose pass: FSR output + the game's own frame (for its HUD) -> final
 	ID3D12PipelineState *pso_comp;
 	ID3D12Resource *orig, *final;
+	// motion refinement (moving characters, the weapon): the previous frame's input, the block vectors, the refined vectors
+	ID3D12Resource *motion2, *prev, *block;
+	ID3D12RootSignature *rs_rf;
+	ID3D12PipelineState *pso_rfa, *pso_rfb;
+	int prev_valid, m2_ok, block_ok, prev_ok;
 	ID3D12DescriptorHeap *heap;
 	UINT desc_inc;
 	ID3D12Resource *dcopy;
@@ -232,6 +237,9 @@ static int setup(UINT w, UINT h)
 	S.final = make_texture(w, h, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 	if (!S.color || !S.output || !S.depth || !S.motion || !S.orig || !S.final)
 		return 0;
+	S.motion2 = make_texture(S.iw, S.ih, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+	S.prev = make_texture(S.iw, S.ih, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_NONE);
+	S.block = make_texture((S.iw + 7) / 8, (S.ih + 7) / 8, DXGI_FORMAT_R32_UINT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 	S.w = w;
 	S.h = h;
 	build_depth_pass();
@@ -256,6 +264,7 @@ static int setup(UINT w, UINT h)
 
 // ---------------------------------------------------------------------------------------------------- the depth pass
 static const char depth_cs_ms[] =
+	"cbuffer C : register(b0) { float4 P; };\n"
 	"Texture2DMS<float> src : register(t0);\n"
 	"RWTexture2D<float> dst : register(u0);\n"
 	"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)\n"
@@ -263,9 +272,10 @@ static const char depth_cs_ms[] =
 	"  uint w, h, s;\n"
 	"  src.GetDimensions(w, h, s);\n"
 	"  if (id.x >= w || id.y >= h) return;\n"
-	"  dst[id.xy] = src.Load(int2(id.xy), 0);\n"
+	"  dst[id.xy] = saturate((src.Load(int2(id.xy), 0) - P.x) * P.y);\n"
 	"}\n";
 static const char depth_cs_1[] =
+	"cbuffer C : register(b0) { float4 P; };\n"
 	"Texture2D<float> src : register(t0);\n"
 	"RWTexture2D<float> dst : register(u0);\n"
 	"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)\n"
@@ -273,7 +283,7 @@ static const char depth_cs_1[] =
 	"  uint w, h;\n"
 	"  src.GetDimensions(w, h);\n"
 	"  if (id.x >= w || id.y >= h) return;\n"
-	"  dst[id.xy] = src.Load(int3(id.xy, 0));\n"
+	"  dst[id.xy] = saturate((src.Load(int3(id.xy, 0)) - P.x) * P.y);\n"
 	"}\n";
 
 // motion vectors of the camera: from the depth, the reprojection matrix T (current clip space -> previous clip space, row-vector convention) and the jitter of this frame. The result is in render
@@ -294,7 +304,7 @@ static const char mv_cs[] =
 	"  float4 v = float4(ndc, z, 1.0);\n"
 	"  float4 pc = v.x * T0 + v.y * T1 + v.z * T2 + v.w * T3;\n"
 	"  float2 r = float2(0.0, 0.0);\n"
-	"  if (pc.w > 1e-6) {\n"
+	"  if (pc.w > 1e-6 && z > 0.0) {\n"
 	"    float2 pn = pc.xy / pc.w;\n"
 	"    r = float2((pn.x - ndc.x) * 0.5 * w, -(pn.y - ndc.y) * 0.5 * h);\n"
 	"  }\n"
@@ -326,6 +336,198 @@ static ID3D12PipelineState *make_compute_pso(compile_t compile, const char *src,
 	return SUCCEEDED(hr) ? pso : NULL;
 }
 
+
+// Motion refinement. The camera vectors move every pixel as if it were part of the static world; a walking soldier or the weapon is not, and FSR then blends the picture with the wrong place of the
+// previous one (smear, blocks, "grain"). Pass A (one thread per 8x8 block): where the previous picture, moved by the camera vector, does not match the current one, search the previous picture for the
+// block (+-16 px, then one pixel finer) and keep the vector when it matches clearly better. Pass B (per pixel): of the camera vector and the vectors of the 3x3 neighbouring blocks, take the one
+// whose 3x3 window of the current picture is best explained by the previous one. Compared in luma, with the difference of the two frames' jitter taken into account.
+#define HLSL(...) #__VA_ARGS__
+static const char rf_common[] = HLSL(
+	cbuffer C : register(b0) { uint iw; uint ih; float jcx; float jcy; float jpx; float jpy; float thr; float pad; };
+	Texture2D<float4> cur : register(t0);
+	Texture2D<float4> prv : register(t1);
+	Texture2D<float2> cam : register(t2);
+	RWTexture2D<uint> blk : register(u0);
+	RWTexture2D<float2> outmv : register(u1);
+	float lum(float4 c) { return dot(c.rgb, float3(0.299, 0.587, 0.114)); }
+	float curL(int2 p) { p = clamp(p, int2(0, 0), int2(iw - 1, ih - 1)); return lum(cur.Load(int3(p, 0))); }
+	float prvL(int2 p) { p = clamp(p, int2(0, 0), int2(iw - 1, ih - 1)); return lum(prv.Load(int3(p, 0))); }
+	float prvB(float2 pos)
+	{
+		float2 f = pos - 0.5;
+		int2 i = int2(floor(f));
+		float2 w = f - float2(i);
+		float a = lerp(prvL(i), prvL(i + int2(1, 0)), w.x);
+		float b = lerp(prvL(i + int2(0, 1)), prvL(i + int2(1, 1)), w.x);
+		return lerp(a, b, w.y);
+	}
+);
+static const char rf_a_main[] = HLSL(
+	float sad(int2 org, int2 off)
+	{
+		float s = 0.0;
+		for (int y = 0; y < 8; y++)
+			for (int x = 0; x < 8; x++) {
+				int2 p = org + int2(x, y);
+				s += abs(curL(p) - prvL(p + off));
+			}
+		return s / 64.0;
+	}
+	float sadb(int2 org, float2 mv)
+	{
+		float s = 0.0;
+		for (int y = 0; y < 8; y++)
+			for (int x = 0; x < 8; x++) {
+				int2 p = org + int2(x, y);
+				s += abs(curL(p) - prvB(float2(p) + 0.5 + mv));
+			}
+		return s / 64.0;
+	}
+	float sad4(int2 org, int2 off)
+	{
+		float s = 0.0;
+		for (int y = 0; y < 8; y += 2)
+			for (int x = 0; x < 8; x += 2) {
+				int2 p = org + int2(x, y);
+				s += abs(curL(p) - prvL(p + off));
+			}
+		return s / 16.0;
+	}
+	[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)
+	{
+		uint bw = (iw + 7) / 8;
+		uint bh = (ih + 7) / 8;
+		if (id.x >= bw || id.y >= bh) return;
+		int2 org = int2(id.xy) * 8;
+		float2 jd = float2(jpx - jcx, jpy - jcy);
+		float2 mvc = cam.Load(int3(min(org + 4, int2(iw - 1, ih - 1)), 0));
+		int2 base = int2(round(mvc + jd));
+		float sad0 = sadb(org, mvc + jd);
+		uint res = 0xFFFFFFFF;
+		if (sad0 > thr) {
+			float best = sad4(org, base);
+			int2 bestr = int2(0, 0);
+			for (int dy = -16; dy <= 16; dy += 4)
+				for (int dx = -16; dx <= 16; dx += 4) {
+					float c = sad4(org, base + int2(dx, dy)) + 0.0004 * (abs(dx) + abs(dy));
+					if (c < best) { best = c; bestr = int2(dx, dy); }
+				}
+			best = sad(org, base + bestr);
+			for (int st = 2; st >= 1; st--) {
+				int2 c0 = bestr;
+				for (int ey = -1; ey <= 1; ey++)
+					for (int ex = -1; ex <= 1; ex++) {
+						int2 r = c0 + int2(ex, ey) * st;
+						float c = sad(org, base + r);
+						if (c < best) { best = c; bestr = r; }
+					}
+			}
+			if (best < 0.6 * sad0) {
+				float2 cand = float2(base + bestr) - jd;
+				res = f32tof16(cand.x) | (f32tof16(cand.y) << 16);
+			}
+		}
+		blk[id.xy] = res;
+	}
+);
+static const char rf_b_main[] = HLSL(
+	float err(int2 p, float2 mv, float2 jd)
+	{
+		float e = 0.0;
+		for (int y = -1; y <= 1; y++)
+			for (int x = -1; x <= 1; x++) {
+				int2 q = p + int2(x, y);
+				e += abs(curL(q) - prvB(float2(q) + 0.5 + mv + jd));
+			}
+		return e / 9.0;
+	}
+	[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)
+	{
+		if (id.x >= iw || id.y >= ih) return;
+		float2 jd = float2(jpx - jcx, jpy - jcy);
+		float2 mvc = cam.Load(int3(id.xy, 0));
+		float2 best = mvc;
+		uint bw = (iw + 7) / 8;
+		uint bh = (ih + 7) / 8;
+		int2 b = int2(id.xy / 8);
+		bool any = false;
+		for (int qy = -1; qy <= 1; qy++)
+			for (int qx = -1; qx <= 1; qx++)
+				if (blk[clamp(b + int2(qx, qy), int2(0, 0), int2(bw - 1, bh - 1))] != 0xFFFFFFFF) any = true;
+		if (!any) { outmv[id.xy] = mvc; return; }
+		float be = err(int2(id.xy), mvc, jd);
+		bool dyn = false;
+		if (be > thr * 0.5) {
+			for (int oy = -1; oy <= 1; oy++)
+				for (int ox = -1; ox <= 1; ox++) {
+					int2 bb = clamp(b + int2(ox, oy), int2(0, 0), int2(bw - 1, bh - 1));
+					uint v = blk[bb];
+					if (v != 0xFFFFFFFF) {
+						float2 cand = float2(f16tof32(v & 0xFFFF), f16tof32(v >> 16));
+						float e = err(int2(id.xy), cand, jd);
+						if (e < be * 0.75 - 0.002) { be = e; best = cand; dyn = true; }
+					}
+				}
+			if (dyn && pad > 0.5) {
+				float step = 0.5;
+				for (int it = 0; it < 2; it++) {
+					float2 c = best;
+					for (int sy = -1; sy <= 1; sy++)
+						for (int sx = -1; sx <= 1; sx++) {
+							if (sx == 0 && sy == 0) continue;
+							float2 cand = c + float2(sx, sy) * step;
+							float e = err(int2(id.xy), cand, jd);
+							if (e < be) { be = e; best = cand; }
+						}
+					step *= 0.5;
+				}
+			}
+		}
+		outmv[id.xy] = best;
+	}
+);
+
+static int build_refine_pass(compile_t compile, serialize_rs_t serialize)
+{
+	static const GUID iid_rs2 = {0xc54a6b66, 0x72df, 0x4ee8, {0x8b, 0xe5, 0xa9, 0x46, 0xa1, 0x42, 0x92, 0x14}};
+	D3D12_DESCRIPTOR_RANGE ranges[2];
+	memset(ranges, 0, sizeof(ranges));
+	ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	ranges[0].NumDescriptors = 3;
+	ranges[0].OffsetInDescriptorsFromTableStart = 0;
+	ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+	ranges[1].NumDescriptors = 2;
+	ranges[1].OffsetInDescriptorsFromTableStart = 3;
+	D3D12_ROOT_PARAMETER rp[2];
+	memset(rp, 0, sizeof(rp));
+	rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	rp[0].Constants.ShaderRegister = 0;
+	rp[0].Constants.Num32BitValues = 8;
+	rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	rp[1].DescriptorTable.NumDescriptorRanges = 2;
+	rp[1].DescriptorTable.pDescriptorRanges = ranges;
+	rp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	D3D12_ROOT_SIGNATURE_DESC rd;
+	memset(&rd, 0, sizeof(rd));
+	rd.NumParameters = 2;
+	rd.pParameters = rp;
+	void *blob = NULL, *err = NULL;
+	if (FAILED(serialize(&rd, 1, &blob, &err)) || !blob)
+		return 0;
+	HRESULT hr = ID3D12Device_CreateRootSignature(S.dev, 0, ((void *(*)(void *))(*(void ***)blob)[3])(blob), ((SIZE_T(*)(void *))(*(void ***)blob)[4])(blob), &iid_rs2, (void **)&S.rs_rf);
+	((ULONG(*)(void *))(*(void ***)blob)[2])(blob);
+	if (FAILED(hr))
+		return 0;
+	static char src[16384];
+	snprintf(src, sizeof(src), "%s\n%s", rf_common, rf_a_main);
+	S.pso_rfa = make_compute_pso(compile, src, S.rs_rf);
+	snprintf(src, sizeof(src), "%s\n%s", rf_common, rf_b_main);
+	S.pso_rfb = make_compute_pso(compile, src, S.rs_rf);
+	log_printf("fsr3: the motion refinement passes are %s", S.pso_rfa && S.pso_rfb ? "ready" : "FAILED");
+	return S.pso_rfa && S.pso_rfb;
+}
+
 static int build_depth_pass(void)
 {
 	static const GUID iid_rs = {0xc54a6b66, 0x72df, 0x4ee8, {0x8b, 0xe5, 0xa9, 0x46, 0xa1, 0x42, 0x92, 0x14}};
@@ -351,10 +553,17 @@ static int build_depth_pass(void)
 	param.DescriptorTable.NumDescriptorRanges = 2;
 	param.DescriptorTable.pDescriptorRanges = ranges;
 	param.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	D3D12_ROOT_PARAMETER dpar[2];
+	memset(dpar, 0, sizeof(dpar));
+	dpar[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	dpar[0].Constants.ShaderRegister = 0;
+	dpar[0].Constants.Num32BitValues = 4; // the depth range of the world viewport: min, 1 / (max - min)
+	dpar[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+	dpar[1] = param;
 	D3D12_ROOT_SIGNATURE_DESC rd;
 	memset(&rd, 0, sizeof(rd));
-	rd.NumParameters = 1;
-	rd.pParameters = &param;
+	rd.NumParameters = 2;
+	rd.pParameters = dpar;
 	void *blob = NULL, *err = NULL;
 	HRESULT hr = serialize(&rd, 1 /* D3D_ROOT_SIGNATURE_VERSION_1_0 */, &blob, &err);
 	if (FAILED(hr) || !blob) {
@@ -368,7 +577,7 @@ static int build_depth_pass(void)
 	D3D12_DESCRIPTOR_HEAP_DESC hd;
 	memset(&hd, 0, sizeof(hd));
 	hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-	hd.NumDescriptors = 8; // 0 depth SRV, 1 depth UAV (the depth pass), 2 depth SRV, 3 motion UAV (motion vectors), 4 output SRV, 5 own frame SRV, 6 final UAV (compose)
+	hd.NumDescriptors = 16; // 0 depth SRV, 1 depth UAV (the depth pass), 2 depth SRV, 3 motion UAV (motion vectors), 4 output SRV, 5 own frame SRV, 6 final UAV (compose)
 	hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 	if (FAILED(ID3D12Device_CreateDescriptorHeap(S.dev, &hd, &iid_heap, (void **)&S.heap)))
 		return 0;
@@ -399,6 +608,7 @@ static int build_depth_pass(void)
 	}
 	log_printf("fsr3: the motion vector pass is %s", S.pso_mv ? "ready" : "FAILED");
 	build_compose_pass();
+	build_refine_pass(compile, serialize);
 	return S.pso_ms && S.pso_1;
 }
 
@@ -515,6 +725,16 @@ static float g_shake_amp;     // QA: FSR3_SHAKE=<percent of the screen width> sw
 static float g_shake_x, g_shake_y;
 static int g_jit_flip;        // QA: FSR3_JITTER_FLIP bit 1 = mirror x, bit 2 = mirror y in the matrix (to test the sign)
 static int g_mv_on = 1;       // QA: FSR3_NOMV=1 leaves the motion vectors at zero
+// QA sweep (FSR3_SWEEP=1, with FSR3_METRIC=1): every 120 frames the next variant of the settings below is used and, after 60 frames to settle, measured for 60 (metric_finish logs one line)
+static int g_sweep;
+static int g_ran_log;
+static int g_subpx = 1; // the refined vectors are searched to a quarter pixel (QA: FSR3_NOSUBPX=1, or a sweep variant)
+static int g_refine = 1; // motion refinement on (QA: FSR3_NOREFINE=1, or a sweep variant)
+static float g_pjit_x, g_pjit_y; // the jitter of the previous upscaled frame
+static int g_sw_sharp = -1;   // -1: the setting's own value
+static float g_sw_bias = 1000.0f; // 1000: the computed bias
+static const char *g_sw_name = "";
+static int g_sw_idx = -1;
 static float g_vp_new[16];    // the world view-projection matrix uploaded in this frame (without jitter), as the game sent it: c0..c3
 
 static float g_vp_prev[16];   // the one of the previous frame
@@ -603,7 +823,7 @@ static HRESULT STDMETHODCALLTYPE hook_dipup9(IDirect3DDevice9 *d, D3DPRIMITIVETY
 
 static HRESULT STDMETHODCALLTYPE hook_srt9(IDirect3DDevice9 *dev, DWORD idx, IDirect3DSurface9 *s)
 {
-	if (S.ok && g_stretched && !g_ran && idx == 0 && s && g_vp_new_ok) { // the game's last pass (the bloom and the HUD) is about to draw into the back buffer: upscale the 3D picture first, so both land on the upscaled picture
+	if (S.ok && (g_stretched || S.iw == S.w) && !g_ran && idx == 0 && s && g_vp_new_ok) { // the game's last pass (the bloom and the HUD) is about to draw into the back buffer: upscale the 3D picture first, so both land on the upscaled picture
 		D3DSURFACE_DESC d;
 		if (SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) && d.Width == S.w && d.Height == S.h) {
 			g_ran = 1;
@@ -636,7 +856,7 @@ static HRESULT STDMETHODCALLTYPE hook_viewport9(IDirect3DDevice9 *dev, const D3D
 			const int world = vp->Width == S.iw && vp->Height == S.ih;
 			if (world != g_bias_on) {
 				g_bias_on = world;
-				float bias = world ? (getenv("FSR3_LODBIAS") ? (float)atof(getenv("FSR3_LODBIAS")) : log2f((float)S.iw / (float)S.w) - 1.0f) : 0.0f;
+				float bias = world ? (g_sw_bias < 999.0f ? g_sw_bias : getenv("FSR3_LODBIAS") ? (float)atof(getenv("FSR3_LODBIAS")) : log2f((float)S.iw / (float)S.w) - 1.0f) : 0.0f;
 				DWORD bits;
 				memcpy(&bits, &bias, 4);
 				for (DWORD i = 0; i < 16; i++)
@@ -699,6 +919,9 @@ static void hook_device(IDirect3DDevice9 *dev9)
 	done = 1;
 	g_jit_on = getenv("FSR3_NOJITTER") ? 0 : 1;
 	g_mv_on = getenv("FSR3_NOMV") ? 0 : 1;
+	g_sweep = getenv("FSR3_SWEEP") != NULL;
+	g_refine = getenv("FSR3_NOREFINE") ? 0 : 1;
+	g_subpx = getenv("FSR3_NOSUBPX") ? 0 : 1;
 	g_mv_flip = getenv("FSR3_MV_FLIP") ? 1 : 0;
 	g_shake_amp = getenv("FSR3_SHAKE") ? (float)atof(getenv("FSR3_SHAKE")) : 0.0f;
 	g_jit_flip = getenv("FSR3_JITTER_FLIP") ? atoi(getenv("FSR3_JITTER_FLIP")) : 0;
@@ -819,6 +1042,216 @@ static void barrier(D3D12_RESOURCE_BARRIER *b, int *n, ID3D12Resource *r, D3D12_
 	(*n)++;
 }
 
+
+// The camera of the world pass, read from its view-projection matrix (rows c0..c3 of clip = ci . (x, y, z, 1), see hook_constants9): with w = the depth along the view, tan(vertical half fov) =
+// |row3| / |row1|, and clip.z / w = A + B / w with A = |row2| / |row3|, B = c2.w - A * c3.w gives near = -B / A and far = -B / (A - 1) (in units of w). 0 when the matrix is not a perspective one.
+static int camera_from_matrix(const float *m, float *vfov, float *znear, float *zfar)
+{
+	const float *r1 = m + 4, *r2 = m + 8, *r3 = m + 12;
+	const float l1 = sqrtf(r1[0] * r1[0] + r1[1] * r1[1] + r1[2] * r1[2]);
+	const float l2 = sqrtf(r2[0] * r2[0] + r2[1] * r2[1] + r2[2] * r2[2]);
+	const float l3 = sqrtf(r3[0] * r3[0] + r3[1] * r3[1] + r3[2] * r3[2]);
+	if (l1 < 1e-6f || l2 < 1e-6f || l3 < 1e-6f)
+		return 0;
+	float a = l2 / l3;
+	if (r2[0] * r3[0] + r2[1] * r3[1] + r2[2] * r3[2] < 0.0f)
+		a = -a;
+	const float bb = m[11] - a * m[15];
+	*vfov = 2.0f * atanf(l3 / l1);
+	static int told;
+	if (told++ < 2)
+		log_printf("fsr3: camera matrix: |row1| %.5f |row2| %.5f |row3| %.5f, A %.6f, B %.3f, rows z %.5f %.5f %.5f %.5f / w %.5f %.5f %.5f %.5f", l1, l2, l3, a, bb, r2[0], r2[1], r2[2], m[11], r3[0], r3[1], r3[2], m[15]);
+	if (bb == 0.0f || a < 0.5f || a > 2.0f)
+		return 0;
+	*znear = -bb / (a * l3);
+	// MW2 uses an infinite far plane (A = 0.9995, B = -3.998 in the Trainer: near 4.0): a finite far plane has A > 1
+	*zfar = a > 1.00001f ? -bb / ((a - 1.0f) * l3) : 100000.0f;
+	return *znear > 0.01f && *znear < 1000.0f && *zfar > *znear * 2.0f;
+}
+
+// QA measuring rig (FSR3_METRIC=1): after each upscale the output and FSR's input are copied to the CPU (the GPU is waited for: a QA stall) and two numbers are taken of a central crop:
+// the gradient (mean absolute luma difference to the right and lower neighbour: how much detail the picture has, higher = sharper) and the temporal difference (mean absolute luma
+// difference to the same pixel of the previous frame: in a still scene the noise or grain the eye sees as flicker). FSR3_DUMPAT=<frame> writes both pictures as BMP files (mw2coop\shots).
+static struct {
+	ID3D12Resource *rb[2]; // 0 = FSR output, 1 = FSR input
+	UINT pitch[2], w[2], h[2];
+	uint8_t *prev[2];
+	int pending;
+	double grad[2], tdiff[2];
+	long frames;
+	long measured;
+} M;
+
+static int metric_on(void)
+{
+	static int on = -1;
+	if (on < 0)
+		on = getenv("FSR3_METRIC") != NULL;
+	return on;
+}
+
+static ID3D12Resource *make_readback(UINT64 bytes)
+{
+	D3D12_HEAP_PROPERTIES hp;
+	D3D12_RESOURCE_DESC rd;
+	memset(&hp, 0, sizeof(hp));
+	memset(&rd, 0, sizeof(rd));
+	hp.Type = D3D12_HEAP_TYPE_READBACK;
+	rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+	rd.Width = bytes;
+	rd.Height = 1;
+	rd.DepthOrArraySize = 1;
+	rd.MipLevels = 1;
+	rd.Format = DXGI_FORMAT_UNKNOWN;
+	rd.SampleDesc.Count = 1;
+	rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+	ID3D12Resource *res = NULL;
+	if (FAILED(ID3D12Device_CreateCommittedResource(S.dev, &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, NULL, &iid_resource, (void **)&res)))
+		return NULL;
+	return res;
+}
+
+// the copies are recorded in the frame's list: `which` 0 = output (in the UAV state), 1 = input (in the read state)
+static void metric_copy(D3D12_RESOURCE_BARRIER *b, int *n, int which)
+{
+	ID3D12Resource *src = which ? S.color : S.output;
+	UINT w = which ? S.iw : S.w, h = which ? S.ih : S.h;
+	D3D12_RESOURCE_STATES st = which ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	UINT pitch = (w * 4 + 255) & ~255u;
+	if (!M.rb[which] || M.w[which] != w || M.h[which] != h) {
+		if (M.rb[which])
+			ID3D12Resource_Release(M.rb[which]);
+		free(M.prev[which]);
+		M.prev[which] = NULL;
+		M.rb[which] = make_readback((UINT64)pitch * h);
+		M.pitch[which] = pitch;
+		M.w[which] = w;
+		M.h[which] = h;
+	}
+	if (!M.rb[which])
+		return;
+	barrier(b, n, src, st, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	ID3D12GraphicsCommandList_ResourceBarrier(S.list, *n, b);
+	*n = 0;
+	D3D12_TEXTURE_COPY_LOCATION dst, sc;
+	memset(&dst, 0, sizeof(dst));
+	memset(&sc, 0, sizeof(sc));
+	dst.pResource = M.rb[which];
+	dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+	dst.PlacedFootprint.Footprint.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	dst.PlacedFootprint.Footprint.Width = w;
+	dst.PlacedFootprint.Footprint.Height = h;
+	dst.PlacedFootprint.Footprint.Depth = 1;
+	dst.PlacedFootprint.Footprint.RowPitch = pitch;
+	sc.pResource = src;
+	sc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+	ID3D12GraphicsCommandList_CopyTextureRegion(S.list, &dst, 0, 0, 0, &sc, NULL);
+	barrier(b, n, src, D3D12_RESOURCE_STATE_COPY_SOURCE, st);
+	ID3D12GraphicsCommandList_ResourceBarrier(S.list, *n, b);
+	*n = 0;
+	M.pending |= 1 << which;
+}
+
+static void write_bmp(const char *name, const uint8_t *px, UINT pitch, UINT w, UINT h)
+{
+	CreateDirectoryA("mw2coop\shots", NULL);
+	FILE *f = fopen(name, "wb");
+	if (!f)
+		return;
+	uint32_t row = (w * 3 + 3) & ~3u, size = row * h;
+	uint8_t hdr[54] = {'B', 'M'};
+	*(uint32_t *)(hdr + 2) = 54 + size;
+	*(uint32_t *)(hdr + 10) = 54;
+	*(uint32_t *)(hdr + 14) = 40;
+	*(int32_t *)(hdr + 18) = (int32_t)w;
+	*(int32_t *)(hdr + 22) = (int32_t)h;
+	*(uint16_t *)(hdr + 26) = 1;
+	*(uint16_t *)(hdr + 28) = 24;
+	*(uint32_t *)(hdr + 34) = size;
+	fwrite(hdr, 1, 54, f);
+	uint8_t *line = (uint8_t *)calloc(1, row);
+	for (int y = (int)h - 1; y >= 0 && line; y--) {
+		for (UINT x = 0; x < w; x++)
+			memcpy(line + x * 3, px + (size_t)y * pitch + x * 4, 3);
+		fwrite(line, 1, row, f);
+	}
+	free(line);
+	fclose(f);
+}
+
+// after the GPU finished: read the copies, measure, log the mean of 30 frames
+static void metric_finish(UINT64 value)
+{
+	if (!M.pending)
+		return;
+	wait_fence(value);
+	const char *dumpat = getenv("FSR3_DUMPAT");
+	for (int which = 0; which < 2; which++) {
+		if (!(M.pending & (1 << which)) || !M.rb[which])
+			continue;
+		UINT w = M.w[which], h = M.h[which], pitch = M.pitch[which];
+		uint8_t *data = NULL;
+		D3D12_RANGE rr = {0, (SIZE_T)pitch * h};
+		if (FAILED(ID3D12Resource_Map(M.rb[which], 0, &rr, (void **)&data)) || !data)
+			continue;
+		if (!M.prev[which])
+			M.prev[which] = (uint8_t *)calloc((size_t)pitch, h);
+		const UINT x0 = w * 20 / 100, x1 = w * 80 / 100, y0 = h * 25 / 100, y1 = h * 80 / 100;
+		double g = 0, t = 0;
+		long cnt = 0;
+		uint8_t *pv = M.prev[which];
+		for (UINT y = y0; y < y1; y++)
+			for (UINT x = x0; x < x1; x++) {
+				const uint8_t *a = data + (size_t)y * pitch + x * 4;
+				const uint8_t *r = a + 4, *d = a + pitch;
+				const uint8_t *q = pv + (size_t)y * pitch + x * 4;
+				double la = 0.114 * a[0] + 0.587 * a[1] + 0.299 * a[2];
+				double lr = 0.114 * r[0] + 0.587 * r[1] + 0.299 * r[2];
+				double ld = 0.114 * d[0] + 0.587 * d[1] + 0.299 * d[2];
+				double lq = 0.114 * q[0] + 0.587 * q[1] + 0.299 * q[2];
+				g += fabs(la - lr) + fabs(la - ld);
+				t += fabs(la - lq);
+				cnt++;
+			}
+		if (S.frame > 30 && (!g_sweep || S.frame % 120 >= 60)) { // the first frames have no history yet (sweep: the first half of a variant's window settles)
+			M.grad[which] += g / cnt;
+			M.tdiff[which] += t / cnt;
+		}
+		if (dumpat && (long)S.frame == atol(dumpat)) {
+			char name[MAX_PATH];
+			snprintf(name, sizeof(name), "mw2coop\shots\fsr-%s-%u.bmp", which ? "in" : "out", S.frame);
+			write_bmp(name, data, pitch, w, h);
+			log_printf("fsr3: metric: wrote %s", name);
+		}
+		if (g_sweep && S.frame % 120 == 119 && (which == 0 || g_sw_idx == 0 || !strcmp(g_sw_name, "nojitter"))) { // the last frame of a variant's window: the picture itself, to compare with the native one offline
+			char name[MAX_PATH];
+			snprintf(name, sizeof(name), "mw2coop\\shots\\sw-%s-%s.bmp", g_sw_name, which ? "in" : "out");
+			write_bmp(name, data, pitch, w, h);
+		}
+		memcpy(pv, data, (size_t)pitch * h);
+		D3D12_RANGE wr = {0, 0};
+		ID3D12Resource_Unmap(M.rb[which], 0, &wr);
+	}
+	M.pending = 0;
+	if (g_sweep) {
+		if (S.frame % 120 >= 60)
+			M.measured++;
+		if (S.frame % 120 == 119 && M.measured > 0) {
+			log_printf("fsr3: sweep [%s] frames %ld: output gradient %.3f temporal %.3f | input gradient %.3f temporal %.3f", g_sw_name, M.measured, M.grad[0] / M.measured, M.tdiff[0] / M.measured, M.grad[1] / M.measured,
+				   M.tdiff[1] / M.measured);
+			M.grad[0] = M.grad[1] = M.tdiff[0] = M.tdiff[1] = 0;
+			M.measured = 0;
+		}
+		return;
+	}
+	if (S.frame > 30 && ++M.measured >= 30) {
+		log_printf("fsr3: metric (30 frames, frame %u): output gradient %.3f temporal %.3f | input gradient %.3f temporal %.3f", S.frame, M.grad[0] / M.measured, M.tdiff[0] / M.measured, M.grad[1] / M.measured,
+			   M.tdiff[1] / M.measured);
+		M.grad[0] = M.grad[1] = M.tdiff[0] = M.tdiff[1] = 0;
+		M.measured = 0;
+	}
+}
+
 // the upscale itself, run from the SetRenderTarget hook when the game's last pass (bloom and HUD) is about to start; 1 when it ran
 static int fsr3_frame(IDirect3DDevice9 *dev9)
 {
@@ -860,6 +1293,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	IDirect3DSurface9 *dsurf = NULL;
 	D3D12_RESOURCE_DESC drd;
 	int depth_fresh = 0; // the depth texture holds this frame depth
+	int mv_done = 0;     // the camera motion vectors were made this frame
 	ID3D12Resource *dsrc = S.rs ? depth_source(dev9, on12, &dsurf, &drd) : NULL;
 	if (dsrc && (drd.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || drd.Format == DXGI_FORMAT_R24G8_TYPELESS)) {
 		if (!S.dcopy || S.dcopy_w != drd.Width || S.dcopy_h != drd.Height || S.dcopy_samples != drd.SampleDesc.Count) {
@@ -910,7 +1344,15 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 			ID3D12GraphicsCommandList_SetDescriptorHeaps(S.list, 1, heaps);
 			ID3D12GraphicsCommandList_SetComputeRootSignature(S.list, S.rs);
 			ID3D12GraphicsCommandList_SetPipelineState(S.list, drd.SampleDesc.Count > 1 ? S.pso_ms : S.pso_1);
-			ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(S.list, 0, gpu);
+			{ // the game's depth is mapped into the viewport's range (the world is drawn in 1/64..1; the first-person weapon in front of it, below 1/64): FSR gets 0..1, the weapon at 0
+				float dvals[4] = {0.0f, 1.0f, 0.0f, 0.0f};
+				if (g_cam_maxz > g_cam_minz) {
+					dvals[0] = g_cam_minz;
+					dvals[1] = 1.0f / (g_cam_maxz - g_cam_minz);
+				}
+				ID3D12GraphicsCommandList_SetComputeRoot32BitConstants(S.list, 0, 4, dvals, 0);
+			}
+			ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(S.list, 1, gpu);
 			ID3D12GraphicsCommandList_Dispatch(S.list, (S.iw + 7) / 8, (S.ih + 7) / 8, 1);
 			barrier(b, &n, S.depth, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 			ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
@@ -948,8 +1390,8 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 			float vals[24] = {0};
 			for (int i = 0; i < 16; i++)
 				vals[i] = (float)t[i];
-			vals[16] = g_cam_minz;
-			vals[17] = 1.0f / (g_cam_maxz - g_cam_minz);
+			vals[16] = 0.0f; // the depth texture is already mapped to 0..1
+			vals[17] = 1.0f;
 			vals[18] = jit_x;
 			vals[19] = jit_y;
 			vals[20] = g_mv_flip ? -1.0f : 1.0f;
@@ -985,6 +1427,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 			barrier(b, &n, S.motion, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 			ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
 			n = 0;
+			mv_done = 1;
 			if (g_jit_log++ < 3)
 				log_printf("fsr3: motion vectors computed (jitter %.3f,%.3f px, depth range %g..%g, phases %d)", jit_x, jit_y, g_cam_minz, g_cam_maxz, S.phase_count);
 		}
@@ -1016,6 +1459,74 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
 	n = 0;
 
+	// motion refinement: the camera vectors corrected where the previous picture, moved by them, does not match the current one (moving characters, the weapon)
+	ID3D12Resource *mv_tex = S.motion;
+	if (mv_done && S.prev_valid && S.pso_rfa && S.pso_rfb && S.motion2 && S.prev && S.block && g_refine) {
+		const UINT bw = (S.iw + 7) / 8, bh = (S.ih + 7) / 8;
+		barrier(b, &n, S.motion2, S.m2_ok ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		if (!S.block_ok)
+			barrier(b, &n, S.block, D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		S.block_ok = 1;
+		D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+		D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+		((D3D12_CPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_CPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[9])(S.heap, &cpu);
+		((D3D12_GPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_GPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[10])(S.heap, &gpu);
+		cpu.ptr += 8 * S.desc_inc;
+		gpu.ptr += 8 * S.desc_inc;
+		D3D12_SHADER_RESOURCE_VIEW_DESC srv;
+		memset(&srv, 0, sizeof(srv));
+		srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srv.Shader4ComponentMapping = 0x1688;
+		srv.Texture2D.MipLevels = 1;
+		srv.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		ID3D12Device_CreateShaderResourceView(S.dev, S.color, &srv, cpu);
+		cpu.ptr += S.desc_inc;
+		ID3D12Device_CreateShaderResourceView(S.dev, S.prev, &srv, cpu);
+		cpu.ptr += S.desc_inc;
+		srv.Format = DXGI_FORMAT_R16G16_FLOAT;
+		ID3D12Device_CreateShaderResourceView(S.dev, S.motion, &srv, cpu);
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uav;
+		memset(&uav, 0, sizeof(uav));
+		uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+		uav.Format = DXGI_FORMAT_R32_UINT;
+		cpu.ptr += S.desc_inc;
+		ID3D12Device_CreateUnorderedAccessView(S.dev, S.block, NULL, &uav, cpu);
+		uav.Format = DXGI_FORMAT_R16G16_FLOAT;
+		cpu.ptr += S.desc_inc;
+		ID3D12Device_CreateUnorderedAccessView(S.dev, S.motion2, NULL, &uav, cpu);
+		const float jsign = getenv("FSR3_RF_JFLIP") ? -1.0f : 1.0f;
+		const float thr = getenv("FSR3_RF_THR") ? (float)atof(getenv("FSR3_RF_THR")) : 0.03f;
+		const float cvals[8] = {0, 0, jit_x * jsign, jit_y * jsign, g_pjit_x * jsign, g_pjit_y * jsign, thr, g_subpx ? 1.0f : 0.0f};
+		unsigned ci[8];
+		memcpy(ci, cvals, sizeof(ci));
+		ci[0] = S.iw;
+		ci[1] = S.ih;
+		ID3D12DescriptorHeap *heaps[1] = {S.heap};
+		ID3D12GraphicsCommandList_SetDescriptorHeaps(S.list, 1, heaps);
+		ID3D12GraphicsCommandList_SetComputeRootSignature(S.list, S.rs_rf);
+		ID3D12GraphicsCommandList_SetComputeRoot32BitConstants(S.list, 0, 8, ci, 0);
+		ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(S.list, 1, gpu);
+		ID3D12GraphicsCommandList_SetPipelineState(S.list, S.pso_rfa);
+		ID3D12GraphicsCommandList_Dispatch(S.list, (bw + 7) / 8, (bh + 7) / 8, 1);
+		D3D12_RESOURCE_BARRIER ub;
+		memset(&ub, 0, sizeof(ub));
+		ub.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+		ub.UAV.pResource = S.block;
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, 1, &ub);
+		ID3D12GraphicsCommandList_SetPipelineState(S.list, S.pso_rfb);
+		ID3D12GraphicsCommandList_Dispatch(S.list, (S.iw + 7) / 8, (S.ih + 7) / 8, 1);
+		barrier(b, &n, S.motion2, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		S.m2_ok = 1;
+		mv_tex = S.motion2;
+		static int told;
+		if (!told++)
+			log_printf("fsr3: motion refinement on (blocks %ux%u, jitter now %.3f,%.3f previous %.3f,%.3f)", bw, bh, jit_x, jit_y, g_pjit_x, g_pjit_y);
+	}
+
 	LARGE_INTEGER now;
 	QueryPerformanceCounter(&now);
 	float dt_ms = S.last_tick.QuadPart ? (float)((now.QuadPart - S.last_tick.QuadPart) * 1000.0 / (double)S.freq.QuadPart) : 16.6f;
@@ -1027,7 +1538,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	d.commandList = S.list;
 	d.color = ffx_res(S.color, S.iw, S.ih, FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_COMPUTE_READ);
 	d.depth = ffx_res(S.depth, S.iw, S.ih, FFX_API_SURFACE_FORMAT_R32_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_COMPUTE_READ);
-	d.motionVectors = ffx_res(S.motion, S.iw, S.ih, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_COMPUTE_READ);
+	d.motionVectors = ffx_res(mv_tex, S.iw, S.ih, FFX_API_SURFACE_FORMAT_R16G16_FLOAT, FFX_API_RESOURCE_USAGE_READ_ONLY, FFX_API_RESOURCE_STATE_COMPUTE_READ);
 	d.output = ffx_res(S.output, S.w, S.h, FFX_API_SURFACE_FORMAT_B8G8R8A8_UNORM, FFX_API_RESOURCE_USAGE_UAV, FFX_API_RESOURCE_STATE_UNORDERED_ACCESS);
 	d.jitterOffset.x = jit_x;
 	d.jitterOffset.y = jit_y;
@@ -1038,7 +1549,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	d.upscaleSize.width = S.w;
 	d.upscaleSize.height = S.h;
 	{ // FSR's own sharpening (RCAS): the soft look of an upscaled frame without it was reported as "soapy"
-		int sh = getenv("FSR3_SHARP") ? atoi(getenv("FSR3_SHARP")) : settings_fsr3_sharpness();
+		int sh = g_sw_sharp >= 0 ? g_sw_sharp : getenv("FSR3_SHARP") ? atoi(getenv("FSR3_SHARP")) : settings_fsr3_sharpness();
 		d.enableSharpening = sh > 0;
 		d.sharpness = (float)sh / 100.0f;
 	}
@@ -1048,6 +1559,19 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	d.cameraNear = 4.0f;
 	d.cameraFar = 40000.0f;
 	d.cameraFovAngleVertical = 1.0f;
+	{ // the real camera of this frame (the fixed numbers above are the fallback)
+		float vfov = 0, zn = 0, zf = 0;
+		static int told;
+		if (g_vp_new_ok && !getenv("FSR3_FIXEDCAM") && camera_from_matrix(g_vp_new, &vfov, &zn, &zf)) {
+			d.cameraNear = zn;
+			d.cameraFar = zf;
+			d.cameraFovAngleVertical = vfov;
+			if (told++ < 3 || told % 6000 == 0)
+				log_printf("fsr3: camera from the matrix: vertical fov %.3f rad (%.1f deg), near %.2f, far %.1f", vfov, vfov * 57.29578f, zn, zf);
+		} else if (told++ < 3) {
+			log_printf("fsr3: camera from the matrix failed (vfov %.3f near %.3f far %.3f): fixed numbers", vfov, zn, zf);
+		}
+	}
 	d.viewSpaceToMetersFactor = 0.0254f; // the game's units are inches
 	d.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
 	if (getenv("FSR3_DEBUGVIEW"))
@@ -1060,6 +1584,25 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 			log_printf("fsr3: ffxDispatch -> %u (0 = OK), frame time %.1f ms", (unsigned)rc, dt_ms);
 	}
 
+	if (rc == FFX_API_RETURN_OK && metric_on()) {
+		metric_copy(b, &n, 0);
+		metric_copy(b, &n, 1);
+	}
+	if (S.prev && S.pso_rfa) { // this frame's input is the next frame's previous picture
+		barrier(b, &n, S.color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+		barrier(b, &n, S.prev, S.prev_ok ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		ID3D12GraphicsCommandList_CopyResource(S.list, S.prev, S.color);
+		barrier(b, &n, S.color, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		barrier(b, &n, S.prev, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		S.prev_ok = 1;
+		S.prev_valid = mv_done;
+		g_pjit_x = jit_x;
+		g_pjit_y = jit_y;
+	}
 	if (rc == FFX_API_RETURN_OK && !getenv("FSR3_SKIPCOPY") && S.pso_comp && getenv("FSR3_COMPOSE")) { // the old way: the output into the back buffer after the HUD, the HUD kept from the game's own frame (QA: FSR3_COMPOSE=1)
 		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
@@ -1118,6 +1661,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	UINT64 value = ++S.fence_value;
 	ID3D12CommandQueue_Signal(S.queue, S.fence, value);
 	S.alloc_fence[slot] = value;
+	metric_finish(value);
 	ID3D12Fence *fences[1] = {S.fence};
 	vt->give_back(on12, (IDirect3DResource9 *)bb, 1, &value, fences);
 	if (dsrc) {
@@ -1156,8 +1700,14 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 			IDirect3DSurface9_Release(bb);
 		}
 	}
-	if (g_frame % 120 == 0 && g_status_log++ < 14)
-		log_printf("fsr3: status frame %d: set up for %ux%u (render %ux%u), upscaled this frame %d, vp %d prev %d", g_frame, S.w, S.h, S.iw, S.ih, g_ran, g_vp_new_ok, g_vp_prev_ok);
+	if (g_frame % 120 == 0 && (g_ran ? g_ran_log++ < 60 : g_status_log++ < 8)) { // 3D frames and the others are counted apart (the menus run first)
+		static LARGE_INTEGER t_last;
+		LARGE_INTEGER t_now;
+		QueryPerformanceCounter(&t_now);
+		const double ms = t_last.QuadPart && S.freq.QuadPart ? (double)(t_now.QuadPart - t_last.QuadPart) * 1000.0 / (double)S.freq.QuadPart / 120.0 : 0.0;
+		t_last = t_now;
+		log_printf("fsr3: status frame %d: set up for %ux%u (render %ux%u), upscaled this frame %d, vp %d prev %d, %.2f ms per frame (refine %d)", g_frame, S.w, S.h, S.iw, S.ih, g_ran, g_vp_new_ok, g_vp_prev_ok, ms, g_refine);
+	}
 	if (g_ran && g_vp_new_ok) { // this frame's matrix is the previous one of the next frame
 		memcpy(g_vp_prev, g_vp_new, sizeof(g_vp_prev));
 		g_vp_prev_ok = 1;
@@ -1170,6 +1720,34 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 	if (g_world_ds) {
 		IDirect3DSurface9_Release(g_world_ds);
 		g_world_ds = NULL;
+	}
+	if (g_sweep && S.frame > 300) {
+		static const struct {
+			const char *name;
+			float bias;
+			int sharp, jit, mv, rf, sp;
+		} var[] = {
+			{"default", 1000.0f, -1, 1, 1, 1, 1},
+			{"norefine", 1000.0f, -1, 1, 1, 0, 1},
+			{"nosubpx", 1000.0f, -1, 1, 1, 1, 0},
+			{"sharp70", 1000.0f, 70, 1, 1, 1, 1},
+			{"sharp85", 1000.0f, 85, 1, 1, 1, 1},
+			{"bias-1.0", -1.0f, -1, 1, 1, 1, 1},
+			{"bias-2.0", -2.0f, -1, 1, 1, 1, 1},
+			{"nojitter", 1000.0f, -1, 0, 1, 1, 1},
+		};
+		const int idx = (int)((S.frame - 300) / 120) % (int)(sizeof(var) / sizeof(var[0]));
+		if (idx != g_sw_idx) {
+			g_sw_idx = idx;
+			g_sw_name = var[idx].name;
+			g_sw_bias = var[idx].bias;
+			g_sw_sharp = var[idx].sharp;
+			g_jit_on = var[idx].jit;
+			g_mv_on = var[idx].mv;
+			g_refine = var[idx].rf;
+			g_subpx = var[idx].sp;
+			g_bias_on = -1; // the bias of the world pass is set again
+		}
 	}
 	next_jitter();
 	if (g_shake_amp != 0.0f) { // the sway of the next frame: a sine of the clock, period 3 s
