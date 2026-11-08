@@ -8287,7 +8287,7 @@ void native_install(void)
 	inputlog_open();
 	padglyphs_install(text_pad_player);
 #ifdef _WIN64
-	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0) || settings_upscale() || settings_fsr3())
+	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0) || cfg("presentlog", 0) || settings_upscale() || settings_fsr3()) // presentlog: the frame cadence of the plain game too (QA: FSR against native)
 		CreateThread(NULL, 0, device_hooks_thread, NULL, 0, NULL);
 #endif
 #ifdef _WIN64

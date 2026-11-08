@@ -202,6 +202,10 @@ static int setup(UINT w, UINT h)
 	up.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
 	up.header.pNext = &backend.header;
 	up.flags = FFX_UPSCALE_ENABLE_AUTO_EXPOSURE | FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE;
+	// MW2 projects to an infinite far plane (A = 0.9995, camera_from_matrix): AMD's docs ask for this flag then, or FSR reconstructs the distances of what it keeps or drops from its
+	// history wrongly (FSR3_FINITE=1: without it, as before)
+	if (!getenv("FSR3_FINITE"))
+		up.flags |= FFX_UPSCALE_ENABLE_DEPTH_INFINITE;
 	if (getenv("FSR3_DEBUGVIEW")) // QA: FSR 3 draws its own debug views into the output (proves that the output is what is shown)
 		up.flags |= FFX_UPSCALE_ENABLE_DEBUG_VISUALIZATION | FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
 	int rw = 0, rh = 0;
@@ -710,6 +714,8 @@ static HRESULT(STDMETHODCALLTYPE *g_vp_orig)(IDirect3DDevice9 *, const D3DVIEWPO
 static HRESULT(STDMETHODCALLTYPE *g_vsc_orig)(IDirect3DDevice9 *, UINT, const float *, UINT);
 static int g_trace; // QA: FSR3_TRACE=n logs n viewport and view-projection events, starting at frame FSR3_TRACE_FROM
 static int g_trace_from, g_frame, g_armed;
+static int g_saw_world_vp; // a viewport of the world pass (render size, depth range from 1/64) was set in this frame
+static int g_autotrace;     // the frames traced because a 3D frame had no world matrix (3 at most)
 static int g_draws; // trace only: draw calls since the last logged event
 static int g_stretched;       // this frame: the game's post-process copy of the 3D picture is done (the next set of the back buffer as the render target starts its last pass: bloom and HUD)
 static int g_ran;             // this frame: FSR 3 has run
@@ -739,6 +745,18 @@ static float g_vp_new[16];    // the world view-projection matrix uploaded in th
 
 static float g_vp_prev[16];   // the one of the previous frame
 static int g_vp_prev_ok;
+// Camera-relative frames (the player on a vehicle's turret, Team Player's Humvee): the world pass uploads only a view-projection without translation and each object's matrix is relative
+// to the eye, so no world matrix is caught and FSR did not run (owner's screenshots: the 1280x720 picture in a corner of the 1920x1080 window; QA trace 2026-11-08). The first such matrix
+// of the world pass (depth range from 1/64: not the weapon's) is used instead. Its motion vectors know the camera's turning, not its movement (the refinement passes take some of that).
+static float g_vp_rel[16];
+static int g_vp_rel_ok;
+static float g_rel_minz, g_rel_maxz = 1.0f;
+static int g_vp_space, g_vp_prev_space; // 0 = world matrix, 1 = camera-relative: the history is not carried across a change
+// diagnostics (owner, 2026-11-08, Team Player: "soap", the near ground smeared while people and the gun were sharp): world matrices in one frame that differ from the first
+// one (another view, or objects with their own full matrix: the motion vectors would then come from the wrong one) and the jittered uploads per frame
+static float g_vp_first[16];
+static int g_vp_distinct, g_jit_uploads, g_multi_frames, g_diag_frames, g_multi_logged;
+static double g_jit_upl_sum;
 static float g_cam_minz, g_cam_maxz = 1.0f;
 static int g_jit_log, g_status_log, g_seq_log;
 static char g_vpseq[400];
@@ -823,7 +841,20 @@ static HRESULT STDMETHODCALLTYPE hook_dipup9(IDirect3DDevice9 *d, D3DPRIMITIVETY
 
 static HRESULT STDMETHODCALLTYPE hook_srt9(IDirect3DDevice9 *dev, DWORD idx, IDirect3DSurface9 *s)
 {
-	if (S.ok && (g_stretched || S.iw == S.w) && !g_ran && idx == 0 && s && g_vp_new_ok) { // the game's last pass (the bloom and the HUD) is about to draw into the back buffer: upscale the 3D picture first, so both land on the upscaled picture
+	// no world matrix in this frame: the camera-relative one (FSR3_NOREL=1: not, FSR does not run then). Only at the point where FSR runs: normal frames upload a
+	// camera-relative matrix early (before the world matrix), and taking it at any earlier render target switch marked them camera-relative (QA 2026-11-08)
+	const int at_last_pass = S.ok && (g_stretched || S.iw == S.w) && !g_ran && idx == 0 && s;
+	if (at_last_pass && !g_vp_new_ok && g_vp_rel_ok && !getenv("FSR3_NOREL")) {
+		D3DSURFACE_DESC rd;
+		if (SUCCEEDED(IDirect3DSurface9_GetDesc(s, &rd)) && rd.Width == S.w && rd.Height == S.h) {
+			memcpy(g_vp_new, g_vp_rel, sizeof(g_vp_new));
+			g_vp_new_ok = 1;
+			g_vp_space = 1;
+			g_cam_minz = g_rel_minz;
+			g_cam_maxz = g_rel_maxz;
+		}
+	}
+	if (at_last_pass && g_vp_new_ok) { // the game's last pass (the bloom and the HUD) is about to draw into the back buffer: upscale the 3D picture first, so both land on the upscaled picture
 		D3DSURFACE_DESC d;
 		if (SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) && d.Width == S.w && d.Height == S.h) {
 			g_ran = 1;
@@ -850,13 +881,17 @@ static HRESULT STDMETHODCALLTYPE hook_viewport9(IDirect3DDevice9 *dev, const D3D
 {
 	if (vp) {
 		g_vp9 = *vp;
+		if (S.ok && vp->Width == S.iw && vp->Height == S.ih && vp->MinZ > 0.0f)
+			g_saw_world_vp = 1;
 		if (S.ok && !g_world_ds && vp->Width == S.iw && vp->Height == S.ih && vp->MinZ > 0.0f) // the world pass: remember its depth surface (the bloom passes after it have another bound)
 			IDirect3DDevice9_GetDepthStencilSurface(dev, &g_world_ds);
 		if (S.ok && S.iw != S.w) { // a texture bias in the world pass: the textures are sampled for the output size, as upscalers ask (FSR 3: log2(render / output) - 1)
 			const int world = vp->Width == S.iw && vp->Height == S.ih;
 			if (world != g_bias_on) {
 				g_bias_on = world;
-				float bias = world ? (g_sw_bias < 999.0f ? g_sw_bias : getenv("FSR3_LODBIAS") ? (float)atof(getenv("FSR3_LODBIAS")) : log2f((float)S.iw / (float)S.w) - 1.0f) : 0.0f;
+				float set_bias = 0.0f;
+				const int have_set = settings_fsr3_lodbias(&set_bias);
+				float bias = world ? (g_sw_bias < 999.0f ? g_sw_bias : getenv("FSR3_LODBIAS") ? (float)atof(getenv("FSR3_LODBIAS")) : have_set ? set_bias : log2f((float)S.iw / (float)S.w) - 1.0f) : 0.0f;
 				DWORD bits;
 				memcpy(&bits, &bias, 4);
 				for (DWORD i = 0; i < 16; i++)
@@ -886,12 +921,41 @@ static HRESULT STDMETHODCALLTYPE hook_constants9(IDirect3DDevice9 *dev, UINT sta
 		if (g_shake_amp != 0.0f) // QA camera sway: x_ndc += k * z_ndc in every 3D matrix (a shift that depends on depth, like parallax; the captured matrix has it too, so the vectors must follow)
 			for (int i = 0; i < 4; i++)
 				tmp[i] += g_shake_x * tmp[8 + i];
-		if (fabsf(data[15]) > 1e-3f) { // the world view-projection (it has a translation): remember it without the jitter, for the motion vectors
+		// the world view-projection (it has a translation, and it is uploaded while the viewport has the world's depth range, 1/64..1): remember it without the jitter,
+		// for the motion vectors. Not in the weapon's range (0..1/64): Team Player's first-person weapon pass uploads a world matrix of its own (another projection), which
+		// replaced the world's in every frame, so the vectors came from the wrong camera (FSR's debug view: motion everywhere on a standing camera) and FSR shifted its
+		// history every frame: the owner's "soap" on the ground and the grain (QA 2026-11-08; the Trainer's weapon pass has a camera-relative matrix, so it was fine there)
+		if (fabsf(data[15]) > 1e-3f && g_vp9.MinZ > 0.01f) {
+			if (!g_vp_new_ok) {
+				memcpy(g_vp_first, tmp, 64);
+				g_vp_distinct = 1;
+			} else {
+				float dmax = 0.0f;
+				for (int i = 0; i < 16; i++)
+					dmax = fmaxf(dmax, fabsf(tmp[i] - g_vp_new[i]) / (1.0f + fabsf(g_vp_new[i])));
+				if (dmax > 1e-4f) {
+					g_vp_distinct++;
+					if (g_multi_logged < 4) {
+						g_multi_logged++;
+						log_printf("fsr3: frame %d: world matrix %d differs from the one before in this frame (c0+%u, viewport %lux%lu depth %g..%g): before | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | now | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f",
+								   g_frame, g_vp_distinct, count, g_vp9.Width, g_vp9.Height, g_vp9.MinZ, g_vp9.MaxZ, g_vp_new[0], g_vp_new[1], g_vp_new[2], g_vp_new[3], g_vp_new[4], g_vp_new[5], g_vp_new[6], g_vp_new[7], g_vp_new[8],
+								   g_vp_new[9], g_vp_new[10], g_vp_new[11], g_vp_new[12], g_vp_new[13], g_vp_new[14], g_vp_new[15], tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6], tmp[7], tmp[8], tmp[9], tmp[10], tmp[11],
+								   tmp[12], tmp[13], tmp[14], tmp[15]);
+					}
+				}
+			}
 			memcpy(g_vp_new, tmp, 64);
 			g_vp_new_ok = 1;
+			g_vp_space = 0;
 			g_cam_minz = g_vp9.MinZ;
 			g_cam_maxz = g_vp9.MaxZ;
+		} else if (!g_vp_rel_ok && g_vp9.MinZ > 0.01f && is_perspective(tmp)) { // a camera-relative view-projection of the world pass (see g_vp_rel)
+			memcpy(g_vp_rel, tmp, 64);
+			g_vp_rel_ok = 1;
+			g_rel_minz = g_vp9.MinZ;
+			g_rel_maxz = g_vp9.MaxZ;
 		}
+		g_jit_uploads++;
 		const float kx = (g_jit_flip & 1 ? -2.0f : 2.0f) * g_jit_x / (float)S.iw;
 		const float ky = (g_jit_flip & 2 ? 2.0f : -2.0f) * g_jit_y / (float)S.ih;
 		for (int i = 0; i < 4; i++) { // clip.xy += jitter * clip.w
@@ -904,9 +968,9 @@ static HRESULT STDMETHODCALLTYPE hook_constants9(IDirect3DDevice9 *dev, UINT sta
 		}
 		return g_vsc_orig(dev, start, tmp, count);
 	}
-	if (g_trace > 0 && g_armed && data && start == 0 && count >= 4) {
+	if (g_trace > 0 && g_armed && data && count >= 4) {
 		g_trace--;
-		log_printf("fsr3: trace: frame %d consts %s viewport %lux%lu depth %g | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f", g_frame, is_perspective(data) ? "PERSP" : "other", g_vp9.Width, g_vp9.Height, g_vp9.MinZ, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]);
+		log_printf("fsr3: trace: frame %d consts c%u+%u %s viewport %lux%lu depth %g | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f", g_frame, start, count, is_perspective(data) ? "PERSP" : "other", g_vp9.Width, g_vp9.Height, g_vp9.MinZ, data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12], data[13], data[14], data[15]);
 	}
 	return g_vsc_orig(dev, start, data, count);
 }
@@ -1069,6 +1133,54 @@ static int camera_from_matrix(const float *m, float *vfov, float *znear, float *
 	return *znear > 0.01f && *znear < 1000.0f && *zfar > *znear * 2.0f;
 }
 
+// The camera's place and view direction from a view-projection matrix (row r = m[4r..4r+3], clip = row . (x, y, z, 1)): the place is where clip x, y and w
+// are all 0 (three planes through the eye), the direction is row 3's (w grows along the view). 0 when the rows are degenerate.
+static int camera_pose(const float *m, double pos[3], double fwd[3])
+{
+	const float *r0 = m, *r1 = m + 4, *r3 = m + 12;
+	const double a[3][3] = {{r0[0], r0[1], r0[2]}, {r1[0], r1[1], r1[2]}, {r3[0], r3[1], r3[2]}};
+	const double b[3] = {-r0[3], -r1[3], -r3[3]};
+	const double det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+	if (fabs(det) < 1e-12)
+		return 0;
+	for (int k = 0; k < 3; k++) { // Cramer's rule
+		double c[3][3];
+		memcpy(c, a, sizeof(c));
+		for (int r = 0; r < 3; r++)
+			c[r][k] = b[r];
+		pos[k] = (c[0][0] * (c[1][1] * c[2][2] - c[1][2] * c[2][1]) - c[0][1] * (c[1][0] * c[2][2] - c[1][2] * c[2][0]) + c[0][2] * (c[1][0] * c[2][1] - c[1][1] * c[2][0])) / det;
+	}
+	const double l = sqrt((double)r3[0] * r3[0] + (double)r3[1] * r3[1] + (double)r3[2] * r3[2]);
+	if (l < 1e-9)
+		return 0;
+	for (int k = 0; k < 3; k++)
+		fwd[k] = r3[k] / l;
+	return 1;
+}
+
+// A camera cut between two frames' matrices, which FSR's history must not blend across (a cutscene's new shot, a teleport, a scope snapping in): the eye
+// moved more than 200 units (a fast vehicle moves about 25 per frame at 50 frames a second), the view turned more than 45 degrees, or the vertical field of
+// view changed by more than a quarter. why: the reason, for the log.
+static int camera_cut(const float *prev, const float *now, char *why, size_t why_size)
+{
+	double p0[3], f0[3], p1[3], f1[3];
+	if (!camera_pose(prev, p0, f0) || !camera_pose(now, p1, f1))
+		return 0;
+	const double dx = p1[0] - p0[0], dy = p1[1] - p0[1], dz = p1[2] - p0[2];
+	const double moved = sqrt(dx * dx + dy * dy + dz * dz);
+	double cosang = f0[0] * f1[0] + f0[1] * f1[1] + f0[2] * f1[2];
+	cosang = cosang > 1.0 ? 1.0 : cosang < -1.0 ? -1.0 : cosang;
+	const double turned = acos(cosang) * 57.29578;
+	float v0 = 0, v1 = 0, n0, n1, z0, z1;
+	const int fov_ok = camera_from_matrix(prev, &v0, &n0, &z0) && camera_from_matrix(now, &v1, &n1, &z1) && v0 > 0.0f && v1 > 0.0f;
+	const double zoom = fov_ok ? (v1 > v0 ? v1 / v0 : v0 / v1) : 1.0;
+	if (moved > 200.0 || turned > 45.0 || zoom > 1.25) {
+		snprintf(why, why_size, "camera cut: moved %.0f units, turned %.0f degrees, field of view %.1f -> %.1f degrees", moved, turned, v0 * 57.29578f, v1 * 57.29578f);
+		return 1;
+	}
+	return 0;
+}
+
 // QA measuring rig (FSR3_METRIC=1): after each upscale the output and FSR's input are copied to the CPU (the GPU is waited for: a QA stall) and two numbers are taken of a central crop:
 // the gradient (mean absolute luma difference to the right and lower neighbour: how much detail the picture has, higher = sharper) and the temporal difference (mean absolute luma
 // difference to the same pixel of the previous frame: in a still scene the noise or grain the eye sees as flicker). FSR3_DUMPAT=<frame> writes both pictures as BMP files (mw2coop\shots).
@@ -1154,7 +1266,7 @@ static void metric_copy(D3D12_RESOURCE_BARRIER *b, int *n, int which)
 
 static void write_bmp(const char *name, const uint8_t *px, UINT pitch, UINT w, UINT h)
 {
-	CreateDirectoryA("mw2coop\shots", NULL);
+	CreateDirectoryA("mw2coop\\shots", NULL);
 	FILE *f = fopen(name, "wb");
 	if (!f)
 		return;
@@ -1177,6 +1289,104 @@ static void write_bmp(const char *name, const uint8_t *px, UINT pitch, UINT w, U
 	}
 	free(line);
 	fclose(f);
+}
+
+// FSR3_DUMPAT: "<frame>" or a series "<first>+<step>x<count>" (e.g. "2000+150x20"). (The path had single backslashes, "\s" escapes: the pictures went to
+// <game dir>\mw2coopshotsfsr-*.bmp, not into mw2coop\shots.)
+static int dump_wanted(const char *spec, long frame)
+{
+	long first = 0, step = 0, count = 0;
+	if (!spec)
+		return 0;
+	if (sscanf(spec, "%ld+%ldx%ld", &first, &step, &count) == 3 && step > 0 && count > 0)
+		return frame >= first && (frame - first) % step == 0 && (frame - first) / step < count;
+	return frame == atol(spec);
+}
+
+// GPU time of the mod's own work in a frame (owner, 2026-11-08: "it is laggy"): five timestamps in each frame's list (start, before the refinement, before FSR,
+// after FSR, end), read back when that ring slot's fence has passed (no stall), the mean logged every 600 upscaled frames. What is not in them is the game's own
+// drawing (and the Direct3D 12 layer's translation of it).
+#define TS_PER_FRAME 5
+static const GUID iid_query_heap = {0x0d9658ae, 0xed45, 0x469e, {0xa6, 0x1d, 0x97, 0x0e, 0xc5, 0x83, 0xca, 0xb4}};
+static ID3D12QueryHeap *g_ts_heap;
+static ID3D12Resource *g_ts_rb;
+static UINT64 g_ts_freq;
+static int g_ts_failed, g_ts_valid[RING], g_ts_n;
+static double g_ts_acc[TS_PER_FRAME - 1];
+// CPU time of the FSR pass in the game's render thread (the GPU timestamps do not see it): unwrapping the back buffer and the depth from the Direct3D 9 device (it flushes
+// the game's work to its queue), recording our list and FSR's dispatch, submitting and handing the resources back; logged with the GPU line
+static double g_cpu_acc[4]; // unwrap, wait for the ring slot, record + dispatch, submit + give back
+static int g_cpu_n;
+static double cpu_ms(LARGE_INTEGER a, LARGE_INTEGER b)
+{
+	return S.freq.QuadPart ? (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)S.freq.QuadPart : 0.0;
+}
+
+static int ts_ready(void)
+{
+	if (g_ts_heap)
+		return 1;
+	if (g_ts_failed)
+		return 0;
+	g_ts_failed = 1;
+	D3D12_QUERY_HEAP_DESC qd;
+	memset(&qd, 0, sizeof(qd));
+	qd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+	qd.Count = RING * TS_PER_FRAME;
+	if (FAILED(ID3D12CommandQueue_GetTimestampFrequency(S.queue, &g_ts_freq)) || !g_ts_freq)
+		return 0;
+	if (FAILED(ID3D12Device_CreateQueryHeap(S.dev, &qd, &iid_query_heap, (void **)&g_ts_heap)) || !g_ts_heap)
+		return 0;
+	g_ts_rb = make_readback((UINT64)RING * TS_PER_FRAME * sizeof(UINT64));
+	if (!g_ts_rb) {
+		ID3D12QueryHeap_Release(g_ts_heap);
+		g_ts_heap = NULL;
+		return 0;
+	}
+	g_ts_failed = 0;
+	return 1;
+}
+
+static void ts_mark(unsigned slot, int i)
+{
+	if (g_ts_heap)
+		ID3D12GraphicsCommandList_EndQuery(S.list, g_ts_heap, D3D12_QUERY_TYPE_TIMESTAMP, slot * TS_PER_FRAME + i);
+}
+
+// this slot's list has finished on the GPU (its fence passed): add its times
+static void ts_collect(unsigned slot)
+{
+	if (!g_ts_heap || !g_ts_valid[slot])
+		return;
+	g_ts_valid[slot] = 0;
+	UINT64 *t = NULL;
+	D3D12_RANGE rr = {slot * TS_PER_FRAME * sizeof(UINT64), (slot + 1) * TS_PER_FRAME * sizeof(UINT64)};
+	if (FAILED(ID3D12Resource_Map(g_ts_rb, 0, &rr, (void **)&t)) || !t)
+		return;
+	const UINT64 *v = t + slot * TS_PER_FRAME;
+	int ok = 1;
+	for (int i = 1; i < TS_PER_FRAME; i++)
+		if (v[i] < v[i - 1])
+			ok = 0;
+	if (ok) {
+		for (int i = 1; i < TS_PER_FRAME; i++)
+			g_ts_acc[i - 1] += (double)(v[i] - v[i - 1]) * 1000.0 / (double)g_ts_freq;
+		g_ts_n++;
+	}
+	D3D12_RANGE wr = {0, 0};
+	ID3D12Resource_Unmap(g_ts_rb, 0, &wr);
+	if (g_ts_n >= 600) {
+		if (g_cpu_n > 0)
+			log_printf("fsr3: CPU time per frame in the render thread (mean of %d): unwrap %.2f ms, ring wait %.2f ms, record and FSR dispatch %.2f ms, submit and give back %.2f ms", g_cpu_n, g_cpu_acc[0] / g_cpu_n,
+					   g_cpu_acc[1] / g_cpu_n, g_cpu_acc[2] / g_cpu_n, g_cpu_acc[3] / g_cpu_n);
+		memset(g_cpu_acc, 0, sizeof(g_cpu_acc));
+		g_cpu_n = 0;
+		const double n = g_ts_n;
+		log_printf("fsr3: GPU time per frame (mean of %d): depth, vectors and copies %.2f ms, refinement %.2f ms, FSR %.2f ms, the rest %.2f ms, all %.2f ms", g_ts_n, g_ts_acc[0] / n, g_ts_acc[1] / n,
+				   g_ts_acc[2] / n, g_ts_acc[3] / n, (g_ts_acc[0] + g_ts_acc[1] + g_ts_acc[2] + g_ts_acc[3]) / n);
+		memset(g_ts_acc, 0, sizeof(g_ts_acc));
+		g_ts_n = 0;
+	}
 }
 
 // after the GPU finished: read the copies, measure, log the mean of 30 frames
@@ -1217,9 +1427,9 @@ static void metric_finish(UINT64 value)
 			M.grad[which] += g / cnt;
 			M.tdiff[which] += t / cnt;
 		}
-		if (dumpat && (long)S.frame == atol(dumpat)) {
+		if (dump_wanted(dumpat, (long)S.frame)) {
 			char name[MAX_PATH];
-			snprintf(name, sizeof(name), "mw2coop\shots\fsr-%s-%u.bmp", which ? "in" : "out", S.frame);
+			snprintf(name, sizeof(name), "mw2coop\\shots\\fsr-%s-%u.bmp", which ? "in" : "out", S.frame);
 			write_bmp(name, data, pitch, w, h);
 			log_printf("fsr3: metric: wrote %s", name);
 		}
@@ -1270,6 +1480,8 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	}
 	on12_vtbl_t *vt = *(on12_vtbl_t **)on12;
 	ID3D12Resource *bb12 = NULL;
+	LARGE_INTEGER c0, c1, c2, c3, c4;
+	QueryPerformanceCounter(&c0);
 	HRESULT hr = vt->unwrap(on12, (IDirect3DResource9 *)bb, (IUnknown *)S.queue, &iid_resource, (void **)&bb12);
 	if (FAILED(hr) || !bb12) {
 		static int told;
@@ -1280,10 +1492,16 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		return 0;
 	}
 
+	QueryPerformanceCounter(&c1);
 	const unsigned slot = S.frame % RING;
 	wait_fence(S.alloc_fence[slot]);
+	QueryPerformanceCounter(&c2);
+	ts_collect(slot);
 	ID3D12CommandAllocator_Reset(S.alloc[slot]);
 	ID3D12GraphicsCommandList_Reset(S.list, S.alloc[slot], NULL);
+	const int ts_on = ts_ready();
+	if (ts_on)
+		ts_mark(slot, 0);
 
 	D3D12_RESOURCE_BARRIER b[8];
 	int n = 0;
@@ -1459,6 +1677,8 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
 	n = 0;
 
+	if (ts_on)
+		ts_mark(slot, 1);
 	// motion refinement: the camera vectors corrected where the previous picture, moved by them, does not match the current one (moving characters, the weapon)
 	ID3D12Resource *mv_tex = S.motion;
 	if (mv_done && S.prev_valid && S.pso_rfa && S.pso_rfb && S.motion2 && S.prev && S.block && g_refine) {
@@ -1555,7 +1775,25 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	}
 	d.frameTimeDelta = dt_ms;
 	d.preExposure = 1.0f;
-	d.reset = first;
+	{ // FSR's history is dropped when the picture does not continue the previous one: the first frame, a frame after one without a 3D view (menu, loading screen, film:
+	  // no previous matrix), or a camera cut (camera_cut). Without it a cutscene's new shot was blended with the old one for a few frames. FSR3_NORESET=1: the first frame only.
+		static unsigned resets;
+		char why[160] = "first frame";
+		int reset = first;
+		if (!first && !getenv("FSR3_NORESET")) {
+			if (!g_vp_prev_ok) {
+				reset = 1;
+				snprintf(why, sizeof(why), "no 3D view in the frame before (menu, loading screen, film)");
+			} else if (g_vp_space != g_vp_prev_space) {
+				reset = 1;
+				snprintf(why, sizeof(why), "the camera matrix changed from %s to %s", g_vp_prev_space ? "camera-relative" : "world", g_vp_space ? "camera-relative" : "world");
+			} else if (g_vp_new_ok && camera_cut(g_vp_prev, g_vp_new, why, sizeof(why)))
+				reset = 1;
+		}
+		d.reset = reset;
+		if (reset && !first && (++resets <= 20 || resets % 100 == 0))
+			log_printf("fsr3: history reset %u at frame %u: %s", resets, S.frame, why);
+	}
 	d.cameraNear = 4.0f;
 	d.cameraFar = 40000.0f;
 	d.cameraFovAngleVertical = 1.0f;
@@ -1576,7 +1814,11 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	d.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
 	if (getenv("FSR3_DEBUGVIEW"))
 		d.flags |= FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW;
+	if (ts_on)
+		ts_mark(slot, 2);
 	ffxReturnCode_t rc = S.dispatch(&S.ctx, &d.header);
+	if (ts_on)
+		ts_mark(slot, 3);
 	static int dlog;
 	if (dlog++ < 3 || rc != FFX_API_RETURN_OK) {
 		static int bad;
@@ -1655,6 +1897,12 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	} else {
 		// FFX left the textures as they were declared: put the color texture back to where the next frame expects it (nothing to do: it is in the read state)
 	}
+	QueryPerformanceCounter(&c3);
+	if (ts_on) {
+		ts_mark(slot, 4);
+		ID3D12GraphicsCommandList_ResolveQueryData(S.list, g_ts_heap, D3D12_QUERY_TYPE_TIMESTAMP, slot * TS_PER_FRAME, TS_PER_FRAME, g_ts_rb, (UINT64)slot * TS_PER_FRAME * sizeof(UINT64));
+		g_ts_valid[slot] = 1;
+	}
 	ID3D12GraphicsCommandList_Close(S.list);
 	ID3D12CommandList *lists[1] = {(ID3D12CommandList *)S.list};
 	ID3D12CommandQueue_ExecuteCommandLists(S.queue, 1, lists);
@@ -1672,6 +1920,12 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	ID3D12Resource_Release(bb12);
 	vt->release(on12);
 	IDirect3DSurface9_Release(bb);
+	QueryPerformanceCounter(&c4);
+	g_cpu_acc[0] += cpu_ms(c0, c1); // (the depth's unwrap is inside the recording part: depth_source)
+	g_cpu_acc[1] += cpu_ms(c1, c2);
+	g_cpu_acc[2] += cpu_ms(c2, c3);
+	g_cpu_acc[3] += cpu_ms(c3, c4);
+	g_cpu_n++;
 	S.frame++;
 	return 1;
 }
@@ -1708,13 +1962,43 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 		t_last = t_now;
 		log_printf("fsr3: status frame %d: set up for %ux%u (render %ux%u), upscaled this frame %d, vp %d prev %d, %.2f ms per frame (refine %d)", g_frame, S.w, S.h, S.iw, S.ih, g_ran, g_vp_new_ok, g_vp_prev_ok, ms, g_refine);
 	}
+	// a frame of the world pass in which no world matrix was caught (FSR did not run: the game's picture stayed in the corner of the enlarged back buffer, owner's screenshot
+	// in a Humvee turret): the next frame's viewports and vertex shader constants go to the log, three times at most
+	if (g_saw_world_vp && !g_vp_new_ok && S.ok && g_autotrace < 3 && g_trace <= 0) {
+		g_autotrace++;
+		g_trace = 400;
+		g_armed = 1;
+		log_printf("fsr3: frame %d drew the world pass but no world view-projection matrix was caught: the next frame is traced", g_frame);
+	}
+	g_saw_world_vp = 0;
+	if (g_ran) {
+		g_diag_frames++;
+		g_jit_upl_sum += g_jit_uploads;
+		if (g_vp_distinct > 1)
+			g_multi_frames++;
+		if (g_diag_frames >= 600) {
+			log_printf("fsr3: of %d upscaled frames %d had more than one world matrix; jittered matrix uploads %.1f per frame", g_diag_frames, g_multi_frames, g_jit_upl_sum / g_diag_frames);
+			g_diag_frames = g_multi_frames = 0;
+			g_jit_upl_sum = 0.0;
+		}
+	}
+	g_jit_uploads = 0;
+	g_vp_distinct = 0;
 	if (g_ran && g_vp_new_ok) { // this frame's matrix is the previous one of the next frame
 		memcpy(g_vp_prev, g_vp_new, sizeof(g_vp_prev));
 		g_vp_prev_ok = 1;
+		if (g_vp_space != g_vp_prev_space) {
+			static int told;
+			if (told++ < 10)
+				log_printf("fsr3: frame %d: the camera matrix is %s now", g_frame, g_vp_space ? "camera-relative (no world matrix: a vehicle's turret)" : "a world matrix again");
+		}
+		g_vp_prev_space = g_vp_space;
 	} else {
 		g_vp_prev_ok = 0; // no 3D view in this frame (menu, loading): no reprojection next frame
 	}
 	g_vp_new_ok = 0;
+	g_vp_rel_ok = 0;
+	g_vp_space = 0;
 	g_ran = 0;
 	g_stretched = 0;
 	if (g_world_ds) {
@@ -1726,7 +2010,7 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 			const char *name;
 			float bias;
 			int sharp, jit, mv, rf, sp;
-		} var[] = {
+		} var_all[] = {
 			{"default", 1000.0f, -1, 1, 1, 1, 1},
 			{"norefine", 1000.0f, -1, 1, 1, 0, 1},
 			{"nosubpx", 1000.0f, -1, 1, 1, 1, 0},
@@ -1736,7 +2020,29 @@ void fsr3_present(IDirect3DDevice9 *dev9)
 			{"bias-2.0", -2.0f, -1, 1, 1, 1, 1},
 			{"nojitter", 1000.0f, -1, 0, 1, 1, 1},
 		};
-		const int idx = (int)((S.frame - 300) / 120) % (int)(sizeof(var) / sizeof(var[0]));
+		// FSR3_SWEEP=grain: the texture bias and the sharpening, which trade grain (shimmer on MW2's sharp alpha-tested grass and fences) against softness (owner,
+		// 2026-11-08: "soft and grainy"); AMD's bias for 1.5x is -1.58 and its docs say to back off for high-frequency content
+		static const struct {
+			const char *name;
+			float bias;
+			int sharp, jit, mv, rf, sp;
+		} var_grain[] = {
+			{"b-1.58_s60", -1.585f, 60, 1, 1, 1, 1},
+			{"b-1.0_s60", -1.0f, 60, 1, 1, 1, 1},
+			{"b-0.58_s60", -0.585f, 60, 1, 1, 1, 1},
+			{"b-1.58_s30", -1.585f, 30, 1, 1, 1, 1},
+			{"b-1.0_s30", -1.0f, 30, 1, 1, 1, 1},
+			{"b-0.58_s30", -0.585f, 30, 1, 1, 1, 1},
+			{"b-0.58_s0", -0.585f, 0, 1, 1, 1, 1},
+		};
+		const int grain = !strcmp(getenv("FSR3_SWEEP"), "grain");
+		const int nvar = grain ? (int)(sizeof(var_grain) / sizeof(var_grain[0])) : (int)(sizeof(var_all) / sizeof(var_all[0]));
+		const int idx = (int)((S.frame - 300) / 120) % nvar;
+		const struct {
+			const char *name;
+			float bias;
+			int sharp, jit, mv, rf, sp;
+		} *var = grain ? (const void *)var_grain : (const void *)var_all;
 		if (idx != g_sw_idx) {
 			g_sw_idx = idx;
 			g_sw_name = var[idx].name;

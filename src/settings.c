@@ -43,6 +43,8 @@ static int d3d9on12_adapter = -1;
 static int fsr3_on;
 static char fsr3_dir_buf[MAX_PATH];
 static int upscale_on, upscale_w, upscale_h, upscale_sharp = 25, fsr3_sharp = 60;
+static int fsr3_bias_set;
+static float fsr3_bias;
 static int gp_fall_damage = -1, gp_jump_height, gp_gravity;
 static char discord_id[32];
 static char player_id[33];
@@ -140,6 +142,14 @@ void settings_load(void)
 	fsr3_sharp = (int)GetPrivateProfileIntA("display", "fsr3_sharpness", 60, path);
 	if (fsr3_sharp < 0 || fsr3_sharp > 100)
 		fsr3_sharp = 60;
+	{ // fsr3_lodbias: the texture LOD bias of the world pass with FSR 3 (empty: AMD's log2(render / output) - 1, -1.58 for 1280x720 -> 1920x1080)
+		char b[32] = "";
+		GetPrivateProfileStringA("display", "fsr3_lodbias", "", b, sizeof(b), path);
+		fsr3_bias_set = b[0] != 0;
+		fsr3_bias = fsr3_bias_set ? (float)atof(b) : 0.0f;
+		if (fsr3_bias < -4.0f || fsr3_bias > 2.0f)
+			fsr3_bias_set = 0;
+	}
 #ifndef _WIN64
 	// AMD's FidelityFX DLLs (the FSR 3 loader and upscaler) exist only for 64-bit Windows, and a 32-bit game (the official
 	// 32-bit build, iw4x) cannot load a 64-bit DLL: LoadLibrary failed with error 193 and the log blamed fsr3_dir. FSR 3 is
@@ -279,6 +289,13 @@ int settings_upscale_sharpness(void)
 int settings_fsr3_sharpness(void)
 {
 	return fsr3_sharp;
+}
+
+int settings_fsr3_lodbias(float *bias)
+{
+	if (fsr3_bias_set && bias)
+		*bias = fsr3_bias;
+	return fsr3_bias_set;
 }
 
 int settings_fsr3(void)
