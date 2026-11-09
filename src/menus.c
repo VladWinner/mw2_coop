@@ -810,6 +810,61 @@ static void patch_main_menu(void)
 // The game starts on "main_selection", its picture cards Campaign / Spec Ops / Multiplayer. The mod's main menu is the list in main_text (patch_main_menu), so the
 // selection menu opens it when it opens itself: one more handler at the end of its onOpen.
 static uint8_t *selection_patched; // the menu object whose onOpen was extended
+// The Spec Ops page's way back: its Main menu button opens the game's own Campaign / Spec Ops picture chooser ("main_selection"); the mod's main menu is main_text, so
+// the scripts of the page's items open that instead. The scripts are replaced once per menu object (a zone reload makes a new one).
+static int specops_replace_set(MenuEventHandlerSet *set, int depth)
+{
+	static const char from[] = "\"main_selection\"", to[] = "\"main_text\"";
+	if (!set || IsBadReadPtr(set, sizeof(*set)) || depth > 4 || set->count < 1 || set->count > 24 || IsBadReadPtr(set->handlers, set->count * sizeof(void *)))
+		return 0;
+	int done = 0;
+	for (int i = 0; i < set->count; i++) {
+		MenuEventHandler *h = set->handlers[i];
+		if (!h || IsBadReadPtr(h, sizeof(*h)))
+			continue;
+		if (h->type == 0) {
+			if (!h->data || IsBadStringPtrA((const char *)h->data, 8) || !strstr((const char *)h->data, from))
+				continue;
+			const char *src = h->data;
+			char *out = HeapAlloc(GetProcessHeap(), 0, strlen(src) + 1);
+			size_t n = 0;
+			while (*src) {
+				if (!strncmp(src, from, sizeof(from) - 1)) {
+					memcpy(out + n, to, sizeof(to) - 1);
+					n += sizeof(to) - 1;
+					src += sizeof(from) - 1;
+				} else
+					out[n++] = *src++;
+			}
+			out[n] = 0;
+			h->data = out;
+			done++;
+#ifdef _WIN64
+		} else if (h->type == 1 && h->data && !IsBadReadPtr(h->data, 16)) { // if (expression, set): a readable set at either place is followed
+			done += specops_replace_set(*(MenuEventHandlerSet **)h->data, depth + 1);
+			done += specops_replace_set(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1);
+		} else if (h->type == 2 && h->data) {
+			done += specops_replace_set((MenuEventHandlerSet *)h->data, depth + 1);
+#endif
+		}
+	}
+	return done;
+}
+
+static uint8_t *specops_seen;
+static void patch_specops_return(void)
+{
+	uint8_t *menu = ui_find_menu("main_specops");
+	if (!menu || menu == specops_seen)
+		return;
+	specops_seen = menu;
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	int count = *(int *)(menu + MENU_ITEM_COUNT), done = 0;
+	for (int i = 0; i < count; i++)
+		done += specops_replace_set(*(MenuEventHandlerSet **)(items[i] + ITEM_ACTION), 0);
+	log_printf("menus: main_specops: %d script(s) now open main_text instead of main_selection", done);
+}
+
 static void patch_selection_menu(void)
 {
 
@@ -3023,6 +3078,7 @@ static void tick_f(void)
 	native_session_tick();
 	patch_main_menu();
 	patch_selection_menu();
+	patch_specops_return();
 	patch_act1_menu();
 	add_multiplayer_menu();
 	add_lobbies_menu();
