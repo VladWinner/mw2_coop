@@ -1,0 +1,26 @@
+# Hand-written descriptions for tools/gen_settings_reference.py: "section.key text". They win over every other source.
+# Say only what the code shows; a key whose meaning is not clear stays without a line here (the generator then says so).
+console.favorites_defaults_initialized Written by the console (1) once it has added its default pinned commands (mapname, viewposNow), so they do not come back after you unpin them. Not for editing.
+console.window_custom 1: the console window opens at the position and size saved in window_left_pct, window_top_pct, window_width_pct and window_height_pct (the console writes them when you move or resize it). Not for editing.
+console.window_left_pct Saved left edge of the console window, 0-10000 (hundredths of a percent of the screen); -1 = not set. Used only with window_custom=1; written by the console.
+console.window_top_pct Saved top edge of the console window, 0-10000 (hundredths of a percent of the screen); -1 = not set. Used only with window_custom=1; written by the console.
+console.window_width_pct Saved width of the console window, 1-10000 (hundredths of a percent of the screen); -1 = not set. Used only with window_custom=1; written by the console.
+console.window_height_pct Saved height of the console window, 1-10000 (hundredths of a percent of the screen); -1 = not set. Used only with window_custom=1; written by the console.
+display.fsr3_sharpness FSR 3's sharpening, 0-100 (0 = off); a value outside the range becomes 60. See the [display] comments in settings.ini.
+native.burstevery With burstat: the number of composed frames between two bursts of screenshots (default 600). QA.
+native.burstn With burstat: how many frames each burst saves (default 40). QA.
+native.padmovedead Gamepad left stick dead zone in percent (default 18), for the split screen's pads.
+native.paddead Gamepad right (look) stick dead zone in percent (default 22), for the split screen's pads.
+native.padcurve Gamepad stick response curve in percent (default 160 = the curve exponent 1.6), for the split screen's pads.
+native.padtrigger Gamepad trigger threshold in percent of full travel (default 30), for the split screen's pads.
+native.p1pad The device of player 2 (the bottom half): an XInput pad 0-3, or -1 for the keyboard and mouse. The lobby and the menu launch set it; a value in the file is for tests.
+native.p1name Name tag of player 1 in the split screen (empty = Alpha).
+native.p2name Name tag of player 2 in the split screen (empty = Bravo).
+native.p1cmd 1: a start value is written into the view angle accumulators of context 1 (player 2), see p1yawdeg. QA.
+native.p1yawdeg With p1cmd=1: the yaw in degrees written into context 1's view angle accumulator (default 60). QA.
+native.nogun 1: the weapon model is hidden in both views through the game's cg_drawGun dvar (testing).
+native.nopredict 1: player 2's view shows the server's player state as it is, without the client's own prediction (the dvar cg_nopredict; testing).
+native.sites Bit mask of which of the split screen's hook sites to install (default 0x7fffffff = all). Testing; a missing bit leaves that part of the game unpatched.
+native.seqstep With seqat: draw the composed picture every this many frames (default 1). QA.
+native.swapsites 1: notes the call sites of the context swap in the log (testing).
+native.timelogskip With timelog=1: the number of draws to skip before the 6000 logged ones. Testing.
