@@ -266,6 +266,23 @@ static void unlink64_guarded(void *node)
 	unlink64_original(node);
 }
 #endif
+#if !defined(_WIN64) && !defined(MW2COOP_IW4X)
+// The official 32-bit game (rva 0xfb410): `const char *lookup(int index)` reads the first word of the entry that a table of pointers (absolute address in the instruction at +7) holds for the
+// index. The level load's client setup (rva 0x1c5ba7: the index is a word of the client state at +0xacbc, the result goes into a format call) called it for an entry that does not exist
+// yet / any more, and the read of the entry faulted at 0xfb41b (null): two of four 32-bit runs of the mission-hop bot scenario (Trainer, Roadkill, Cliffhanger) crashed there or at
+// the next load. An entry that is missing gives the empty string the caller uses for index 0.
+static const void *const *name_table;
+static const char *name_lookup_guarded(int index)
+{
+	const char *const *entry = (const char *const *)name_table[index];
+	if (entry)
+		return *entry;
+	static LONG seen;
+	if (InterlockedIncrement(&seen) < 6)
+		log_printf("guards: the entry %d of the name table is missing, an empty text is used", index);
+	return "";
+}
+#endif
 #if !defined(_WIN64) && defined(MW2COOP_IW4X)
 // The iw4x-sp client (1.0.159 image, rva 0xb2700): the game's unlink of a node from a doubly linked list (next at +4, the pointer to the previous link at +8; called by the function
 // at 0xc6e10 that moves an object between two lists under critical section 0x17). A node whose back pointer is null has been unlinked already: the write through it
@@ -387,6 +404,22 @@ void guards_install(void)
 		return;
 	}
 	log_printf("guards: weapon definition lookup %s", hook_call(site, (void *)wdef_hook, (void **)&wdef_original) ? "guarded" : "NOT guarded (no hook page)");
+#endif
+#if !defined(_WIN64) && !defined(MW2COOP_IW4X)
+	{
+		static const uint8_t lookup_head[11] = {0x8b, 0x44, 0x24, 0x04, 0x8b, 0x0c, 0x85}; // mov eax,[esp+4]; mov ecx,[eax*4 + table] (the 4 bytes of the table address follow)
+		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);
+		uint8_t want[11];
+		memcpy(want, lookup_head, 7);
+		memcpy(want + 7, b32 + 0xfb410 + 7, 4); // (the table's address is relocated when the exe is not at its preferred address: take what is there)
+		void *dummy = NULL;
+		if (b32[0xfb41b] != 0x8b || memcmp(b32 + 0xfb410, lookup_head, 7)) {
+			log_printf("guards: the name table lookup at rva 0xfb410 is not as expected, not guarded");
+		} else {
+			name_table = *(const void *const *const *)(b32 + 0xfb410 + 7);
+			log_printf("guards: the name table lookup at rva 0xfb410 %s", hook_function(b32 + 0xfb410, want, sizeof(want), (void *)name_lookup_guarded, &dummy) ? "is guarded" : "NOT guarded (hook failed)");
+		}
+	}
 #endif
 #if !defined(_WIN64) && defined(MW2COOP_IW4X)
 	if (settings_unlinkguard()) {
