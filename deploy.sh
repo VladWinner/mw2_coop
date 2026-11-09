@@ -36,6 +36,9 @@ for t in "$@"; do
 	mkdir -p "$t/mw2coop/localizedstrings"
 	cp content/release/localizedstrings/*.str "$t/mw2coop/localizedstrings/"
 	cp content/release/missions.csv "$t/mw2coop/"
+	case "$BITS" in 32) AF=addresses-x86.txt ;; *) AF=addresses-x64.txt ;; esac
+	[ "$MW2COOP_IW4X" = 1 ] && AF=addresses-x86.txt
+	cp "content/release/$AF" "$t/mw2coop/"
 	[ -f "$t/mw2coop/settings.ini" ] || cp content/release/settings.ini "$t/mw2coop/"
 	cp content/release/mw2coop-firewall.ps1 "$t/mw2coop/"
 	rm -f "$t/mw2coop/mw2coop.log"

@@ -1,0 +1,77 @@
+# Finding the game's addresses by signature
+
+The mod patches `iw4sp.exe` at addresses it learned from one build of the game (the *reference build*: the official 32-bit Steam build, the
+64-bit Steam build). A build with other addresses used to mean "unknown build: nothing is patched". This page is about how the mod now looks
+the addresses up in a build it has not seen: by byte signatures of the code around them.
+
+## What is there
+
+| Piece | Where | What it does |
+|---|---|---|
+| Signature files | `mw2coop/addresses-x86.txt`, `addresses-x64.txt` (`content/release/`) | for every address the mod uses, byte patterns of the code around it, `??` for bytes that depend on where things are |
+| Generator | `tools/addrsig.py gen` | makes a signature file from the reference build (an image dump or the exe) |
+| Python check | `tools/addrsig.py verify` | resolves a signature file against another build, optionally against a table of known answers |
+| Resolver | `src/addr.c`, `src/addr.h` | the same rules in C, run by the mod at start on a build it does not know; a hash index of the code makes a full run take 0.1 to 0.4 s |
+| Test program | `tools/test_addr.c`, `tools/test_addr.sh` | runs the resolver on a game exe file |
+
+Known builds are not affected: the resolver runs only when the code hash (32-bit) or the PE timestamp (64-bit) is not a known one.
+
+## The signature file
+
+One signature per line (the header of `tools/addrsig.py` has the details):
+
+```
+CODE 0x00cf10 off=16 sig=8B 44 24 04 ?? ?? ?? ?? 56 ...     code point at reference rva 0xcf10, 16 bytes into the pattern
+DATA 0x33ba88 abs cap=4 sig=A1 ?? ?? ?? ?? ...              a global: the 4 bytes at offset 4 are its absolute address
+DATA 0x1b21e90 rip cap=3 tail=0 sig=48 8D 0D ?? ?? ?? ?? ... a global: a rip-relative displacement at offset 3 (64-bit)
+DATA 0x2e9fd0 abs cap=8 delta=4 sig=...                      the code reaches the global through a field 4 bytes into it
+DATA 0x331aec derive                                         no signature: taken from its neighbours
+```
+
+A signature is made only if it matches exactly one place in the reference build. Several signatures (up to 24 for code, 16 for data) are made per
+address from windows of different size and position around it.
+
+## The rules (the Python check and the C resolver are the same)
+
+1. A signature counts if it matches exactly **one** place in the executable sections of the running build.
+2. An address is accepted if two signatures agree on it, or, for a code address, one signature with 40 or more fixed bytes; and no other
+   candidate has as many votes. Anything else stays unresolved. **The mod must not use an unresolved address.**
+3. A global that no signature found is derived from the nearest accepted globals below and above it (within 0x1000), if both moved by the same amount.
+4. The window for finding a global through the code that uses a field of it is limited to -0x20 .. +0x100 bytes. A wider window found 3 wrong
+   addresses in a test (the code referenced another entry of the same table in the other build), so it is not used.
+
+## Same layout
+
+If every address found is the reference address itself, at least 90% of the code addresses (and 40) and at least half of the data addresses
+were found, the build has the reference build's layout: the same addresses with some bytes changed. The mod then runs with the known addresses
+(`addr_layout_same()`); each hook still checks the bytes it patches and refuses if they differ.
+
+## Measured
+
+| Test | Result |
+|---|---|
+| 32-bit reference (official) -> the 1.0.159 exe of the iw4x client; the 241 addresses with known answers (`src/addr159.c`) | **212 right, 0 wrong**, 29 not resolved (138 code: 132 found by signature; 103 data: 80) |
+| the same in C (`test_addr.exe`) | identical to the Python result, 0.26 s |
+| 32-bit reference -> a second official-layout exe (D:\ install of the owner, 33 patched places, 174 differing bytes; the layout is identical, so every answer must be identity) | **235 of 241 found, all identity**; in the game the mod recognised the layout, installed all its modules and started split screen with the same hooks as on the official exe |
+| 64-bit reference -> itself, inside the running game (forced) | 74 of 120 found in 140 ms, all identity |
+
+## What is not done
+
+* The 64-bit signatures find 74 of 120 addresses: the 46 that are missing are globals (tables and structs) that the code reaches only far into
+  the structure. Until more of them are found, a 64-bit build with another layout is reported but not run.
+* A build whose addresses moved is not run yet. The resolver finds most addresses of the 159 build, but the mod's code reads its addresses as
+  constants (320 `RVA_` macros and about 130 written inline); they have to go through `addr_xr()` first, and a feature must be switched off when
+  one of its addresses is unresolved. The iw4x profile already does this through `addr159()`.
+* 6 globals of the 32-bit build (the rumble script function table and three others) are never found: no code reaches them near enough.
+
+## Regenerating
+
+```sh
+python -I tools/addrsig.py gen x86 <image32.bin or iw4sp.exe> content/release/addresses-x86.txt
+python -I tools/addrsig.py gen x64 <64-bit iw4sp.exe>        content/release/addresses-x64.txt
+python -I tools/addrsig.py verify content/release/addresses-x86.txt <other build> [--truth table]
+sh tools/test_addr.sh && build/test_addr.exe content/release/addresses-x86.txt <other build>
+```
+
+The 32-bit reference is a memory dump of the official build (`mw2coop\dump_image`, docs/32bit-plan.md); the 64-bit generator needs
+`llvm-objdump` for instruction boundaries. QA: `MW2COOP_FORCE_UNKNOWN=1` takes the unknown-build path on a known build.

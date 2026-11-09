@@ -1,8 +1,10 @@
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "game.h"
 #include "log.h"
+#include "addr.h"
 
 static uint8_t *base;
 static int ready;
@@ -19,8 +21,21 @@ int game_init(void)
 	uint32_t stamp = nt->FileHeader.TimeDateStamp;
 	image_size = nt->OptionalHeader.SizeOfImage;
 	ready = stamp == IW4SP_TIMESTAMP;
+	// QA: MW2COOP_FORCE_UNKNOWN=1 takes the unknown build path on the known build (the resolver must then find every address where it is)
+	int forced = getenv("MW2COOP_FORCE_UNKNOWN") != NULL;
+	if (forced)
+		ready = 0;
 	log_printf("game: exe timestamp 0x%08x, expected 0x%08x -> %s", stamp, IW4SP_TIMESTAMP,
-		   ready ? "known build" : "UNKNOWN BUILD, game calls disabled");
+		   ready ? "known build" : forced ? "UNKNOWN BUILD (forced for a test), game calls disabled" : "UNKNOWN BUILD, game calls disabled");
+	if (!ready) { // look the addresses of this build up by their signatures (addr.c); the game calls stay off, the log says what was found
+		int total = 0;
+		int found = addr_resolve_running(&total);
+		log_printf("game: addresses found by signature: %d of %d", found, total);
+		if (addr_layout_same() && !forced) {
+			ready = 1; // the layout of the known build: its addresses hold; hooks verify their own bytes
+			log_printf("game: unknown build with the layout of the known one: the mod runs with the known addresses");
+		}
+	}
 #else
 	IMAGE_NT_HEADERS32 *nt = (IMAGE_NT_HEADERS32 *)(base + dos->e_lfanew);
 	image_size = nt->OptionalHeader.SizeOfImage;

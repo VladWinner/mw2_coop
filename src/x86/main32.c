@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "game.h"
+#include "addr.h"
 #include "log.h"
 #include "scripts.h"
 #include "zones.h"
@@ -192,6 +193,38 @@ static void dump_image(void)
 	log_printf("main32: image of %lu bytes written to %s (%lu bytes readable)", (unsigned long)size, out, (unsigned long)readable);
 }
 
+// the modules of the mod, in the order they have always been installed
+static void install_all(void)
+{
+	game_init();
+	crash_install();
+	log_printf("main32: settings port %u", (unsigned)settings_port());
+	scripts_install();
+	mirror_install();
+	transplant_install();
+	localize_install();
+	zones_install();
+	scrdebug_install();
+	net_install();
+	party_install();
+	progress_install();
+	menus_install();
+	access_install();
+	upnp_install();
+	steamnet_install();
+	firewall_install();
+	shot_install();
+	fov_install();
+	window_install();
+	native_install(); // (iw4x-sp: the official addresses go through XR(), src/addr159.c)
+	guards_install(); // (iw4x-sp only: see guards.c)
+	climbads_install(); // (not in the iw4x-sp profile)
+	rumble_install();
+	devices_install();
+	console_install();
+	control_start();
+}
+
 static DWORD WINAPI identify(LPVOID unused)
 {
 	(void)unused;
@@ -215,42 +248,27 @@ static DWORD WINAPI identify(LPVOID unused)
 		return 0;
 	}
 	log_printf("main32: image base %p, code sections %u bytes, SHA-256 %s", (void *)GetModuleHandleW(NULL), bytes, hex);
+	int forced_unknown = getenv("MW2COOP_FORCE_UNKNOWN") != NULL; // QA: take the unknown build path on the known build
 #ifdef MW2COOP_IW4X
 	for (size_t i = 0; i < 1; i++) {
 		if (iw4x_known()) {
 			log_printf("main32: known build: 1.0.159 iw4sp.exe of the iw4x-sp client");
 #else
 	for (size_t i = 0; i < sizeof(builds) / sizeof(builds[0]); i++) {
-		if (strcmp(hex, builds[i].code_sha256) == 0) {
+		if (!forced_unknown && strcmp(hex, builds[i].code_sha256) == 0) {
 			log_printf("main32: known build: %s", builds[i].name);
 #endif
-			game_init();
-			crash_install();
-			log_printf("main32: settings port %u", (unsigned)settings_port());
-			scripts_install();
-			mirror_install();
-			transplant_install();
-			localize_install();
-			zones_install();
-			scrdebug_install();
-			net_install();
-			party_install();
-			progress_install();
-			menus_install();
-			access_install();
-			upnp_install();
-			steamnet_install();
-			firewall_install();
-			shot_install();
-			fov_install();
-			window_install();
-			native_install(); // (iw4x-sp: the official addresses go through XR(), src/addr159.c)
-			guards_install(); // (iw4x-sp only: see guards.c)
-			climbads_install(); // (not in the iw4x-sp profile)
-			rumble_install();
-			devices_install();
-			console_install();
-			control_start();
+			install_all();
+			return 0;
+		}
+	}
+	{ // look the addresses of this build up by their signatures (addr.c); nothing is patched, the log says what was found
+		int total = 0;
+		int found = addr_resolve_running(&total);
+		log_printf("main32: addresses found by signature: %d of %d", found, total);
+		if (addr_layout_same() && !forced_unknown) {
+			log_printf("main32: unknown build with the layout of the known one (same addresses, some code bytes differ): the mod runs with the known addresses");
+			install_all();
 			return 0;
 		}
 	}
