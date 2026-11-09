@@ -30,9 +30,6 @@ typedef struct {
 
 static shader_info_t shaders[MAX_SHADERS];
 static int nshaders;
-static IDirect3DVertexShader9 *cur_vs;
-static shader_info_t *cur_info;
-static float cur_minz, cur_maxz;
 static int log_on;
 static float (*tan_view)(void); // tan(fov / 2) of the view as the game builds it (set at install)
 static float weapon_tan; // tan(weapon fov / 2) in the same unit; 0 = off
@@ -73,6 +70,7 @@ static void read_table(shader_info_t *si, const DWORD *code)
 
 static shader_info_t *info_of(IDirect3DDevice9 *dev, IDirect3DVertexShader9 *vs)
 {
+	(void)dev; // (kept in the signature: the table is read from the shader object itself)
 	for (int i = 0; i < nshaders; i++)
 		if (shaders[i].vs == vs)
 			return &shaders[i];
@@ -120,7 +118,6 @@ static void apply_scale(const float *in, float *out, float k)
 static HRESULT STDMETHODCALLTYPE hook_viewport(IDirect3DDevice9 *dev, const D3DVIEWPORT9 *vp)
 {
 	if (vp) {
-		cur_minz = vp->MinZ, cur_maxz = vp->MaxZ;
 		if (log_on) {
 			static float seen[16][2];
 			static int n;
@@ -158,8 +155,8 @@ static HRESULT STDMETHODCALLTYPE hook_viewport(IDirect3DDevice9 *dev, const D3DV
 
 static HRESULT STDMETHODCALLTYPE hook_shader(IDirect3DDevice9 *dev, IDirect3DVertexShader9 *vs)
 {
-	cur_vs = vs;
-	cur_info = vs ? info_of(dev, vs) : NULL;
+	if (vs)
+		info_of(dev, vs); // reads the shader's constant table once (cached for hook_constants)
 	return vs_orig(dev, vs);
 }
 
@@ -191,9 +188,6 @@ void weaponfov_hook(IDirect3DDevice9 *dev, void (*patch)(void **slot, void *hook
 	tan_view = view_tan;
 	weapon_tan = weapon_fov_degrees > 0 ? tanf(weapon_fov_degrees * 3.14159265f / 360.0f) : 0;
 	nshaders = 0;
-	cur_info = NULL;
-	cur_vs = NULL;
-	cur_minz = 0, cur_maxz = 1;
 	scaled = 0;
 	patch(&vt[47], (void *)hook_viewport, (void **)&vp_orig);
 	patch(&vt[92], (void *)hook_shader, (void **)&vs_orig);

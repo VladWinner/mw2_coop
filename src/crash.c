@@ -73,7 +73,7 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 	log_printf("%s", line);
 	{ // the same, for code outside the exe (a graphics driver, the Steam overlay, d3d9): module + offset of the faulting instruction and of the return addresses on the stack
 		char mods[900];
-		int m = 0, shown = 0;
+		int m = 0;
 		uintptr_t list[17];
 		int nl = 0;
 		list[nl++] = rip;
@@ -93,7 +93,6 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 				GetModuleFileNameA(mod, name, sizeof(name));
 				const char *slash = strrchr(name, '\\');
 				m += wsprintfA(mods + m, " %s+%lx", slash ? slash + 1 : name, (unsigned long)(list[i] - (uintptr_t)mod));
-				shown++;
 			}
 		}
 		log_printf("%s", mods);

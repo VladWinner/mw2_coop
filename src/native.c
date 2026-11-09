@@ -3871,7 +3871,7 @@ static void ctx_swap_hand(int to)
 
 // The cgame block holds what the cgame registered for the whole process (the media handles the 2D drawing uses even while the cgame is still being initialised). Context 1 starts
 // from context 0's block after its init, so its own init can draw the loading screen.
-static int ctx_seeded; // once for each session (session_reset clears it): a second session in the same process starts context 1 from the new level's cgame, not from the first level's
+static int ctx_seeded; // once for each level of a session (session_reset and the cgame init of a new level clear it): a second session in the same process starts context 1 from the new level's cgame, not from the first level's
 static void ctx_seed_cgame(void)
 {
 	if (ctx_seeded || ctx_current != 0)
@@ -4189,6 +4189,10 @@ static void cg_init_all_hook(void)
 	if (native_active) { // a new level: context 1 starts again from this level's cgame
 		ctx1_ready = 0;
 		draws_after_init = 0;
+		// ... and from a fresh copy of it: context 1's block still held the previous level's cgame (pointers into memory freed with that level) because the seeding is made once per
+		// session. A level change inside one session (the mission's end, the next mission) then ran context 1 on stale lists: access violations a second or two after the split view
+		// came up, in the render thread (rva 0x11b6f6) and the main thread (0x1bdef0), in 1 of 2 v0.6.0 runs of QA scenario hop (Trainer to Roadkill).
+		ctx_seeded = 0;
 	}
 	log_printf("native: cgame init done, dvar ptr 0x52bfc0 = %p", *(void **)(base + 0x52bfc0));
 }

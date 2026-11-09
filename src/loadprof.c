@@ -46,7 +46,7 @@ static DWORD WINAPI prof_thread(LPVOID arg)
 	unsigned samples = 0;
 	while (GetTickCount() - start < seconds * 1000) {
 		HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-		THREADENTRY32 te = {sizeof(te)};
+		THREADENTRY32 te = {.dwSize = sizeof(te)};
 		if (snap != INVALID_HANDLE_VALUE && Thread32First(snap, &te))
 			do {
 				if (te.th32OwnerProcessID != pid || te.th32ThreadID == self)
@@ -115,7 +115,7 @@ static DWORD WINAPI prof_thread(LPVOID arg)
 		if (GetProcessIoCounters(GetCurrentProcess(), &io))
 			log_printf("loadprof: process read %llu MB in %llu reads, wrote %llu MB", (unsigned long long)(io.ReadTransferCount >> 20), (unsigned long long)io.ReadOperationCount, (unsigned long long)(io.WriteTransferCount >> 20));
 		HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-		THREADENTRY32 te = {sizeof(te)};
+		THREADENTRY32 te = {.dwSize = sizeof(te)};
 		if (snap != INVALID_HANDLE_VALUE && Thread32First(snap, &te))
 			do {
 				if (te.th32OwnerProcessID != pid)

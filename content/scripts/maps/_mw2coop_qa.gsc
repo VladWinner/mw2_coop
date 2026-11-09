@@ -26,6 +26,8 @@
 //   oilrigambush - (oilrig, start "heli", pair) hostages alive and the ambush flags every 2 s for 90 s
 //   framesevery - (any level and start) a frame of both players (a composed one in split screen) every second for 40 s: mw2coop\shotse-<n>.bmp, with both players' positions in the report
 //   failspin - (split screen, any level) 12 s in the mission is failed (maps\_mw2coop::mission_failed); after the restart a frame every second for 20 s with player 2's yaw: does his half turn by itself (testers: after a failed mission his camera spins)?
+//   hop - (any level, split screen or pair) 15 s after the level starts the mission is completed (the next mission is started the way the game does it); the scenario goes on in the next level: a chain of missions without a lobby (memory and crashes across loads)
+//   falsefall - (any level, split screen or pair) a MOD_FALLING hit with no fall behind it is undone (Vlad's Oil Rig log), a real 300 unit fall still hurts
 //   downaudio - (any level, split screen or pair) player 2 is downed for 20 s, then revived: the near-death sound filter (EQ/reverb flag) of each player every second.
 //              Run with MW2COOP_MID "!trace <rva>" for seteqbands/setreverb/deactivateeq/deactivatereverb/playlocalsound to see who calls them and how often (Vlad: sound stutters after a partner is downed)
 //   failspinkill - failspin, but both players really die (the death view) instead of the scripted fail; frames fk-N while they die
@@ -359,6 +361,12 @@ main()
 		case "oilrigclimbb":
 		case "oilrigclimbbp":
 			oilrigclimb();
+			break;
+		case "hop":
+			hop();
+			break;
+		case "falsefall":
+			falsefall();
 			break;
 		case "downaudio":
 			downaudio();
@@ -1118,6 +1126,46 @@ god()
 	check( IsAlive( level.player ) && IsAlive( level.player2 ), "both players alive after heavy damage" );
 	check( !level.player ent_flag( "coop_downed" ) && !level.player2 ent_flag( "coop_downed" ), "neither player downed" );
 	check( level.player.health > 0 && level.player2.health > 0, "health " + level.player.health + " / " + level.player2.health );
+	report( "done" );
+}
+
+// hop: completes the mission 15 s after the level began. The dvar mw2coop_qa stays set, so every next level runs it again.
+hop()
+{
+	common_checks();
+	report( "hop: level " + level.script + " up, completing in 15 s" );
+	wait 15;
+	maps\_mw2coop::mission_complete();
+	wait 60;
+	report( "hop: still here after 60 s (the next mission did not start)" );
+}
+
+// falsefall (run with MW2COOP_PRE "set mw2coop_god 0;set bg_fallDamageMinHeight 10;set bg_fallDamageMaxHeight 30;set mw2coop_qa falsefall"; a script cannot set the fall dvars; split screen or pair): falling damage with no real fall behind it is undone (Vlad's Oil Rig log: player 2
+// "landed" with 100 damage after 20 s in the air above the deck). A script cannot make a fall-less MOD_FALLING hit (DoDamage takes no means of death, and a teleport into the air gives the engine
+// no start of the fall), so what is checked is that the guard does not undo a real fall: 300 units must still hurt. The undo itself is not reproduced yet.
+falsefall()
+{
+	common_checks();
+	wait 3;
+	p = level.player2;
+	spot = p.origin;
+	level.mw2coop_fall_guard_off = true;
+	p.health = p.maxhealth;
+	p SetOrigin( spot + ( 0, 0, 25 ) );
+	wait 1.5;
+	report( "falsefall: guard off, 25 unit drop: health " + p.health );
+	report( "falsefall: (info) the engine measures a fall from where the player left the ground: a teleport into the air gives it none, so this drop may cost nothing even without the guard" );
+	level.mw2coop_fall_guard_off = false;
+	p.health = p.maxhealth;
+	wait 3;
+	p SetOrigin( spot + ( 0, 0, 25 ) );
+	wait 1.5;
+	check( p.health >= p.maxhealth, "with the guard the same drop is undone (health " + p.health + ")" );
+	p.health = p.maxhealth;
+	wait 3;
+	p SetOrigin( spot + ( 0, 0, 300 ) );
+	wait 2;
+	check( p.health < p.maxhealth || p ent_flag( "coop_downed" ), "a real fall of 300 units still hurts (health " + p.health + ")" );
 	report( "done" );
 }
 

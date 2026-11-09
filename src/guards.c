@@ -6,8 +6,15 @@
 // definition (an unaligned heap address), the read of def+0x2e0 faulted at rva 0x9eb2b. The lookup at the call site 0x9eb1c is wrapped: a result whose slot
 // array cannot be read is replaced by an empty definition (its slots are all null: the entity is skipped, as the game does for a weapon without a model), and the
 // index is logged, which is what is still missing to find out how the table got that value.
+//
+// Removed entities (rva 0xb06a0, the cgame's loop over the local client's entities that are being removed, stride 0x1a8): for each one without a pointer at +0x20 the
+// loop fetches the entity's DObj (0x1fece0, handle word at +0x13e), sets its flag (0x299ee0), traces from it, spawns the effect and frees it (0x92c00). Split screen: both
+// contexts run as local client 0 and share the DObj table, so when both contexts remove the same entity the second finds no DObj, and the flag write faulted at 0x299ee0
+// (read of 0xf; Vlad, Cliffhanger, the moment the ice axes are handed out, GSC thread _gameskill::playerhealthregen). The fetch's result is tested: without a DObj the entity is
+// skipped (the first context already did the work).
 #include <windows.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "game.h"
 #include "guards.h"
@@ -221,6 +228,15 @@ static DWORD WINAPI hud_text_thread(LPVOID unused)
 	return 0;
 }
 
+#ifdef _WIN64
+static void (*dobj_flag_original)(void *, int);
+static void dobj_flag_guarded(void *dobj, int on)
+{
+	if (dobj)
+		dobj_flag_original(dobj, on);
+}
+#endif
+
 void guards_install(void)
 {
 	CreateThread(NULL, 0, hud_text_thread, NULL, 0, NULL);
@@ -240,6 +256,32 @@ void guards_install(void)
 	}
 	if (!settings_hotguards())
 		return;
+	{
+		// at 0xb0715: mov dl,1; mov rcx,rax; mov r14,rax; call 0x299ee0; movss xmm0,[rdi-8] (18 bytes), rax = the DObj just fetched
+		static const uint8_t removal_bytes[18] = {0xb2, 0x01, 0x48, 0x8b, 0xc8, 0x4c, 0x8b, 0xf0, 0xe8, 0xbe, 0x97, 0x1e, 0x00, 0xf3, 0x0f, 0x10, 0x47, 0xf8};
+		if (memcmp(base + 0xb0715, removal_bytes, sizeof(removal_bytes))) {
+			log_printf("guards: the removed entity loop at 0xb0715 is not as expected, not guarded");
+		} else {
+			uint8_t code[58] = {0x48, 0x85, 0xc0, 0x75, 0x0e,                           // 0: test rax, rax; jnz run
+					    0xff, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,         // 5: jmp [rip+0], the address at 11: the loop's next entity (0xb07f6)
+					    0xb2, 0x01, 0x48, 0x89, 0xc1, 0x49, 0x89, 0xc6,         // 19 run: mov dl,1; mov rcx,rax; mov r14,rax
+					    0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xd0,         // 27: mov rax, <0x299ee0 at 29>; call rax
+					    0xf3, 0x0f, 0x10, 0x47, 0xf8,                           // 39: movss xmm0, [rdi-8]
+					    0xff, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};        // 44: jmp [rip+0], the address at 50: 0xb0727
+			uint64_t skip = (uint64_t)(base + 0xb07f6), flag = (uint64_t)(base + 0x299ee0), back = (uint64_t)(base + 0xb0727);
+			memcpy(code + 11, &skip, 8);
+			memcpy(code + 29, &flag, 8);
+			memcpy(code + 50, &back, 8);
+			uint8_t *cave = hook_code(code, sizeof(code));
+			if (cave) {
+				hook_jump(base + 0xb0715, sizeof(removal_bytes), cave, 0x90);
+				log_printf("guards: the removed entity loop at 0xb0715 is guarded (an entity without a DObj is skipped)");
+			} else
+				log_printf("guards: the removed entity loop at 0xb0715 NOT guarded (no hook page)");
+		}
+		static const uint8_t flag_bytes[15] = {0x44, 0x0f, 0xb6, 0x41, 0x0f, 0x41, 0x0f, 0xb6, 0xc0, 0x41, 0x80, 0xc8, 0x01, 0x24, 0xfe}; // movzx r8d,[rcx+0xf]; movzx eax,r8b; or r8b,1; and al,0xfe
+		log_printf("guards: the DObj flag setter at 0x299ee0 %s", hook_function(base + 0x299ee0, flag_bytes, sizeof(flag_bytes), (void *)dobj_flag_guarded, (void **)&dobj_flag_original) ? "ignores a null DObj" : "is not as expected, not guarded");
+	}
 	uint8_t *site = base + 0x9eb1c; // call 0x140085850 (the table lookup)
 	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + 0x85850) {
 		log_printf("guards: weapon definition lookup not guarded (bytes differ)");

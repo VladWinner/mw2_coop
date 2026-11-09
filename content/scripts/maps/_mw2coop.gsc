@@ -146,6 +146,7 @@ main()
 	thread camera_probe();
 	set_bodies();
 	thread sync_weapons();
+	thread watch_false_falls();
 	thread track_checkpoints();
 	thread maps\_mw2coop_checkpoints::watch_flags();
 	thread maps\_mw2coop_rec::start();	// what both players do and where they are, into mw2coop.log
@@ -734,6 +735,65 @@ sync_weapons()
 			level.mw2coop_empty_hands = 0;
 		prev1 = level.player GetWeaponsListAll();
 		prev2 = level.player2 GetWeaponsListAll();
+	}
+}
+
+// --------------------------------------------------------------------------------------------
+// Falling damage without a fall. Vlad's Oil Rig session (2026-11-08, log mw2coop(4)): after a restart player 2 stood one unit above the deck, "in the air" and not moving, for
+// 20 s; then he "landed" at the same spot with 100 damage from MOD_FALLING and was downed at once ("player 2 hurt himself"). The engine measures the fall from where the
+// player left the ground, and that point was stale. A fall of 140 units or more is needed for any damage, and the player must have been that much higher in the seconds before:
+// damage of that kind without it is undone (the health goes back to what it was a tick earlier).
+
+watch_false_falls()
+{
+	level endon( "mw2coop_level_end" );
+	foreach ( player in level.players )
+		player thread false_fall_guard();
+}
+
+false_fall_guard()
+{
+	level endon( "mw2coop_level_end" );
+	self endon( "death" );
+	self.mw2coop_zs = [];
+	self.mw2coop_h0 = self.health;
+	thread false_fall_sampler();
+	for ( ;; )
+	{
+		self waittill( "damage", amount, attacker, direction, point, type );
+		if ( !isdefined( type ) || type != "MOD_FALLING" || is_downed( self ) )
+			continue;
+		if ( isdefined( level.mw2coop_fall_guard_off ) && level.mw2coop_fall_guard_off )	// QA: to see what the engine does without the guard
+			continue;
+		top = self.origin[ 2 ];
+		foreach ( z in self.mw2coop_zs )
+			if ( z > top )
+				top = z;
+		if ( top - self.origin[ 2 ] >= 64 )
+			continue;
+		if ( self.mw2coop_h0 > self.health && self.mw2coop_h0 <= self.maxhealth )
+			self.health = self.mw2coop_h0;
+		state( "falling damage " + amount + " without a fall (" + ( top - self.origin[ 2 ] ) + " units) undone, health " + self.health );
+	}
+}
+
+// self: a player. Health of the last tick (the damage notify comes after the health dropped) and the heights of the last 3 s.
+false_fall_sampler()
+{
+	level endon( "mw2coop_level_end" );
+	self endon( "death" );
+	n = 0;
+	k = 0;
+	for ( ;; )
+	{
+		wait 0.05;
+		self.mw2coop_h0 = self.health;
+		n++;
+		if ( n % 2 == 0 )
+		{
+			self.mw2coop_zs[ k ] = self.origin[ 2 ];
+			k = ( k + 1 ) % 30;
+		}
 	}
 }
 
