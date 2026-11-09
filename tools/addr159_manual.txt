@@ -11,3 +11,42 @@
 0x1af9bc8 -> 0x1afc858    # the split screen view range (per local client views + visible cell bits): VA 0x1ef9bd0/0x1ef9bcc/0x1efa6c0/0x1efa6c4/0x1ef9cb0 all map +0x2c90 (map159 data, 2-8 refs each agree)
 0x2d18b -> 0x9c4fb    # the tail jmp to the snapshot build (official 0x65cc90, 159 rva 0x25f400: mov eax,0x4028; call alloca_probe), 0x36 behind the server commands call 0x2d155 -> 0x9c4c5 (entring)
 0x5a8f0 -> 0x2b260    # the animation transfer queue's apply loop (push esi / xor esi,esi / cmp [count],esi; found by its bytes in both images)
+
+0x9b40 -> 0xa1090    # RVA_CBUF_ADDTEXT: the iw4x-sp profile block of game.h had this value
+0x233480 -> 0x235c50    # RVA_DVAR_FINDVAR: the iw4x-sp profile block of game.h had this value
+0x1569a90 -> 0x156d010    # RVA_DVAR_HASH: the iw4x-sp profile block of game.h had this value
+0x28090 -> 0x478a0    # RVA_CMD_ADDCOMMAND: the iw4x-sp profile block of game.h had this value
+0x104c950 -> 0x104fed0    # RVA_CMD_ARGS: the iw4x-sp profile block of game.h had this value
+0x1057620 -> 0x105aba0    # RVA_SV_CMD_ARGS: the iw4x-sp profile block of game.h had this value
+0x166ab98 -> 0x166e110    # RVA_SV_CMD_DEVMAP: the iw4x-sp profile block of game.h had this value
+0x104c9d8 -> 0x104ff58    # RVA_CMD_FUNCTIONS: the iw4x-sp profile block of game.h had this value
+0x15fbf88 -> 0x15ff508    # RVA_XUID_TABLE: the iw4x-sp profile block of game.h had this value
+0x534480 -> 0x537a08    # RVA_PARTY_SKILL: the iw4x-sp profile block of game.h had this value
+0x534450 -> 0x5379d8    # RVA_PARTY_LOBBY: the iw4x-sp profile block of game.h had this value
+0x534448 -> 0x5379d0    # RVA_PARTY_IS_HOST: the iw4x-sp profile block of game.h had this value
+0x534449 -> 0x5379d1    # RVA_PARTY_ACTIVE: the iw4x-sp profile block of game.h had this value
+0x53444b -> 0x5379d3    # RVA_PARTY_LAUNCH: the iw4x-sp profile block of game.h had this value
+0x534458 -> 0x5379e0    # RVA_PARTY_MEMBER_NAMES: the iw4x-sp profile block of game.h had this value
+0x53444c -> 0x5379d4    # RVA_PARTY_START_TIME: the iw4x-sp profile block of game.h had this value
+0x35ff0 -> 0xbead0    # RVA_LOBBY_SLOT_USED: the iw4x-sp profile block of game.h had this value
+0x2f0f0 -> 0xd43a0    # RVA_PARTY_RESET: the iw4x-sp profile block of game.h had this value
+0xb82f0 -> 0x66830    # RVA_PARTY_CLEAR_MEMBERS: the iw4x-sp profile block of game.h had this value
+0x92e80 -> 0x7a20    # RVA_LOBBY_JOIN: the iw4x-sp profile block of game.h had this value
+0x2fc40 -> 0x54190    # RVA_PARTY_JOIN: the iw4x-sp profile block of game.h had this value
+0x5dde0 -> 0x14550    # RVA_PARTY_ACTIVATE: the iw4x-sp profile block of game.h had this value
+0x19810 -> 0x5b250    # RVA_PARTY_AFTER_JOIN: the iw4x-sp profile block of game.h had this value
+0x4e1b0 -> 0x4e130    # RVA_SYS_MILLISECONDS: the iw4x-sp profile block of game.h had this value
+0x7bd80 -> 0xb1e40    # RVA_COOP_LAUNCH_MAP: the iw4x-sp profile block of game.h had this value
+0x525bc0 -> 0x529148    # RVA_COOP_SLOT_STATE: the iw4x-sp profile block of game.h had this value
+0x7f8e0 -> 0x173c0    # RVA_SCR_ADD_SOURCE_BUFFER: the iw4x-sp profile block of game.h had this value
+0xf6f10 -> 0xb200    # RVA_DB_FIND_HEADER: the iw4x-sp profile block of game.h had this value
+0xc32b0 -> 0x1ab70    # RVA_DB_IS_DEFAULT: the iw4x-sp profile block of game.h had this value
+0xe3080 -> 0xd2e60    # RVA_DB_RAWFILE_LEN: the iw4x-sp profile block of game.h had this value
+0xe55f0 -> 0x345e0    # RVA_DB_RAW_BUFFER: the iw4x-sp profile block of game.h had this value
+0xeed0 -> 0x3b40    # RVA_HUNK_TEMP_HIGH: the iw4x-sp profile block of game.h had this value
+0x331504 -> 0x334504    # RVA_FN_SETDVAR_ENTRY: the iw4x-sp profile block of game.h had this value
+0xd5f20 -> 0xd39c0    # RVA_SCR_GET_STRING: the iw4x-sp profile block of game.h had this value
+0x17eb4e4 -> 0x0    # STEAM_LOBBY_FAIL_NODE: no mapping for the iw4x-sp 1.0.159 exe yet (0: the feature stays off there)
+0x1c8ed9c -> 0x0    # RVA_RENDER_WIDTH: no mapping for the iw4x-sp 1.0.159 exe yet
+0x1c8eda0 -> 0x0    # RVA_RENDER_HEIGHT: no mapping for the iw4x-sp 1.0.159 exe yet
+0x86920 -> 0x0    # RVA_CLIENT_COMMAND: no mapping for the iw4x-sp 1.0.159 exe yet (the delivery is off there)
