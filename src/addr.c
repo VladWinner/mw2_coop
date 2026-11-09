@@ -13,7 +13,7 @@
 #define KIND_CODE 0
 #define KIND_DATA 1
 #define STRONG_FIXED 40    // fixed bytes of one code signature that are enough on their own
-#define DERIVE_REACH 0x1000 // a derived global lies this close to the resolved ones on both sides
+#define DERIVE_REACH 0x1000000 // a derived global lies this close to the resolved ones on both sides
 #define MAX_CAND 4
 
 typedef struct {
@@ -343,23 +343,42 @@ int addr_resolve(const char *sigs_text, const AddrSection *secs, int nsecs, uint
 			e->result = e->c[top].cand;
 		}
 	}
-	// a global that no signature found: the nearest resolved globals below and above moved by the same amount
+	// a global that no signature found: the globals around it moved as one block, so it moved by the same amount as the two nearest
+	// resolved ones below and the two nearest above it, if all of those agree
 	for (int i = 0; i < nent; i++) {
 		Entry *e = &ent[i];
 		if (e->ok || e->kind != KIND_DATA)
 			continue;
-		int b = -1, a = -1;
+		int bl[2] = {-1, -1}, ab[2] = {-1, -1}; // nearest first
 		for (int j = 0; j < nent; j++) {
 			if (ent[j].ok != 1 || ent[j].kind != KIND_DATA)
 				continue;
-			if (ent[j].rva < e->rva && e->rva - ent[j].rva <= DERIVE_REACH && (b < 0 || ent[j].rva > ent[b].rva))
-				b = j;
-			if (ent[j].rva > e->rva && ent[j].rva - e->rva <= DERIVE_REACH && (a < 0 || ent[j].rva < ent[a].rva))
-				a = j;
+			if (ent[j].rva < e->rva && e->rva - ent[j].rva <= DERIVE_REACH) {
+				if (bl[0] < 0 || ent[j].rva > ent[bl[0]].rva) {
+					bl[1] = bl[0];
+					bl[0] = j;
+				} else if (bl[1] < 0 || ent[j].rva > ent[bl[1]].rva)
+					bl[1] = j;
+			}
+			if (ent[j].rva > e->rva && ent[j].rva - e->rva <= DERIVE_REACH) {
+				if (ab[0] < 0 || ent[j].rva < ent[ab[0]].rva) {
+					ab[1] = ab[0];
+					ab[0] = j;
+				} else if (ab[1] < 0 || ent[j].rva < ent[ab[1]].rva)
+					ab[1] = j;
+			}
 		}
-		if (b >= 0 && a >= 0 && ent[b].result - ent[b].rva == ent[a].result - ent[a].rva) {
+		if (bl[0] < 0 || ab[0] < 0)
+			continue;
+		int32_t delta = (int32_t)(ent[bl[0]].result - ent[bl[0]].rva);
+		int same = 1;
+		int others[3] = {bl[1], ab[0], ab[1]};
+		for (int k = 0; k < 3; k++)
+			if (others[k] >= 0 && (int32_t)(ent[others[k]].result - ent[others[k]].rva) != delta)
+				same = 0;
+		if (same) {
 			e->ok = 2;
-			e->result = e->rva + (ent[b].result - ent[b].rva);
+			e->result = e->rva + (uint32_t)delta;
 		}
 	}
 	index_free(&ix);

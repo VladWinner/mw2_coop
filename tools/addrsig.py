@@ -236,7 +236,7 @@ def find_all(text, pat, limit=3):
 CODE_SHAPES = [(pre, post) for pre in (0, 8, 16, 32, 48, 64, 96, 128) for post in (12, 16, 24, 32, 48, 64, 96)]
 DATA_SHAPES = [(pre, post) for pre in (4, 8, 12, 16, 24, 32) for post in (4, 8, 12, 16, 24, 32)]
 MIN_FIXED = 12
-DERIVE_REACH = 0x1000  # a derived global lies this close to the resolved ones on both sides
+DERIVE_REACH = 0x1000000  # a derived global lies this close to the resolved ones on both sides (the two nearest on each side must agree)
 STRONG_FIXED = 40  # fixed bytes of one code signature that are enough on their own
 
 
@@ -379,9 +379,10 @@ def resolve(sigs, tgt):
         below = [r for r in known if r < d and d - r <= DERIVE_REACH]
         above = [r for r in known if r > d and r - d <= DERIVE_REACH]
         if below and above:
-            b, a = max(below), min(above)
-            if known[b] - b == known[a] - a:
-                result[d] = d + known[b] - b
+            near = sorted(below)[-2:] + sorted(above)[:2]
+            deltas = set(known[r] - r for r in near)
+            if len(deltas) == 1:
+                result[d] = d + deltas.pop()
     return result
 
 

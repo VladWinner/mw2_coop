@@ -36,7 +36,8 @@ address from windows of different size and position around it.
 1. A signature counts if it matches exactly **one** place in the executable sections of the running build.
 2. An address is accepted if two signatures agree on it, or, for a code address, one signature with 40 or more fixed bytes; and no other
    candidate has as many votes. Anything else stays unresolved. **The mod must not use an unresolved address.**
-3. A global that no signature found is derived from the nearest accepted globals below and above it (within 0x1000), if both moved by the same amount.
+3. A global that no signature found is derived from the two nearest accepted globals below it and the two nearest above it (within 16 MB), if all of them moved by the same amount.
+   On the 1.0.159 build this added 3 right answers and no wrong one; on the 64-bit build it takes 74 of 120 to 115.
 4. The window for finding a global through the code that uses a field of it is limited to -0x20 .. +0x100 bytes. A wider window found 3 wrong
    addresses in a test (the code referenced another entry of the same table in the other build), so it is not used.
 
@@ -50,18 +51,19 @@ were found, the build has the reference build's layout: the same addresses with 
 
 | Test | Result |
 |---|---|
-| 32-bit reference (official) -> the 1.0.159 exe of the iw4x client; the 241 addresses with known answers (`src/addr159.c`) | **212 right, 0 wrong**, 29 not resolved (138 code: 132 found by signature; 103 data: 80) |
+| 32-bit reference (official) -> the 1.0.159 exe of the iw4x client; the 241 addresses with known answers (`src/addr159.c`) | **215 right, 0 wrong**, 26 not resolved |
 | the same in C (`test_addr.exe`) | identical to the Python result, 0.26 s |
 | 32-bit reference -> a second official-layout exe (D:\ install of the owner, 33 patched places, 174 differing bytes; the layout is identical, so every answer must be identity) | **235 of 241 found, all identity**; in the game the mod recognised the layout, installed all its modules and started split screen with the same hooks as on the official exe |
-| 64-bit reference -> itself, inside the running game (forced) | 74 of 120 found in 140 ms, all identity |
+| 64-bit reference -> itself, inside the running game (forced) | 115 of 120 found in 110 ms (code 55 of 55, data 60 of 65), all identity; this is the "same layout" case, so a 64-bit exe with the reference layout now runs |
 
 ## What is not done
 
-* The 64-bit signatures find 74 of 120 addresses: the 46 that are missing are globals (tables and structs) that the code reaches only far into
-  the structure. Until more of them are found, a 64-bit build with another layout is reported but not run.
-* A build whose addresses moved is not run yet. The resolver finds most addresses of the 159 build, but the mod's code reads its addresses as
-  constants (320 `RVA_` macros and about 130 written inline); they have to go through `addr_xr()` first, and a feature must be switched off when
-  one of its addresses is unresolved. The iw4x profile already does this through `addr159()`.
+* The 64-bit code writes most of its addresses inline (`base + 0x...`, several hundred in native.c, guards.c, console.c and others), and the signature
+  file covers only the `RVA_` macros (120). A 64-bit build whose addresses moved is therefore reported but not run; a 64-bit build with the reference
+  layout runs.
+* A 32-bit build whose addresses moved is not run yet either. The native code already goes through `XR()` / `XV()` (the iw4x-sp profile maps them
+  through `addr159()`), but the generic hooks use `RVA_` macros and inline addresses (scrdebug32.c, climbads.c), and every consumer has to survive an
+  address that stays unresolved (`addr_xr()` gives 0). Routing half of them would be worse than none: a moved build runs only when all of them are routed.
 * 6 globals of the 32-bit build (the rumble script function table and three others) are never found: no code reaches them near enough.
 
 ## Regenerating
