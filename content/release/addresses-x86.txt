@@ -1,5 +1,6 @@
 # mw2coop address signatures, x86. Made by tools/addrsig.py from image32.bin.
 # See the header of that script for the format; docs/address-resolution.md for how the game uses this file.
+# code 0x1000 0x294000
 
 CODE 0x008889 off=0 sig=3B 3D ?? ?? ?? ?? 0F 9C C0 EB 06 83 3B 00 0F 95 C0 84 C0 74 25 A1 10 3C
 CODE 0x008889 off=0 sig=3B 3D ?? ?? ?? ?? 0F 9C C0 EB 06 83 3B 00 0F 95 C0 84 C0 74 25 A1 ?? ?? ?? ?? 8D 8C ?? ?? ?? ?? 00 51 57 E8 ?? ?? ?? ?? 8B 15 ?? ?? ?? ?? 8D 04

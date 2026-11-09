@@ -262,13 +262,33 @@ static DWORD WINAPI identify(LPVOID unused)
 			return 0;
 		}
 	}
+	int total = 0, found = 0;
 	{ // look the addresses of this build up by their signatures (addr.c); nothing is patched, the log says what was found
-		int total = 0;
-		int found = addr_resolve_running(&total);
+		found = addr_resolve_running(&total);
 		log_printf("main32: addresses found by signature: %d of %d", found, total);
 		if (addr_layout_same() && !forced_unknown) {
 			log_printf("main32: unknown build with the layout of the known one (same addresses, some code bytes differ): the mod runs with the known addresses");
 			install_all();
+			return 0;
+		}
+	}
+	// a build whose addresses moved: best effort, only when the settings ask for it ([native] movedbuilds=1, or MW2COOP_MOVED for QA) and most addresses were found. Every
+	// address goes through addr_xr(); one that was not found points at a harmless block (addr.c), so the features that need it do nothing and nothing else is touched.
+	{
+		char ini[MAX_PATH];
+		DWORD n = GetModuleFileNameA(NULL, ini, MAX_PATH);
+		while (n > 0 && ini[n - 1] != 0x5c)
+			n--;
+		ini[n] = 0;
+		lstrcatA(ini, "mw2coop\settings.ini");
+		int allowed = getenv("MW2COOP_MOVED") != NULL || GetPrivateProfileIntA("native", "movedbuilds", 0, ini) != 0;
+		if (total > 0 && found * 100 >= total * 85) {
+			if (allowed) {
+				log_printf("main32: unknown build, addresses moved: %d of %d found; the mod runs with them (best effort, [native] movedbuilds)", found, total);
+				install_all();
+				return 0;
+			}
+			log_printf("main32: unknown build, addresses moved: %d of %d found. Nothing is patched; [native] movedbuilds=1 in mw2coop\settings.ini makes the mod try (best effort)", found, total);
 			return 0;
 		}
 	}

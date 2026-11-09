@@ -442,9 +442,69 @@ int addr_layout_same(void)
 	return layout_same;
 }
 
+// What addr_xr() hands out for an address that was not found in a build whose addresses moved: a place in a private block of memory instead of 0 (which would be the exe's own
+// header). A hook compares the bytes it is about to patch and finds the wrong ones; a read gives zeros; a write lands in the block; and a call returns at once (the code block
+// is all `ret`). So a feature whose addresses are missing does nothing, and nothing that is not missing is touched. Which kind an address is, the signature file says
+// ("# code <rva> <rva>": the reference build's code); an address the file does not list is code if it lies in those ranges.
+#define SCRATCH_SIZE 0x10000
+static struct {
+	unsigned lo, hi;
+} ref_code[8];
+static int ref_code_n;
+static uint8_t *scratch[2]; // [0] data (zeros), [1] code (ret)
+static int scratch_tried;
+static int scratch_hits;
+
+static int ref_is_code(unsigned ref)
+{
+	for (int i = 0; i < ref_code_n; i++)
+		if (ref >= ref_code[i].lo && ref < ref_code[i].hi)
+			return 1;
+	return 0;
+}
+
+static void scratch_make(void)
+{
+	scratch_tried = 1;
+	const uint8_t *base = (const uint8_t *)GetModuleHandleW(NULL);
+	for (int k = 0; k < 2; k++) {
+		uint8_t *p = NULL;
+#ifdef _WIN64
+		// the RVA must fit in 32 bits: a block within 4 GB above the image
+		for (uintptr_t at = (uintptr_t)base + 0x20000000u; !p && at < (uintptr_t)base + 0xf0000000u; at += 0x01000000u)
+			p = VirtualAlloc((void *)at, SCRATCH_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+#else
+		p = VirtualAlloc(NULL, SCRATCH_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+#endif
+		if (p && k == 1)
+			memset(p, 0xc3, SCRATCH_SIZE);
+		scratch[k] = p;
+	}
+}
+
+static unsigned scratch_rva(unsigned ref)
+{
+	if (!scratch_tried)
+		scratch_make();
+	int code = ref_is_code(ref);
+	const uint8_t *base = (const uint8_t *)GetModuleHandleW(NULL);
+	if (!scratch[code])
+		return 0;
+	static unsigned logged[64];
+	int seen = 0;
+	for (int i = 0; i < scratch_hits && i < 64; i++)
+		if (logged[i] == ref)
+			seen = 1;
+	if (!seen && scratch_hits < 64) {
+		logged[scratch_hits++] = ref;
+		log_printf("addr: reference rva 0x%x has no address in this build: a harmless %s block is used for it", ref, code ? "code (ret)" : "data (zeros)");
+	}
+	return (unsigned)(scratch[code] + 0x100 - base); // (a little in: an offset below the address stays inside the block)
+}
+
 unsigned addr_xr(unsigned ref)
 {
-	if (!mode)
+	if (!mode || !ref)
 		return ref;
 	int lo = 0, hi = table_n - 1;
 	while (lo <= hi) {
@@ -456,7 +516,7 @@ unsigned addr_xr(unsigned ref)
 		else
 			hi = mid - 1;
 	}
-	return 0;
+	return scratch_rva(ref);
 }
 
 int addr_resolve_running(int *total)
@@ -500,6 +560,16 @@ int addr_resolve_running(int *total)
 		secs[nsecs].rva = sec[i].VirtualAddress;
 		secs[nsecs].size = sec[i].Misc.VirtualSize;
 		nsecs++;
+	}
+	ref_code_n = 0;
+	for (const char *l = text; (l = strstr(l, "\n# code 0x")) && ref_code_n < 8;) {
+		unsigned lo = 0, hi = 0;
+		if (sscanf(l + 1, "# code 0x%x 0x%x", &lo, &hi) == 2) {
+			ref_code[ref_code_n].lo = lo;
+			ref_code[ref_code_n].hi = hi;
+			ref_code_n++;
+		}
+		l += 2;
 	}
 	DWORD t0 = GetTickCount();
 	AddrResult res;

@@ -301,9 +301,14 @@ def data_signatures(img, be, ref_rva, per_address=16, max_sites=60):
     return spread(found, per_address)
 
 
-def write_sigs(path, arch, ref_desc, items, unresolved):
+def write_sigs(path, arch, ref_desc, items, unresolved, img=None):
     lines = ["# mw2coop address signatures, %s. Made by tools/addrsig.py from %s." % (arch, ref_desc),
-             "# See the header of that script for the format; docs/address-resolution.md for how the game uses this file.", ""]
+             "# See the header of that script for the format; docs/address-resolution.md for how the game uses this file."]
+    if img is not None:  # the reference build's code, as RVAs: an address the file does not list is taken to be code or data by it (src/addr.c)
+        for name, va, vs, raw, rs, ex in img.secs:
+            if ex:
+                lines.append("# code 0x%x 0x%x" % (va - img.base, va - img.base + vs))
+    lines.append("")
     for kind, rva, extra, sig in items:
         lines.append("%s 0x%06x %s sig=%s" % (kind, rva, extra, sig))
     lines.append("")
@@ -448,7 +453,7 @@ def cmd_gen(argv):
         items += sigs
         if i % 25 == 0:
             print("%d / %d addresses" % (i, len(addrs)), flush=True)
-    write_sigs(out, arch, os.path.basename(ref), items, missing)
+    write_sigs(out, arch, os.path.basename(ref), items, missing, img)
     print("%d addresses, %d signatures, %d without a signature" % (len(addrs), len(items), len(missing)))
 
 
