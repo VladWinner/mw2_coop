@@ -161,8 +161,8 @@ LANG_ENGLISH        "stxlvn (Modern Warfare 2 Enhanced)"
 LANG_RUSSIAN        "stxlvn (Modern Warfare 2 Enhanced)"
 
 REFERENCE           MW2COOP_CREDIT_2
-LANG_ENGLISH        "VladWinner (H*-Mod)"
-LANG_RUSSIAN        "VladWinner (H*-Mod)"
+LANG_ENGLISH        "VladWinner"
+LANG_RUSSIAN        "VladWinner"
 
 REFERENCE           MW2COOP_CALLSIGN_A
 LANG_ENGLISH        "Alpha"
