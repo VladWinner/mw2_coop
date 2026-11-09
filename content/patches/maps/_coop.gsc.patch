@@ -73,3 +73,22 @@ thread maps\_gameskill::resetSkill();
 @@@ to
 thread maps\_mw2coop::reset_skill_keep_scene();
 @@@ end
+
+5. Falling damage with no fall behind it must not down a player (Vlad's Oil Rig log: after a restart player 2 hovered one unit above the deck for 17 seconds, then "landed"
+   with 100 points of MOD_FALLING damage and was downed). The deathshield event of such a hit is ignored; maps\_mw2coop::watch_false_falls() gives the health back.
+@@@ replace
+		// we're already downed
+		if ( self ent_flag( "coop_downed" ) )
+			continue;
+
+		death_array = [];
+@@@ with
+		// we're already downed
+		if ( self ent_flag( "coop_downed" ) )
+			continue;
+
+		if ( maps\_mw2coop::false_fall_hit( self, type ) )
+			continue;
+
+		death_array = [];
+@@@ end

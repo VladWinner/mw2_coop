@@ -772,16 +772,34 @@ false_fall_guard()
 			continue;
 		if ( isdefined( level.mw2coop_fall_guard_off ) && level.mw2coop_fall_guard_off )	// QA: to see what the engine does without the guard
 			continue;
-		top = self.origin[ 2 ];
-		foreach ( z in self.mw2coop_zs )
-			if ( z > top )
-				top = z;
-		if ( top - self.origin[ 2 ] >= 64 )
+		height = fall_height( self );
+		if ( height >= 64 )
 			continue;
 		if ( self.mw2coop_h0 > self.health && self.mw2coop_h0 <= self.maxhealth )
 			self.health = self.mw2coop_h0;
-		state( "falling damage " + amount + " without a fall (" + ( top - self.origin[ 2 ] ) + " units) undone, health " + self.health );
+		state( "falling damage " + amount + " without a fall (" + height + " units) undone, health " + self.health );
 	}
+}
+
+// How far the player has dropped in the last 3 seconds (0 when he has not).
+fall_height( player )
+{
+	top = player.origin[ 2 ];
+	if ( isdefined( player.mw2coop_zs ) )
+		foreach ( z in player.mw2coop_zs )
+			if ( z > top )
+				top = z;
+	return top - player.origin[ 2 ];
+}
+
+// maps{bs}_coop::player_coop_proc(): a hit that would down the player. True for falling damage without a fall behind it (see watch_false_falls); that hit does not down him.
+false_fall_hit( player, type )
+{
+	if ( !is_campaign_coop() || !isdefined( type ) || type != "MOD_FALLING" )
+		return false;
+	if ( isdefined( level.mw2coop_fall_guard_off ) && level.mw2coop_fall_guard_off )
+		return false;
+	return fall_height( player ) < 64;
 }
 
 // self: a player. Health of the last tick (the damage notify comes after the health dropped) and the heights of the last 3 s.
