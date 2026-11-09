@@ -85,9 +85,18 @@ static uint8_t *make_trampoline(const uint8_t *target, size_t len)
 	return page;
 }
 
+// Whether [p, p+size) can be read: a hook site that lies outside the image (a build whose addresses moved) must be refused, not faulted on. VirtualQuery raises nothing.
+static int site_readable(const void *p, size_t size)
+{
+	MEMORY_BASIC_INFORMATION mbi;
+	if (!p || !VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+		return 0;
+	return (const uint8_t *)p + size <= (const uint8_t *)mbi.BaseAddress + mbi.RegionSize;
+}
+
 int hook_function(uint8_t *target, const uint8_t *expected, size_t len, void *replacement, void **original)
 {
-	if (len < JUMP_SIZE || len > MAX_LEN || memcmp(target, expected, len) != 0)
+	if (len < JUMP_SIZE || len > MAX_LEN || !site_readable(target, len) || memcmp(target, expected, len) != 0)
 		return 0;
 	uint8_t *trampoline = make_trampoline(target, len);
 	if (!trampoline)
@@ -114,6 +123,8 @@ uint8_t *hook_page_near(const uint8_t *where)
 
 int hook_call(uint8_t *site, void *replacement, void **original)
 {
+	if (!site_readable(site, 5))
+		return 0;
 	if (site[0] != 0xe8 && site[0] != 0xe9) // a call, or a tail jump (the replacement is entered like a function either way)
 		return 0;
 	int32_t rel;
@@ -142,6 +153,8 @@ int hook_call(uint8_t *site, void *replacement, void **original)
 // 32 bits: every address is within reach of a relative call, so the call site goes straight to the replacement.
 int hook_call(uint8_t *site, void *replacement, void **original)
 {
+	if (!site_readable(site, 5))
+		return 0;
 	if (site[0] != 0xe8 && site[0] != 0xe9) // a call, or a tail jump (the replacement is entered like a function either way)
 		return 0;
 	int32_t rel;
