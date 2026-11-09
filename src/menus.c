@@ -520,6 +520,8 @@ static void style_items(uint8_t **items, int count)
 #define ITEM_TEXT_ALIGN (ITEM_FONT + 4)
 #define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
 #define ITEM_TEXT_SCALE (ITEM_FONT + 16)
+static void set_page_esc(uint8_t *page);
+static void append_on_open(uint8_t *menu, const char *script);
 #define ALIGN_MIDDLE_CENTER 5
 #define ITEM_TEXT_STYLE (ITEM_FONT + 0x14) // int textStyle after textscale: 3 = shadowed
 #define TEXT_STYLE_SHADOWED 3
@@ -646,6 +648,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 	list[n++] = back;
 	*(uint8_t ***)(page + MENU_ITEMS) = list;
 	*(int *)(page + MENU_ITEM_COUNT) = n;
+	set_page_esc(page);
 	if (ui_register_menu(page))
 		log_printf("menus: About page added (%d items, icons %s)", n, icons ? "on" : "no picture");
 }
@@ -752,6 +755,7 @@ static void patch_main_menu(void)
 		}
 		*(uint8_t ***)(camp + MENU_ITEMS) = cl;
 		*(int *)(camp + MENU_ITEM_COUNT) = n;
+		set_page_esc(camp);
 		if (ui_register_menu(camp))
 			log_printf("menus: campaign page added (%d items)", n);
 	}
@@ -829,7 +833,33 @@ static void patch_main_menu(void)
 	main_items = list;
 	*(uint8_t ***)(menu + MENU_ITEMS) = list;
 	*(int *)(menu + MENU_ITEM_COUNT) = n;
+	// the game's onOpen ends with "focusfirst", which no longer finds the Resume button it was written for: the first entry gets the focus by name (a key or a pad starts there)
+	append_on_open(menu, "\"setfocus\" \"mw2coop_campaign_btn\" ; ");
 	log_printf("menus: main_text: Campaign, Spec Ops and Multiplayer entries (%d items)", n);
+}
+
+// Esc on a page of the mod closes it (the pages are copies of the main menu, whose Esc would ask whether to quit). onESC follows onClose in the menu (onOpen, onCloseRequest, onClose, onESC).
+static void set_page_esc(uint8_t *page)
+{
+	*(void **)(page + MENU_ON_CLOSE + sizeof(void *)) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+}
+
+// One more handler (a menu script) at the end of a menu's onOpen.
+static void append_on_open(uint8_t *menu, const char *script)
+{
+	const MenuEventHandlerSet *old = *(MenuEventHandlerSet **)(menu + MENU_ON_OPEN);
+	int n = old && old->count > 0 && old->count < 64 ? old->count : 0;
+	MenuEventHandlerSet *set = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*set));
+	MenuEventHandler **list = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n + 1) * sizeof(*list));
+	for (int i = 0; i < n; i++)
+		list[i] = old->handlers[i];
+	MenuEventHandler *h = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*h));
+	h->data = (void *)script;
+	h->type = 0;
+	list[n] = h;
+	set->count = n + 1;
+	set->handlers = list;
+	*(MenuEventHandlerSet **)(menu + MENU_ON_OPEN) = set;
 }
 
 // The game starts on "main_selection", its picture cards Campaign / Spec Ops / Multiplayer. The mod's main menu is the list in main_text (patch_main_menu), so the
@@ -837,9 +867,9 @@ static void patch_main_menu(void)
 static uint8_t *selection_patched; // the menu object whose onOpen was extended
 // The Spec Ops page's way back: its Main menu button opens the game's own Campaign / Spec Ops picture chooser ("main_selection"); the mod's main menu is main_text, so
 // the scripts of the page's items open that instead. The scripts are replaced once per menu object (a zone reload makes a new one).
-static int specops_replace_set(MenuEventHandlerSet *set, int depth)
+static int specops_replace_set(MenuEventHandlerSet *set, int depth, const char *from, const char *to)
 {
-	static const char from[] = "\"main_selection\"", to[] = "\"main_text\"";
+	const size_t from_len = strlen(from), to_len = strlen(to);
 	if (!set || !game_mem_readable(set, sizeof(*set)) || depth > 4 || set->count < 1 || set->count > 24 || !game_mem_readable(set->handlers, set->count * sizeof(void *)))
 		return 0;
 	int done = 0;
@@ -851,13 +881,13 @@ static int specops_replace_set(MenuEventHandlerSet *set, int depth)
 			if (!h->data || !game_string_readable((const char *)h->data, 8) || !strstr((const char *)h->data, from))
 				continue;
 			const char *src = h->data;
-			char *out = HeapAlloc(GetProcessHeap(), 0, strlen(src) + 1);
+			char *out = HeapAlloc(GetProcessHeap(), 0, strlen(src) * (to_len > from_len ? to_len : 1) + 1);
 			size_t n = 0;
 			while (*src) {
-				if (!strncmp(src, from, sizeof(from) - 1)) {
-					memcpy(out + n, to, sizeof(to) - 1);
-					n += sizeof(to) - 1;
-					src += sizeof(from) - 1;
+				if (!strncmp(src, from, from_len)) {
+					memcpy(out + n, to, to_len);
+					n += to_len;
+					src += from_len;
 				} else
 					out[n++] = *src++;
 			}
@@ -866,10 +896,10 @@ static int specops_replace_set(MenuEventHandlerSet *set, int depth)
 			done++;
 #ifdef _WIN64
 		} else if (h->type == 1 && h->data && game_mem_readable(h->data, 16)) { // if (expression, set): a readable set at either place is followed
-			done += specops_replace_set(*(MenuEventHandlerSet **)h->data, depth + 1);
-			done += specops_replace_set(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1);
+			done += specops_replace_set(*(MenuEventHandlerSet **)h->data, depth + 1, from, to);
+			done += specops_replace_set(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1, from, to);
 		} else if (h->type == 2 && h->data) {
-			done += specops_replace_set((MenuEventHandlerSet *)h->data, depth + 1);
+			done += specops_replace_set((MenuEventHandlerSet *)h->data, depth + 1, from, to);
 #endif
 		}
 	}
@@ -886,8 +916,9 @@ static void patch_specops_return(void)
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	int count = *(int *)(menu + MENU_ITEM_COUNT), done = 0;
 	for (int i = 0; i < count; i++)
-		done += specops_replace_set(*(MenuEventHandlerSet **)(items[i] + ITEM_ACTION), 0);
-	log_printf("menus: main_specops: %d script(s) now open main_text instead of main_selection", done);
+		done += specops_replace_set(*(MenuEventHandlerSet **)(items[i] + ITEM_ACTION), 0, "\"main_selection\"", "\"main_text\"");
+	set_page_esc(menu); // Esc closes the page, which was opened over the main menu (the game's own Esc sent it to the chooser)
+	log_printf("menus: main_specops: %d script(s) now open main_text (the Main menu button); Esc closes the page", done);
 }
 
 static void patch_selection_menu(void)
