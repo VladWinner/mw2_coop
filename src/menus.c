@@ -522,6 +522,7 @@ static void style_items(uint8_t **items, int count)
 #define ITEM_TEXT_SCALE (ITEM_FONT + 16)
 #define ALIGN_MIDDLE_CENTER 5
 #define ABOUT_ICONS 1
+#define TEXT_DX 44.0f // a centered text is drawn this many units left of where a picture with the same rectangle is (measured on 1920 x 1080), so its rectangle goes right by that
 
 static void set_rect(uint8_t *it, float x, float y, float w, float h, int align_h, int align_v)
 {
@@ -583,7 +584,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		*(const char **)line = def->name;
 		*(const char **)(line + ITEM_TEXT) = def->text;
 		*(void **)(line + ITEM_TEXT_EXP) = NULL;
-		set_rect(line, -300, y, 600, 16, 2, 1);
+		set_rect(line, -300 + TEXT_DX, y, 600, 16, 2, 1);
 		*(int *)(line + ITEM_FONT) = k == 0 ? 9 : 3; // the heading in the title font, the lines in the body font of the buttons
 		*(int *)(line + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
 		*(float *)(line + ITEM_TEXT_ALIGN_X) = 0;
@@ -621,7 +622,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 			set_rect(hit, -128 + 64 * b++, icons_y, 64, 64, 2, 1);
 		}
 		else {
-			set_rect(hit, -240 + 120 * b++, icons_y, 120, 20, 2, 1);
+			set_rect(hit, -240 + TEXT_DX + 120 * b++, icons_y, 120, 20, 2, 1);
 			*(int *)(hit + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
 			*(float *)(hit + ITEM_TEXT_ALIGN_X) = 0;
 		}
@@ -633,7 +634,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 	*(const char **)(back + ITEM_TEXT) = "@PLATFORM_BACK_CAPS";
 	*(void **)(back + ITEM_TEXT_EXP) = NULL;
 	*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
-	set_rect(back, -100, 420, 200, 20, 2, 1);
+	set_rect(back, -100 + TEXT_DX, 420, 200, 20, 2, 1);
 	*(int *)(back + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
 	*(float *)(back + ITEM_TEXT_ALIGN_X) = 0;
 	list[n++] = back;
