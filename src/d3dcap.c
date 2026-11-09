@@ -20,6 +20,7 @@
 #include <tlhelp32.h>
 
 #include "d3dcap.h"
+#include "game.h"
 #include "hook.h"
 #include "log.h"
 #include "settings.h"
@@ -806,11 +807,8 @@ static void hook_create9(HMODULE d3d9)
 
 void d3dcap_install(void)
 {
-#ifdef MW2COOP_IW4X
-	use_ex = 0; // iw4x-sp keeps control of r_useD3D9Ex; we observe its factory without changing that setting
-#else
-	use_ex = settings_d3d9ex() || settings_d3d9on12(); // Direct3D 9 on Direct3D 12 is made through the Ex interface (the flip model swap chain needs it)
-#endif
+	// (iw4x-sp keeps control of r_useD3D9Ex: we observe its factory without changing that setting)
+	use_ex = game_is_iw4x() ? 0 : (settings_d3d9ex() || settings_d3d9on12()); // Direct3D 9 on Direct3D 12 is made through the Ex interface (the flip model swap chain needs it)
 	HMODULE host = GetModuleHandleA(NULL);
 	int host_patched = patch_module_imports(host);
 	log_printf("d3dcap: host imports captured for cinematics: %d", host_patched);

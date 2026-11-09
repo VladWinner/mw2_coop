@@ -6,6 +6,14 @@
 // macros below goes through it; the iw4x-sp profile has its own values.
 #define XRA(r) addr_xr(r)
 
+// 1 when the 32-bit mod runs in the iw4x-sp client (iw4x-sp.exe, the known 1.0.159 iw4sp.exe): its addresses come from the table of addr159.c, and a few things work
+// another way (scripts are rawfiles there, the client brings its own watermark and its own `connect`). Never in the 64-bit build.
+#ifdef _WIN64
+#define game_is_iw4x() 0
+#else
+int game_is_iw4x(void);
+#endif
+
 #ifdef _WIN64
 // Addresses in iw4sp.exe of the 64-bit Steam build (buildid 25374375, PE timestamp 0x6aaaa257,
 // SHA-256 2F8C9CFD...D805), as RVAs from the image base. Found with Ghidra, see NOTES.md.
@@ -55,49 +63,6 @@
 // The script builtin table entry of "setdvar" ({name, function, developer}) and Scr_GetString(index)
 #define RVA_FN_SETDVAR_ENTRY 0x3c1568
 #define RVA_SCR_GET_STRING   0x223440
-#elif defined(MW2COOP_IW4X)
-// Addresses in the 1.0.159 iw4sp.exe (linked 2009-11-07) that the iw4x-sp client loads (SHA-256 of the file 9480909B...3565), as RVAs
-// from the image base 0x400000. Derived from the official 32-bit profile below by byte signatures and cross-checked against
-// iw4x-sp's symbols.hpp (games/modern-warfare-2/NOTES.md, "iw4x-sp support"). Same functions, other addresses.
-#define IW4SP_TIMESTAMP 0u // see main32.c: the build is known by the file hash of iw4sp.exe
-
-#define RVA_CBUF_ADDTEXT   0x0a1090
-#define RVA_DVAR_FINDVAR   0x235c50  // USERCALL, name in EDI (iw4x's cdecl wrapper is 0xb29d0)
-#define RVA_DVAR_HASH      0x156d010 // dvar_t *table[1024] (Dvar_FindVar's buckets)
-#define RVA_CMD_ADDCOMMAND 0x0478a0
-#define RVA_CMD_ARGS       0x104fed0
-#define RVA_SV_CMD_ARGS    0x105aba0
-#define RVA_SV_CMD_DEVMAP  0x166e110
-#define RVA_CMD_FUNCTIONS  0x104ff58
-#define RVA_XUID_TABLE     0x15ff508
-
-#define RVA_PARTY_SKILL          0x537a08
-#define RVA_PARTY_LOBBY          0x5379d8
-#define RVA_PARTY_IS_HOST        0x5379d0
-#define RVA_PARTY_ACTIVE         0x5379d1
-#define RVA_PARTY_LAUNCH         0x5379d3
-#define RVA_PARTY_MEMBER_NAMES   0x5379e0
-#define RVA_PARTY_START_TIME     0x5379d4
-#define RVA_LOBBY_SLOT_USED      0x0bead0
-#define RVA_PARTY_RESET          0x0d43a0
-#define RVA_PARTY_CLEAR_MEMBERS  0x066830
-#define RVA_LOBBY_JOIN           0x007a20
-#define RVA_PARTY_JOIN           0x054190
-#define RVA_PARTY_ACTIVATE       0x014550
-#define RVA_PARTY_AFTER_JOIN     0x05b250
-#define RVA_SYS_MILLISECONDS     0x04e130
-#define RVA_COOP_LAUNCH_MAP      0x0b1e40
-#define RVA_COOP_SLOT_STATE      0x529148
-
-#define RVA_SCR_ADD_SOURCE_BUFFER 0x0173c0
-#define RVA_DB_FIND_HEADER  0x00b200
-#define RVA_DB_IS_DEFAULT   0x01ab70
-#define RVA_DB_RAWFILE_LEN  0x0d2e60
-#define RVA_DB_RAW_BUFFER   0x0345e0
-#define RVA_HUNK_TEMP_HIGH  0x003b40
-
-#define RVA_FN_SETDVAR_ENTRY 0x334504
-#define RVA_SCR_GET_STRING   0x0d39c0
 #else
 // Addresses in iw4sp.exe of the 32-bit official Steam build (linked 2010-02-10, code SHA-256 FC9E4843...52D7), as RVAs
 // from the image base 0x400000. Found with Ghidra on the memory dump, see docs/32bit-plan.md. Names as above; a 0 means
@@ -255,11 +220,7 @@ const char *game_sv_cmd_argv(int i);
 
 // The 32-bit native code (native.c, rumble.c, padopts.c, padglyphs.c) is written with the official 32-bit build's addresses. In the iw4x-sp profile (1.0.159) XR() turns an
 // official RVA into the 159 RVA through a table that tools/gen_addr159.py builds from the source (tools/map159.py maps by byte signatures); XV() does the same for a VA.
-#ifdef MW2COOP_IW4X
-unsigned addr159(unsigned rva);
-#define XR(r) addr159(r)
-#define XV(va) (0x400000u + addr159((va) - 0x400000u))
-#elif !defined(_WIN64)
+#ifndef _WIN64
 #define XR(r) addr_xr(r)
 #define XV(va) (0x400000u + addr_xr((va) - 0x400000u))
 #else

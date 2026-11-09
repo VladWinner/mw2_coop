@@ -502,8 +502,20 @@ static unsigned scratch_rva(unsigned ref)
 	return (unsigned)(scratch[code] + 0x100 - base); // (a little in: an offset below the address stays inside the block)
 }
 
+#ifndef _WIN64
+unsigned addr159(unsigned rva); // addr159.c: the official 32-bit RVA -> the RVA in the iw4x-sp client's 1.0.159 exe
+void addr_use_159(void)
+{
+	mode = 2;
+}
+#endif
+
 unsigned addr_xr(unsigned ref)
 {
+#ifndef _WIN64
+	if (mode == 2)
+		return ref ? addr159(ref) : 0;
+#endif
 	if (!mode || !ref)
 		return ref;
 	int lo = 0, hi = table_n - 1;

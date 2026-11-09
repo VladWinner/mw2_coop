@@ -266,7 +266,7 @@ static void unlink64_guarded(void *node)
 	unlink64_original(node);
 }
 #endif
-#if !defined(_WIN64) && !defined(MW2COOP_IW4X)
+#ifndef _WIN64
 // The official 32-bit game (rva 0xfb410): `const char *lookup(int index)` reads the first word of the entry that a table of pointers (absolute address in the instruction at +7) holds for the
 // index. The level load's client setup (rva 0x1c5ba7: the index is a word of the client state at +0xacbc, the result goes into a format call) called it for an entry that does not exist
 // yet / any more, and the read of the entry faulted at 0xfb41b (null): two of four 32-bit runs of the mission-hop bot scenario (Trainer, Roadkill, Cliffhanger) crashed there or at
@@ -283,7 +283,7 @@ static const char *name_lookup_guarded(int index)
 	return "";
 }
 #endif
-#if !defined(_WIN64) && defined(MW2COOP_IW4X)
+#ifndef _WIN64
 // The iw4x-sp client (1.0.159 image, rva 0xb2700): the game's unlink of a node from a doubly linked list (next at +4, the pointer to the previous link at +8; called by the function
 // at 0xc6e10 that moves an object between two lists under critical section 0x17). A node whose back pointer is null has been unlinked already: the write through it
 // (rva 0xb276f, `mov [edx], eax`) faulted, three seconds after "mission failed" when the level was torn down for the restart (a test with several failures in a row, the thread
@@ -405,8 +405,8 @@ void guards_install(void)
 	}
 	log_printf("guards: weapon definition lookup %s", hook_call(site, (void *)wdef_hook, (void **)&wdef_original) ? "guarded" : "NOT guarded (no hook page)");
 #endif
-#if !defined(_WIN64) && !defined(MW2COOP_IW4X)
-	{
+#ifndef _WIN64
+	if (!game_is_iw4x()) {
 		static const uint8_t lookup_head[11] = {0x8b, 0x44, 0x24, 0x04, 0x8b, 0x0c, 0x85}; // mov eax,[esp+4]; mov ecx,[eax*4 + table] (the 4 bytes of the table address follow)
 		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);
 		uint8_t want[11];
@@ -421,8 +421,8 @@ void guards_install(void)
 		}
 	}
 #endif
-#if !defined(_WIN64) && defined(MW2COOP_IW4X)
-	if (settings_unlinkguard()) {
+#ifndef _WIN64
+	if (game_is_iw4x() && settings_unlinkguard()) {
 		static const uint8_t unlink_bytes[7] = {0x51, 0x53, 0x55, 0x8b, 0x6c, 0x24, 0x10}; // push ecx; push ebx; push ebp; mov ebp, [esp+0x10]
 		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);
 		log_printf("guards: the list unlink at rva 0xb2700 %s", hook_function(b32 + 0xb2700, unlink_bytes, sizeof(unlink_bytes), (void *)unlink_guarded, (void **)&unlink_original) ? "is guarded" : "is not as expected, not guarded");

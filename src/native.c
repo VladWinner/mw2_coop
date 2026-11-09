@@ -1075,8 +1075,8 @@ static void perf_report(void)
 			snd_names[i].n[0] = snd_names[i].n[1] = 0;
 		}
 	}
-#elif !defined(MW2COOP_IW4X)
-	if (CFG_ONCE("sndlog", 0)) {
+#else
+	if (!game_is_iw4x() && CFG_ONCE("sndlog", 0)) {
 		const uint8_t *l = base + 0x17f5b4c; // rva of the listener array in the official 32-bit build
 		log_printf("native: sound listeners: 0 %s at %.0f %.0f %.0f, 1 %s at %.0f %.0f %.0f", l[0x38] ? "on" : "off", (double)((const float *)l)[0], (double)((const float *)l)[1], (double)((const float *)l)[2],
 			   l[0x3c + 0x38] ? "on" : "off", (double)((const float *)(l + 0x3c))[0], (double)((const float *)(l + 0x3c))[1], (double)((const float *)(l + 0x3c))[2]);
@@ -1965,7 +1965,7 @@ static void layer_back(IDirect3DDevice9 *dev)
 	set_rt_orig(dev, 0, layer_rt);
 	viewport_orig(dev, &vp);
 }
-#ifdef MW2COOP_IW4X
+#ifndef _WIN64
 // The iw4x-sp client writes its name ("AlterWare IW4x-SP", faint and large) over the view, as one 512x64 DXT1 picture drawn at the end of the scene. In split screen that scene is
 // squeezed into the half, so the name comes out flat and cut off at the top of both halves: it is left out ([native] watermark=1 keeps it).
 static int watermark_draw(IDirect3DDevice9 *dev, UINT nv, UINT pc)
@@ -2079,8 +2079,8 @@ static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t
 	if (trace_on)
 		trace_draw(dev);
 	int movie_quad = bink_is_movie_quad(dev, (UINT)t, pc, "DrawIndexedPrimitive");
-#ifdef MW2COOP_IW4X
-	if (watermark_draw(dev, nv, pc)) {
+#ifndef _WIN64
+	if (game_is_iw4x() && watermark_draw(dev, nv, pc)) {
 		layer_unfix(dev);
 		return D3D_OK;
 	}
@@ -4073,9 +4073,9 @@ static void hang_dump_thread(const char *why, DWORD only) // only: one thread's 
 #ifndef _WIN64
 				snprintf(regs, sizeof(regs), " regs eax %lx ebx %lx ecx %lx edx %lx esi %lx edi %lx ebp %lx", ctx.Eax, ctx.Ebx, ctx.Ecx, ctx.Edx, ctx.Esi, ctx.Edi, ctx.Ebp);
 #endif
-#if !defined(_WIN64) && defined(MW2COOP_IW4X)
+#ifndef _WIN64
 				// the string release loop of the iw4x exe (SL_RemoveRef..., rva 0x213d5c): the string (ebp), its hash bucket chain
-				if (CTX_IP(ctx) >= (uintptr_t)base + 0x213d50 && CTX_IP(ctx) <= (uintptr_t)base + 0x213d63) {
+				if (game_is_iw4x() && CTX_IP(ctx) >= (uintptr_t)base + 0x213d50 && CTX_IP(ctx) <= (uintptr_t)base + 0x213d63) {
 					const uint8_t *str = (const uint8_t *)ctx.Ebp;
 					char text[48] = "?";
 					MEMORY_BASIC_INFORMATION mbi;
@@ -5772,7 +5772,7 @@ static unsigned make_cmd_calls[3]; // QA (padlog): calls of the usercmd maker pe
 // [native] scrwatch=1 (iw4x-sp only, diagnostics): the script variable table (159 image VA 0x16c7480, 0x22000 entries of 16 bytes) should change only while the server
 // frame runs the scripts. A copy is taken when a server step ends and compared at the next points outside it (the client frame's begin and end, the next step's start): every
 // 16-byte entry that differs there was written by something that is not the server step, and is logged with its old and new bytes and the window it was found in.
-#ifdef MW2COOP_IW4X
+#ifndef _WIN64
 #define SCRW_RVA 0x12c7480u
 #define SCRW_SIZE 0x220000u
 static uint8_t *scrw_copy;
@@ -5795,6 +5795,8 @@ static void strw_check(const char *label)
 }
 static void scrw_diff(const char *label, int log_it)
 {
+	if (!game_is_iw4x())
+		return; // (iw4x-sp only, diagnostics)
 	if (!CFG_ONCE("scrwatch", 0))
 		return;
 	strw_check(label);
@@ -5841,8 +5843,8 @@ static void client_frame_inner(void)
 		DWORD now = GetTickCount();
 		if (seen < 4 || now - last >= 2000) {
 			log_printf("native: client frame #%d (active %d, ctx %d, ready %d, split %d, cg draws %u) cls %d | sv clients %d %d | hooks: snap %u ps %u step %u ucmd %u smsg %u scmd %u | entities %d", seen, native_active, ctx_current, ctx1_ready, split_on, cg_draw_count, *(int *)(base + RVA_CLS_STATE), *(int *)(base + RVA_SV_CLIENTS), *(int *)(base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE), hook_counts[0], hook_counts[1], hook_counts[2], hook_counts[3], hook_counts[4], hook_counts[5], *(int *)(base + RVA_LEVEL_NUM_ENT));
-#ifdef MW2COOP_IW4X
-			// the script variable pool (159 image): AllocVariable counts the variables of the root object (VA 0x18e7540) and of all others (0x18e7544); the table has 0x22000 entries
+#ifndef _WIN64
+			if (game_is_iw4x()) // the script variable pool (159 image): AllocVariable counts the variables of the root object (VA 0x18e7540) and of all others (0x18e7544); the table has 0x22000 entries
 			log_printf("native: script variables in use: root %d, others %d, of 139264 (free list head entry %u)", *(int *)(base + 0x14e7540), *(int *)(base + 0x14e7544), (unsigned)*(const uint16_t *)(base + 0x12c7480));
 #endif
 			last = now;
@@ -7972,21 +7974,17 @@ static int hooks_apply32_contexts(void)
 	{ // the 2D texts of the HUD (docs/32bit-native-map/inputui.md): message windows, the title lines' element draw, the names over the other player
 		static const uint8_t key_event_bytes32[] = {0x8b, 0x4c, 0x24, 0x0c, 0x53};
 		uint8_t msgwin_bytes32[] = {0xa1, 0xc0, 0xa7, 0x86, 0x00}; // mov eax, [0x86a7c0]
-#ifdef MW2COOP_IW4X
 		{
-			uint32_t at = XV(0x86a7c0);
+			uint32_t at = XV(0x86a7c0); // (the same number on the official build)
 			memcpy(msgwin_bytes32 + 1, &at, 4);
 		}
-#endif
 		if (!jhook_function(base + XR(0xd2350), key_event_bytes32, sizeof(key_event_bytes32), key_event_hook, (void **)&key_event_original))
 			log_printf("native: key event bytes differ");
 		uint8_t hudelem_bytes32[] = {0xa1, 0x50, 0x86, 0x75, 0x00}; // mov eax, [0x758650]
-#ifdef MW2COOP_IW4X
 		{
 			uint32_t at = XV(0x758650);
 			memcpy(hudelem_bytes32 + 1, &at, 4);
 		}
-#endif
 		if (!jhook_function(base + XR(0x713b0), msgwin_bytes32, sizeof(msgwin_bytes32), msgwin_hook, (void **)&msgwin_original))
 			log_printf("native: game message window draw bytes differ");
 		if (cfg("titles", 1) && !jhook_function(base + XR(0x164b40), hudelem_bytes32, sizeof(hudelem_bytes32), hudelem_hook, (void **)&hudelem_original))

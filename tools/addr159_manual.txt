@@ -50,3 +50,33 @@
 0x1c8ed9c -> 0x0    # RVA_RENDER_WIDTH: no mapping for the iw4x-sp 1.0.159 exe yet
 0x1c8eda0 -> 0x0    # RVA_RENDER_HEIGHT: no mapping for the iw4x-sp 1.0.159 exe yet
 0x86920 -> 0x0    # RVA_CLIENT_COMMAND: no mapping for the iw4x-sp 1.0.159 exe yet (the delivery is off there)
+0xd0450 -> 0x18ce0    # RVA_LOAD_LEVEL_ZONES (zones.c)
+0x9edb0 -> 0xcfc90    # RVA_DB_LOAD_XASSETS (zones.c)
+0x330510 -> 0x333510    # RVA_POOL_SIZES (zones.c)
+0x3307f8 -> 0x3337f8    # RVA_POOLS (zones.c)
+0x151cef0 -> 0x1520470    # RVA_UI_CONTEXT (menus.c)
+0xaa76b8 -> 0xaaac38    # RVA_G_ENTITIES (mirror.c)
+0xc332d -> 0x1abed    # LEAK_EXIT_RVA (transplant.c)
+0x8fc8b4 -> 0x8ffe34    # LEAK_COUNT_RVA (transplant.c)
+0x8c5f7 -> 0x94e27    # net_port push immediate (settings.c)
+0x23908f -> 0x23b87f    # net_port push immediate (settings.c)
+0x212f50 -> 0x215790    # RVA_ERROR_HANDLER (scrdebug32.c)
+0x14e3f90 -> 0x14e7510    # RVA_ERROR_MESSAGE (scrdebug32.c)
+0x14e3f8f -> 0x14e750f    # RVA_ERROR_FLAG_A (scrdebug32.c)
+0x1188a34 -> 0x118bfb4    # RVA_ERROR_FLAG_B (scrdebug32.c)
+0x90180 -> 0x5dc30    # RVA_END_LOAD_SCRIPTS (scrdebug32.c)
+0x20ffa0 -> 0x2127e0    # RVA_MT_SIZE (scrdebug32.c)
+0x211490 -> 0x213cd0    # RVA_SL_FREE (scrdebug32.c)
+0x128be00 -> 0x128f380    # RVA_SL_TABLE (scrdebug32.c)
+0x1018f0 -> 0x62750    # RVA_GET_FUNC_HANDLE (scrdebug32.c)
+0x14e3fe0 -> 0x14e7560    # RVA_PROGRAM_BUFFER (scrdebug32.c)
+0x150a854 -> 0x150ddd4    # RVA_VM_POS (scrdebug32.c)
+0x150a878 -> 0x150ddf8    # RVA_VM_DEPTH (scrdebug32.c)
+0x150a87c -> 0x150ddfc    # RVA_VM_FRAME_PTR (scrdebug32.c)
+0x150a900 -> 0x150de00    # RVA_VM_STACK_TOP (scrdebug32.c)
+0x29116c -> 0x29415c    # DB_FindXAssetHeader's absolute operand (VA 0x69116c -> 0x69415c), localize.c
+0x2e8ec4 -> 0x2ebde4    # builtin entry setactionslot (mirror.c)
+0x2e8d14 -> 0x2ebc34    # builtin entry setoffhandsecondaryclass
+0x2e8c18 -> 0x2ebb38    # builtin entry givemaxammo
+0x2e8c0c -> 0x2ebb2c    # builtin entry givestartammo
+0x2eb140 -> 0x2ee030    # builtin entry setthreatbiasgroup

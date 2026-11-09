@@ -91,7 +91,6 @@ static int sha256_code(char out[65], unsigned *bytes)
 	return ok;
 }
 
-#ifdef MW2COOP_IW4X
 // The iw4x-sp client (docs: games/modern-warfare-2/NOTES.md, "iw4x-sp support") maps the 1.0.159 iw4sp.exe into its own process and patches
 // the code in memory, so the code hash changes with the client's build. The build is known by the SHA-256 of the iw4sp.exe file next to it.
 static int sha256_file(const char *path, char out[65])
@@ -123,6 +122,18 @@ static int sha256_file(const char *path, char out[65])
 	return ok;
 }
 
+static int iw4x_process;
+int game_is_iw4x(void)
+{
+	return iw4x_process;
+}
+static void detect_iw4x_process(void)
+{
+	char path[MAX_PATH];
+	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
+	iw4x_process = n >= 11 && lstrcmpiA(path + n - 11, "iw4x-sp.exe") == 0;
+}
+
 static const char iw4x_exe_sha256[] = "9480909B18CF5A4EC483C989AAFCE929D2172C5F9448F8C23B723683D1A43565"; // SP_ALTER_HASH of iw4x-sp
 static int iw4x_known(void)
 {
@@ -139,7 +150,6 @@ static int iw4x_known(void)
 	log_printf("main32: iw4sp.exe file SHA-256 %s", hex);
 	return strcmp(hex, iw4x_exe_sha256) == 0;
 }
-#endif
 
 static BOOL CALLBACK find_game_window(HWND h, LPARAM out)
 {
@@ -249,15 +259,17 @@ static DWORD WINAPI identify(LPVOID unused)
 	}
 	log_printf("main32: image base %p, code sections %u bytes, SHA-256 %s", (void *)GetModuleHandleW(NULL), bytes, hex);
 	int forced_unknown = getenv("MW2COOP_FORCE_UNKNOWN") != NULL; // QA: take the unknown build path on the known build
-#ifdef MW2COOP_IW4X
-	for (size_t i = 0; i < 1; i++) {
-		if (iw4x_known()) {
+	if (game_is_iw4x()) { // the iw4x-sp client: its 1.0.159 exe is known by its file's hash (the client patches the code in memory)
+		if (!forced_unknown && iw4x_known()) {
 			log_printf("main32: known build: 1.0.159 iw4sp.exe of the iw4x-sp client");
-#else
-	for (size_t i = 0; i < sizeof(builds) / sizeof(builds[0]); i++) {
+			addr_use_159();
+			install_all();
+			return 0;
+		}
+	}
+	for (size_t i = 0; !game_is_iw4x() && i < sizeof(builds) / sizeof(builds[0]); i++) {
 		if (!forced_unknown && strcmp(hex, builds[i].code_sha256) == 0) {
 			log_printf("main32: known build: %s", builds[i].name);
-#endif
 			install_all();
 			return 0;
 		}
@@ -308,6 +320,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 	GetLocalTime(&day);
 	log_printf("main32: %04d-%02d-%02d, 32-bit proxy attached, pid %lu", day.wYear, day.wMonth, day.wDay,
 		   GetCurrentProcessId());
+	detect_iw4x_process();
 	d3dcap_install(); // the exe's imports are loaded and its code has not run: the game has not created its device yet
 	if (!proxy_init()) {
 		log_printf("main32: could not load the real winmm.dll");

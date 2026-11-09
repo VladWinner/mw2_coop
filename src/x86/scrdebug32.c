@@ -14,47 +14,24 @@
 #include "scrdebug.h"
 #include "scrdebug_stack.h"
 
-#ifdef MW2COOP_IW4X // the 1.0.159 exe of iw4x-sp
-#define RVA_ERROR_HANDLER 0x215790
-#define RVA_ERROR_MESSAGE 0x14e7510
-#define RVA_ERROR_FLAG_A  0x14e750f
-#define RVA_ERROR_FLAG_B  0x118bfb4
-#define ERROR_FLAG_ADDR   {0x0f, 0x75, 0x8e, 0x01}
-// the script VM in the 159 image (tools/map159.py, every data address agrees on all its references): function_count 0x190ddf8, the frame pointer 0x190ddfc (frames of 0x18 bytes),
-// the live code position 0x190ddd4, the program buffer pointer 0x18e7560, Scr_GetFunctionHandle VA 0x462750 (the same bytes as the official function, it reads 0x18e7560), Scr_EndLoadScripts VA 0x45dc30
-#define RVA_END_LOAD_SCRIPTS 0x5dc30
-#define RVA_MT_SIZE          0x2127e0
-#define RVA_SL_FREE          0x213cd0 // the last release of a script string: edi = its handle, [esp+4] the string, [esp+8] its length; the hash function is 0x2f0 before it
-#define RVA_SL_TABLE         0x128f380 // the string hash table (8-byte entries: next index u16, handle at +4)
-#define RVA_GET_FUNC_HANDLE  0x62750
-#define RVA_PROGRAM_BUFFER   0x14e7560
-#define RVA_VM_POS           0x150ddd4
-#define RVA_VM_DEPTH         0x150ddf8
-#define RVA_VM_FRAME_PTR     0x150ddfc
-#define RVA_VM_STACK_TOP     0x150de00
-#define RVA_VM_STACK_BASE_VA 0x190e110u
-#define VM_FRAME_SIZE        0x18
-#else
-#define RVA_ERROR_HANDLER 0x212f50 // void (void); starts with cmp byte [0x18e3f8f], 0
-#define RVA_ERROR_MESSAGE 0x14e3f90 // const char * (0x18e3f90)
-#define RVA_ERROR_FLAG_A  0x14e3f8f // uint8
-#define RVA_ERROR_FLAG_B  0x1188a34 // uint8 (0x1588a34)
-#define ERROR_FLAG_ADDR   {0x8f, 0x3f, 0x8e, 0x01}
+#define RVA_ERROR_HANDLER XRA(0x212f50) // void (void); starts with cmp byte [0x18e3f8f], 0
+#define RVA_ERROR_MESSAGE XRA(0x14e3f90) // const char * (0x18e3f90)
+#define RVA_ERROR_FLAG_A  XRA(0x14e3f8f) // uint8
+#define RVA_ERROR_FLAG_B  XRA(0x1188a34) // uint8 (0x1588a34)
 // the script VM (docs/32bit-native-map): function_count 0x190a878, the pointer one past the top call frame 0x190a87c (frames of 0x18 bytes, the saved code position first),
 // the live code position 0x190a854, the program buffer pointer 0x18e3fe0, Scr_GetFunctionHandle(file, name) 0x5018f0 (cdecl), Scr_EndLoadScripts 0x490180
-#define RVA_END_LOAD_SCRIPTS 0x90180
-#define RVA_MT_SIZE          0x20ffa0 // MT_GetSize(esi = bytes) -> eax: the size class of a script memory request
-#define RVA_SL_FREE          0x211490
-#define RVA_SL_TABLE         0x128be00
-#define RVA_GET_FUNC_HANDLE  0x1018f0
-#define RVA_PROGRAM_BUFFER   0x14e3fe0
-#define RVA_VM_POS           0x150a854
-#define RVA_VM_DEPTH         0x150a878
-#define RVA_VM_FRAME_PTR     0x150a87c
-#define RVA_VM_STACK_TOP     0x150a900 // (not known for the official build: reads the frame pointer's neighbour, only for the log line)
-#define RVA_VM_STACK_BASE_VA 0x190a000u
+#define RVA_END_LOAD_SCRIPTS XRA(0x90180)
+#define RVA_MT_SIZE          XRA(0x20ffa0) // MT_GetSize(esi = bytes) -> eax: the size class of a script memory request
+#define RVA_SL_FREE          XRA(0x211490)
+#define RVA_SL_TABLE         XRA(0x128be00)
+#define RVA_GET_FUNC_HANDLE  XRA(0x1018f0)
+#define RVA_PROGRAM_BUFFER   XRA(0x14e3fe0)
+#define RVA_VM_POS           XRA(0x150a854)
+#define RVA_VM_DEPTH         XRA(0x150a878)
+#define RVA_VM_FRAME_PTR     XRA(0x150a87c)
+#define RVA_VM_STACK_TOP     XRA(0x150a900) // (not known for the official build: reads the frame pointer's neighbour, only for the log line)
 #define VM_FRAME_SIZE        0x18
-#endif
+#define RVA_VM_STACK_BASE_VA (game_is_iw4x() ? 0x190e110u : 0x190a000u) // a VA: the value stack of the script VM (the iw4x-sp client's exe has it elsewhere)
 
 static uint8_t *base;
 static void (*handler_original)(void);
@@ -288,7 +265,6 @@ int sl_free_check(unsigned handle, const uint8_t *str, int len, const uintptr_t 
 	return 0;
 }
 
-#ifdef MW2COOP_IW4X
 // Diagnostics (a file mw2coop\\xferlog next to the exe): the animation transfer queue (159 image: entries of 36 bytes at VA 0x1a4ade0, their count at VA 0x1a53de4). A DObj that is
 // freed saves its animation state into it (VA 0x486930, the tree in [esp+8]); VA 0x42b260 applies every entry (and gives back the strings the entries hold) at the start of VA 0x4bbe50;
 // VA 0x4dfe40 empties it. A string that is given back twice is what the string guard catches, so the order of these three calls with the live context is logged.
@@ -363,11 +339,12 @@ static void xfer_install(void)
 		 hook_function(base + 0x4dfe40 - 0x400000, reset_bytes, sizeof(reset_bytes), xfer_reset_hook, (void **)&xfer_reset_next);
 	log_printf("scrdebug: animation transfer queue events are logged: %s", ok ? "on" : "bytes did not match");
 }
-#endif
 
 void scrdebug_install(void)
 {
-	static const uint8_t flag_addr[4] = ERROR_FLAG_ADDR;
+	const uint32_t flag_va = XV(0x18e3f8f); // the address of the error flag (a VA: it goes into the instruction as it is)
+	uint8_t flag_addr[4];
+	memcpy(flag_addr, &flag_va, 4);
 	const uint8_t expected[] = {0x80, 0x3d, flag_addr[0], flag_addr[1], flag_addr[2], flag_addr[3], 0x00};
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	if (!hook_function(base + RVA_ERROR_HANDLER, expected, sizeof(expected), error_hook, (void **)&handler_original)) {
@@ -375,9 +352,8 @@ void scrdebug_install(void)
 		return;
 	}
 	log_printf("scrdebug: script errors are logged");
-#ifdef MW2COOP_IW4X
-	xfer_install();
-#endif
+	if (game_is_iw4x())
+		xfer_install();
 	{
 		static const uint8_t mt_bytes[] = {0x51, 0x81, 0xfe, 0x00, 0x00, 0x01, 0x00}; // push ecx / cmp esi, 0x10000 (the next instruction, jge, stays whole)
 		if (hook_function(base + RVA_MT_SIZE, mt_bytes, sizeof(mt_bytes), mt_size_stub, &mt_size_next))
@@ -392,7 +368,7 @@ void scrdebug_install(void)
 		else
 			log_printf("scrdebug: unexpected bytes at the string release, not caught");
 	}
-	static const scrdebug_vm_t vm = {RVA_GET_FUNC_HANDLE, RVA_PROGRAM_BUFFER, RVA_VM_POS, RVA_VM_DEPTH, 0, RVA_VM_FRAME_PTR, VM_FRAME_SIZE};
+	const scrdebug_vm_t vm = {RVA_GET_FUNC_HANDLE, RVA_PROGRAM_BUFFER, RVA_VM_POS, RVA_VM_DEPTH, 0, RVA_VM_FRAME_PTR, VM_FRAME_SIZE};
 	static const uint8_t handle_bytes[] = {0x8b, 0x44, 0x24, 0x04, 0x83, 0xec, 0x08, 0x56, 0x57, 0x50};
 	if (memcmp(base + RVA_GET_FUNC_HANDLE, handle_bytes, sizeof(handle_bytes)) == 0) {
 		scrdebug_stack_init(base, &vm);

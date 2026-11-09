@@ -101,11 +101,8 @@ extern char climbads_stub32[];
 
 void climbads_install(void)
 {
-#ifdef MW2COOP_IW4X
-	return;
-#else
-	if (!settings_keepads())
-		return;
+	if (game_is_iw4x() || !settings_keepads())
+		return; // (not mapped for the iw4x-sp client)
 	base = (uint8_t *)GetModuleHandleA(NULL);
 #ifdef _WIN64
 	static const uint8_t bytes[15] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xec, 0x20}; // mov [rsp+0x18], rbx; mov [rsp+0x20], rsi; push rdi; sub rsp, 0x20
@@ -113,6 +110,5 @@ void climbads_install(void)
 #else
 	static const uint8_t bytes[6] = {0x51, 0x55, 0x8b, 0x6c, 0x24, 0x0c}; // push ecx; push ebp; mov ebp, [esp+0xc]
 	log_printf("climbads: the usercmd aim/movement function at VA 0x578c20 %s", hook_function(base + 0x178c20, bytes, sizeof(bytes), (void *)climbads_stub32, &climbads_orig32) ? "is watched" : "is not as expected, not watched");
-#endif
 #endif
 }

@@ -552,8 +552,8 @@ static void *find_header(int type, const char *name)
 			return &fixed[i].entry;
 		}
 	}
-#ifdef MW2COOP_IW4X
-	if (type == 0x24) { // a script of ours: the iw4x client reads it as a rawfile (scripts.c)
+#ifndef _WIN64
+	if (game_is_iw4x() && type == 0x24) { // a script of ours: the iw4x client reads it as a rawfile (scripts.c)
 		void *raw = scripts_raw_override(name);
 		if (raw)
 			return raw;
@@ -601,6 +601,8 @@ static char override_text[256];
 
 void localize_override(const char *name, const char *text)
 {
+	if (!original)
+		return; // (the hook is not in)
 	LocalizeEntry *e = find_header(ASSET_TYPE_LOCALIZE_ENTRY, name);
 	if (!e || !e->value || !e->name || strcmp(e->name, name) != 0)
 		return;
@@ -619,6 +621,8 @@ void localize_override(const char *name, const char *text)
 
 const char *localize_text(const char *name)
 {
+	if (!original) // the hook is not in (the build was not recognised, or its bytes differ): the game's own function is not ours to call
+		return NULL;
 	LocalizeEntry *e = find_header(ASSET_TYPE_LOCALIZE_ENTRY, name);
 	return e && e->value && e->name && strcmp(e->name, name) == 0 ? e->value : NULL;
 }
@@ -626,17 +630,18 @@ const char *localize_text(const char *name)
 #ifdef _WIN64
 static const uint8_t expected[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
 #else
-// 32-bit DB_FindXAssetHeader (0x4f6f10): push ecx; push ebx; mov ebx, [0x69116c] (an absolute address, copied as it is)
-#ifdef MW2COOP_IW4X
-// the 1.0.159 exe (iw4x-sp): the same, with the absolute address 0x69415c
-static const uint8_t expected[] = {0x51, 0x53, 0x8b, 0x1d, 0x5c, 0x41, 0x69, 0x00};
-#else
-static const uint8_t expected[] = {0x51, 0x53, 0x8b, 0x1d, 0x6c, 0x11, 0x69, 0x00};
-#endif
+// 32-bit DB_FindXAssetHeader (0x4f6f10): push ecx; push ebx; mov ebx, [0x69116c] (an absolute address, copied as it is; in the iw4x-sp client's exe it is 0x69415c: filled in at install)
+static uint8_t expected[] = {0x51, 0x53, 0x8b, 0x1d, 0x6c, 0x11, 0x69, 0x00};
 #endif
 
 void localize_install(void)
 {
+#ifndef _WIN64
+	{
+		uint32_t at = XV(0x69116c); // (the same number on the official build)
+		memcpy(expected + 4, &at, 4);
+	}
+#endif
 	uint8_t *target = (uint8_t *)GetModuleHandleA(NULL) + RVA_DB_FIND_HEADER;
 	if (memcmp(target, expected, sizeof(expected)) != 0) {
 		log_printf("localize: unexpected bytes at DB_FindXAssetHeader, not hooking");

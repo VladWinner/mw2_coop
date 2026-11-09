@@ -69,16 +69,7 @@ typedef char *(*hunk_temp_high_t)(int64_t size);
 // The 32-bit official Steam build (code SHA-256 FC9E4843...52D7, image base 0x400000), docs/32bit-plan.md.
 // All of these are cdecl; the wrapper takes the same four arguments as the 64-bit function.
 typedef char *(*hunk_temp_high_t)(int size);
-#ifdef MW2COOP_IW4X
-#include "game.h" // the 1.0.159 profile the iw4x-sp client loads
-#else
-#define RVA_SCR_ADD_SOURCE_BUFFER 0x7f8e0
-#define RVA_DB_FIND_HEADER        0xf6f10
-#define RVA_DB_IS_DEFAULT         0xc32b0
-#define RVA_DB_RAWFILE_LEN        0xe3080
-#define RVA_DB_RAW_BUFFER         0xe55f0
-#define RVA_HUNK_TEMP_HIGH        0x0eed0
-#endif
+#include "game.h" // the RVA_ macros (through addr_xr: the iw4x-sp client's 1.0.159 exe has its own addresses)
 #endif
 
 // Reads <mod_dir>\<sub>\<ext><suffix> into a malloc'd, NUL-terminated buffer with '\r' removed.
@@ -408,7 +399,7 @@ static const uint8_t expected[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x56, 0x48, 0x8
 // The first two instructions and more of the cdecl wrapper at 0x47f8e0 (it forwards to a usercall body).
 static const uint8_t expected[] = {0x8b, 0x44, 0x24, 0x10, 0x8b, 0x4c, 0x24, 0x04, 0x53, 0x8b, 0x5c, 0x24, 0x10, 0x56, 0x8b, 0x74, 0x24, 0x10, 0x50, 0x51};
 #endif
-#ifdef MW2COOP_IW4X
+#ifndef _WIN64
 // The iw4x-sp client loads scripts with its own loader (it replaces the calls of Scr_AddSourceBuffer, so the hook above is not reached):
 // it asks DB_FindXAssetHeader / DB_IsXAssetDefault for the rawfile "<script>.gsc", allocates DB_GetRawFileLen bytes and fills them
 // with DB_GetRawBuffer. So here those two are hooked and give the mod's text: a script of ours the zone does not have gets a made-up
@@ -553,9 +544,11 @@ void scripts_install(void)
 	mod_dir[n] = 0;
 	lstrcatA(mod_dir, "mw2coop");
 
-#ifdef MW2COOP_IW4X
-	install_iw4x();
-	return;
+#ifndef _WIN64
+	if (game_is_iw4x()) {
+		install_iw4x();
+		return;
+	}
 #endif
 	uint8_t *target = base + RVA_SCR_ADD_SOURCE_BUFFER;
 #ifdef _WIN64

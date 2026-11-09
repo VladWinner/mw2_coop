@@ -31,13 +31,8 @@
 #include "game.h"
 #include "transplant.h"
 
-#ifdef MW2COOP_IW4X
-#define RVA_LOAD_LEVEL_ZONES 0x018ce0 // the 1.0.159 exe of iw4x-sp
-#define RVA_DB_LOAD_XASSETS  0x0cfc90
-#else
-#define RVA_LOAD_LEVEL_ZONES 0x0d0450
-#define RVA_DB_LOAD_XASSETS  0x09edb0
-#endif
+#define RVA_LOAD_LEVEL_ZONES XRA(0x0d0450)
+#define RVA_DB_LOAD_XASSETS  XRA(0x09edb0)
 #endif
 
 typedef struct {
@@ -66,13 +61,8 @@ static load_level_zones_t original;
 #define RVA_POOLS      0x3bfe00 // void *[43]
 #else
 // 32-bit: the per-type tables the asset alloc (0x57ea60) reads: sizes at 0x730510, pool pointers at 0x7307f8
-#ifdef MW2COOP_IW4X
-#define RVA_POOL_SIZES 0x333510
-#define RVA_POOLS      0x3337f8
-#else
-#define RVA_POOL_SIZES 0x330510
-#define RVA_POOLS      0x3307f8
-#endif
+#define RVA_POOL_SIZES XRA(0x330510)
+#define RVA_POOLS      XRA(0x3307f8)
 #endif
 #define ASSET_TYPE_LOADED_SOUND 13
 

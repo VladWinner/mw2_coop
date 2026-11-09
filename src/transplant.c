@@ -365,11 +365,7 @@ static uint8_t *pick_model, *pick_source;
 #ifdef _WIN64
 #define RVA_POOLS 0x3bfe00 // void *[43]: { free list head; entries[] } (see zones.c)
 #else
-#ifdef MW2COOP_IW4X
-#define RVA_POOLS 0x3337f8 // the 1.0.159 exe of iw4x-sp
-#else
-#define RVA_POOLS 0x3307f8 // void *[43] at 0x7307f8, read by the per-type allocator (0x5801b0 for models): { free list head; entries[] }
-#endif
+#define RVA_POOLS XRA(0x3307f8) // void *[43] at 0x7307f8, read by the per-type allocator (0x5801b0 for models): { free list head; entries[] }
 #endif
 
 static struct {
@@ -620,8 +616,8 @@ static is_default_t is_default_original;
 
 static char is_default(unsigned type, const char *name)
 {
-#ifdef MW2COOP_IW4X
-	if (type == 0x24 && name && scripts_is_override(name)) // a script of ours (scripts.c): the rawfile exists
+#ifndef _WIN64
+	if (game_is_iw4x() && type == 0x24 && name && scripts_is_override(name)) // a script of ours (scripts.c): the rawfile exists
 		return 0;
 #endif
 	if (type == 4 && name && strcmp(name, PICK_NAME) == 0 && pick_model)
@@ -652,14 +648,9 @@ static const uint8_t is_default_bytes[] = {0x53, 0x8b, 0x5c, 0x24, 0x0c, 0x56, 0
 #define LEAK_COUNT_RVA 0xa8a830
 #define LEAK_RESUME_RVA 0xf00c8 // the epilogue the found path also ends in
 static const uint8_t leak_exit_bytes[] = {0xb8, 0x01, 0x00, 0x00, 0x00}; // mov eax,1
-#elif defined(MW2COOP_IW4X)
-// the 1.0.159 exe of iw4x-sp: DB_IsXAssetDefault at 0x1ab70, the same not-found exit at +0x7d, the counter pushed as 0xcffe34
-#define LEAK_EXIT_RVA 0x1abed
-#define LEAK_COUNT_RVA 0x8ffe34
-static const uint8_t leak_exit_bytes[] = {0x5f, 0x5e, 0xb8, 0x01, 0x00, 0x00, 0x00, 0x5b, 0xc3}; // pop edi; pop esi; mov eax,1; pop ebx; ret
 #else
-#define LEAK_EXIT_RVA 0xc332d
-#define LEAK_COUNT_RVA 0x8fc8b4
+#define LEAK_EXIT_RVA XRA(0xc332d) // (the iw4x-sp client's exe: DB_IsXAssetDefault at 0x1ab70, the same not-found exit at +0x7d: 0x1abed)
+#define LEAK_COUNT_RVA XRA(0x8fc8b4) // (0x8ffe34 there)
 static const uint8_t leak_exit_bytes[] = {0x5f, 0x5e, 0xb8, 0x01, 0x00, 0x00, 0x00, 0x5b, 0xc3}; // pop edi; pop esi; mov eax,1; pop ebx; ret
 #endif
 
