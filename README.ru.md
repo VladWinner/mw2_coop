@@ -166,6 +166,19 @@ connect <IP хоста> 8305
 </details>
 
 <details>
+<summary>🗂️ <b>Файлы, которые можно править</b></summary>
+
+Всё, что мод показывает или решает, лежит в читаемых файлах в папке игры `mw2coop`; правьте их при закрытой игре.
+
+- `settings.ini`: настройки. Все ключи, которые читает мод, с умолчаниями перечислены в [docs/settings-reference.md](docs/settings-reference.md).
+- `localizedstrings\mw2coop.str` и `console.str`: тексты мода, английские и русские, в формате `.str` движков Call of Duty.
+- `missions.csv`: миссии (название в Discord, зона Spec Ops, картинка лобби).
+- `menus.menu`: кнопки и окна, которые мод добавляет в главное меню, в синтаксисе `.menu` Call of Duty.
+- `addresses-x86.txt`, `addresses-x64.txt`: сигнатуры байтов для поиска адресов игры в версии, которую мод не знает ([docs/address-resolution.md](docs/address-resolution.md)).
+
+</details>
+
+<details>
 <summary>🔧 <b>Сборка</b></summary>
 
 Нужны [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) и POSIX-оболочка (Git Bash):

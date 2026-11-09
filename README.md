@@ -166,6 +166,19 @@ connect <host IP> 8305
 </details>
 
 <details>
+<summary>🗂️ <b>Files you can edit</b></summary>
+
+Everything the mod shows or decides is in readable files in the game's `mw2coop` folder; edit one with the game closed.
+
+- `settings.ini`: the options. Every key the mod reads, with its default, is listed in [docs/settings-reference.md](docs/settings-reference.md).
+- `localizedstrings\mw2coop.str` and `console.str`: the mod's texts, English and Russian, in the `.str` format of the Call of Duty engines.
+- `missions.csv`: the missions (title in Discord, Spec Ops zone, lobby picture).
+- `menus.menu`: the buttons and popups the mod adds to the main menu, in the `.menu` syntax of Call of Duty.
+- `addresses-x86.txt`, `addresses-x64.txt`: byte signatures for finding the game's addresses in a build the mod has not seen ([docs/address-resolution.md](docs/address-resolution.md)).
+
+</details>
+
+<details>
 <summary>🔧 <b>Build</b></summary>
 
 Needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and a POSIX shell (Git Bash):
