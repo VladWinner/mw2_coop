@@ -647,6 +647,22 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		log_printf("menus: About page added (%d items, icons %s)", n, icons ? "on" : "no picture");
 }
 
+// The game's own Multiplayer entry: the action of the "game_mp" item of its selection menu (main_selection). The mod's Multiplayer button runs that, so it does what the game's
+// button does; the mod's own modes (co-op, split screen) are on the Campaign page only. NULL if the item is not there.
+static void *original_multiplayer_action(void)
+{
+	uint8_t *selection = ui_find_menu("main_selection");
+	if (!selection)
+		return NULL;
+	uint8_t **si = *(uint8_t ***)(selection + MENU_ITEMS);
+	for (int i = 0; i < *(int *)(selection + MENU_ITEM_COUNT); i++) {
+		const char *name = *(const char **)si[i];
+		if (name && !strcmp(name, "game_mp"))
+			return *(void **)(si[i] + ITEM_ACTION);
+	}
+	return NULL;
+}
+
 static int name_in(const char *name, const char *const *list)
 {
 	for (; *list; list++)
@@ -767,6 +783,12 @@ static void patch_main_menu(void)
 				*(const char **)item = def->name;
 				*(const char **)(item + ITEM_TEXT) = def->text;
 				*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(def->action);
+				if (!strcmp(def->name, "mw2coop_multiplayer_btn")) {
+					void *original = original_multiplayer_action();
+					if (original)
+						*(void **)(item + ITEM_ACTION) = original;
+					log_printf("menus: the Multiplayer button runs %s", original ? "the game's own action" : "the fallback of menus.menu");
+				}
 				*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
 				*(float *)(item + ITEM_RECT_Y) = y;
 				*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
@@ -1171,14 +1193,6 @@ static void open_url_f(void)
 	}
 	log_printf("menus: opening %s", urls[k - 1]);
 	ShellExecuteA(NULL, "open", urls[k - 1], NULL, NULL, SW_SHOWNORMAL);
-}
-
-static void add_multiplayer_menu(void)
-{
-	if (ui_find_menu("mw2coop_multiplayer"))
-		return;
-	if (table_popup("mw2coop_multiplayer"))
-		log_printf("menus: multiplayer popup added");
 }
 
 static void add_lobbies_menu(void)
@@ -3080,7 +3094,6 @@ static void tick_f(void)
 	patch_selection_menu();
 	patch_specops_return();
 	patch_act1_menu();
-	add_multiplayer_menu();
 	add_lobbies_menu();
 	add_host_menu();
 	add_saves_menu();

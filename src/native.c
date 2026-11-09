@@ -1942,7 +1942,9 @@ static int comp_hook(IDirect3DDevice9 *hint);
 static IDirect3DSurface9 *layer_scene_rt, *layer_rt;
 static int layer_to_scene(IDirect3DDevice9 *dev)
 {
-	if (!layer_scene_rt || !layer_rt || !CFG_ONCE("layer3d", 1))
+	// (the originals of SetRenderTarget and SetViewport are known once the full device hooks are in (trace_install); the 16:9 cinematics hooks put the draw hook in first,
+	// so for a moment the layer pass can run without them: a call through the null pointer crashed the render thread, 2026-11-09, Museum load on a 2560 x 1080 screen)
+	if (!set_rt_orig || !viewport_orig || !layer_scene_rt || !layer_rt || !CFG_ONCE("layer3d", 1))
 		return 0;
 	DWORD z = 0;
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_ZENABLE, &z);
@@ -1956,6 +1958,8 @@ static int layer_to_scene(IDirect3DDevice9 *dev)
 }
 static void layer_back(IDirect3DDevice9 *dev)
 {
+	if (!set_rt_orig || !viewport_orig)
+		return;
 	D3DVIEWPORT9 vp;
 	IDirect3DDevice9_GetViewport(dev, &vp);
 	set_rt_orig(dev, 0, layer_rt);

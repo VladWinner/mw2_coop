@@ -202,7 +202,7 @@ void game_for_each_dvar(int (*fn)(dvar_t *dvar, void *ctx), void *ctx)
 	for (int i = 0; i < 1024; i++) {
 		int guard = 0;
 		for (dvar_t *d = table[i]; d && guard < 64 && !IsBadReadPtr(d, sizeof(*d)); d = d->hash_next, guard++)
-			if (d->name && fn(d, ctx))
+			if (d->name && !IsBadStringPtrA(d->name, 256) && fn(d, ctx))
 				return;
 	}
 }
@@ -212,8 +212,10 @@ void game_for_each_command(int (*fn)(const char *name, void *ctx), void *ctx)
 	if (!ready || !RVA_CMD_FUNCTIONS)
 		return;
 	int guard = 0;
-	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c && guard < 4000; c = c->next, guard++)
-		if (c->name && fn(c->name, ctx))
+	// (the list is the game's own and changes under us: a node can be freed while the console walks it, and its name pointer then points nowhere; Vlad's log 2026-11-09:
+	// a read fault in _stricmp of the console's completion catalog while the second player was bleeding out)
+	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c && guard < 4000 && !IsBadReadPtr(c, sizeof(*c)); c = c->next, guard++)
+		if (c->name && !IsBadStringPtrA(c->name, 256) && fn(c->name, ctx))
 			return;
 }
 
