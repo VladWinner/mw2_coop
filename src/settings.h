@@ -64,5 +64,7 @@ int settings_gameplay_jump_height(void);
 int settings_gameplay_gravity(void);
 // settings.ini [discord] client_id: the id of a Discord application (digits); empty (the default): no Discord presence (discord.c).
 const char *settings_discord_id(void);
+// The picture of the Discord card: the address of a file of the mod's repository (fixed, not a setting).
+const char *settings_discord_image(void);
 // mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).
 const char *settings_player_id(void);

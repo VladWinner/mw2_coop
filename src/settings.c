@@ -49,6 +49,9 @@ static int fsr3_refine = 1;
 static int fsr3_bias_set;
 static float fsr3_bias;
 static int gp_fall_damage = -1, gp_jump_height, gp_gravity;
+#define DEFAULT_DISCORD_ID "1569303296165027900"
+// the card's picture: a file of the mod's repository (docs/discord-card.jpg); Discord fetches it from the address. Not a setting.
+#define DEFAULT_DISCORD_IMAGE "https://raw.githubusercontent.com/stxlvn/mw2_enhanced/main/docs/discord-card.jpg"
 static char discord_id[32];
 static char player_id[33];
 static char player_ini[MAX_PATH];
@@ -206,7 +209,11 @@ void settings_load(void)
 	gp_gravity = (int)GetPrivateProfileIntA("gameplay", "gravity", 0, path);
 	if (gp_gravity < 0 || gp_gravity > 5000)
 		gp_gravity = 0;
-	GetPrivateProfileStringA("discord", "client_id", "", discord_id, sizeof(discord_id), path);
+	// [discord] client_id: the Application ID of the mod's Discord application (a public number; the mission shows under the game's name).
+	// No key: the id the mod ships with (content/release/settings.ini holds it too). A key that is empty or not a number ("off") turns the presence off.
+	GetPrivateProfileStringA("discord", "client_id", "\x01", discord_id, sizeof(discord_id), path);
+	if (discord_id[0] == 1)
+		lstrcpynA(discord_id, DEFAULT_DISCORD_ID, sizeof(discord_id));
 	for (char *c = discord_id; *c; c++)
 		if (*c < '0' || *c > '9') {
 			discord_id[0] = 0;
@@ -370,6 +377,11 @@ int settings_gameplay_gravity(void)
 const char *settings_discord_id(void)
 {
 	return discord_id;
+}
+
+const char *settings_discord_image(void)
+{
+	return DEFAULT_DISCORD_IMAGE;
 }
 
 int settings_hudtextscale(void)

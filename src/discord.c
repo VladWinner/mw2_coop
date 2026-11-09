@@ -12,6 +12,7 @@
 #include "discord.h"
 #include "game.h"
 #include "log.h"
+#include "missions.h"
 #include "settings.h"
 
 static HANDLE pipe = INVALID_HANDLE_VALUE;
@@ -75,14 +76,17 @@ static int read_frame(char *out, int size, int ms)
 
 static int connect_pipe(void)
 {
+	DWORD last_error = 0;
 	char name[64];
-	const char *forced = getenv("MW2COOP_DISCORD_PIPE"); // QA: a fake Discord
+	const char *forced = getenv("MW2COOP_DISCORD_PIPE"); // QA: a fake Discord (the pipe's short name: the pipe is then <name> in the pipe folder)
 	for (int i = 0; i < 10; i++) {
 		if (forced)
-			snprintf(name, sizeof(name), "%s", forced);
+			snprintf(name, sizeof(name), "\\\\.\\pipe\\%s", forced);
 		else
 			snprintf(name, sizeof(name), "\\\\.\\pipe\\discord-ipc-%d", i);
 		pipe = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+		if (pipe == INVALID_HANDLE_VALUE)
+			last_error = GetLastError();
 		if (pipe != INVALID_HANDLE_VALUE) {
 			char json[128], answer[600];
 			snprintf(json, sizeof(json), "{\"v\":1,\"client_id\":\"%s\"}", settings_discord_id());
@@ -96,19 +100,16 @@ static int connect_pipe(void)
 		if (forced)
 			break;
 	}
+	static int told;
+	if (!told++)
+		log_printf("discord: no Discord pipe found (last try %s, error %lu; is the Discord app running on this PC? it is tried again every 15 s)", name, (unsigned long)last_error);
 	return 0;
 }
 
 static const char *mission_title(const char *map)
 {
-	static const struct { const char *map, *title; } titles[] = {
-		{"trainer", "S.S.D.D."}, {"roadkill", "Team Player"}, {"cliffhanger", "Cliffhanger"},
-		{"airport", "No Russian"}, {"favela", "Takedown"}, {"invasion", "Wolverines!"},
-	};
-	for (size_t i = 0; i < sizeof(titles) / sizeof(titles[0]); i++)
-		if (_stricmp(map, titles[i].map) == 0)
-			return titles[i].title;
-	return map;
+	const Mission *m = missions_find(map); // content/release/missions.csv
+	return m && m->title[0] ? m->title : map;
 }
 
 static int json_safe(const char *s)
@@ -126,6 +127,9 @@ void discord_poll(void)
 	DWORD now = GetTickCount();
 	if (!id[0])
 		return;
+	static int announced_on;
+	if (!announced_on++)
+		log_printf("discord: presence is on (application id %s)", id);
 	if (pipe == INVALID_HANDLE_VALUE) {
 		if ((int)(now - next_try) < 0)
 			return;
@@ -147,9 +151,16 @@ void discord_poll(void)
 	/* Discord allows an update every few seconds; send on a change, and again every minute so it stays */
 	if (!strcmp(details, last_details) && !strcmp(state, last_state) && now - last_sent < 60000)
 		return;
+	// a session of two (Co-op, Split screen) is a party of 2 of 2 on each player's own card; solo has none. The id is this process's: the card goes to the local Discord only
+	char party[96] = "";
+	if (state[0] && (!strcmp(mode, "coop") || split[0] == '1')) // (state is empty in the menus)
+		snprintf(party, sizeof(party), ",\"party\":{\"id\":\"mw2coop-%lu\",\"size\":[2,2]}", (unsigned long)GetCurrentProcessId());
+	char assets[360] = "";
+	if (settings_discord_image()[0])
+		snprintf(assets, sizeof(assets), ",\"assets\":{\"large_image\":\"%s\",\"large_text\":\"Modern Warfare 2 Enhanced\"}", settings_discord_image());
 	snprintf(json, sizeof(json),
-		"{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":%lu,\"activity\":{\"details\":\"%s\"%s%s%s,\"timestamps\":{\"start\":%lld}}},\"nonce\":\"%lu\"}",
-		(unsigned long)GetCurrentProcessId(), details, state[0] ? ",\"state\":\"" : "", state, state[0] ? "\"" : "", started, (unsigned long)now);
+		"{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":%lu,\"activity\":{\"details\":\"%s\"%s%s%s%s%s,\"timestamps\":{\"start\":%lld}}},\"nonce\":\"%lu\"}",
+		(unsigned long)GetCurrentProcessId(), details, state[0] ? ",\"state\":\"" : "", state, state[0] ? "\"" : "", assets, party, started, (unsigned long)now);
 	if (!write_frame(1, json)) {
 		log_printf("discord: the pipe closed");
 		close_pipe();
