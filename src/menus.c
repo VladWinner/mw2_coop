@@ -593,14 +593,14 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		k++;
 		list[n++] = line;
 	}
-	// the icons: one picture of four, 64 x 64 units each, with a button over each
-	float icons_y = y + 50;
+	// the icons: one picture of four, 40 x 40 units each, with a button over each
+	float icons_y = y + 110; // lower, away from the credits
 	void *icons = ABOUT_ICONS && logo_item ? icons_material(*(void **)(logo_item + ITEM_BACKGROUND_PTR)) : NULL; // a copy of the logo's material with the icons as its picture
 	if (icons) {
 		uint8_t *strip = ui_clone_item(logo_item, page);
 		*(const char **)strip = "mw2coop_about_icons";
 		*(void **)(strip + ITEM_BACKGROUND_PTR) = icons;
-		set_rect(strip, -128, icons_y, 256, 64, 2, 1);
+		set_rect(strip, -80, icons_y, 160, 40, 2, 1); // four icons of 40 x 40 units
 		list[n++] = strip;
 	}
 	int b = 0;
@@ -619,7 +619,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 			*(void **)(hit + ITEM_BACKGROUND_PTR) = NULL; // (a button's selection bar, and the black fill its focus script sets, would be drawn in the wrong place over an icon)
 			*(void **)(hit + ITEM_ON_FOCUS) = NULL;
 			*(void **)(hit + ITEM_LEAVE_FOCUS) = NULL;
-			set_rect(hit, -128 + 64 * b++, icons_y, 64, 64, 2, 1);
+			set_rect(hit, -80 + 40 * b++, icons_y, 40, 40, 2, 1);
 		}
 		else {
 			set_rect(hit, -240 + TEXT_DX + 120 * b++, icons_y, 120, 20, 2, 1);
