@@ -153,34 +153,38 @@ LANG_ENGLISH        "ABOUT THE MOD"
 LANG_RUSSIAN        "О МОДЕ"
 
 REFERENCE           MW2COOP_CREDIT_0
-LANG_ENGLISH        "CREDITS"
-LANG_RUSSIAN        "СОЗДАТЕЛИ МОДА"
+LANG_ENGLISH        "DEVELOPERS"
+LANG_RUSSIAN        "РАЗРАБОТЧИКИ"
 
 REFERENCE           MW2COOP_CREDIT_1
-LANG_ENGLISH        "stxlvn (Modern Warfare 2 Enhanced)"
-LANG_RUSSIAN        "stxlvn (Modern Warfare 2 Enhanced)"
+LANG_ENGLISH        "stxlvn"
+LANG_RUSSIAN        "stxlvn"
 
 REFERENCE           MW2COOP_CREDIT_2
 LANG_ENGLISH        "VladWinner"
 LANG_RUSSIAN        "VladWinner"
 
 REFERENCE           MW2COOP_CREDIT_3
+LANG_ENGLISH        "SPECIAL THANKS"
+LANG_RUSSIAN        "ОСОБАЯ БЛАГОДАРНОСТЬ"
+
+REFERENCE           MW2COOP_CREDIT_4
 LANG_ENGLISH        "alicealys (h2-mod)"
 LANG_RUSSIAN        "alicealys (h2-mod)"
 
-REFERENCE           MW2COOP_CREDIT_4
+REFERENCE           MW2COOP_CREDIT_5
 LANG_ENGLISH        "momo5502 (COD-MOD)"
 LANG_RUSSIAN        "momo5502 (COD-MOD)"
 
-REFERENCE           MW2COOP_CREDIT_5
+REFERENCE           MW2COOP_CREDIT_6
 LANG_ENGLISH        "AlterWare (iw4x-sp)"
 LANG_RUSSIAN        "AlterWare (iw4x-sp)"
 
-REFERENCE           MW2COOP_CREDIT_6
+REFERENCE           MW2COOP_CREDIT_7
 LANG_ENGLISH        "FreeTheTech101 (iw4lan, IW4-Dump-Files)"
 LANG_RUSSIAN        "FreeTheTech101 (iw4lan, IW4-Dump-Files)"
 
-REFERENCE           MW2COOP_CREDIT_7
+REFERENCE           MW2COOP_CREDIT_8
 LANG_ENGLISH        "cranebeaker (Co-op Anything)"
 LANG_RUSSIAN        "cranebeaker (Co-op Anything)"
 

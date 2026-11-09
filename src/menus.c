@@ -586,18 +586,21 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		*(const char **)line = def->name;
 		*(const char **)(line + ITEM_TEXT) = def->text;
 		*(void **)(line + ITEM_TEXT_EXP) = NULL;
+		const int heading = strstr(def->name, "head") != NULL;
+		if (heading && k > 0)
+			y += 8; // a little air before the second heading
 		set_rect(line, -300 + TEXT_DX, y, 600, 16, 2, 1);
-		*(int *)(line + ITEM_FONT) = k == 0 ? 9 : 3; // the heading in the title font, the lines in the body font of the buttons
+		*(int *)(line + ITEM_FONT) = heading ? 9 : 3; // a heading in the title font, the lines in the body font of the buttons
 		*(int *)(line + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
 		*(float *)(line + ITEM_TEXT_ALIGN_X) = 0;
-		*(float *)(line + ITEM_TEXT_SCALE) = k == 0 ? 0.45f : 0.3f;
+		*(float *)(line + ITEM_TEXT_SCALE) = heading ? 0.45f : 0.3f;
 		*(int *)(line + ITEM_TEXT_STYLE) = TEXT_STYLE_SHADOWED; // readable over the picture without a box behind
-		y += k == 0 ? 24 : 17;
+		y += heading ? 24 : 17;
 		k++;
 		list[n++] = line;
 	}
 	// the icons: one picture of four, 40 x 40 units each, with a button over each
-	float icons_y = y + 110; // lower, away from the credits
+	float icons_y = y + 63; // under the credits
 	void *icons = ABOUT_ICONS && logo_item ? icons_material(*(void **)(logo_item + ITEM_BACKGROUND_PTR)) : NULL; // a copy of the logo's material with the icons as its picture
 	if (icons) {
 		uint8_t *strip = ui_clone_item(logo_item, page);

@@ -62,7 +62,7 @@ menuDef {
 	name "mw2coop_about"
 	title "@MW2COOP_ABOUT"
 	itemDef {
-		name "mw2coop_credit_0"
+		name "mw2coop_credit_head_0"
 		text "@MW2COOP_CREDIT_0"
 	}
 	itemDef {
@@ -74,7 +74,7 @@ menuDef {
 		text "@MW2COOP_CREDIT_2"
 	}
 	itemDef {
-		name "mw2coop_credit_3"
+		name "mw2coop_credit_head_3"
 		text "@MW2COOP_CREDIT_3"
 	}
 	itemDef {
@@ -92,6 +92,10 @@ menuDef {
 	itemDef {
 		name "mw2coop_credit_7"
 		text "@MW2COOP_CREDIT_7"
+	}
+	itemDef {
+		name "mw2coop_credit_8"
+		text "@MW2COOP_CREDIT_8"
 	}
 	itemDef {
 		name "mw2coop_link_github"
