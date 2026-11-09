@@ -35,6 +35,7 @@
 #include "padopts.h"
 #include "gfxopts.h"
 #include "log.h"
+#include "missions.h"
 #include "settings.h"
 #include "upnp.h"
 #include "menus.h"
@@ -1569,12 +1570,8 @@ static void patch_lobby_mission(uint8_t *menu, int campaign)
 
 	// Only campaign Mission Select entries have a known levelshot. The Museum material was
 	// confirmed in levels.menu as levelshot_mw2_museum; never look up levelshot_mw2_ending.
-	static const char *const listed[] = {"trainer", "roadkill", "cliffhanger", "airport", "favela", "invasion",
-		"favela_escape", "arcadia", "oilrig", "gulag", "dcburning", "contingency", "dcemp", "dc_whitehouse",
-		"estate", "boneyard", "af_caves", "af_chase", "museum"};
-	int in_list = 0;
-	for (size_t i = 0; i < sizeof(listed) / sizeof(listed[0]); i++)
-		in_list |= strcmp(shown, listed[i]) == 0;
+	const Mission *listed = missions_find(shown); // content/release/missions.csv: "picture" is 1 for the missions of Mission Select
+	int in_list = listed && listed->picture;
 	if (!in_list) {
 		shown_description = NULL;
 		patch_lobby_description(menu, 1, NULL);

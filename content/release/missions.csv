@@ -1,0 +1,29 @@
+// mw2coop missions: one row per campaign map, in the order of the game's Mission Select.
+// Edit a row and restart the game; a row you delete keeps the mod's built-in values; a new row adds a map.
+//   map        the level's name (the game's "mapname")
+//   title      the mission's name as Discord shows it (empty: the map name is shown)
+//   zone       the Spec Ops zone loaded with the level so the second player has a body (empty: none)
+//   zone_own   1: that zone replaces the level's own zone (the Spec Ops map is built on the level);
+//              0: the level loads as it is and the zone is added on top of it
+//   picture    1: the lobby shows the mission's picture and text (the map is in the game's Mission Select)
+map,title,zone,zone_own,picture
+trainer,S.S.D.D.,so_killspree_trainer,1,1
+roadkill,Team Player,so_killspree_invasion,0,1
+cliffhanger,Cliffhanger,so_sabotage_cliffhanger,1,1
+airport,No Russian,so_escape_airport,1,1
+favela,Takedown,so_killspree_favela,1,1
+invasion,Wolverines!,so_killspree_invasion,1,1
+favela_escape,The Hornet's Nest,so_defuse_favela_escape,1,1
+arcadia,Exodus,so_download_arcadia,1,1
+oilrig,The Only Easy Day... Was Yesterday,so_assault_oilrig,1,1
+gulag,The Gulag,so_showers_gulag,1,1
+dcburning,Of Their Own Accord,so_killspree_invasion,0,1
+contingency,Contingency,so_rooftop_contingency,1,1
+dcemp,Second Sun,so_killspree_invasion,0,1
+dc_whitehouse,Whiskey Hotel,so_killspree_invasion,0,1
+estate,Loose Ends,so_takeover_estate,1,1
+boneyard,The Enemy of My Enemy,so_intel_boneyard,1,1
+af_caves,Just Like Old Times,so_killspree_favela,0,1
+af_chase,,so_killspree_favela,0,1
+museum,Museum,,0,1
+ending,Museum,so_killspree_favela,0,0

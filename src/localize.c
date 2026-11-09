@@ -9,11 +9,13 @@
 // a trampoline that then jumps back to +15.
 #include <windows.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "game.h"
 #include "fonts.h"
 #include "localize.h"
+#include "ctexts.h"
 #include "scripts.h"
 #include "transplant.h"
 #include "hook.h"
@@ -269,6 +271,179 @@ static FixedString fixed[] = {
 };
 #define FIXED_COUNT (int)(sizeof(fixed) / sizeof(fixed[0]))
 
+// ---------------------------------------------------------------------------------------------
+// Texts from files: every *.str in <game>\mw2coop\localizedstrings is read at start (the .str format the Call of Duty
+// engines and IW4M / iw4x mods use for localized strings: VERSION "1", then REFERENCE <NAME> with LANG_ENGLISH and
+// LANG_RUSSIAN lines, // comments). A text found there replaces the built-in one of the same name; content/release/
+// localizedstrings/mw2coop.str holds all of them and is made from the table above by tools/gen_texts_str.py.
+static char *over_en[sizeof(strings) / sizeof(strings[0])];
+static char *over_ru[sizeof(strings) / sizeof(strings[0])];
+static char *over_fixed[sizeof(fixed) / sizeof(fixed[0])];
+
+// <text> (UTF-8, <len> bytes) as Windows-1251, in a heap block; NULL if it is empty or does not fit
+static char *utf8_to_1251(const char *text, int len)
+{
+	WCHAR wide[512];
+	char *out;
+	int n = MultiByteToWideChar(CP_UTF8, 0, text, len, wide, 512);
+	if (n <= 0)
+		return NULL;
+	int bytes = WideCharToMultiByte(1251, 0, wide, n, NULL, 0, NULL, NULL);
+	if (bytes <= 0 || !(out = HeapAlloc(GetProcessHeap(), 0, bytes + 1)))
+		return NULL;
+	WideCharToMultiByte(1251, 0, wide, n, out, bytes, NULL, NULL);
+	out[bytes] = 0;
+	return out;
+}
+
+// The quoted text at <p> (after LANG_xxx): \n and \" and \\ are escapes. Returns the converted text, or NULL.
+static char *str_quoted(const char *p, const char *end)
+{
+	char raw[1024];
+	int n = 0;
+	while (p < end && (*p == ' ' || *p == '\t'))
+		p++;
+	if (p >= end || *p != '"')
+		return NULL;
+	for (p++; p < end && *p != '"' && n < (int)sizeof(raw) - 1; p++) {
+		if (*p == '\\' && p + 1 < end) {
+			p++;
+			raw[n++] = *p == 'n' ? '\n' : *p;
+		} else
+			raw[n++] = *p;
+	}
+	if (!n)
+		return NULL;
+	char *out = HeapAlloc(GetProcessHeap(), 0, (size_t)n + 1);
+	if (out) {
+		memcpy(out, raw, (size_t)n);
+		out[n] = 0;
+	}
+	return out;
+}
+
+static int str_name_index(const char *name, int *fixed_index)
+{
+	*fixed_index = -1;
+	for (int i = 0; i < STRING_COUNT; i++)
+		if (strcmp(name, strings[i].name) == 0)
+			return i;
+	for (int i = 0; i < FIXED_COUNT; i++)
+		if (strcmp(name, fixed[i].name) == 0) {
+			*fixed_index = i;
+			return -1;
+		}
+	return -1;
+}
+
+// en / ru are UTF-8 here (or NULL): the texts of this file's own table are kept as Windows-1251, the console's as UTF-8
+static char *to_1251(const char *utf8)
+{
+	return utf8 ? utf8_to_1251(utf8, (int)strlen(utf8)) : NULL;
+}
+
+static void str_apply(const char *name, char *en, char *ru)
+{
+	int f;
+	int i = str_name_index(name, &f);
+	if (i >= 0) {
+		if (en)
+			over_en[i] = to_1251(en);
+		if (ru)
+			over_ru[i] = to_1251(ru);
+	} else if (f >= 0) {
+		if (ru)
+			over_fixed[f] = to_1251(ru);
+	} else if (!ctexts_set(name, en, ru))
+		log_printf("localize: %s is not a text of the mod, ignored", name);
+}
+
+static int str_load_file(const char *path)
+{
+	HANDLE h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (h == INVALID_HANDLE_VALUE)
+		return 0;
+	DWORD size = GetFileSize(h, NULL), got = 0;
+	char *buf = size && size < (1u << 20) ? HeapAlloc(GetProcessHeap(), 0, size + 1) : NULL;
+	if (!buf || !ReadFile(h, buf, size, &got, NULL)) {
+		CloseHandle(h);
+		return 0;
+	}
+	CloseHandle(h);
+	buf[got] = 0;
+	char name[96] = "";
+	char *en = NULL, *ru = NULL;
+	int texts = 0;
+	const char *p = buf, *stop = buf + got;
+	if (got >= 3 && (unsigned char)p[0] == 0xef && (unsigned char)p[1] == 0xbb && (unsigned char)p[2] == 0xbf)
+		p += 3;
+	while (p < stop) {
+		const char *eol = p;
+		while (eol < stop && *eol != '\n')
+			eol++;
+		const char *e = eol;
+		while (e > p && (e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
+			e--;
+		const char *q = p;
+		while (q < e && (*q == ' ' || *q == '\t'))
+			q++;
+		if (q < e && !(q[0] == '/' && q + 1 < e && q[1] == '/')) {
+			const char *w = q;
+			while (w < e && *w != ' ' && *w != '\t')
+				w++;
+			size_t wl = (size_t)(w - q);
+			if (wl == 9 && !strncmp(q, "REFERENCE", 9)) {
+				if (name[0])
+					str_apply(name, en, ru);
+				name[0] = 0;
+				en = ru = NULL;
+				while (w < e && (*w == ' ' || *w == '\t'))
+					w++;
+				if (w < e && *w == '"')
+					w++;
+				size_t n = 0;
+				while (w < e && *w != '"' && n < sizeof(name) - 1)
+					name[n++] = *w++;
+				name[n] = 0;
+				texts++;
+			} else if (name[0] && wl == 12 && !strncmp(q, "LANG_ENGLISH", 12))
+				en = str_quoted(w, e);
+			else if (name[0] && wl == 12 && !strncmp(q, "LANG_RUSSIAN", 12)) {
+				if (e - w >= 5 && !strncmp(e - 5, "#same", 5))
+					ru = en;
+				else
+					ru = str_quoted(w, e);
+			}
+		}
+		p = eol + 1;
+	}
+	if (name[0])
+		str_apply(name, en, ru);
+	HeapFree(GetProcessHeap(), 0, buf);
+	return texts;
+}
+
+static void load_str_files(void)
+{
+	char dir[MAX_PATH], pattern[MAX_PATH], path[MAX_PATH];
+	DWORD length = GetModuleFileNameA(NULL, dir, sizeof(dir));
+	char *slash = length && length < sizeof(dir) ? strrchr(dir, '\\') : NULL;
+	if (!slash)
+		return;
+	slash[1] = 0;
+	snprintf(pattern, sizeof(pattern), "%smw2coop\\localizedstrings\\*.str", dir);
+	WIN32_FIND_DATAA fd;
+	HANDLE find = FindFirstFileA(pattern, &fd);
+	if (find == INVALID_HANDLE_VALUE)
+		return;
+	do {
+		snprintf(path, sizeof(path), "%smw2coop\\localizedstrings\\%s", dir, fd.cFileName);
+		int texts = str_load_file(path);
+		log_printf("localize: %s: %d texts read", fd.cFileName, texts);
+	} while (FindNextFileA(find, &fd));
+	FindClose(find);
+}
+
 static int probe_game_language(int retry_negative)
 {
 	LONG state = InterlockedCompareExchange(&russian, -1, -1);
@@ -316,7 +491,9 @@ int localize_retry_language(void)
 
 static const char *text_of(int i)
 {
-	return game_is_russian() ? strings[i].ru : strings[i].en;
+	if (game_is_russian())
+		return over_ru[i] ? over_ru[i] : strings[i].ru;
+	return over_en[i] ? over_en[i] : strings[i].en;
 }
 
 static int string_index(const char *name)
@@ -356,7 +533,7 @@ static void *find_header(int type, const char *name)
 				log_printf("localize: %s replaced (stock text: %s)", name, stock && stock->value ? stock->value : "?");
 			}
 			fixed[i].entry.name = fixed[i].name;
-			fixed[i].entry.value = fixed[i].ru;
+			fixed[i].entry.value = over_fixed[i] ? over_fixed[i] : fixed[i].ru;
 			return &fixed[i].entry;
 		}
 	}
@@ -453,4 +630,5 @@ void localize_install(void)
 	if (!hook_function(target, expected, sizeof(expected), find_header, (void **)&original))
 		return;
 	log_printf("localize: DB_FindXAssetHeader hooked for MW2COOP_ strings");
+	load_str_files();
 }

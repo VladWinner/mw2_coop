@@ -1,0 +1,278 @@
+// mw2coop texts: the words of the mod's menus, lobby and HUD, in the .str format of the Call of Duty
+// engines (the same as the game's own localizedstrings). Edit a line and restart the game; a text
+// you delete keeps the mod's built-in wording. UTF-8.
+//
+//   REFERENCE     the text's name as the game's scripts and menus know it
+//   LANG_ENGLISH  the English text (also shown in every language but Russian)
+//   LANG_RUSSIAN  the Russian text (shown when the game's language is Russian)
+//
+// Words like [{+activate}] are the game's own key hints: keep them as they are. A line break in a
+// text is written as a backslash and the letter n.
+VERSION             "1"
+CONFIG              "mw2coop"
+FILENOTES           ""
+
+REFERENCE           MW2COOP_STUNNED
+LANG_ENGLISH        "You are stunned. Wait for the other player"
+LANG_RUSSIAN        "Вы оглушены. Ожидайте второго игрока"
+
+REFERENCE           MW2COOP_SWAP_SEATS
+LANG_ENGLISH        "Hold [{+activate}] to take the turret"
+LANG_RUSSIAN        "Удерживайте [{+activate}], чтобы сесть за пулемёт"
+
+REFERENCE           MW2COOP_FF_ON
+LANG_ENGLISH        "Friendly fire: on"
+LANG_RUSSIAN        "Огонь по своим: вкл"
+
+REFERENCE           MW2COOP_FF_OFF
+LANG_ENGLISH        "Friendly fire: off"
+LANG_RUSSIAN        "Огонь по своим: выкл"
+
+REFERENCE           MW2COOP_READY_SET
+LANG_ENGLISH        "Ready"
+LANG_RUSSIAN        "Готов"
+
+REFERENCE           MW2COOP_READY_UNSET
+LANG_ENGLISH        "Not ready"
+LANG_RUSSIAN        "Не готов"
+
+REFERENCE           MW2COOP_START_GO
+LANG_ENGLISH        "Start"
+LANG_RUSSIAN        "Старт"
+
+REFERENCE           MW2COOP_START_NEED_PARTNER
+LANG_ENGLISH        "Start: a second player is needed"
+LANG_RUSSIAN        "Старт: нужен второй игрок"
+
+REFERENCE           MW2COOP_START_WAIT_YOU
+LANG_ENGLISH        "Start: you are not ready"
+LANG_RUSSIAN        "Старт: вы не готовы"
+
+REFERENCE           MW2COOP_START_WAIT_PARTNER
+LANG_ENGLISH        "Start: your partner is not ready"
+LANG_RUSSIAN        "Старт: напарник не готов"
+
+REFERENCE           MW2COOP_START_WAIT_BOTH
+LANG_ENGLISH        "Start: waiting for both players"
+LANG_RUSSIAN        "Старт: ждём готовности"
+
+REFERENCE           MW2COOP_START_HOST
+LANG_ENGLISH        "Waiting for the host to start"
+LANG_RUSSIAN        "Ждём старта от хоста"
+
+REFERENCE           MW2COOP_JOIN_IDLE
+LANG_ENGLISH        "JOIN A GAME"
+LANG_RUSSIAN        "ПРИСОЕДИНИТЬСЯ К ИГРЕ"
+
+REFERENCE           MW2COOP_JOIN_SEARCHING
+LANG_ENGLISH        "SEARCHING THE NETWORK..."
+LANG_RUSSIAN        "ПОИСК ИГР В СЕТИ..."
+
+REFERENCE           MW2COOP_JOIN_NONE
+LANG_ENGLISH        "NO GAMES FOUND"
+LANG_RUSSIAN        "ИГР В СЕТИ НЕ НАЙДЕНО"
+
+REFERENCE           MW2COOP_JOIN_CONNECTING
+LANG_ENGLISH        "CONNECTING..."
+LANG_RUSSIAN        "ПОДКЛЮЧЕНИЕ..."
+
+REFERENCE           MW2COOP_LOBBIES
+LANG_ENGLISH        "Games on the network"
+LANG_RUSSIAN        "Игры в сети"
+
+REFERENCE           MW2COOP_ACCESS_OPEN
+LANG_ENGLISH        "Access: open"
+LANG_RUSSIAN        "Доступ: свободный"
+
+REFERENCE           MW2COOP_ACCESS_PASSWORD
+LANG_ENGLISH        "Access: password"
+LANG_RUSSIAN        "Доступ: по паролю"
+
+REFERENCE           MW2COOP_ACCESS_STEAM
+LANG_ENGLISH        "Access: Steam friends only"
+LANG_RUSSIAN        "Доступ: только друзья Steam"
+
+REFERENCE           MW2COOP_PW_UNSET
+LANG_ENGLISH        "Password: not set"
+LANG_RUSSIAN        "Пароль: не задан"
+
+REFERENCE           MW2COOP_PW_SET
+LANG_ENGLISH        "Password: set"
+LANG_RUSSIAN        "Пароль: задан"
+
+REFERENCE           MW2COOP_EDIT_PASSWORD
+LANG_ENGLISH        "Session password"
+LANG_RUSSIAN        "Пароль сессии"
+
+REFERENCE           MW2COOP_EDIT_ADDRESS
+LANG_ENGLISH        "Host address"
+LANG_RUSSIAN        "Адрес хоста"
+
+REFERENCE           MW2COOP_LABEL_PASSWORD
+LANG_ENGLISH        "Password:"
+LANG_RUSSIAN        "Пароль:"
+
+REFERENCE           MW2COOP_LABEL_ADDRESS
+LANG_ENGLISH        "Address:"
+LANG_RUSSIAN        "Адрес:"
+
+REFERENCE           MW2COOP_BY_ADDRESS
+LANG_ENGLISH        "Enter an address..."
+LANG_RUSSIAN        "Ввести адрес вручную..."
+
+REFERENCE           MW2COOP_LOCKED
+LANG_ENGLISH        "(password)"
+LANG_RUSSIAN        "(пароль)"
+
+REFERENCE           MW2COOP_BAD_PASSWORD
+LANG_ENGLISH        "Wrong password"
+LANG_RUSSIAN        "Неверный пароль"
+
+REFERENCE           MW2COOP_FRIENDS_ONLY
+LANG_ENGLISH        "The host only lets Steam friends in"
+LANG_RUSSIAN        "Хост пускает только друзей Steam"
+
+REFERENCE           MW2COOP_SPLITSCREEN
+LANG_ENGLISH        "SPLIT SCREEN"
+LANG_RUSSIAN        "РАЗДЕЛЕНИЕ ЭКРАНА"
+
+REFERENCE           MW2COOP_SPLIT_TITLE
+LANG_ENGLISH        "Split Screen"
+LANG_RUSSIAN        "Разделение экрана"
+
+REFERENCE           MW2COOP_CALLSIGN_A
+LANG_ENGLISH        "Alpha"
+LANG_RUSSIAN        "Альфа"
+
+REFERENCE           MW2COOP_CALLSIGN_B
+LANG_ENGLISH        "Bravo"
+LANG_RUSSIAN        "Браво"
+
+REFERENCE           MW2COOP_SPLIT_CANCEL_PAD
+LANG_ENGLISH        " (Back: cancel)"
+LANG_RUSSIAN        " (Back: отменить)"
+
+REFERENCE           MW2COOP_SPLIT_CANCEL_KB
+LANG_ENGLISH        " (Backspace: cancel)"
+LANG_RUSSIAN        " (Backspace: отменить)"
+
+REFERENCE           MW2COOP_PAD_MENU_1
+LANG_ENGLISH        "Gamepad: Alpha"
+LANG_RUSSIAN        "Геймпад: Альфа"
+
+REFERENCE           MW2COOP_PAD_MENU_2
+LANG_ENGLISH        "Gamepad: Bravo"
+LANG_RUSSIAN        "Геймпад: Браво"
+
+REFERENCE           MW2COOP_PAD_SENS
+LANG_ENGLISH        "Look sensitivity"
+LANG_RUSSIAN        "Чувствительность обзора"
+
+REFERENCE           MW2COOP_PAD_INVERT
+LANG_ENGLISH        "Invert look"
+LANG_RUSSIAN        "Инверсия обзора"
+
+REFERENCE           MW2COOP_PAD_ASSIST
+LANG_ENGLISH        "Aim assist"
+LANG_RUSSIAN        "Помощь в прицеливании"
+
+REFERENCE           MW2COOP_PAD_SOUTHPAW
+LANG_ENGLISH        "Swap sticks (southpaw)"
+LANG_RUSSIAN        "Стики местами (левша)"
+
+REFERENCE           MW2COOP_PAD_TACTICAL
+LANG_ENGLISH        "Tactical layout (crouch on the right stick)"
+LANG_RUSSIAN        "Тактическая раскладка (присесть на правый стик)"
+
+REFERENCE           MW2COOP_PAD_RUMBLE
+LANG_ENGLISH        "Vibration"
+LANG_RUSSIAN        "Вибрация"
+
+REFERENCE           MW2COOP_SPLIT_P1
+LANG_ENGLISH        "Player 1: "
+LANG_RUSSIAN        "Игрок 1: "
+
+REFERENCE           MW2COOP_SPLIT_P2
+LANG_ENGLISH        "Player 2: "
+LANG_RUSSIAN        "Игрок 2: "
+
+REFERENCE           MW2COOP_SPLIT_PRESS
+LANG_ENGLISH        "press a button on your device\n(keyboard or gamepad)"
+LANG_RUSSIAN        "нажмите кнопку на своём устройстве\n(клавиатура или геймпад)"
+
+REFERENCE           MW2COOP_SPLIT_KEYBOARD
+LANG_ENGLISH        "keyboard and mouse"
+LANG_RUSSIAN        "клавиатура и мышь"
+
+REFERENCE           MW2COOP_SPLIT_PAD
+LANG_ENGLISH        "gamepad %d"
+LANG_RUSSIAN        "геймпад %d"
+
+REFERENCE           MW2COOP_START_NEED_DEVICES
+LANG_ENGLISH        "Start: the players choose their devices"
+LANG_RUSSIAN        "Старт: игроки выбирают устройства"
+
+REFERENCE           MW2COOP_CAMPAIGN
+LANG_ENGLISH        "CAMPAIGN"
+LANG_RUSSIAN        "КАМПАНИЯ"
+
+REFERENCE           MW2COOP_FIREWALL_TITLE
+LANG_ENGLISH        "Windows Firewall"
+LANG_RUSSIAN        "Брандмауэр Windows"
+
+REFERENCE           MW2COOP_FIREWALL_TEXT
+LANG_ENGLISH        "The other player cannot get in.\nAllow access?"
+LANG_RUSSIAN        "Второй игрок не сможет войти.\nРазрешить доступ?"
+
+REFERENCE           MW2COOP_PARTNER_TITLE
+LANG_ENGLISH        "Different partner"
+LANG_RUSSIAN        "Другой напарник"
+
+REFERENCE           MW2COOP_PARTNER_FMT
+LANG_ENGLISH        "The campaign \"%s\" was saved with: %s.\nContinue with %s?"
+LANG_RUSSIAN        "Кампания «%s» сохранена с: %s.\nПродолжить с %s?"
+
+REFERENCE           MW2COOP_MEMBER_TITLE
+LANG_ENGLISH        "Playthrough members"
+LANG_RUSSIAN        "Участники прохождения"
+
+REFERENCE           MW2COOP_MEMBER_FMT
+LANG_ENGLISH        "Add %s to the members\nof this playthrough?"
+LANG_RUSSIAN        "Добавить %s в участники\nэтого прохождения?"
+
+REFERENCE           MW2COOP_NEWGAME_TITLE
+LANG_ENGLISH        "New game"
+LANG_RUSSIAN        "Новая игра"
+
+REFERENCE           MW2COOP_NEWGAME_FMT
+LANG_ENGLISH        "Start a new game with %s\nfrom the very beginning?"
+LANG_RUSSIAN        "Начать новую игру с %s\nс самого начала?"
+
+REFERENCE           MW2COOP_PICK_SAVE
+LANG_ENGLISH        "PICK A SAVE"
+LANG_RUSSIAN        "ВЫБРАТЬ СОХРАНЕНИЕ"
+
+REFERENCE           MW2COOP_SAVES
+LANG_ENGLISH        "Saves"
+LANG_RUSSIAN        "Сохранения"
+
+REFERENCE           MW2COOP_SAVE_NO_PARTNER
+LANG_ENGLISH        "no partner"
+LANG_RUSSIAN        "без напарника"
+
+REFERENCE           MW2COOP_CONTINUE_PREFIX
+LANG_ENGLISH        "CONTINUE: "
+LANG_RUSSIAN        "ПРОДОЛЖИТЬ: "
+
+REFERENCE           MW2COOP_NEW_CAMPAIGN
+LANG_ENGLISH        "NEW CAMPAIGN"
+LANG_RUSSIAN        "НОВАЯ КАМПАНИЯ"
+
+REFERENCE           MW2COOP_MUSEUM_DESC
+LANG_ENGLISH        "Bonus level: freely explore the museum and its campaign exhibits."
+LANG_RUSSIAN        "Бонусный уровень: свободное исследование музея с экспонатами кампании."
+
+// The game's own texts the mod words differently in the Russian game (no English line: the English game keeps its own).
+
+REFERENCE           FAVELA_ESCAPE_OBJ_FOLLOW_SOAP
+LANG_RUSSIAN        "Доберитесь с капитаном Мактавишем и отрядом до зоны посадки."

@@ -1,0 +1,279 @@
+// mw2coop console texts: what the developer console (the ` / ~ key) prints and shows, in the .str format of the Call of Duty
+// engines (the same as the game's own localizedstrings). Edit a line and restart the game; a text you delete keeps the
+// mod's built-in wording. UTF-8. %s and %d in a text are filled in by the console: keep them in the same order.
+VERSION             "1"
+CONFIG              "mw2coop"
+FILENOTES           ""
+
+REFERENCE           CON_FIND_USAGE
+LANG_ENGLISH        "find <text>: the commands and dvars with that in their name"
+LANG_RUSSIAN        "find <текст>: команды и переменные, в именах которых встречается этот текст"
+
+REFERENCE           CON_SVCHEATS_NOT_REGISTERED
+LANG_ENGLISH        "sv_cheats is not registered yet; the value was not changed."
+LANG_RUSSIAN        "sv_cheats ещё не зарегистрирован; значение не изменено."
+
+REFERENCE           CON_SVCHEATS_BAD_TYPE
+LANG_ENGLISH        "sv_cheats has an unexpected type; the value was not changed."
+LANG_RUSSIAN        "У sv_cheats неожиданный тип; значение не изменено."
+
+REFERENCE           CON_SVCHEATS_USAGE
+LANG_ENGLISH        "Usage: sv_cheats [0|1]"
+LANG_RUSSIAN        "Использование: sv_cheats [0|1]"
+
+REFERENCE           CON_SVCHEATS_REJECTED
+LANG_ENGLISH        "sv_cheats was not changed; the engine rejected the value."
+LANG_RUSSIAN        "sv_cheats не изменён: движок отклонил значение."
+
+REFERENCE           CON_FAV_NONE
+LANG_ENGLISH        "No favorite dvars. Hover a dvar suggestion and click its pin icon."
+LANG_RUSSIAN        "Избранных dvar нет. Наведите курсор на подсказку dvar и нажмите значок булавки."
+
+REFERENCE           CON_FAV_ALLOC_FAILED
+LANG_ENGLISH        "Could not allocate the favorites snapshot."
+LANG_RUSSIAN        "Не удалось выделить память для списка избранного."
+
+REFERENCE           CON_FAV_HEADER
+LANG_ENGLISH        "^5Favorite dvars^7 (live values are displayed in rows below the status bar):"
+LANG_RUSSIAN        "^5Избранные dvar^7 (текущие значения отображаются в строках под строкой состояния):"
+
+REFERENCE           CON_FAV_GROW_FAILED
+LANG_ENGLISH        "Could not grow the favorite dvar list."
+LANG_RUSSIAN        "Не удалось расширить список избранных dvar."
+
+REFERENCE           CON_DVARCOMPARE_USAGE
+LANG_ENGLISH        "Usage: dvarcompare <registered dvar>"
+LANG_RUSSIAN        "Использование: dvarcompare <зарегистрированный dvar>"
+
+REFERENCE           CON_HELP_01
+LANG_ENGLISH        "`/~ opens or closes the console; use the title-bar buttons to collapse, maximize or close it"
+LANG_RUSSIAN        "`/~ открывает и закрывает консоль; кнопки заголовка позволяют свернуть, развернуть или закрыть её"
+
+REFERENCE           CON_HELP_02
+LANG_ENGLISH        "Ctrl+A selects input; Ctrl+C/X/V copy/cut/paste; Ctrl+W/Backspace deletes a word"
+LANG_RUSSIAN        "Ctrl+A — выделить ввод; Ctrl+C/X/V — копировать/вырезать/вставить; Ctrl+W/Backspace — удалить слово"
+
+REFERENCE           CON_HELP_03
+LANG_ENGLISH        "Ctrl+Z / Alt+Left: undo; Ctrl+Y / Ctrl+Shift+Z / Alt+Right: redo"
+LANG_RUSSIAN        "Ctrl+Z / Alt+Left — отменить; Ctrl+Y / Ctrl+Shift+Z / Alt+Right — повторить"
+
+REFERENCE           CON_HELP_04
+LANG_ENGLISH        "Ctrl+U deletes before the cursor; Ctrl+K deletes after it; Ctrl+L clears scrollback"
+LANG_RUSSIAN        "Ctrl+U — удалить до курсора; Ctrl+K — удалить после курсора; Ctrl+L — очистить историю вывода"
+
+REFERENCE           CON_HELP_05
+LANG_ENGLISH        "RU / EN in the title bar switches console language; Enhanced / Legacy changes the window layout"
+LANG_RUSSIAN        "RU / EN в заголовке переключает язык консоли; Enhanced / Legacy меняет раскладку окна"
+
+REFERENCE           CON_HELP_06
+LANG_ENGLISH        "Click the title bar to collapse; double-click it to maximize/restore; drag it to move"
+LANG_RUSSIAN        "Щелчок по заголовку сворачивает окно, двойной щелчок разворачивает/восстанавливает; перетаскивайте заголовок для перемещения"
+
+REFERENCE           CON_HELP_07
+LANG_ENGLISH        "Drag the bottom-right corner to resize the window"
+LANG_RUSSIAN        "Перетаскивайте нижний правый угол окна, чтобы изменить его размер"
+
+REFERENCE           CON_HELP_08
+LANG_ENGLISH        "Right-click the input/output for Undo, Redo, Cut, Copy, Paste, Delete, Select All or Clear Output"
+LANG_RUSSIAN        "Щёлкните правой кнопкой по вводу или выводу для отмены, повтора, вырезания, копирования, вставки, удаления, выделения или очистки вывода"
+
+REFERENCE           CON_HELP_09
+LANG_ENGLISH        "Up/Down: command history; with a typed prefix, cycle matching previous commands"
+LANG_RUSSIAN        "Стрелки вверх/вниз — история команд; с введённым префиксом перебирают совпадающие команды"
+
+REFERENCE           CON_HELP_10
+LANG_ENGLISH        "PgUp/PgDn: scroll output; Ctrl+Home/End: oldest/newest output"
+LANG_RUSSIAN        "PgUp/PgDn — прокрутка вывода; Ctrl+Home/End — к началу/концу вывода"
+
+REFERENCE           CON_HELP_11
+LANG_ENGLISH        "Mouse wheel follows Windows scroll settings; partial wheel movement is accumulated"
+LANG_RUSSIAN        "Колёсико учитывает настройки прокрутки Windows; неполные шаги накапливаются"
+
+REFERENCE           CON_HELP_12
+LANG_ENGLISH        "Click a completion to select it"
+LANG_RUSSIAN        "Щелчок по подсказке выбирает её"
+
+REFERENCE           CON_HELP_13
+LANG_ENGLISH        "Completion search: *cheats or sv_*; ? matches one character"
+LANG_RUSSIAN        "Поиск подсказок: *cheats или sv_*; знак ? заменяет один символ"
+
+REFERENCE           CON_HELP_14
+LANG_ENGLISH        "Search current dvar values with *=%text% (for example: *=%1920%)"
+LANG_RUSSIAN        "Поиск по текущим значениям dvar: *=%текст% (например: *=%1920%)"
+
+REFERENCE           CON_HELP_15
+LANG_ENGLISH        "<dvar>: details; <dvar> <value>: save with seta, then verify current/default/latched values"
+LANG_RUSSIAN        "<dvar> — сведения; <dvar> <value> — сохранить через seta и проверить текущее/исходное/отложенное значения"
+
+REFERENCE           CON_HELP_16
+LANG_ENGLISH        "Drag in output or input to select text; double-click input to select a word; Ctrl+C copies the selection"
+LANG_RUSSIAN        "Перетаскивайте мышь по вводу или выводу для выделения; двойной щелчок по вводу выделяет слово; Ctrl+C копирует выделенное"
+
+REFERENCE           CON_HELP_17
+LANG_ENGLISH        "Long input wraps upward automatically; the console window keeps its size"
+LANG_RUSSIAN        "Длинный ввод автоматически переносится вверх; внешний размер окна консоли не меняется"
+
+REFERENCE           CON_HELP_18
+LANG_ENGLISH        "Dvar details collapse equal values and show only differing current/default/latched values"
+LANG_RUSSIAN        "В сведениях dvar одинаковые значения объединяются; отдельно показываются только различающиеся текущее/исходное/отложенное значения"
+
+REFERENCE           CON_HELP_19
+LANG_ENGLISH        "Ctrl+F searches output; F3 moves newer and Shift+F3 moves older between matches"
+LANG_RUSSIAN        "Ctrl+F ищет в выводе; F3 переходит к более новым, Shift+F3 — к более старым совпадениям"
+
+REFERENCE           CON_HELP_20
+LANG_ENGLISH        "Triple-click an output line to select it; right-click for Copy Line"
+LANG_RUSSIAN        "Тройной щелчок по строке вывода выделяет её целиком; правый щелчок открывает «Копировать строку»"
+
+REFERENCE           CON_HELP_21
+LANG_ENGLISH        "Pin any number of dvars from autocomplete; hover a favorite and click its unpin icon at the right edge. Commands: watch, unwatch, watchlist, dvarcompare."
+LANG_RUSSIAN        "Закрепляйте любое число dvar в автодополнении; для открепления наведите курсор на избранный dvar и нажмите появившуюся справа иконку. Команды: watch, unwatch, watchlist, dvarcompare."
+
+REFERENCE           CON_HELP_22
+LANG_ENGLISH        "cmdlist [filter], dvarlist [filter], dvardump [filter], find <text>, clear, echo, condump"
+LANG_RUSSIAN        "cmdlist [фильтр], dvarlist [фильтр], dvardump [фильтр], find <текст>, clear, echo, condump"
+
+REFERENCE           CON_PAUSE_OFF_COOP
+LANG_ENGLISH        "Pause mode is off in a co-op session (it would stop the partner)."
+LANG_RUSSIAN        "Режим паузы выключен в кооперативной сессии (он остановил бы напарника)."
+
+REFERENCE           CON_BANNER
+LANG_ENGLISH        "^5MW2 Enhanced^7 console: type help"
+LANG_RUSSIAN        "Консоль ^5MW2 Enhanced^7: введите help"
+
+REFERENCE           CON_WARN_PENDING
+LANG_ENGLISH        "^3WARNING:^7 %s is pending; restart or reinitialize to apply it"
+LANG_RUSSIAN        "^3ПРЕДУПРЕЖДЕНИЕ:^7 %s ожидает применения; требуется перезапуск или повторная инициализация"
+
+REFERENCE           CON_WARN_CHEATS_OFF
+LANG_ENGLISH        "^3WARNING:^7 %s was not changed; sv_cheats is disabled"
+LANG_RUSSIAN        "^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: sv_cheats отключён"
+
+REFERENCE           CON_WARN_READ_ONLY
+LANG_ENGLISH        "^3WARNING:^7 %s was not changed; it is read-only"
+LANG_RUSSIAN        "^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: параметр доступен только для чтения"
+
+REFERENCE           CON_WARN_INIT_ONLY
+LANG_ENGLISH        "^3WARNING:^7 %s was not changed; it is INIT-only"
+LANG_RUSSIAN        "^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: параметр доступен только при запуске"
+
+REFERENCE           CON_WARN_VERIFY_FAILED
+LANG_ENGLISH        "^3WARNING:^7 could not verify the new value of %s"
+LANG_RUSSIAN        "^3ПРЕДУПРЕЖДЕНИЕ:^7 не удалось проверить новое значение %s"
+
+REFERENCE           CON_WARN_REJECTED
+LANG_ENGLISH        "^3WARNING:^7 %s was not changed; the engine rejected or clamped the value"
+LANG_RUSSIAN        "^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: движок отклонил или ограничил значение"
+
+REFERENCE           CON_WARN_NOT_REGISTERED
+LANG_ENGLISH        "^3WARNING:^7 %s was not changed; the dvar is not registered"
+LANG_RUSSIAN        "^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: dvar не зарегистрирован"
+// The console's labels, menus and tooltips (the plural forms of the word "command": one / few (Russian 2-4) / many)
+REFERENCE           CON_NOUN_COMMAND_ONE
+LANG_ENGLISH        "command"
+LANG_RUSSIAN        "команда"
+
+REFERENCE           CON_NOUN_COMMAND_FEW
+LANG_ENGLISH        "commands"
+LANG_RUSSIAN        "команды"
+
+REFERENCE           CON_NOUN_COMMAND_MANY
+LANG_ENGLISH        "commands"
+LANG_RUSSIAN        "команд"
+
+REFERENCE           CON_LIST_TRUNCATED
+LANG_ENGLISH        " (truncated at 4096)"
+LANG_RUSSIAN        " (список ограничен 4096)"
+
+REFERENCE           CON_LIST_INCOMPLETE
+LANG_ENGLISH        "%d+ %s  |  INCOMPLETE"
+LANG_RUSSIAN        "%d+ %s  |  СПИСОК НЕПОЛНЫЙ"
+
+REFERENCE           CON_LIST_SHOWING
+LANG_ENGLISH        "%s  |  SHOWING %d"
+LANG_RUSSIAN        "%s  |  ПОКАЗАНО %d"
+
+REFERENCE           CON_MENU_UNDO
+LANG_ENGLISH        "Undo"
+LANG_RUSSIAN        "Отменить"
+
+REFERENCE           CON_MENU_REDO
+LANG_ENGLISH        "Redo"
+LANG_RUSSIAN        "Повторить"
+
+REFERENCE           CON_MENU_CUT
+LANG_ENGLISH        "Cut"
+LANG_RUSSIAN        "Вырезать"
+
+REFERENCE           CON_MENU_COPY
+LANG_ENGLISH        "Copy"
+LANG_RUSSIAN        "Копировать"
+
+REFERENCE           CON_MENU_PASTE
+LANG_ENGLISH        "Paste"
+LANG_RUSSIAN        "Вставить"
+
+REFERENCE           CON_MENU_DELETE
+LANG_ENGLISH        "Delete"
+LANG_RUSSIAN        "Удалить"
+
+REFERENCE           CON_MENU_SELECT_ALL
+LANG_ENGLISH        "Select All"
+LANG_RUSSIAN        "Выделить всё"
+
+REFERENCE           CON_MENU_COPY_LINE
+LANG_ENGLISH        "Copy Line"
+LANG_RUSSIAN        "Копировать строку"
+
+REFERENCE           CON_MENU_CLEAR_OUTPUT
+LANG_ENGLISH        "Clear Output"
+LANG_RUSSIAN        "Очистить вывод"
+
+REFERENCE           CON_FIND_PREFIX
+LANG_ENGLISH        "Find: "
+LANG_RUSSIAN        "Поиск: "
+
+REFERENCE           CON_PAUSE_WATERMARK
+LANG_ENGLISH        "|| Game pause activated"
+LANG_RUSSIAN        "|| Игра приостановлена"
+
+REFERENCE           CON_TIP_MINIMIZE
+LANG_ENGLISH        "Minimize console"
+LANG_RUSSIAN        "Свернуть консоль"
+
+REFERENCE           CON_TIP_RESTORE
+LANG_ENGLISH        "Restore size (Shift+~)"
+LANG_RUSSIAN        "Восстановить размер (Shift+~)"
+
+REFERENCE           CON_TIP_MAXIMIZE
+LANG_ENGLISH        "Maximize (Shift+~)"
+LANG_RUSSIAN        "Развернуть (Shift+~)"
+
+REFERENCE           CON_TIP_CLOSE
+LANG_ENGLISH        "Close console"
+LANG_RUSSIAN        "Закрыть консоль"
+
+REFERENCE           CON_TIP_PAUSE_ON
+LANG_ENGLISH        "Pause mode: enabled"
+LANG_RUSSIAN        "Режим паузы: включён"
+
+REFERENCE           CON_TIP_PAUSE_OFF
+LANG_ENGLISH        "Pause mode: disabled"
+LANG_RUSSIAN        "Режим паузы: выключен"
+
+REFERENCE           CON_TIP_LAYOUT
+LANG_ENGLISH        "Switch layout"
+LANG_RUSSIAN        "Сменить раскладку"
+
+REFERENCE           CON_TIP_LANGUAGE
+LANG_ENGLISH        "Switch language"
+LANG_RUSSIAN        "Сменить язык"
+
+REFERENCE           CON_DEFAULT_LABEL
+LANG_ENGLISH        "default"
+LANG_RUSSIAN        "по умолчанию"
+
+REFERENCE           CON_NEW_OUTPUT
+LANG_ENGLISH        "NEW OUTPUT"
+LANG_RUSSIAN        "НОВЫЙ ВЫВОД"
+

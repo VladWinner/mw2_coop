@@ -17,6 +17,7 @@
 #include "native.h"
 #include "shot.h"
 #include "localize.h"
+#include "ctexts.h"
 #ifndef _WIN64
 #include "d3dcap.h"
 #endif
@@ -264,6 +265,7 @@ static int console_dpi_logical(int physical, UINT dpi)
 
 static UINT console_codepage(void);
 static void console_print_localized(const char *english, const char *russian_utf8);
+static void console_print_text(const char *name);
 static int console_ui_is_russian(void);
 static void console_ui_text_out(HDC dc, int x, int y, const char *utf8);
 static int console_ui_text_width(HDC dc, const char *utf8, SIZE *size);
@@ -934,11 +936,11 @@ static int dvar_value_matches_text(const dvar_t *d, const dvar_value_t *value, c
 	}
 }
 
-static void print_dvar_warning(const char *name, const char *english, const char *russian)
+static void print_dvar_warning(const char *name, const char *text_name)
 {
 	char en[LINE_LEN], ru[LINE_LEN];
-	snprintf(en, sizeof(en), english, name ? name : "<unknown>");
-	snprintf(ru, sizeof(ru), russian, name ? name : "<unknown>");
+	snprintf(en, sizeof(en), ctexts_get(text_name, 0), name ? name : "<unknown>");
+	snprintf(ru, sizeof(ru), ctexts_get(text_name, 1), name ? name : "<unknown>");
 	console_print_localized(en, ru);
 }
 
@@ -954,44 +956,39 @@ static void print_dvar_verification(dvar_t *d, const char *expected)
 	if (current_match == 1)
 		return;
 	if (latched_match == 1 && (d->flags & DVAR_LATCH_FLAG)) {
-		print_dvar_warning(d->name, "^3WARNING:^7 %s is pending; restart or reinitialize to apply it",
-			"^3ПРЕДУПРЕЖДЕНИЕ:^7 %s ожидает применения; требуется перезапуск или повторная инициализация");
+		print_dvar_warning(d->name, "CON_WARN_PENDING");
 	} else if ((d->flags & DVAR_CHEAT_FLAG) && !dvar_cheats_enabled()) {
-		print_dvar_warning(d->name, "^3WARNING:^7 %s was not changed; sv_cheats is disabled",
-			"^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: sv_cheats отключён");
+		print_dvar_warning(d->name, "CON_WARN_CHEATS_OFF");
 	} else if (d->flags & DVAR_ROM_FLAG) {
-		print_dvar_warning(d->name, "^3WARNING:^7 %s was not changed; it is read-only",
-			"^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: параметр доступен только для чтения");
+		print_dvar_warning(d->name, "CON_WARN_READ_ONLY");
 	} else if (d->flags & DVAR_INIT_FLAG) {
-		print_dvar_warning(d->name, "^3WARNING:^7 %s was not changed; it is INIT-only",
-			"^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: параметр доступен только при запуске");
+		print_dvar_warning(d->name, "CON_WARN_INIT_ONLY");
 	} else if (current_match < 0 || latched_match < 0) {
-		print_dvar_warning(d->name, "^3WARNING:^7 could not verify the new value of %s",
-			"^3ПРЕДУПРЕЖДЕНИЕ:^7 не удалось проверить новое значение %s");
+		print_dvar_warning(d->name, "CON_WARN_VERIFY_FAILED");
 	} else {
-		print_dvar_warning(d->name, "^3WARNING:^7 %s was not changed; the engine rejected or clamped the value",
-			"^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: движок отклонил или ограничил значение");
+		print_dvar_warning(d->name, "CON_WARN_REJECTED");
 	}
 }
 
-static const char *russian_command_count_noun(int count)
+// The name (console.str) of the word "command" for <count>, in the plural form of the language
+static const char *command_noun_name(int count, int russian)
 {
-	int last_two = count % 100;
-	int last_one = count % 10;
-	if (last_two >= 11 && last_two <= 14) return "команд";
-	if (last_one == 1) return "команда";
-	if (last_one >= 2 && last_one <= 4) return "команды";
-	return "команд";
+	if (russian) {
+		int last_two = count % 100;
+		int last_one = count % 10;
+		if (last_two >= 11 && last_two <= 14) return "CON_NOUN_COMMAND_MANY";
+		if (last_one == 1) return "CON_NOUN_COMMAND_ONE";
+		if (last_one >= 2 && last_one <= 4) return "CON_NOUN_COMMAND_FEW";
+		return "CON_NOUN_COMMAND_MANY";
+	}
+	return count == 1 ? "CON_NOUN_COMMAND_ONE" : "CON_NOUN_COMMAND_MANY";
 }
 
 static void format_command_count(char *out, size_t capacity, int count, int russian)
 {
 	if (!out || capacity == 0) return;
 	if (count < 0) count = 0;
-	if (russian)
-		snprintf(out, capacity, "%d %s", count, russian_command_count_noun(count));
-	else
-		snprintf(out, capacity, "%d %s", count, count == 1 ? "command" : "commands");
+	snprintf(out, capacity, "%d %s", count, ctexts_get(command_noun_name(count, russian), russian));
 }
 
 static void list_commands(const char *filter)
@@ -1002,14 +999,11 @@ static void list_commands(const char *filter)
 	qsort(names, (size_t)l.n, sizeof(names[0]), by_name);
 	for (int i = 0; i < l.n; i++)
 		console_print(names[i]);
-	if (console_ui_is_russian()) {
+	{
+		int ru = console_ui_is_russian();
 		char count_label[48];
-		format_command_count(count_label, sizeof(count_label), l.n, 1);
-		printf_line("%s%s", count_label, l.truncated ? " (список ограничен 4096)" : "");
-	} else {
-		char count_label[48];
-		format_command_count(count_label, sizeof(count_label), l.n, 0);
-		printf_line("%s%s", count_label, l.truncated ? " (truncated at 4096)" : "");
+		format_command_count(count_label, sizeof(count_label), l.n, ru);
+		printf_line("%s%s", count_label, l.truncated ? ctexts_get("CON_LIST_TRUNCATED", ru) : "");
 	}
 }
 
@@ -1027,8 +1021,7 @@ static void list_dvars(const char *filter, int with_default)
 static void find_all(const char *text)
 {
 	if (!*text) {
-		console_print_localized("find <text>: the commands and dvars with that in their name",
-			"find <текст>: команды и переменные, в именах которых встречается этот текст");
+		console_print_text("CON_FIND_USAGE");
 		return;
 	}
 	list_commands(text);
@@ -1577,13 +1570,11 @@ static void sv_cheats_f(void)
 	const char *arg = game_cmd_argv(1);
 	const char *extra = game_cmd_argv(2);
 	if (!d) {
-		console_print_localized("sv_cheats is not registered yet; the value was not changed.",
-			"sv_cheats ещё не зарегистрирован; значение не изменено.");
+		console_print_text("CON_SVCHEATS_NOT_REGISTERED");
 		return;
 	}
 	if (d->type != DVAR_TYPE_BOOL) {
-		console_print_localized("sv_cheats has an unexpected type; the value was not changed.",
-			"У sv_cheats неожиданный тип; значение не изменено.");
+		console_print_text("CON_SVCHEATS_BAD_TYPE");
 		return;
 	}
 	if (!arg || !*arg) {
@@ -1591,15 +1582,14 @@ static void sv_cheats_f(void)
 		return;
 	}
 	if ((strcmp(arg, "0") && strcmp(arg, "1")) || (extra && *extra)) {
-		console_print_localized("Usage: sv_cheats [0|1]", "Использование: sv_cheats [0|1]");
+		console_print_text("CON_SVCHEATS_USAGE");
 		return;
 	}
 	{
 		int wanted = arg[0] == '1';
 		if (!set_sv_cheats_value(d, wanted) || d->current.enabled != wanted ||
 			d->reset.enabled != wanted || d->latched.enabled != wanted) {
-			console_print_localized("sv_cheats was not changed; the engine rejected the value.",
-				"sv_cheats не изменён: движок отклонил значение.");
+			console_print_text("CON_SVCHEATS_REJECTED");
 		}
 		InterlockedExchange(&auto_cheats_queued, AUTO_CHEATS_USER_OVERRIDE);
 		log_printf("console: sv_cheats update %s (flags=0x%08x)",
@@ -1636,9 +1626,7 @@ static void dvar_verify_f(void)
 	char expected[INPUT_LEN + 1];
 	int argc = game_cmd_argc(), used = 0;
 	if (!d) {
-		print_dvar_warning(name && *name ? name : "<missing name>",
-			"^3WARNING:^7 %s was not changed; the dvar is not registered",
-			"^3ПРЕДУПРЕЖДЕНИЕ:^7 %s не изменён: dvar не зарегистрирован");
+		print_dvar_warning(name && *name ? name : "<missing name>", "CON_WARN_NOT_REGISTERED");
 		return;
 	}
 	expected[0] = 0;
@@ -1674,16 +1662,14 @@ static void console_watch_print(void)
 	}
 	LeaveCriticalSection(&lock);
 	if (!count) {
-		console_print_localized("No favorite dvars. Hover a dvar suggestion and click its pin icon.",
-			"Избранных dvar нет. Наведите курсор на подсказку dvar и нажмите значок булавки.");
+		console_print_text("CON_FAV_NONE");
 		return;
 	}
 	if (!names) {
-		console_print_localized("Could not allocate the favorites snapshot.", "Не удалось выделить память для списка избранного.");
+		console_print_text("CON_FAV_ALLOC_FAILED");
 		return;
 	}
-	console_print_localized("^5Favorite dvars^7 (live values are displayed in rows below the status bar):",
-		"^5Избранные dvar^7 (текущие значения отображаются в строках под строкой состояния):");
+	console_print_text("CON_FAV_HEADER");
 	for (int i = 0; i < count; i++) {
 		char value[COMPLETION_VALUE_LEN];
 		game_dvar_string(names[i], value, sizeof(value));
@@ -1746,7 +1732,7 @@ static int console_watch_change(const char *name, int remove)
 	}
 	if (count == 0x7fffffff || !console_watch_reserve_locked(count + 1)) {
 		LeaveCriticalSection(&lock);
-		console_print_localized("Could not grow the favorite dvar list.", "Не удалось расширить список избранных dvar.");
+		console_print_text("CON_FAV_GROW_FAILED");
 		return 0;
 	}
 	lstrcpynA(console_watch_names[count], name, COMPLETION_NAME_LEN);
@@ -1764,7 +1750,7 @@ static void console_dvar_compare(const char *name)
 	dvar_t *d = name && *name ? game_find_dvar(name) : NULL;
 	char *current, *def, *latched;
 	if (!d) {
-		console_print_localized("Usage: dvarcompare <registered dvar>", "Использование: dvarcompare <зарегистрированный dvar>");
+		console_print_text("CON_DVARCOMPARE_USAGE");
 		return;
 	}
 	current = dvar_value_dup(d, &d->current);
@@ -1836,50 +1822,28 @@ static void run_line(char *cmd)
 		return;
 	}
 	if (!strcmp(cmd, "help") || !strcmp(cmd, "?")) {
-		console_print_localized("`/~ opens or closes the console; use the title-bar buttons to collapse, maximize or close it",
-			"`/~ открывает и закрывает консоль; кнопки заголовка позволяют свернуть, развернуть или закрыть её");
-		console_print_localized("Ctrl+A selects input; Ctrl+C/X/V copy/cut/paste; Ctrl+W/Backspace deletes a word",
-			"Ctrl+A — выделить ввод; Ctrl+C/X/V — копировать/вырезать/вставить; Ctrl+W/Backspace — удалить слово");
-		console_print_localized("Ctrl+Z / Alt+Left: undo; Ctrl+Y / Ctrl+Shift+Z / Alt+Right: redo",
-			"Ctrl+Z / Alt+Left — отменить; Ctrl+Y / Ctrl+Shift+Z / Alt+Right — повторить");
-		console_print_localized("Ctrl+U deletes before the cursor; Ctrl+K deletes after it; Ctrl+L clears scrollback",
-			"Ctrl+U — удалить до курсора; Ctrl+K — удалить после курсора; Ctrl+L — очистить историю вывода");
-		console_print_localized("RU / EN in the title bar switches console language; Enhanced / Legacy changes the window layout",
-			"RU / EN в заголовке переключает язык консоли; Enhanced / Legacy меняет раскладку окна");
-		console_print_localized("Click the title bar to collapse; double-click it to maximize/restore; drag it to move",
-			"Щелчок по заголовку сворачивает окно, двойной щелчок разворачивает/восстанавливает; перетаскивайте заголовок для перемещения");
-		console_print_localized("Drag the bottom-right corner to resize the window",
-			"Перетаскивайте нижний правый угол окна, чтобы изменить его размер");
-		console_print_localized("Right-click the input/output for Undo, Redo, Cut, Copy, Paste, Delete, Select All or Clear Output",
-			"Щёлкните правой кнопкой по вводу или выводу для отмены, повтора, вырезания, копирования, вставки, удаления, выделения или очистки вывода");
-		console_print_localized("Up/Down: command history; with a typed prefix, cycle matching previous commands",
-			"Стрелки вверх/вниз — история команд; с введённым префиксом перебирают совпадающие команды");
-		console_print_localized("PgUp/PgDn: scroll output; Ctrl+Home/End: oldest/newest output",
-			"PgUp/PgDn — прокрутка вывода; Ctrl+Home/End — к началу/концу вывода");
-		console_print_localized("Mouse wheel follows Windows scroll settings; partial wheel movement is accumulated",
-			"Колёсико учитывает настройки прокрутки Windows; неполные шаги накапливаются");
-		console_print_localized("Click a completion to select it",
-			"Щелчок по подсказке выбирает её");
-		console_print_localized("Completion search: *cheats or sv_*; ? matches one character",
-			"Поиск подсказок: *cheats или sv_*; знак ? заменяет один символ");
-		console_print_localized("Search current dvar values with *=%text% (for example: *=%1920%)",
-			"Поиск по текущим значениям dvar: *=%текст% (например: *=%1920%)");
-		console_print_localized("<dvar>: details; <dvar> <value>: save with seta, then verify current/default/latched values",
-			"<dvar> — сведения; <dvar> <value> — сохранить через seta и проверить текущее/исходное/отложенное значения");
-		console_print_localized("Drag in output or input to select text; double-click input to select a word; Ctrl+C copies the selection",
-			"Перетаскивайте мышь по вводу или выводу для выделения; двойной щелчок по вводу выделяет слово; Ctrl+C копирует выделенное");
-		console_print_localized("Long input wraps upward automatically; the console window keeps its size",
-			"Длинный ввод автоматически переносится вверх; внешний размер окна консоли не меняется");
-		console_print_localized("Dvar details collapse equal values and show only differing current/default/latched values",
-			"В сведениях dvar одинаковые значения объединяются; отдельно показываются только различающиеся текущее/исходное/отложенное значения");
-		console_print_localized("Ctrl+F searches output; F3 moves newer and Shift+F3 moves older between matches",
-			"Ctrl+F ищет в выводе; F3 переходит к более новым, Shift+F3 — к более старым совпадениям");
-		console_print_localized("Triple-click an output line to select it; right-click for Copy Line",
-			"Тройной щелчок по строке вывода выделяет её целиком; правый щелчок открывает «Копировать строку»");
-		console_print_localized("Pin any number of dvars from autocomplete; hover a favorite and click its unpin icon at the right edge. Commands: watch, unwatch, watchlist, dvarcompare.",
-			"Закрепляйте любое число dvar в автодополнении; для открепления наведите курсор на избранный dvar и нажмите появившуюся справа иконку. Команды: watch, unwatch, watchlist, dvarcompare.");
-		console_print_localized("cmdlist [filter], dvarlist [filter], dvardump [filter], find <text>, clear, echo, condump",
-			"cmdlist [фильтр], dvarlist [фильтр], dvardump [фильтр], find <текст>, clear, echo, condump");
+		console_print_text("CON_HELP_01");
+		console_print_text("CON_HELP_02");
+		console_print_text("CON_HELP_03");
+		console_print_text("CON_HELP_04");
+		console_print_text("CON_HELP_05");
+		console_print_text("CON_HELP_06");
+		console_print_text("CON_HELP_07");
+		console_print_text("CON_HELP_08");
+		console_print_text("CON_HELP_09");
+		console_print_text("CON_HELP_10");
+		console_print_text("CON_HELP_11");
+		console_print_text("CON_HELP_12");
+		console_print_text("CON_HELP_13");
+		console_print_text("CON_HELP_14");
+		console_print_text("CON_HELP_15");
+		console_print_text("CON_HELP_16");
+		console_print_text("CON_HELP_17");
+		console_print_text("CON_HELP_18");
+		console_print_text("CON_HELP_19");
+		console_print_text("CON_HELP_20");
+		console_print_text("CON_HELP_21");
+		console_print_text("CON_HELP_22");
 		return;
 	}
 	char name[64];
@@ -2328,7 +2292,7 @@ static void console_pause_apply_mode(void)
 	if (InterlockedCompareExchange(&console_pause_mode, 0, 0) && console_pause_blocked_by_coop()) {
 		static LONG told;
 		if (!InterlockedExchange(&told, 1))
-			console_print_localized("Pause mode is off in a co-op session (it would stop the partner).", "Режим паузы выключен в кооперативной сессии (он остановил бы напарника).");
+			console_print_text("CON_PAUSE_OFF_COOP");
 		return;
 	}
 	if (InterlockedCompareExchange(&console_pause_mode, 0, 0)) {
@@ -2617,15 +2581,13 @@ static int context_menu_count(int mode)
 
 static const char *context_menu_label(int mode, int index)
 {
-	static const char *const input_items_en[] = {"Undo", "Redo", "Cut", "Copy", "Paste", "Delete", "Select All"};
-	static const char *const output_items_en[] = {"Copy", "Copy Line", "Select All", "Clear Output"};
-	static const char *const input_items_ru[] = {"Отменить", "Повторить", "Вырезать", "Копировать", "Вставить", "Удалить", "Выделить всё"};
-	static const char *const output_items_ru[] = {"Копировать", "Копировать строку", "Выделить всё", "Очистить вывод"};
+	static const char *const input_items[] = {"CON_MENU_UNDO", "CON_MENU_REDO", "CON_MENU_CUT", "CON_MENU_COPY", "CON_MENU_PASTE", "CON_MENU_DELETE", "CON_MENU_SELECT_ALL"};
+	static const char *const output_items[] = {"CON_MENU_COPY", "CON_MENU_COPY_LINE", "CON_MENU_SELECT_ALL", "CON_MENU_CLEAR_OUTPUT"};
 	int russian = console_ui_is_russian();
 	if (mode == CONSOLE_CONTEXT_INPUT && index >= 0 && index < 7)
-		return russian ? input_items_ru[index] : input_items_en[index];
+		return ctexts_get(input_items[index], russian);
 	if (mode == CONSOLE_CONTEXT_OUTPUT && index >= 0 && index < 4)
-		return russian ? output_items_ru[index] : output_items_en[index];
+		return ctexts_get(output_items[index], russian);
 	return "";
 }
 
@@ -5453,6 +5415,12 @@ static void console_print_localized(const char *english, const char *russian_utf
 	console_print_codepage(encoded, 1251);
 }
 
+// Prints the text of <name> (console.str) in the console's language.
+static void console_print_text(const char *name)
+{
+	console_print_localized(ctexts_get(name, 0), ctexts_get(name, 1));
+}
+
 static void console_ui_text_out(HDC dc, int x, int y, const char *utf8)
 {
 	WCHAR wide[LINE_LEN * 2];
@@ -5750,7 +5718,7 @@ static int paint(int w, int panel_h)
 		int editor_offset = INPUT_TEXT_OFFSET;
 		if (output_search_mode) {
 			SIZE prefix_size = {0, 0};
-			const char *prefix = console_ui_is_russian() ? "Поиск: " : "Find: ";
+			const char *prefix = ctexts_get("CON_FIND_PREFIX", console_ui_is_russian());
 			if (console_ui_text_width(mem_dc, prefix, &prefix_size)) {
 				int required = 44 + prefix_size.cx + 12;
 				if (required > editor_offset) editor_offset = required;
@@ -6003,11 +5971,9 @@ static int paint(int w, int panel_h)
 		if (console_pause_read_state(&paused) && paused) {
 			static HFONT watermark_fonts[4];
 			static const int watermark_heights[4] = {34, 30, 26, 22};
-			static const char watermark_english[] = "|| Game pause activated";
-			static const char watermark_russian[] = "|| Игра приостановлена";
 			WCHAR watermark_text[64];
 			int watermark_len = MultiByteToWideChar(CP_UTF8, 0,
-				console_ui_is_russian() ? watermark_russian : watermark_english,
+				ctexts_get("CON_PAUSE_WATERMARK", console_ui_is_russian()),
 				-1, watermark_text, (int)(sizeof(watermark_text) / sizeof(watermark_text[0])));
 			const int watermark_top = output_top + 12;
 			const int watermark_bottom = input_top_y - output_gap - 12;
@@ -6297,15 +6263,11 @@ static int paint(int w, int panel_h)
 			int hover = (int)InterlockedCompareExchange(&console_header_hover_button, 0, 0);
 			if (hover && !console_window_collapsed && (DWORD)(GetTickCount() - console_header_hover_tick) >= 550) {
 				int pause_enabled = InterlockedCompareExchange(&console_pause_mode, 0, 0) != 0;
-				const char *tip_en = hover == 1 ? "Minimize console" : hover == 2 ?
-					(full_console ? "Restore size (Shift+~)" : "Maximize (Shift+~)") : hover == 3 ? "Close console" :
-					hover == 4 ? (pause_enabled ? "Pause mode: enabled" : "Pause mode: disabled") :
-					hover == 5 ? "Switch layout" : "Switch language";
-				const char *tip_ru = hover == 1 ? "Свернуть консоль" : hover == 2 ?
-					(full_console ? "Восстановить размер (Shift+~)" : "Развернуть (Shift+~)") : hover == 3 ? "Закрыть консоль" :
-					hover == 4 ? (pause_enabled ? "Режим паузы: включён" : "Режим паузы: выключен") :
-					hover == 5 ? "Сменить раскладку" : "Сменить язык";
-				const char *tip = console_ui_is_russian() ? tip_ru : tip_en;
+				const char *tip_name = hover == 1 ? "CON_TIP_MINIMIZE" : hover == 2 ?
+					(full_console ? "CON_TIP_RESTORE" : "CON_TIP_MAXIMIZE") : hover == 3 ? "CON_TIP_CLOSE" :
+					hover == 4 ? (pause_enabled ? "CON_TIP_PAUSE_ON" : "CON_TIP_PAUSE_OFF") :
+					hover == 5 ? "CON_TIP_LAYOUT" : "CON_TIP_LANGUAGE";
+				const char *tip = ctexts_get(tip_name, console_ui_is_russian());
 				SIZE tip_size = {0, 0};
 				RECT tip_rect;
 				int tip_width = 0;
@@ -6517,7 +6479,7 @@ static int paint(int w, int panel_h)
 	SetTextColor(mem_dc, RGB(229, 169, 91));
 	if (output_search_mode)
 		console_ui_text_out_centered(mem_dc, window_left + 44, input_top_y, lh,
-			console_ui_is_russian() ? "Поиск: " : "Find: ");
+			ctexts_get("CON_FIND_PREFIX", console_ui_is_russian()));
 	else
 		console_text_out(mem_dc, window_left + 44, input_top_y, "> ", 2);
 	SetTextColor(mem_dc, RGB(229, 225, 216));
@@ -6590,24 +6552,14 @@ static int paint(int w, int panel_h)
 		SetTextColor(mem_dc, RGB(166, 160, 149));
 		{
 			char label[192];
-			if (console_ui_is_russian()) {
+			{
+				int ru = console_ui_is_russian();
 				char count_label[48];
-				format_command_count(count_label, sizeof(count_label), completion_total, 1);
+				format_command_count(count_label, sizeof(count_label), completion_total, ru);
 				if (completion_catalog_truncated)
-					snprintf(label, sizeof(label), "%d+ %s  |  СПИСОК НЕПОЛНЫЙ",
-						completion_total, russian_command_count_noun(completion_total));
+					snprintf(label, sizeof(label), ctexts_get("CON_LIST_INCOMPLETE", ru), completion_total, ctexts_get(command_noun_name(completion_total, ru), ru));
 				else if (completion_total > completion_count)
-					snprintf(label, sizeof(label), "%s  |  ПОКАЗАНО %d", count_label, completion_count);
-				else
-					snprintf(label, sizeof(label), "%s", count_label);
-			} else {
-				char count_label[48];
-				format_command_count(count_label, sizeof(count_label), completion_total, 0);
-				if (completion_catalog_truncated)
-					snprintf(label, sizeof(label), "%d+ %s  |  INCOMPLETE",
-						completion_total, completion_total == 1 ? "command" : "commands");
-				else if (completion_total > completion_count)
-					snprintf(label, sizeof(label), "%s  |  SHOWING %d", count_label, completion_count);
+					snprintf(label, sizeof(label), ctexts_get("CON_LIST_SHOWING", ru), count_label, completion_count);
 				else
 					snprintf(label, sizeof(label), "%s", count_label);
 			}
@@ -6627,10 +6579,7 @@ static int paint(int w, int panel_h)
 				SIZE value_size = {0, 0};
 				int room = cellw - 68;
 				SetTextColor(mem_dc, RGB(153, 140, 140));
-				if (console_ui_is_russian())
-					console_ui_text_out_centered(mem_dc, popup_rect.left + 12, y, lh, "по умолчанию");
-				else
-					console_ui_text_out_centered(mem_dc, popup_rect.left + 12, y, lh, "default");
+				console_ui_text_out_centered(mem_dc, popup_rect.left + 12, y, lh, ctexts_get("CON_DEFAULT_LABEL", console_ui_is_russian()));
 				if (room > 20 && completion_fit_value(mem_dc, item->default_value, room, shown, sizeof(shown), &value_size) > 0) {
 					int value_x = popup_rect.left + cellw - 8 - value_size.cx;
 					SetTextColor(mem_dc, RGB(188, 173, 147));
@@ -6780,7 +6729,7 @@ static int paint(int w, int panel_h)
 				RECT header = {toast_left + 10, toast_top + 2, toast_left + toast_width - 26, toast_top + 20};
 				SetTextColor(mem_dc, RGB(199, 146, 72));
 				console_ui_text_out_centered(mem_dc, header.left, header.top, header.bottom - header.top,
-					console_ui_is_russian() ? "НОВЫЙ ВЫВОД" : "NEW OUTPUT");
+					ctexts_get("CON_NEW_OUTPUT", console_ui_is_russian()));
 				output_toast_close_rect.left = toast_left + toast_width - 22;
 				output_toast_close_rect.top = toast_top + 2;
 				output_toast_close_rect.right = toast_left + toast_width - 5;
@@ -7544,7 +7493,7 @@ static DWORD WINAPI setup_thread(LPVOID unused)
 		return 0;
 	}
 	console_load_layout();
-	console_print_localized("^5MW2 Enhanced^7 console: type help", "Консоль ^5MW2 Enhanced^7: введите help");
+	console_print_text("CON_BANNER");
 	// the game may make its window again (a video restart): the watcher puts the console's procedure on whichever window is the game's
 	for (;;) {
 		HWND now = NULL;

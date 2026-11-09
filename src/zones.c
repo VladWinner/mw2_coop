@@ -16,6 +16,7 @@
 
 #include "hook.h"
 #include "log.h"
+#include "missions.h"
 #include "zones.h"
 #include "guards.h"
 #ifdef _WIN64
@@ -50,31 +51,7 @@ typedef void (*db_load_xassets_t)(XZoneInfo *zones, uint32_t count, int sync);
 
 static load_level_zones_t original;
 
-static const struct {
-	const char *level, *spec_ops; // own: the Spec Ops map built on the level
-	int own;
-} zones[] = {
-	{"trainer", "so_killspree_trainer", 1},
-	{"invasion", "so_killspree_invasion", 1},
-	{"arcadia", "so_download_arcadia", 1},
-	{"airport", "so_escape_airport", 1},
-	{"favela", "so_killspree_favela", 1},
-	{"favela_escape", "so_defuse_favela_escape", 1},
-	{"cliffhanger", "so_sabotage_cliffhanger", 1},
-	{"contingency", "so_rooftop_contingency", 1},
-	{"oilrig", "so_assault_oilrig", 1},
-	{"gulag", "so_showers_gulag", 1},
-	{"estate", "so_takeover_estate", 1},
-	{"boneyard", "so_intel_boneyard", 1},
-	// no Spec Ops map of their own: a zone with the same uniform
-	{"roadkill", "so_killspree_invasion", 0},
-	{"dcburning", "so_killspree_invasion", 0},
-	{"dcemp", "so_killspree_invasion", 0},
-	{"dc_whitehouse", "so_killspree_invasion", 0},
-	{"af_caves", "so_killspree_favela", 0}, // needs more loaded_sound room (pool_extend)
-	{"af_chase", "so_killspree_favela", 0},
-	{"ending", "so_killspree_favela", 0},
-};
+// The level -> Spec Ops zone table is content/release/missions.csv (src/missions.c).
 
 // Asset pools. An extra zone on top of a level also needs room in the pools: Just Like Old Times
 // (af_caves) with any Spec Ops zone stopped at load with "Exceeded limit of 1350 'loaded_sound'
@@ -156,18 +133,17 @@ static void load_level_zones(const char *map, int flag)
 			pool_extend(ASSET_TYPE_LOADED_SOUND, 650, sizeof(void *) == 8 ? 64 : 0); // 64: the pool's span / 1350; 0: found
 
 
-		for (size_t i = 0; i < sizeof(zones) / sizeof(zones[0]); i++) {
-			if (strcmp(map, zones[i].level) != 0)
-				continue;
-			if (zones[i].own) {
-				log_printf("zones: %s with its Spec Ops zone %s (co-op player bodies)", map, zones[i].spec_ops);
-				original(zones[i].spec_ops, flag);
+		const Mission *m = missions_find(map);
+		if (m && m->zone[0]) {
+			if (m->zone_own) {
+				log_printf("zones: %s with its Spec Ops zone %s (co-op player bodies)", map, m->zone);
+				original(m->zone, flag);
 				return;
 			}
 			original(map, flag);
-			XZoneInfo extra = {zones[i].spec_ops, 4, 0};
+			XZoneInfo extra = {m->zone, 4, 0};
 			((db_load_xassets_t)((uint8_t *)GetModuleHandleA(NULL) + RVA_DB_LOAD_XASSETS))(&extra, 1, 0);
-			log_printf("zones: %s with %s (co-op player bodies)", map, zones[i].spec_ops);
+			log_printf("zones: %s with %s (co-op player bodies)", map, m->zone);
 			return;
 		}
 	}
