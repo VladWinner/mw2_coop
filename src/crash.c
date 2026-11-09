@@ -36,10 +36,20 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 	if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
 	    code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW)
 		return EXCEPTION_CONTINUE_SEARCH;
-	if (InterlockedIncrement(&logged) > 3)
-		return EXCEPTION_CONTINUE_SEARCH;
 	CONTEXT *c = info->ContextRecord;
 	uintptr_t rip = (uintptr_t)CTX_IP(c);
+	{ // a fault inside kernel32 / kernelbase is the probe of IsBadReadPtr, IsBadStringPtr or lstrcpy, which catch it themselves: it is not a crash, and it must not use up the three entries below
+		HMODULE mod = NULL;
+		char name[MAX_PATH];
+		if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)rip, &mod) && mod && GetModuleFileNameA(mod, name, sizeof(name))) {
+			const char *base_name = strrchr(name, 0x5c);
+			base_name = base_name ? base_name + 1 : name;
+			if (!lstrcmpiA(base_name, "kernel32.dll") || !lstrcmpiA(base_name, "kernelbase.dll"))
+				return EXCEPTION_CONTINUE_SEARCH;
+		}
+	}
+	if (InterlockedIncrement(&logged) > 3)
+		return EXCEPTION_CONTINUE_SEARCH;
 	ULONG_PTR *ei = info->ExceptionRecord->ExceptionInformation;
 	if (code == EXCEPTION_ACCESS_VIOLATION)
 		log_printf("CRASH: access violation (%s 0x%llx) at %s 0x%llx", ei[0] == 1 ? "write" : ei[0] == 8 ? "execute" : "read",
