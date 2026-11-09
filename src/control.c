@@ -362,6 +362,26 @@ static void gameplay_poll(void)
 	}
 }
 
+// A script wants player 2 to press his weapon key (maps\_mw2coop::sync_weapons: his hands are empty while player 1 holds a weapon; the client keeps its own weapon choice and undoes a script's
+// SwitchToWeapon). In a split screen session native.c presses the second pad's key. In a network session both machines run the script in lockstep and set the dvar, and player 2 plays on the
+// client: that machine's "weapnext" goes into its own command buffer, as if he pressed the key (issue 13: "the client loses his weapon without a cause"). The host never does.
+static void weapnext_poll(void)
+{
+	static char last[24];
+	char v[24];
+	if (!game_dvar_raw("mw2coop_p2_weapnext", v, sizeof(v)) || !v[0] || strcmp(v, last) == 0)
+		return;
+	lstrcpynA(last, v, sizeof(last));
+	if (game_peek(RVA_PARTY_IS_HOST, 1) || native_split_active())
+		return;
+#ifdef _WIN64
+	game_cbuf_addtext("mw2coop_bind weapnext\n"); // the binding itself, as native.c's pad_action does: the plain console command "weapnext" does not reach the usercmd in this build
+#else
+	game_cbuf_addtext("weapnext\n"); // (32 bits: the key's command)
+#endif
+	log_printf("control: player 2's hands are empty: weapnext sent for him (%s)", v);
+}
+
 static void script_channel_poll(void)
 {
 	char v[256];
@@ -370,6 +390,7 @@ static void script_channel_poll(void)
 	transplant_poll();
 	progress_poll();
 	press_poll();
+	weapnext_poll();
 	// a scenario asks both machines for a frame (mw2coop_qa_shot "<name>"): each saves its own
 	if (game_dvar_raw("mw2coop_qa_shot", v, sizeof(v)) && v[0] && strcmp(v, last_shot) != 0) {
 		lstrcpynA(last_shot, v, sizeof(last_shot));

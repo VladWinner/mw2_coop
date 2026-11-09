@@ -26,6 +26,7 @@
 //   oilrigambush - (oilrig, start "heli", pair) hostages alive and the ambush flags every 2 s for 90 s
 //   framesevery - (any level and start) a frame of both players (a composed one in split screen) every second for 40 s: mw2coop\shotse-<n>.bmp, with both players' positions in the report
 //   failspin - (split screen, any level) 12 s in the mission is failed (maps\_mw2coop::mission_failed); after the restart a frame every second for 20 s with player 2's yaw: does his half turn by itself (testers: after a failed mission his camera spins)?
+//   weapnexttest - (pair, any level) the script asks for player 2's weapon key (dvar mw2coop_p2_weapnext): the client's DLL must press it, player 2's current weapon changes (issue 13)
 //   hop - (any level, split screen or pair) 15 s after the level starts the mission is completed (the next mission is started the way the game does it); the scenario goes on in the next level: a chain of missions without a lobby (memory and crashes across loads)
 //   falsefall - (any level, split screen or pair) a MOD_FALLING hit with no fall behind it is undone (Vlad's Oil Rig log), a real 300 unit fall still hurts
 //   downaudio - (any level, split screen or pair) player 2 is downed for 20 s, then revived: the near-death sound filter (EQ/reverb flag) of each player every second.
@@ -361,6 +362,9 @@ main()
 		case "oilrigclimbb":
 		case "oilrigclimbbp":
 			oilrigclimb();
+			break;
+		case "weapnexttest":
+			weapnexttest();
 			break;
 		case "hop":
 			hop();
@@ -1126,6 +1130,21 @@ god()
 	check( IsAlive( level.player ) && IsAlive( level.player2 ), "both players alive after heavy damage" );
 	check( !level.player ent_flag( "coop_downed" ) && !level.player2 ent_flag( "coop_downed" ), "neither player downed" );
 	check( level.player.health > 0 && level.player2.health > 0, "health " + level.player.health + " / " + level.player2.health );
+	report( "done" );
+}
+
+// weapnexttest (run on a level whose start gives two primaries, e.g. oilrig start "rig"): player 2 holds two weapons; the dvar that sync_weapons sets when his hands are empty is set by hand, and his weapon must change on its own (the client's DLL presses weapnext).
+weapnexttest()
+{
+	common_checks();
+	wait 3;
+	p = level.player2;
+	before = p GetCurrentWeapon();
+	report( "weapnexttest: player 2 holds " + before + " of " + p GetWeaponsListPrimaries().size + " primaries" );
+	SetDvar( "mw2coop_p2_weapnext", GetTime() );
+	wait 3;
+	after = p GetCurrentWeapon();
+	check( after != before, "player 2's weapon changed from " + before + " to " + after + " after the weapon key was pressed for him" );
 	report( "done" );
 }
 
