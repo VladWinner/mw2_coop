@@ -17,6 +17,6 @@
 	{"estate", "Loose Ends", "so_takeover_estate", 1, 1},
 	{"boneyard", "The Enemy of My Enemy", "so_intel_boneyard", 1, 1},
 	{"af_caves", "Just Like Old Times", "so_killspree_favela", 0, 1},
-	{"af_chase", "", "so_killspree_favela", 0, 1},
+	{"af_chase", "Endgame", "so_killspree_favela", 0, 1},
 	{"museum", "Museum", "", 0, 1},
 	{"ending", "Museum", "so_killspree_favela", 0, 0},
