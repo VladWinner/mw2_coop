@@ -5470,13 +5470,13 @@ static void hud_apply(void)
 		}
 		if (!ok)
 			continue;
-		if (cfg("hintdx", 0) && (!strcmp(hud_moves[m].menu, "cursorhints") || !strcmp(hud_moves[m].menu, "mantlehint"))) { // QA experiment: the menu's own rect too
+		if (CFG_ONCE("hintdx", 0) && (!strcmp(hud_moves[m].menu, "cursorhints") || !strcmp(hud_moves[m].menu, "mantlehint"))) { // QA experiment: the menu's own rect too
 			static float moved[4];
 			static int n;
 			float *mr = (float *)(menu + ITEM_RECT);
 			if (n < 4)
 				moved[n++] = mr[0];
-			mr[0] += (float)cfg("hintdx", 0);
+			mr[0] += (float)CFG_ONCE("hintdx", 0);
 		}
 		for (int i = 0; i < count && hud_nslots < (int)(sizeof(hud_slots) / sizeof(hud_slots[0])); i++) {
 			const hud_move_t *mv = all;
@@ -5501,8 +5501,8 @@ static void hud_apply(void)
 			s->cnow_ah = s->cwas_ah;
 			s->cnow[0] = cl[0] + mv->dx, s->cnow[1] = cl[1] + mv->dy, s->cnow[2] = mv->w > 0 ? mv->w : cl[2];
 			if (!strcmp(hud_moves[m].menu, "cursorhints") || !strcmp(hud_moves[m].menu, "mantlehint")) { // QA ([native] hintdx=<units>): where the hints land for a given shift
-				s->now[0] += (float)cfg("hintdx", 0);
-				s->cnow[0] += (float)cfg("hintdx", 0);
+				s->now[0] += (float)CFG_ONCE("hintdx", 0);
+				s->cnow[0] += (float)CFG_ONCE("hintdx", 0);
 				s->center_hint = 1;
 				s->now_ah = s->cnow_ah = menu[ITEM_RECT_ALIGN_H];
 				s->now_av = s->now_av_client = menu[ITEM_RECT_ALIGN_V];
@@ -5976,7 +5976,8 @@ static void client_frame_inner(void)
 	if (nogun < 0)
 		nogun = cfg("nogun", 0);
 	uint8_t *gun_dvar = *(uint8_t **)(base + RVA_DRAWGUN_DVAR); // cg_drawGun
-	if (mode >= 5 && ctx1_ready && split_on && (((frame++) / (unsigned)(CFG_ONCE("viewrun", 1) < 1 ? 1 : CFG_ONCE("viewrun", 1))) & 1)) { // [native] viewrun=<n>: each view is drawn n engine frames in a row (diagnostics: does the renderer reuse the last frame's data?)
+	const unsigned view_run = CFG_ONCE("viewrun", 1) < 1 ? 1u : (unsigned)CFG_ONCE("viewrun", 1);
+	if (mode >= 5 && ctx1_ready && split_on && (((frame++) / view_run) & 1)) { // [native] viewrun=<n>: each view is drawn n engine frames in a row (diagnostics: does the renderer reuse the last frame's data?)
 		frame_bottom = 1;
 		if (nogun && gun_dvar)
 			*(int *)(gun_dvar + 0x10) = 0; // test: context 1 without the view model
