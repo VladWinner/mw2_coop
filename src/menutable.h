@@ -15,3 +15,6 @@ const MenuItem *menutable_item(const char *menu, int n);
 
 // The popup's heading ("@NAME"), or NULL.
 const char *menutable_title(const char *menu);
+
+// A yes/no popup's question ("@NAME"), or NULL.
+const char *menutable_question(const char *menu);

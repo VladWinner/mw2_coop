@@ -5,7 +5,7 @@
   python -I tools/gen_menus.py --check    fail if the header is not what the menu file gives
 
 menus.menu is the one place the menus the mod adds are listed (Call of Duty .menu syntax); the game reads mw2coop/menus.menu at start and its
-items replace the built-in ones of the same menu and name. The check here only guards the shape: balanced braces, popups with four items.
+items replace the built-in ones of the same menu and name. The check here only guards the shape: balanced braces, popups with four items (a yes/no popup: two).
 """
 import os
 import re
@@ -25,8 +25,9 @@ def check(text):
     for block in re.split(r"(?m)^menuDef", plain)[1:]:
         name = re.search(r'name\s+"([^"]+)"', block).group(1)
         items = len(re.findall(r"\bitemDef\b", block))
-        if name != "main_text" and items != 4:
-            raise SystemExit("menus.menu: popup %s has %d items, expected 4" % (name, items))
+        want = 2 if re.search(r"\bquestion\b", block) else 4  # a yes/no popup has Yes and No
+        if name != "main_text" and items != want:
+            raise SystemExit("menus.menu: popup %s has %d items, expected %d" % (name, items, want))
 
 
 def build():

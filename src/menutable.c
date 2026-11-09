@@ -13,12 +13,12 @@
 #include "menus_gen.h"
 
 #define MAX_ITEMS 48
-#define MAX_MENUS 12
+#define MAX_MENUS 16
 
 static MenuItem items[MAX_ITEMS];
 static int item_count;
 static struct {
-	char menu[40], title[80];
+	char menu[40], title[80], question[80];
 } titles[MAX_MENUS];
 static int title_count;
 static volatile LONG loaded; // 0 not yet, 1 loading, 2 done
@@ -163,7 +163,8 @@ static int parse(const char *text, int replace_only)
 			} else if (!lx.quoted && !strcmp(lx.word, "name")) {
 				if (next_token(&lx))
 					lstrcpynA(menu, lx.word, sizeof(menu));
-			} else if (!lx.quoted && !strcmp(lx.word, "title")) {
+			} else if (!lx.quoted && (!strcmp(lx.word, "title") || !strcmp(lx.word, "question"))) {
+				int is_question = lx.word[0] == 'q';
 				if (next_token(&lx) && menu[0]) {
 					int t;
 					for (t = 0; t < title_count; t++)
@@ -174,7 +175,10 @@ static int parse(const char *text, int replace_only)
 							title_count++;
 							lstrcpynA(titles[t].menu, menu, sizeof(titles[t].menu));
 						}
-						lstrcpynA(titles[t].title, lx.word, sizeof(titles[t].title));
+						if (is_question)
+							lstrcpynA(titles[t].question, lx.word, sizeof(titles[t].question));
+						else
+							lstrcpynA(titles[t].title, lx.word, sizeof(titles[t].title));
 						read++;
 					}
 				}
@@ -273,5 +277,14 @@ const char *menutable_title(const char *menu)
 	for (int i = 0; i < title_count; i++)
 		if (!_stricmp(titles[i].menu, menu))
 			return titles[i].title;
+	return NULL;
+}
+
+const char *menutable_question(const char *menu)
+{
+	load();
+	for (int i = 0; i < title_count; i++)
+		if (!_stricmp(titles[i].menu, menu))
+			return titles[i].question[0] ? titles[i].question : NULL;
 	return NULL;
 }

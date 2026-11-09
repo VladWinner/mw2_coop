@@ -7,7 +7,7 @@ T=build/menutable-test
 mkdir -p "$T/mw2coop"
 cat > "$T/mw2coop/menus.menu" <<'MENU'
 menuDef { name "main_text"
-  itemDef { name "mw2coop_find" text "Custom join" action { play "mouse_click"; exec "my_command"; setdvar credits 0 } }
+  itemDef { name "mw2coop_specops_btn" text "Custom join" action { play "mouse_click"; exec "my_command"; setdvar credits 0 } }
   itemDef { name "not_in_builtin" text "x" }
 }
 menuDef { name "mw2coop_host" title "My title" }

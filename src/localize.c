@@ -135,6 +135,11 @@ static const ModString strings[] = {
 	 "SPLIT SCREEN"},
 	// Разделение экрана: the split screen lobby's title, after "Campaign :"
 	{"MW2COOP_SPLIT_TITLE", "\xd0\xe0\xe7\xe4\xe5\xeb\xe5\xed\xe8\xe5 \xfd\xea\xf0\xe0\xed\xe0", "Split Screen"},
+	// МУЛЬТИПЛЕЕР / НАСТРОЙКИ: the main menu's multiplayer entry (co-op) and its settings entry (the game's Options)
+	{"MW2COOP_MULTIPLAYER", "\xcc\xd3\xcb\xdc\xd2\xc8\xcf\xcb\xc5\xc5\xd0", "MULTIPLAYER"},
+	{"MW2COOP_SETTINGS", "\xcd\xc0\xd1\xd2\xd0\xce\xc9\xca\xc8", "SETTINGS"},
+	// the line under the logo in the main menu
+	{"MW2COOP_SUBTITLE", "ENHANCED", "ENHANCED"},
 	// Альфа / Браво: the split screen lobby's player cards (call signs, owner 2026-10-28)
 	{"MW2COOP_CALLSIGN_A", "\xc0\xeb\xfc\xf4\xe0", "Alpha"},
 	{"MW2COOP_CALLSIGN_B", "\xc1\xf0\xe0\xe2\xee", "Bravo"},

@@ -22,8 +22,8 @@ static void expect(int ok, const char *what)
 int main(void)
 {
 	const MenuItem *i = menutable_item("main_text", 0);
-	expect(i && !strcmp(i->name, "mw2coop_online"), "first main button");
-	expect(i && !strcmp(i->action, "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_host_menu\" ; "), "its script is the game's parsed form");
+	expect(i && !strcmp(i->name, "mw2coop_campaign_btn"), "first main button");
+	expect(i && !strcmp(i->action, "\"play\" \"mouse_click\" ; \"setGameMode\" \"sp\" ; \"setdvar\" \"specialops\" 0 ; \"open\" \"mw2coop_campaign\" ; "), "its script is the game's parsed form (a number stays bare)");
 	i = menutable_item("main_text", 1);
 	expect(i && !strcmp(i->text, "Custom join"), "an override replaces the text");
 	expect(i && !strcmp(i->action, "\"play\" \"mouse_click\" ; \"exec\" \"my_command\" ; \"setdvar\" \"credits\" 0 ; "), "an override replaces the action; a number stays bare");
@@ -34,6 +34,11 @@ int main(void)
 	expect(!strcmp(menutable_title("mw2coop_host") ? menutable_title("mw2coop_host") : "", "My title"), "an override replaces the title");
 	expect(!strcmp(menutable_title("mw2coop_saves") ? menutable_title("mw2coop_saves") : "", "@MW2COOP_SAVES"), "a built-in title");
 	expect(menutable_title("nothing") == NULL, "no title for an unknown menu");
+	i = menutable_item("mw2coop_member", 1);
+	expect(i && !strcmp(i->name, "no") && !strcmp(i->text, "@MENU_NO"), "a yes/no popup's second row");
+	expect(menutable_item("mw2coop_member", 2) == NULL, "a yes/no popup has two rows");
+	expect(menutable_question("mw2coop_member") && !strcmp(menutable_question("mw2coop_member"), "@MW2COOP_MEMBER_Q"), "a yes/no popup's question");
+	expect(menutable_question("mw2coop_saves") == NULL, "a list popup has no question");
 	printf(failed ? "menutable: FAILED\n" : "menutable: ok\n");
 	return failed;
 }

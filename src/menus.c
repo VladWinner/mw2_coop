@@ -462,6 +462,17 @@ static int main_button_count(void)
 	return n;
 }
 
+static int name_in(const char *name, const char *const *list)
+{
+	for (; *list; list++)
+		if (name && !strcmp(name, *list))
+			return 1;
+	return 0;
+}
+
+// The main menu as six entries: CAMPAIGN, SPEC OPS, MULTIPLAYER (menus.menu, menuDef "main_text"), then Settings, Credits and Quit. The game's Resume, New game and Mission select
+// move to a page of their own, "mw2coop_campaign" (a copy of the main menu with Stats but without Options, Credits, the Main menu button and Quit, with a Back button);
+// the game's Main menu button (the Campaign / Spec Ops chooser) goes, as SPEC OPS opens the Spec Ops menu itself.
 static void patch_main_menu(void)
 {
 	uint8_t *menu = ui_find_menu("main_text");
@@ -478,37 +489,149 @@ static void patch_main_menu(void)
 		main_items = items;
 		return;
 	}
-	uint8_t *src = items[at];
-	float y0 = *(float *)(src + ITEM_RECT_Y) + BUTTON_HEIGHT;
+	static const char *const top_gone[] = {"resume", "newgame", "newgame_warning", "levelselect", "game_selection", NULL};
+	static const char *const campaign_gone[] = {"options", "credits", "game_selection", "button_quit", NULL};
+	static const char *const top_gone_more[] = {"stats", NULL}; // Stats moves to the campaign page
+	uint8_t *src = items[at]; // Mission Select: the template of the new buttons
 
-	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + nbuttons) * sizeof(*list));
-	memcpy(list, items, (at + 1) * sizeof(*list));
-	for (int b = 0; b < nbuttons; b++) {
-		uint8_t *item = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
-		memcpy(item, src, ITEM_SIZE);
-		float y = y0 + b * BUTTON_HEIGHT;
-		const MenuItem *def = menutable_item("main_text", b);
-		*(const char **)item = def->name;
-		*(const char **)(item + ITEM_TEXT) = def->text;
-		*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(def->action);
-		*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
-		*(float *)(item + ITEM_RECT_Y) = y;
-		*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
-		list[at + 1 + b] = item;
-	}
-	memcpy(list + at + 1 + nbuttons, items + at + 1, (count - at - 1) * sizeof(*list));
-	// everything below the new buttons moves down
-	for (int i = at + 1 + nbuttons; i < count + nbuttons; i++) {
-		if (*(float *)(list[i] + ITEM_RECT_Y) >= y0 - 0.5f) {
-			*(float *)(list[i] + ITEM_RECT_Y) += nbuttons * BUTTON_HEIGHT;
-			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += nbuttons * BUTTON_HEIGHT;
+	// the campaign page
+	if (!ui_find_menu("mw2coop_campaign")) {
+		uint8_t *camp = ui_clone_menu(menu, "mw2coop_campaign");
+		uint8_t **ci = *(uint8_t ***)(camp + MENU_ITEMS);
+		uint8_t **cl = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(*cl));
+		int n = 0;
+		uint8_t *level = NULL;
+		for (int i = 0; i < count; i++) {
+			const char *name = *(const char **)ci[i];
+			if (name_in(name, campaign_gone))
+				continue;
+			if (name && !strcmp(name, "levelselect"))
+				level = ci[i];
+			cl[n++] = ci[i];
 		}
+		if (level) {
+			uint8_t *back = ui_clone_item(level, camp);
+			float y = *(float *)(level + ITEM_RECT_Y) + BUTTON_HEIGHT;
+			for (int k = 0; k < n; k++) { // Back goes under the last button (Stats)
+				const char *kn = *(const char **)cl[k];
+				if (kn && !strcmp(kn, "stats"))
+					y = *(float *)(cl[k] + ITEM_RECT_Y) + BUTTON_HEIGHT;
+			}
+			*(const char **)back = "mw2coop_campaign_back";
+			*(const char **)(back + ITEM_TEXT) = "@PLATFORM_BACK_CAPS";
+			*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+			*(float *)(back + ITEM_RECT_Y) = y;
+			*(float *)(back + ITEM_RECT_CLIENT_Y) = y;
+			cl[n++] = back;
+		}
+		*(uint8_t ***)(camp + MENU_ITEMS) = cl;
+		*(int *)(camp + MENU_ITEM_COUNT) = n;
+		if (ui_register_menu(camp))
+			log_printf("menus: campaign page added (%d items)", n);
+	}
+
+	// the look: the logo moves to the top of the left panel with the mod's name under it, and the buttons go down to make room (menus.menu has the entries)
+	const float header_dy = 24.0f;
+	void *fade_material = NULL;
+	for (int i = 0; i < count; i++) {
+		uint8_t *it = items[i];
+		const char *text = *(const char **)(it + ITEM_TEXT);
+		const char **mat = *(const char ***)(it + ITEM_BACKGROUND_PTR);
+		const char *mat_name = mat && !IsBadReadPtr(mat, sizeof(*mat)) && *mat && !IsBadStringPtrA(*mat, 16) ? *mat : "";
+		float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4); // rect and rectClient: x, y, width, height
+		if (!strcmp(mat_name, "logo_cod2")) {
+			rect[0] = client[0] = 0, rect[1] = client[1] = 4, rect[2] = client[2] = 216, rect[3] = client[3] = 54;
+			it[ITEM_RECT_ALIGN_H] = 1, it[ITEM_RECT_ALIGN_V] = 1;
+		} else if (!strcmp(mat_name, "gradient_fadein_fadebottom") || !strcmp(mat_name, "gradient_fadein")) {
+			// the dark panel behind the list ends in a hard edge on the right, and so does the line in it. A negative width draws the picture mirrored over the same
+			// place; the horizontal fade-in of the line's material, mirrored, fades out to the right: the panel gets that material too
+			if (!fade_material)
+				for (int k = 0; k < count; k++) {
+					const char **m = *(const char ***)(items[k] + ITEM_BACKGROUND_PTR);
+					if (m && !IsBadReadPtr(m, sizeof(*m)) && *m && !IsBadStringPtrA(*m, 16) && !strcmp(*m, "gradient_fadein"))
+						fade_material = *(void **)(items[k] + ITEM_BACKGROUND_PTR);
+				}
+			if (fade_material && strcmp(mat_name, "gradient_fadein"))
+				*(void **)(it + ITEM_BACKGROUND_PTR) = fade_material;
+			if (rect[2] > 0)
+				rect[2] = client[2] = -rect[2];
+		} else if (text && !strcmp(text, "@MENU_SP_FOR_THE_RECORD")) {
+			*(const char **)(it + ITEM_TEXT) = "@MW2COOP_SUBTITLE";
+			*(void **)(it + ITEM_TEXT_EXP) = NULL;
+			rect[1] = client[1] = -6;
+		}
+	}
+	// the top level: the game's four buttons are replaced by the table's
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + nbuttons) * sizeof(*list));
+	int n = 0, inserted = 0;
+	for (int i = 0; i < count; i++) {
+		const char *name = *(const char **)items[i];
+		if (name_in(name, top_gone_more))
+			continue;
+		if (name_in(name, top_gone)) {
+			if (inserted)
+				continue;
+			inserted = 1;
+			float y0 = *(float *)(items[i] + ITEM_RECT_Y);
+			for (int b = 0; b < nbuttons; b++) {
+				uint8_t *item = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
+				memcpy(item, src, ITEM_SIZE);
+				float y = y0 + header_dy + b * BUTTON_HEIGHT;
+				const MenuItem *def = menutable_item("main_text", b);
+				*(const char **)item = def->name;
+				*(const char **)(item + ITEM_TEXT) = def->text;
+				*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(def->action);
+				*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
+				*(float *)(item + ITEM_RECT_Y) = y;
+				*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
+				list[n++] = item;
+			}
+			continue;
+		}
+		if (name && !strcmp(name, "options")) // Options is called Settings
+			*(const char **)(items[i] + ITEM_TEXT) = "@MW2COOP_SETTINGS";
+		// Stats and the Main menu button are gone: Credits moves up one row, Quit two
+		if (name && (!strcmp(name, "credits") || !strcmp(name, "button_quit"))) {
+			float up = BUTTON_HEIGHT * (!strcmp(name, "credits") ? 1 : 2);
+			*(float *)(items[i] + ITEM_RECT_Y) -= up;
+			*(float *)(items[i] + ITEM_RECT_CLIENT_Y) -= up;
+		}
+		if (inserted) { // the rows below the three entries (the line, Settings, Credits, Quit) move down with them
+			*(float *)(items[i] + ITEM_RECT_Y) += header_dy;
+			*(float *)(items[i] + ITEM_RECT_CLIENT_Y) += header_dy;
+		}
+		list[n++] = items[i];
 	}
 	// the old items stay valid, so the UI may read the new array before the new count
 	main_items = list;
 	*(uint8_t ***)(menu + MENU_ITEMS) = list;
-	*(int *)(menu + MENU_ITEM_COUNT) = count + nbuttons;
-	log_printf("menus: main_text: co-op buttons added under Mission Select (%d items)", count + nbuttons);
+	*(int *)(menu + MENU_ITEM_COUNT) = n;
+	log_printf("menus: main_text: Campaign, Spec Ops and Multiplayer entries (%d items)", n);
+}
+
+// The game starts on "main_selection", its picture cards Campaign / Spec Ops / Multiplayer. The mod's main menu is the list in main_text (patch_main_menu), so the
+// selection menu opens it when it opens itself: one more handler at the end of its onOpen.
+static uint8_t *selection_patched; // the menu object whose onOpen was extended
+static void patch_selection_menu(void)
+{
+	uint8_t *sel = ui_find_menu("main_selection");
+	if (!sel || sel == selection_patched || !ui_find_menu("main_text"))
+		return;
+	selection_patched = sel;
+	const MenuEventHandlerSet *old = *(MenuEventHandlerSet **)(sel + MENU_ON_OPEN);
+	int n = old && old->count > 0 && old->count < 64 ? old->count : 0;
+	MenuEventHandlerSet *set = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*set));
+	MenuEventHandler **list = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n + 1) * sizeof(*list));
+	for (int i = 0; i < n; i++)
+		list[i] = old->handlers[i];
+	MenuEventHandler *h = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*h));
+	h->data = (void *)"\"open\" \"main_text\" ; ";
+	h->type = 0;
+	list[n] = h;
+	set->count = n + 1;
+	set->handlers = list;
+	*(MenuEventHandlerSet **)(sel + MENU_ON_OPEN) = set;
+	log_printf("menus: main_selection opens main_text (onOpen had %d handlers)", n);
 }
 
 // No Russian in Mission Select (owner, 2026-11-04): the PC game's Act I list holds Trainer, Roadkill, Cliffhanger and Favela but not the airport mission. A button for it is cloned from
@@ -779,6 +902,14 @@ static void show_row(uint8_t *menu, const char *row, int visible)
 		*flags |= WINDOW_VISIBLE;
 	else
 		*flags &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
+}
+
+static void add_multiplayer_menu(void)
+{
+	if (ui_find_menu("mw2coop_multiplayer"))
+		return;
+	if (table_popup("mw2coop_multiplayer"))
+		log_printf("menus: multiplayer popup added");
 }
 
 static void add_lobbies_menu(void)
@@ -1952,18 +2083,24 @@ static void new_game_f(void)
 }
 
 // A yes/no question (a copy of the quit popup, as firewall.c does).
-static void yes_no_popup(const char *name, const char *title, const char *question, const char *yes_action,
-			 const char *no_action)
+static void yes_no_popup(const char *name)
 {
 	if (ui_find_menu(name))
 		return;
+	// the heading, the question and the Yes / No rows come from menus.menu
+	const MenuItem *yes = menutable_item(name, 0), *no = menutable_item(name, 1);
+	const char *title = menutable_title(name), *question = menutable_question(name);
+	if (!yes || !no || !title || !question) {
+		log_printf("menus: menus.menu has no complete yes/no popup %s", name);
+		return;
+	}
 	// From the difficulty popup (rows_popup), not the quit popup: the difficulty popup is opened
 	// from the lobby in Spec Ops. Its own text items stay hidden whatever they are given, so the
 	// question (up to three lines) is a copy of the title item one line under it; rows: Yes, No,
 	// lowered under the question.
-	static const char *const names[LIST_ROWS] = {"yes", "no", "mw2coop_row_3", "mw2coop_row_4"};
-	static const char *const texts[LIST_ROWS] = {"@MENU_YES", "@MENU_NO", "", ""};
-	const char *const actions[LIST_ROWS] = {yes_action, no_action, "", ""};
+	const char *const names[LIST_ROWS] = {yes->name, no->name, "mw2coop_row_3", "mw2coop_row_4"};
+	const char *const texts[LIST_ROWS] = {yes->text, no->text, "", ""};
+	const char *const actions[LIST_ROWS] = {yes->action, no->action, "", ""};
 	uint8_t *menu = rows_popup(name, title, names, texts, actions);
 	if (!menu)
 		return;
@@ -1986,7 +2123,7 @@ static void yes_no_popup(const char *name, const char *title, const char *questi
 	more[count] = text;
 	*(uint8_t ***)(menu + MENU_ITEMS) = more;
 	*(int *)(menu + MENU_ITEM_COUNT) = count + 1;
-	int rows[2] = {ui_item_index(menu, "yes"), ui_item_index(menu, "no")};
+	int rows[2] = {ui_item_index(menu, yes->name), ui_item_index(menu, no->name)};
 	for (int i = 0; i < 2; i++) {
 		*(float *)(more[rows[i]] + ITEM_RECT_Y) += 72;
 		*(float *)(more[rows[i]] + ITEM_RECT_CLIENT_Y) += 72;
@@ -1999,15 +2136,9 @@ static void yes_no_popup(const char *name, const char *title, const char *questi
 // the popup and nothing starts.
 static void add_partner_popups(void)
 {
-	yes_no_popup("mw2coop_partner", "@MW2COOP_PARTNER_TITLE", "@MW2COOP_PARTNER_Q",
-		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_partner_yes\" ; ",
-		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
-	yes_no_popup("mw2coop_member", "@MW2COOP_MEMBER_TITLE", "@MW2COOP_MEMBER_Q",
-		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_member_yes\" ; ",
-		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_member_no\" ; ");
-	yes_no_popup("mw2coop_newgame", "@MW2COOP_NEWGAME_TITLE", "@MW2COOP_NEWGAME_Q",
-		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_new_game\" ; ",
-		     "\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+	yes_no_popup("mw2coop_partner");
+	yes_no_popup("mw2coop_member");
+	yes_no_popup("mw2coop_newgame");
 }
 
 // mw2coop_online: run by the campaign menu's co-op button before "listen" opens the lobby
@@ -2676,7 +2807,9 @@ static void tick_f(void)
 		return;
 	native_session_tick();
 	patch_main_menu();
+	patch_selection_menu();
 	patch_act1_menu();
+	add_multiplayer_menu();
 	add_lobbies_menu();
 	add_host_menu();
 	add_saves_menu();

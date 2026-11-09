@@ -2,28 +2,57 @@
 // The mod does not load .menu files into the game; it reads this file to build what it adds to the game's own menus.
 // Edit a text or an action and restart the game; an item you delete keeps the mod's built-in values (the built-in copy of this file is compiled in).
 //
-//   menuDef name "main_text"   the game's main menu: its itemDefs are buttons added under Mission Select, in this order
-//   menuDef name "<other>"     a popup the mod adds; title "..." is its heading, and it has exactly four itemDefs (its rows), in this order
+//   menuDef name "main_text"   the game's main menu: its itemDefs are the buttons added at the top, in this order
+//   menuDef name "<other>"     a popup the mod adds; title "..." is its heading, and it has exactly four itemDefs (its rows), in this order;
+//                              with question "..." it is a yes/no popup: two itemDefs, Yes and No (their names yes and no are fixed)
 //   itemDef name               the button's or row's name; the code finds some of them by name, so do not rename them (mw2coop_host_4 is shown or hidden by the code)
 //   itemDef text               what is written on it; "@NAME" is a text of the game or of mw2coop\localizedstrings\mw2coop.str (shown in the game's language)
 //   itemDef action { ... }     what a click does: the menu script of the game. Some commands: play "mouse_click"; close self; open <menu>; exec "<console command>";
 
+// The top level of the main menu: three entries in the place of the game's Resume / New game / Mission select / Main menu buttons, above Settings (the game's Options), Credits and Quit.
+// The campaign page (menuDef "mw2coop_campaign": the game's own Resume, New game and Mission select, made by the mod) and the multiplayer popup are opened from here.
 menuDef {
 	name "main_text"
 	itemDef {
+		name "mw2coop_campaign_btn"
+		text "@MW2COOP_CAMPAIGN"
+		action { play "mouse_click"; setGameMode "sp"; setdvar "specialops" 0; open "mw2coop_campaign"; }
+	}
+	itemDef {
+		name "mw2coop_specops_btn"
+		text "@MENU_SP_SPECIAL_OPS_CAPS"
+		action { play "mouse_click"; open "main_specops"; }
+	}
+	itemDef {
+		name "mw2coop_multiplayer_btn"
+		text "@MW2COOP_MULTIPLAYER"
+		action { play "mouse_click"; open "mw2coop_multiplayer"; }
+	}
+}
+
+// MULTIPLAYER: the co-op entries
+menuDef {
+	name "mw2coop_multiplayer"
+	title "@MW2COOP_MULTIPLAYER"
+	itemDef {
 		name "mw2coop_online"
 		text "@MENU_SP_TWO_PLAYER_ONLINE_CAPS"
-		action { play "mouse_click"; exec "mw2coop_host_menu"; }
+		action { play "mouse_click"; close self; exec "mw2coop_host_menu"; }
 	}
 	itemDef {
 		name "mw2coop_find"
 		text "@MW2COOP_JOIN"
-		action { play "mouse_click"; exec "xrequirelivesignin"; exec "mw2coop_find"; }
+		action { play "mouse_click"; close self; exec "xrequirelivesignin"; exec "mw2coop_find"; }
 	}
 	itemDef {
 		name "mw2coop_splitscreen"
 		text "@MW2COOP_SPLITSCREEN"
-		action { play "mouse_click"; exec "mw2coop_split_menu"; }
+		action { play "mouse_click"; close self; exec "mw2coop_split_menu"; }
+	}
+	itemDef {
+		name "mw2coop_multiplayer_back"
+		text "@PLATFORM_BACK_CAPS"
+		action { play "mouse_click"; close self; }
 	}
 }
 
@@ -102,5 +131,55 @@ menuDef {
 		name "mw2coop_save_4"
 		text "@MW2COOP_SAVE_4"
 		action { play "mouse_click"; close self; exec "mw2coop_save_pick 4"; }
+	}
+}
+
+// Yes/no questions of the host's menu: a heading (title), the question under it and two rows. Start with a partner who is not a member of the save:
+// continue with him? then: add him to this playthrough's members? No to that: start a new game from the very beginning? No anywhere closes the popup.
+menuDef {
+	name "mw2coop_partner"
+	title "@MW2COOP_PARTNER_TITLE"
+	question "@MW2COOP_PARTNER_Q"
+	itemDef {
+		name "yes"
+		text "@MENU_YES"
+		action { play "mouse_click"; close self; exec "mw2coop_partner_yes"; }
+	}
+	itemDef {
+		name "no"
+		text "@MENU_NO"
+		action { play "mouse_click"; close self; }
+	}
+}
+
+menuDef {
+	name "mw2coop_member"
+	title "@MW2COOP_MEMBER_TITLE"
+	question "@MW2COOP_MEMBER_Q"
+	itemDef {
+		name "yes"
+		text "@MENU_YES"
+		action { play "mouse_click"; close self; exec "mw2coop_member_yes"; }
+	}
+	itemDef {
+		name "no"
+		text "@MENU_NO"
+		action { play "mouse_click"; close self; exec "mw2coop_member_no"; }
+	}
+}
+
+menuDef {
+	name "mw2coop_newgame"
+	title "@MW2COOP_NEWGAME_TITLE"
+	question "@MW2COOP_NEWGAME_Q"
+	itemDef {
+		name "yes"
+		text "@MENU_YES"
+		action { play "mouse_click"; close self; exec "mw2coop_new_game"; }
+	}
+	itemDef {
+		name "no"
+		text "@MENU_NO"
+		action { play "mouse_click"; close self; }
 	}
 }
