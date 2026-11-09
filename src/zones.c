@@ -17,6 +17,7 @@
 #include "hook.h"
 #include "log.h"
 #include "zones.h"
+#include "guards.h"
 #ifdef _WIN64
 #include "game.h"
 #include "transplant.h"
@@ -130,6 +131,7 @@ static void pool_extend(int type, int extra, size_t entry_size)
 // original ones again and the next co-op level extends the pools again (the fresh pools have none of the extra entries).
 void zones_pools_reset(void)
 {
+	guards_invalidate_caches();
 	int *sizes = (int *)((uint8_t *)GetModuleHandleA(NULL) + RVA_POOL_SIZES);
 	for (int i = 0; i < 43; i++)
 		if (pool_added[i]) {
@@ -143,6 +145,7 @@ void zones_pools_reset(void)
 
 static void load_level_zones(const char *map, int flag)
 {
+	guards_invalidate_caches();
 	transplant_new_level();
 	char coop[8] = "";
 	game_dvar_string("coop", coop, sizeof(coop)); // a bool: "0" / "1"
