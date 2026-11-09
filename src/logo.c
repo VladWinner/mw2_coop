@@ -282,46 +282,55 @@ void logo_install(void *material, int dump_only)
 	free(px);
 }
 
-#ifdef _WIN64
-#define IMAGE_DIMS 0x18
-#else
-#define IMAGE_DIMS 0x14
-#endif
-
-int icons_install(void *material)
+// A copy of <template_material> (a Material *, here the logo's) with the About page's four icons (mw2coop\about-icons.tga, 512 x 128, straight alpha) as its picture. The game's own
+// material and image are not touched: the copy has its own texture table and image (as padicon.c does for the gamepad picture; copied a little over their ends, as menu copies are).
+void *icons_material(void *template_material)
 {
-	static void *done;
-	if (material == done)
-		return 1;
-	uint8_t *image = material_image(material);
+	static uint8_t *copy;
+	if (copy)
+		return copy;
+	uint8_t *src = template_material;
+	if (!src || !readable(src, 0x100))
+		return NULL;
+	uint8_t *table = *(uint8_t **)(src + MATERIAL_TABLE);
+	uint8_t *image = table && readable(table, 0x40) ? *(uint8_t **)(table + DEF_IMAGE) : NULL;
 	IDirect3DDevice9 *dev = d3dcap_device();
-	if (!image || !dev)
-		return 0;
+	if (!image || !readable(image, 0x80) || !dev)
+		return NULL;
 	char path[MAX_PATH];
 	game_dir_file("mw2coop\\about-icons.tga", path, sizeof(path));
 	int w = 0, h = 0;
 	uint32_t *px = read_tga(path, &w, &h);
 	if (!px) {
 		log_printf("logo: %s is missing: no icons on the About page", path);
-		return 0;
+		return NULL;
 	}
 	IDirect3DTexture9 *tex = NULL;
-	int ok = 0;
-	if (SUCCEEDED(IDirect3DDevice9_CreateTexture(dev, (UINT)w, (UINT)h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, NULL)) && tex) {
-		D3DLOCKED_RECT lr;
-		if (SUCCEEDED(IDirect3DTexture9_LockRect(tex, 0, &lr, NULL, 0))) {
-			for (int y = 0; y < h; y++)
-				memcpy((uint8_t *)lr.pBits + (size_t)y * lr.Pitch, px + (size_t)y * w, (size_t)w * 4);
-			IDirect3DTexture9_UnlockRect(tex, 0);
-			*(IDirect3DTexture9 **)image = tex; // (the old texture stays alive: the engine may still hold it)
-			*(uint16_t *)(image + IMAGE_DIMS) = (uint16_t)w;
-			*(uint16_t *)(image + IMAGE_DIMS + 2) = (uint16_t)h;
-			ok = 1;
-		}
+	if (FAILED(IDirect3DDevice9_CreateTexture(dev, (UINT)w, (UINT)h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, NULL)) || !tex) {
+		free(px);
+		return NULL;
 	}
+	D3DLOCKED_RECT lr;
+	if (FAILED(IDirect3DTexture9_LockRect(tex, 0, &lr, NULL, 0))) {
+		IDirect3DTexture9_Release(tex);
+		free(px);
+		return NULL;
+	}
+	for (int y = 0; y < h; y++)
+		memcpy((uint8_t *)lr.pBits + (size_t)y * lr.Pitch, px + (size_t)y * w, (size_t)w * 4);
+	IDirect3DTexture9_UnlockRect(tex, 0);
 	free(px);
-	log_printf("logo: the About page's icons are %s (%dx%d)", ok ? "in place" : "NOT in place", w, h);
-	if (ok)
-		done = material;
-	return ok;
+	static uint8_t mat[0x100], tab[0x40], img[0x80];
+	memcpy(mat, src, 0x100);
+	memcpy(tab, table, 0x40);
+	memcpy(img, image, 0x80);
+	*(IDirect3DTexture9 **)img = tex;
+	for (int i = 0; i < 4; i++)
+		if (*(uint8_t **)(tab + i * 16 + DEF_IMAGE) == image)
+			*(uint8_t **)(tab + i * 16 + DEF_IMAGE) = img;
+	*(uint8_t **)(mat + MATERIAL_TABLE) = tab;
+	*(const char **)mat = "mw2coop_about_icons";
+	copy = mat;
+	log_printf("logo: the About page's icons made (%dx%d)", w, h);
+	return copy;
 }

@@ -86,6 +86,14 @@ menuDef {
 		text "@MW2COOP_CREDIT_5"
 	}
 	itemDef {
+		name "mw2coop_credit_6"
+		text "@MW2COOP_CREDIT_6"
+	}
+	itemDef {
+		name "mw2coop_credit_7"
+		text "@MW2COOP_CREDIT_7"
+	}
+	itemDef {
 		name "mw2coop_link_github"
 		text "GITHUB"
 		action { play "mouse_click"; exec "mw2coop_open_url 1"; }

@@ -147,6 +147,8 @@ static const ModString strings[] = {
 	{"MW2COOP_CREDIT_3", "alicealys (h2-mod)", "alicealys (h2-mod)"},
 	{"MW2COOP_CREDIT_4", "momo5502 (COD-MOD)", "momo5502 (COD-MOD)"},
 	{"MW2COOP_CREDIT_5", "AlterWare (iw4x-sp)", "AlterWare (iw4x-sp)"},
+	{"MW2COOP_CREDIT_6", "FreeTheTech101 (iw4lan, IW4-Dump-Files)", "FreeTheTech101 (iw4lan, IW4-Dump-Files)"},
+	{"MW2COOP_CREDIT_7", "cranebeaker (Co-op Anything)", "cranebeaker (Co-op Anything)"},
 	// Альфа / Браво: the split screen lobby's player cards (call signs, owner 2026-10-28)
 	{"MW2COOP_CALLSIGN_A", "\xc0\xeb\xfc\xf4\xe0", "Alpha"},
 	{"MW2COOP_CALLSIGN_B", "\xc1\xf0\xe0\xe2\xee", "Bravo"},

@@ -510,8 +510,8 @@ static void style_items(uint8_t **items, int count)
 
 // The About page (menus.menu, menuDef "mw2coop_about"): a page of its own, made from a copy of the game's main menu. From the top: the logo centered in the header, the credits
 // (the itemDefs without an action: lines of text, centered), the four source links as icons (a strip of four pictures, mw2coop\about-icons.tga, in the place of the picture of one
-// of the game's menu cards; the itemDefs with an action are the clickable places over the icons) and Back at the bottom. ABOUT_ICONS is 0: the card pictures are the
-// main menu's hero art (they are drawn there too), so the icons cannot go in them; the links are text buttons in a row until another picture is found. Over the whole page lies the dark panel of the main menu.
+// of the game's menu cards; the itemDefs with an action are the clickable places over the icons) and Back at the bottom. The icons are a copy of the logo's
+// material with a texture of their own (icons_material), so nothing the game draws elsewhere changes; without them (ABOUT_ICONS 0, or the picture missing) the links are text buttons. Over the whole page lies the dark panel of the main menu.
 #ifdef _WIN64
 #define ITEM_FONT 0xd0 // int fontEnum, then textAlignMode (int), textalignx and textaligny (float), textscale (float)
 #else
@@ -521,7 +521,7 @@ static void style_items(uint8_t **items, int count)
 #define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
 #define ITEM_TEXT_SCALE (ITEM_FONT + 16)
 #define ALIGN_MIDDLE_CENTER 5
-#define ABOUT_ICONS 0
+#define ABOUT_ICONS 1
 
 static void set_rect(uint8_t *it, float x, float y, float w, float h, int align_h, int align_v)
 {
@@ -540,15 +540,6 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		return;
 	uint8_t *page = ui_clone_menu(main_menu, "mw2coop_about");
 	uint8_t **pi = *(uint8_t ***)(page + MENU_ITEMS);
-	// the picture the icons go in: the material of one of the cards of the game's selection menu (nothing else shows it any more)
-	void *card_material = NULL;
-	uint8_t *selection = ui_find_menu("main_selection");
-	if (selection) {
-		uint8_t **si = *(uint8_t ***)(selection + MENU_ITEMS);
-		for (int i = 0; i < *(int *)(selection + MENU_ITEM_COUNT); i++)
-			if (!strcmp(item_material_name(si[i]), "mw2_main_sp_image"))
-				card_material = *(void **)(si[i] + ITEM_BACKGROUND_PTR);
-	}
 	int lines = 0, links = 0;
 	for (int i = 0;; i++) {
 		const MenuItem *def = menutable_item("mw2coop_about", i);
@@ -602,11 +593,12 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		list[n++] = line;
 	}
 	// the icons: one picture of four, 64 x 64 units each, with a button over each
-	float icons_y = y + 34;
-	if (ABOUT_ICONS && logo_item && card_material && icons_install(card_material)) {
+	float icons_y = y + 50;
+	void *icons = ABOUT_ICONS && logo_item ? icons_material(*(void **)(logo_item + ITEM_BACKGROUND_PTR)) : NULL; // a copy of the logo's material with the icons as its picture
+	if (icons) {
 		uint8_t *strip = ui_clone_item(logo_item, page);
 		*(const char **)strip = "mw2coop_about_icons";
-		*(void **)(strip + ITEM_BACKGROUND_PTR) = card_material;
+		*(void **)(strip + ITEM_BACKGROUND_PTR) = icons;
 		set_rect(strip, -128, icons_y, 256, 64, 2, 1);
 		list[n++] = strip;
 	}
@@ -619,11 +611,13 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 			continue;
 		uint8_t *hit = ui_clone_item(button, page);
 		*(const char **)hit = def->name;
-		*(const char **)(hit + ITEM_TEXT) = ABOUT_ICONS ? "" : def->text;
+		*(const char **)(hit + ITEM_TEXT) = icons ? "" : def->text;
 		*(void **)(hit + ITEM_TEXT_EXP) = NULL;
 		*(MenuEventHandlerSet **)(hit + ITEM_ACTION) = ui_script_set(def->action);
-		if (ABOUT_ICONS)
+		if (icons) {
+			*(void **)(hit + ITEM_BACKGROUND_PTR) = NULL; // (a button's selection bar would be drawn in the wrong place over an icon)
 			set_rect(hit, -128 + 64 * b++, icons_y, 64, 64, 2, 1);
+		}
 		else {
 			set_rect(hit, -240 + 120 * b++, icons_y, 120, 20, 2, 1);
 			*(int *)(hit + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
@@ -644,7 +638,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 	*(uint8_t ***)(page + MENU_ITEMS) = list;
 	*(int *)(page + MENU_ITEM_COUNT) = n;
 	if (ui_register_menu(page))
-		log_printf("menus: About page added (%d items, icons %s)", n, card_material ? "on" : "no picture");
+		log_printf("menus: About page added (%d items, icons %s)", n, icons ? "on" : "no picture");
 }
 
 static int name_in(const char *name, const char *const *list)
