@@ -521,6 +521,8 @@ static void style_items(uint8_t **items, int count)
 #define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
 #define ITEM_TEXT_SCALE (ITEM_FONT + 16)
 #define ALIGN_MIDDLE_CENTER 5
+#define ITEM_TEXT_STYLE (ITEM_FONT + 0x14) // int textStyle after textscale: 3 = shadowed
+#define TEXT_STYLE_SHADOWED 3
 #define ABOUT_ICONS 1
 #define TEXT_DX 44.0f // a centered text is drawn this many units left of where a picture with the same rectangle is (measured on 1920 x 1080), so its rectangle goes right by that
 
@@ -589,6 +591,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		*(int *)(line + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
 		*(float *)(line + ITEM_TEXT_ALIGN_X) = 0;
 		*(float *)(line + ITEM_TEXT_SCALE) = k == 0 ? 0.45f : 0.3f;
+		*(int *)(line + ITEM_TEXT_STYLE) = TEXT_STYLE_SHADOWED; // readable over the picture without a box behind
 		y += k == 0 ? 24 : 17;
 		k++;
 		list[n++] = line;
