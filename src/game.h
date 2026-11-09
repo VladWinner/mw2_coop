@@ -243,6 +243,7 @@ void game_add_command(cmd_function_t *node);
 // Whether [p, p+size) is committed readable memory / whether the string at s (up to max bytes) is: checked with VirtualQuery, no exception (IsBadReadPtr raises and catches
 // one, and the crash logger counts those: crash.c writes only its first three).
 int game_mem_readable(const void *p, size_t size);
+uint8_t *game_builtin_entry(unsigned rva, const char *name); // the {name, function, developer} entry of a script builtin, by address or else by name
 int game_string_readable(const char *s, size_t max);
 // Read 1/2/4/8 bytes of the game image at an RVA (0 outside the image).
 unsigned long long game_peek(unsigned long long rva, int width);

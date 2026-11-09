@@ -100,48 +100,6 @@ WRAP(3)
 WRAP(4)
 static const method_t wrappers[MIRRORED] = {wrap0, wrap1, wrap2, wrap3, wrap4};
 
-// The table entry of a method builtin found by its name, so the mirror works on a build whose addresses moved: the name is a string in the image, and the entry is the
-// {name, function, developer} record that holds a pointer to it, next to a pointer into the code. NULL if there is none.
-static uint8_t *find_method_entry(const char *name)
-{
-	const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
-	const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
-	const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
-	const size_t len = strlen(name) + 1;
-	for (int i = 0; i < nt->FileHeader.NumberOfSections; i++) {
-		if (!(sec[i].Characteristics & IMAGE_SCN_MEM_READ) || (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE))
-			continue;
-		const uint8_t *s0 = base + sec[i].VirtualAddress;
-		size_t size = sec[i].Misc.VirtualSize;
-		if (size < len + 1 || !game_mem_readable(s0, size))
-			continue;
-		for (size_t k = 1; k + len <= size; k++) {
-			if (s0[k] != (uint8_t)name[0] || s0[k - 1] != 0 || memcmp(s0 + k, name, len) != 0)
-				continue;
-			const uintptr_t va = (uintptr_t)(s0 + k);
-			// a pointer to that string, in a section that holds data, with a pointer into the code after it
-			for (int j = 0; j < nt->FileHeader.NumberOfSections; j++) {
-				if (!(sec[j].Characteristics & IMAGE_SCN_MEM_READ) || (sec[j].Characteristics & IMAGE_SCN_MEM_EXECUTE))
-					continue;
-				const uint8_t *d0 = base + sec[j].VirtualAddress;
-				size_t dsize = sec[j].Misc.VirtualSize;
-				if (dsize < 3 * sizeof(void *) || !game_mem_readable(d0, dsize))
-					continue;
-				for (size_t q = 0; q + 3 * sizeof(void *) <= dsize; q += sizeof(void *)) {
-					if (*(const uintptr_t *)(d0 + q) != va)
-						continue;
-					const uintptr_t fn = *(const uintptr_t *)(d0 + q + sizeof(void *));
-					for (int e = 0; e < nt->FileHeader.NumberOfSections; e++)
-						if ((sec[e].Characteristics & IMAGE_SCN_MEM_EXECUTE) && fn >= (uintptr_t)base + sec[e].VirtualAddress &&
-						    fn < (uintptr_t)base + sec[e].VirtualAddress + sec[e].Misc.VirtualSize)
-							return (uint8_t *)(d0 + q);
-				}
-			}
-		}
-	}
-	return NULL;
-}
-
 void mirror_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
@@ -151,17 +109,10 @@ void mirror_install(void)
 	}
 	int done = 0;
 	for (size_t i = 0; i < MIRRORED; i++) {
-		uint8_t *entry = base + mirrored[i].rva;
-		const char *name = game_mem_readable(entry, 3 * sizeof(void *)) ? *(const char **)entry : NULL;
-		if (!name || !game_string_readable(name, 64) || strcmp(name, mirrored[i].name) != 0) {
-			// not where this build was known to have it: look for it by its name
-			uint8_t *found = find_method_entry(mirrored[i].name);
-			if (!found) {
-				log_printf("mirror: no %s at rva 0x%x or anywhere else, player 2 does not get it", mirrored[i].name, mirrored[i].rva);
-				continue;
-			}
-			log_printf("mirror: %s found by its name at rva 0x%x (it was expected at 0x%x)", mirrored[i].name, (unsigned)(found - base), mirrored[i].rva);
-			entry = found;
+		uint8_t *entry = game_builtin_entry(mirrored[i].rva, mirrored[i].name);
+		if (!entry) {
+			log_printf("mirror: no %s at rva 0x%x or anywhere else, player 2 does not get it", mirrored[i].name, mirrored[i].rva);
+			continue;
 		}
 		method_t *func = (method_t *)(entry + sizeof(char *)); // {name, function, developer}
 		originals[i] = *func;

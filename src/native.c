@@ -4590,8 +4590,8 @@ static void vision_forward_install(void)
 {
 	if (!cfg("visionfwd", 1))
 		return;
-	uint8_t *entry = base + RVA_FN_VISIONSETNAKED_ENTRY;
-	if (strcmp(*(const char **)entry, "visionsetnaked") != 0) {
+	uint8_t *entry = game_builtin_entry(RVA_FN_VISIONSETNAKED_ENTRY, "visionsetnaked");
+	if (!entry) {
 		log_printf("native: no visionsetnaked entry at rva 0x%x, player 2's vision does not follow", RVA_FN_VISIONSETNAKED_ENTRY);
 		return;
 	}

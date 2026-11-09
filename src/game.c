@@ -215,6 +215,65 @@ int game_string_readable(const char *s, size_t max)
 	return 1;
 }
 
+// The table entry of a script builtin (method or function) found by its name, so what needs one works on a build whose addresses moved: the name is a string in the image, and the entry is the
+// {name, function, developer} record that holds a pointer to it, next to a pointer into the code. NULL if there is none.
+static uint8_t *find_builtin_entry(const char *name)
+{
+	const uint8_t *base = (const uint8_t *)GetModuleHandleW(NULL);
+	const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+	const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+	const IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
+	const size_t len = strlen(name) + 1;
+	for (int i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+		if (!(sec[i].Characteristics & IMAGE_SCN_MEM_READ) || (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE))
+			continue;
+		const uint8_t *s0 = base + sec[i].VirtualAddress;
+		size_t size = sec[i].Misc.VirtualSize;
+		if (size < len + 1 || !game_mem_readable(s0, size))
+			continue;
+		for (size_t k = 1; k + len <= size; k++) {
+			if (s0[k] != (uint8_t)name[0] || s0[k - 1] != 0 || memcmp(s0 + k, name, len) != 0)
+				continue;
+			const uintptr_t va = (uintptr_t)(s0 + k);
+			// a pointer to that string, in a section that holds data, with a pointer into the code after it
+			for (int j = 0; j < nt->FileHeader.NumberOfSections; j++) {
+				if (!(sec[j].Characteristics & IMAGE_SCN_MEM_READ) || (sec[j].Characteristics & IMAGE_SCN_MEM_EXECUTE))
+					continue;
+				const uint8_t *d0 = base + sec[j].VirtualAddress;
+				size_t dsize = sec[j].Misc.VirtualSize;
+				if (dsize < 3 * sizeof(void *) || !game_mem_readable(d0, dsize))
+					continue;
+				for (size_t q = 0; q + 3 * sizeof(void *) <= dsize; q += sizeof(void *)) {
+					if (*(const uintptr_t *)(d0 + q) != va)
+						continue;
+					const uintptr_t fn = *(const uintptr_t *)(d0 + q + sizeof(void *));
+					for (int e = 0; e < nt->FileHeader.NumberOfSections; e++)
+						if ((sec[e].Characteristics & IMAGE_SCN_MEM_EXECUTE) && fn >= (uintptr_t)base + sec[e].VirtualAddress &&
+						    fn < (uintptr_t)base + sec[e].VirtualAddress + sec[e].Misc.VirtualSize)
+							return (uint8_t *)(d0 + q);
+				}
+			}
+		}
+	}
+	return NULL;
+}
+
+// The {name, function, developer} entry of the script builtin <name>: at base + rva if the entry there is that one, else found by its name; NULL if there is none.
+uint8_t *game_builtin_entry(unsigned rva, const char *name)
+{
+	uint8_t *base_ = (uint8_t *)GetModuleHandleW(NULL);
+	uint8_t *entry = base_ + rva;
+	if (rva && game_mem_readable(entry, 3 * sizeof(void *))) {
+		const char *n = *(const char **)entry;
+		if (n && game_string_readable(n, 64) && strcmp(n, name) == 0)
+			return entry;
+	}
+	uint8_t *found = find_builtin_entry(name);
+	if (found)
+		log_printf("game: the builtin %s found by its name at rva 0x%x (it was expected at 0x%x)", name, (unsigned)(found - base_), rva);
+	return found;
+}
+
 void game_for_each_dvar(int (*fn)(dvar_t *dvar, void *ctx), void *ctx)
 {
 	if (!ready || !RVA_DVAR_HASH)

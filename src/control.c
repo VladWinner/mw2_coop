@@ -773,7 +773,6 @@ static void setdvar_wrap(void)
 
 static void hook_script_setdvar(void)
 {
-	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	{ // QA bisect: a file mw2coop\nosetdvar next to the exe leaves the builtin alone
 		char probe[MAX_PATH];
 		DWORD n = GetModuleFileNameA(NULL, probe, MAX_PATH);
@@ -786,8 +785,8 @@ static void hook_script_setdvar(void)
 			return;
 		}
 	}
-	uint8_t *entry = base + RVA_FN_SETDVAR_ENTRY;
-	if (lstrcmpA(*(const char **)entry, "setdvar") != 0) {
+	uint8_t *entry = game_builtin_entry(RVA_FN_SETDVAR_ENTRY, "setdvar");
+	if (!entry) {
 		log_printf("control: no setdvar entry at rva 0x%x, script dvars stay unreadable in co-op", RVA_FN_SETDVAR_ENTRY);
 		return;
 	}
