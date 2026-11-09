@@ -2103,8 +2103,7 @@ static void console_save_layout(void)
 		log_printf("console: failed to save layout setting (error %lu)", (unsigned long)GetLastError());
 		return;
 	}
-	if (!WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file))
-		log_printf("console: settings.ini flush failed (error %lu)", (unsigned long)GetLastError());
+	WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file); // (the flush returns 0 when it works: not an error, and the old error code is stale)
 	log_printf("console: saved %s layout to settings.ini", value);
 }
 
@@ -2115,8 +2114,7 @@ static void console_save_language(void)
 		log_printf("console: failed to save UI language (error %lu)", (unsigned long)GetLastError());
 		return;
 	}
-	if (!WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file))
-		log_printf("console: settings.ini flush failed (error %lu)", (unsigned long)GetLastError());
+	WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file); // (the flush returns 0 when it works: not an error, and the old error code is stale)
 	log_printf("console: saved %s UI language to settings.ini", value);
 }
 
@@ -2127,8 +2125,7 @@ static void console_save_pause_mode(void)
 		log_printf("console: failed to save Pause mode (error %lu)", (unsigned long)GetLastError());
 		return;
 	}
-	if (!WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file))
-		log_printf("console: settings.ini flush failed (error %lu)", (unsigned long)GetLastError());
+	WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file); // (the flush returns 0 when it works: not an error, and the old error code is stale)
 	log_printf("console: saved Pause mode %s to settings.ini", value);
 }
 
