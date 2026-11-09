@@ -194,6 +194,27 @@ void game_dvar_value_text(const dvar_t *d, const dvar_value_t *v, char *buf, int
 	}
 }
 
+// Readable memory without an exception (game.h): IsBadReadPtr / IsBadStringPtr raise an access violation inside (caught there) and the crash logger (crash.c) writes its first three
+// access violations to the log as CRASH lines, so probing a bad pointer with them eats the log's room for a real crash.
+int game_mem_readable(const void *p, size_t size)
+{
+	MEMORY_BASIC_INFORMATION mbi;
+	if (!p || !VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+		return 0;
+	return (const uint8_t *)p + size <= (const uint8_t *)mbi.BaseAddress + mbi.RegionSize;
+}
+
+int game_string_readable(const char *s, size_t max)
+{
+	for (size_t n = 0; n < max; n++) {
+		if ((n == 0 || ((uintptr_t)(s + n) & 0xfff) == 0) && !game_mem_readable(s + n, 1))
+			return 0;
+		if (!s[n])
+			return 1;
+	}
+	return 1;
+}
+
 void game_for_each_dvar(int (*fn)(dvar_t *dvar, void *ctx), void *ctx)
 {
 	if (!ready || !RVA_DVAR_HASH)
@@ -201,8 +222,8 @@ void game_for_each_dvar(int (*fn)(dvar_t *dvar, void *ctx), void *ctx)
 	dvar_t **table = (dvar_t **)(base + RVA_DVAR_HASH);
 	for (int i = 0; i < 1024; i++) {
 		int guard = 0;
-		for (dvar_t *d = table[i]; d && guard < 64 && !IsBadReadPtr(d, sizeof(*d)); d = d->hash_next, guard++)
-			if (d->name && !IsBadStringPtrA(d->name, 256) && fn(d, ctx))
+		for (dvar_t *d = table[i]; d && guard < 64 && game_mem_readable(d, sizeof(*d)); d = d->hash_next, guard++)
+			if (d->name && game_string_readable(d->name, 256) && fn(d, ctx))
 				return;
 	}
 }
@@ -214,8 +235,8 @@ void game_for_each_command(int (*fn)(const char *name, void *ctx), void *ctx)
 	int guard = 0;
 	// (the list is the game's own and changes under us: a node can be freed while the console walks it, and its name pointer then points nowhere; Vlad's log 2026-11-09:
 	// a read fault in _stricmp of the console's completion catalog while the second player was bleeding out)
-	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c && guard < 4000 && !IsBadReadPtr(c, sizeof(*c)); c = c->next, guard++)
-		if (c->name && !IsBadStringPtrA(c->name, 256) && fn(c->name, ctx))
+	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c && guard < 4000 && game_mem_readable(c, sizeof(*c)); c = c->next, guard++)
+		if (c->name && game_string_readable(c->name, 256) && fn(c->name, ctx))
 			return;
 }
 

@@ -837,15 +837,15 @@ static uint8_t *selection_patched; // the menu object whose onOpen was extended
 static int specops_replace_set(MenuEventHandlerSet *set, int depth)
 {
 	static const char from[] = "\"main_selection\"", to[] = "\"main_text\"";
-	if (!set || IsBadReadPtr(set, sizeof(*set)) || depth > 4 || set->count < 1 || set->count > 24 || IsBadReadPtr(set->handlers, set->count * sizeof(void *)))
+	if (!set || !game_mem_readable(set, sizeof(*set)) || depth > 4 || set->count < 1 || set->count > 24 || !game_mem_readable(set->handlers, set->count * sizeof(void *)))
 		return 0;
 	int done = 0;
 	for (int i = 0; i < set->count; i++) {
 		MenuEventHandler *h = set->handlers[i];
-		if (!h || IsBadReadPtr(h, sizeof(*h)))
+		if (!h || !game_mem_readable(h, sizeof(*h)))
 			continue;
 		if (h->type == 0) {
-			if (!h->data || IsBadStringPtrA((const char *)h->data, 8) || !strstr((const char *)h->data, from))
+			if (!h->data || !game_string_readable((const char *)h->data, 8) || !strstr((const char *)h->data, from))
 				continue;
 			const char *src = h->data;
 			char *out = HeapAlloc(GetProcessHeap(), 0, strlen(src) + 1);
@@ -862,7 +862,7 @@ static int specops_replace_set(MenuEventHandlerSet *set, int depth)
 			h->data = out;
 			done++;
 #ifdef _WIN64
-		} else if (h->type == 1 && h->data && !IsBadReadPtr(h->data, 16)) { // if (expression, set): a readable set at either place is followed
+		} else if (h->type == 1 && h->data && game_mem_readable(h->data, 16)) { // if (expression, set): a readable set at either place is followed
 			done += specops_replace_set(*(MenuEventHandlerSet **)h->data, depth + 1);
 			done += specops_replace_set(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1);
 		} else if (h->type == 2 && h->data) {
