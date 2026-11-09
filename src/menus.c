@@ -615,7 +615,9 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		*(void **)(hit + ITEM_TEXT_EXP) = NULL;
 		*(MenuEventHandlerSet **)(hit + ITEM_ACTION) = ui_script_set(def->action);
 		if (icons) {
-			*(void **)(hit + ITEM_BACKGROUND_PTR) = NULL; // (a button's selection bar would be drawn in the wrong place over an icon)
+			*(void **)(hit + ITEM_BACKGROUND_PTR) = NULL; // (a button's selection bar, and the black fill its focus script sets, would be drawn in the wrong place over an icon)
+			*(void **)(hit + ITEM_ON_FOCUS) = NULL;
+			*(void **)(hit + ITEM_LEAVE_FOCUS) = NULL;
 			set_rect(hit, -128 + 64 * b++, icons_y, 64, 64, 2, 1);
 		}
 		else {
