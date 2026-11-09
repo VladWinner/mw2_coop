@@ -602,7 +602,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		list[n++] = line;
 	}
 	// the icons: one picture of four, 64 x 64 units each, with a button over each
-	float icons_y = y + 14;
+	float icons_y = y + 34;
 	if (ABOUT_ICONS && logo_item && card_material && icons_install(card_material)) {
 		uint8_t *strip = ui_clone_item(logo_item, page);
 		*(const char **)strip = "mw2coop_about_icons";

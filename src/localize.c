@@ -140,10 +140,13 @@ static const ModString strings[] = {
 	{"MW2COOP_SETTINGS", "\xcd\xc0\xd1\xd2\xd0\xce\xc9\xca\xc8", "SETTINGS"},
 	// О МОДЕ: the About page of the main menu and its four links (opened by mw2coop_open_url, menus.c)
 	{"MW2COOP_ABOUT", "\xce\x20\xcc\xce\xc4\xc5", "ABOUT THE MOD"},
-	// the About page: who made the mod (a contributor's nickname as on GitHub; stxlvn with the name of the mod)
+	// the About page: who made the mod (nicknames as on GitHub; the mod's name in brackets for the authors of the work this one stands on)
 	{"MW2COOP_CREDIT_0", "\xd1\xce\xc7\xc4\xc0\xd2\xc5\xcb\xc8\x20\xcc\xce\xc4\xc0", "CREDITS"},
 	{"MW2COOP_CREDIT_1", "stxlvn (Modern Warfare 2 Enhanced)", "stxlvn (Modern Warfare 2 Enhanced)"},
 	{"MW2COOP_CREDIT_2", "VladWinner", "VladWinner"},
+	{"MW2COOP_CREDIT_3", "alicealys (h2-mod)", "alicealys (h2-mod)"},
+	{"MW2COOP_CREDIT_4", "momo5502 (COD-MOD)", "momo5502 (COD-MOD)"},
+	{"MW2COOP_CREDIT_5", "AlterWare (iw4x-sp)", "AlterWare (iw4x-sp)"},
 	// Альфа / Браво: the split screen lobby's player cards (call signs, owner 2026-10-28)
 	{"MW2COOP_CALLSIGN_A", "\xc0\xeb\xfc\xf4\xe0", "Alpha"},
 	{"MW2COOP_CALLSIGN_B", "\xc1\xf0\xe0\xe2\xee", "Bravo"},

@@ -164,6 +164,18 @@ REFERENCE           MW2COOP_CREDIT_2
 LANG_ENGLISH        "VladWinner"
 LANG_RUSSIAN        "VladWinner"
 
+REFERENCE           MW2COOP_CREDIT_3
+LANG_ENGLISH        "alicealys (h2-mod)"
+LANG_RUSSIAN        "alicealys (h2-mod)"
+
+REFERENCE           MW2COOP_CREDIT_4
+LANG_ENGLISH        "momo5502 (COD-MOD)"
+LANG_RUSSIAN        "momo5502 (COD-MOD)"
+
+REFERENCE           MW2COOP_CREDIT_5
+LANG_ENGLISH        "AlterWare (iw4x-sp)"
+LANG_RUSSIAN        "AlterWare (iw4x-sp)"
+
 REFERENCE           MW2COOP_CALLSIGN_A
 LANG_ENGLISH        "Alpha"
 LANG_RUSSIAN        "Альфа"
