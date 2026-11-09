@@ -19,6 +19,7 @@
 //   MenuEventHandlerSet {int count; MenuEventHandler **handlers}
 //   MenuEventHandler {void *data; char type}  type 0: data is a menu script string
 #include <windows.h>
+#include <shellapi.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +38,7 @@
 #include "log.h"
 #include "missions.h"
 #include "menutable.h"
+#include "logo.h"
 #include "settings.h"
 #include "upnp.h"
 #include "menus.h"
@@ -462,6 +464,179 @@ static int main_button_count(void)
 	return n;
 }
 
+// The look of the main menu: the game's logo, with the mod's name in it (logo.c), sits at the top of the left panel
+// with its right edge on the right edge of the list; the dark panel behind the list and the line in it end in a hard edge on the right, so they are drawn mirrored (a negative
+// width draws the picture mirrored over the same place) with the fade-in material of the line, which fades out there. The other pages are the game's own.
+// The title line ("For the record") is emptied: the name is in the logo.
+static void *fade_material;  // the Material * of "gradient_fadein"
+
+static const char *item_material_name(const uint8_t *it)
+{
+	const char **mat = *(const char ***)(it + ITEM_BACKGROUND_PTR);
+	return mat && !IsBadReadPtr(mat, sizeof(*mat)) && *mat && !IsBadStringPtrA(*mat, 16) ? *mat : "";
+}
+
+static void place_logo(uint8_t *it)
+{
+	float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4); // rect and rectClient: x, y, width, height
+	rect[0] = client[0] = -44, rect[1] = client[1] = 4, rect[2] = client[2] = 216, rect[3] = client[3] = 54; // its right edge on the right edge of the buttons' text
+	it[ITEM_RECT_ALIGN_H] = 1, it[ITEM_RECT_ALIGN_V] = 1;
+}
+
+static void style_items(uint8_t **items, int count)
+{
+	for (int i = 0; i < count; i++) // the fade material first: the line of the main menu has it
+		if (!fade_material && !strcmp(item_material_name(items[i]), "gradient_fadein"))
+			fade_material = *(void **)(items[i] + ITEM_BACKGROUND_PTR);
+	for (int i = 0; i < count; i++) {
+		uint8_t *it = items[i];
+		const char *text = *(const char **)(it + ITEM_TEXT), *mat_name = item_material_name(it);
+		float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4);
+		if (!strcmp(mat_name, "logo_cod2")) {
+			logo_install(*(void **)(it + ITEM_BACKGROUND_PTR), getenv("MW2COOP_LOGODUMP") != NULL);
+			place_logo(it);
+		} else if (!strcmp(mat_name, "gradient_fadein_fadebottom") || !strcmp(mat_name, "gradient_fadein")) {
+			if (fade_material && strcmp(mat_name, "gradient_fadein"))
+				*(void **)(it + ITEM_BACKGROUND_PTR) = fade_material;
+			if (rect[2] > 0)
+				rect[2] = client[2] = -rect[2];
+		} else if (text && !strcmp(text, "@MENU_SP_FOR_THE_RECORD")) {
+			*(const char **)(it + ITEM_TEXT) = ""; // the mod's name is in the logo
+			*(void **)(it + ITEM_TEXT_EXP) = NULL;
+			rect[1] = client[1] = -6;
+		}
+	}
+}
+
+// The About page (menus.menu, menuDef "mw2coop_about"): a page of its own, made from a copy of the game's main menu. From the top: the logo centered in the header, the credits
+// (the itemDefs without an action: lines of text, centered), the four source links as icons (a strip of four pictures, mw2coop\about-icons.tga, in the place of the picture of one
+// of the game's menu cards; the itemDefs with an action are the clickable places over the icons) and Back at the bottom. Over the whole page lies the dark panel of the main menu.
+#ifdef _WIN64
+#define ITEM_FONT 0xd0 // int fontEnum, then textAlignMode (int), textalignx and textaligny (float), textscale (float)
+#else
+#define ITEM_FONT 0xc4
+#endif
+#define ITEM_TEXT_ALIGN (ITEM_FONT + 4)
+#define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
+#define ITEM_TEXT_SCALE (ITEM_FONT + 16)
+#define ALIGN_MIDDLE_CENTER 5
+
+static void set_rect(uint8_t *it, float x, float y, float w, float h, int align_h, int align_v)
+{
+	float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4);
+	rect[0] = client[0] = x, rect[1] = client[1] = y, rect[2] = client[2] = w, rect[3] = client[3] = h;
+	it[ITEM_RECT_ALIGN_H] = (uint8_t)align_h, it[ITEM_RECT_ALIGN_V] = (uint8_t)align_v;
+}
+
+static int name_in(const char *name, const char *const *list);
+static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
+{
+	static const char *const gone[] = {"resume", "newgame", "newgame_warning", "levelselect", "options", "stats", "credits", "game_selection", "button_quit", NULL};
+	if (ui_find_menu("mw2coop_about"))
+		return;
+	uint8_t *page = ui_clone_menu(main_menu, "mw2coop_about");
+	uint8_t **pi = *(uint8_t ***)(page + MENU_ITEMS);
+	// the picture the icons go in: the material of one of the cards of the game's selection menu (nothing else shows it any more)
+	void *card_material = NULL;
+	uint8_t *selection = ui_find_menu("main_selection");
+	if (selection) {
+		uint8_t **si = *(uint8_t ***)(selection + MENU_ITEMS);
+		for (int i = 0; i < *(int *)(selection + MENU_ITEM_COUNT); i++)
+			if (!strcmp(item_material_name(si[i]), "mw2_main_sp_image"))
+				card_material = *(void **)(si[i] + ITEM_BACKGROUND_PTR);
+	}
+	int lines = 0, links = 0;
+	for (int i = 0;; i++) {
+		const MenuItem *def = menutable_item("mw2coop_about", i);
+		if (!def)
+			break;
+		if (def->action[0])
+			links++;
+		else
+			lines++;
+	}
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + lines + links + 4) * sizeof(*list));
+	int n = 0;
+	uint8_t *title_item = NULL, *logo_item = NULL;
+	for (int i = 0; i < count; i++) {
+		const char *name = *(const char **)pi[i], *text = *(const char **)(pi[i] + ITEM_TEXT), *mat = item_material_name(pi[i]);
+		if (name_in(name, gone) || !strcmp(mat, "gradient_fadein"))
+			continue;
+		if (!strcmp(mat, "gradient_fadein_fadebottom")) // the dark panel over the whole page
+			set_rect(pi[i], -427, -240, 854, 480, 2, 2);
+		if (!strcmp(mat, "logo_cod2")) {
+			logo_item = pi[i];
+			set_rect(pi[i], -144, 6, 288, 72, 2, 1);
+		}
+		if (text && !strcmp(text, "@MENU_SP_FOR_THE_RECORD")) {
+			title_item = pi[i];
+			*(const char **)(pi[i] + ITEM_TEXT) = ""; // (it is the template of the credits lines)
+			*(void **)(pi[i] + ITEM_TEXT_EXP) = NULL;
+		}
+		list[n++] = pi[i];
+	}
+	// the credits: lines of text, centered, one under the other
+	float y = 92;
+	int k = 0;
+	for (int i = 0;; i++) {
+		const MenuItem *def = menutable_item("mw2coop_about", i);
+		if (!def)
+			break;
+		if (def->action[0] || !title_item)
+			continue;
+		uint8_t *line = ui_clone_item(title_item, page);
+		*(const char **)line = def->name;
+		*(const char **)(line + ITEM_TEXT) = def->text;
+		*(void **)(line + ITEM_TEXT_EXP) = NULL;
+		set_rect(line, -300, y, 600, 16, 2, 1);
+		*(int *)(line + ITEM_FONT) = k == 0 ? 9 : 3; // the heading in the title font, the lines in the body font of the buttons
+		*(int *)(line + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
+		*(float *)(line + ITEM_TEXT_ALIGN_X) = 0;
+		*(float *)(line + ITEM_TEXT_SCALE) = k == 0 ? 0.45f : 0.3f;
+		y += k == 0 ? 24 : 17;
+		k++;
+		list[n++] = line;
+	}
+	// the icons: one picture of four, 64 x 64 units each, with a button over each
+	float icons_y = y + 14;
+	if (logo_item && card_material && icons_install(card_material)) {
+		uint8_t *strip = ui_clone_item(logo_item, page);
+		*(const char **)strip = "mw2coop_about_icons";
+		*(void **)(strip + ITEM_BACKGROUND_PTR) = card_material;
+		set_rect(strip, -128, icons_y, 256, 64, 2, 1);
+		list[n++] = strip;
+	}
+	int b = 0;
+	for (int i = 0;; i++) {
+		const MenuItem *def = menutable_item("mw2coop_about", i);
+		if (!def)
+			break;
+		if (!def->action[0])
+			continue;
+		uint8_t *hit = ui_clone_item(button, page);
+		*(const char **)hit = def->name;
+		*(const char **)(hit + ITEM_TEXT) = "";
+		*(void **)(hit + ITEM_TEXT_EXP) = NULL;
+		*(MenuEventHandlerSet **)(hit + ITEM_ACTION) = ui_script_set(def->action);
+		set_rect(hit, -128 + 64 * b++, icons_y, 64, 64, 2, 1);
+		list[n++] = hit;
+	}
+	// Back at the bottom
+	uint8_t *back = ui_clone_item(button, page);
+	*(const char **)back = "mw2coop_about_back";
+	*(const char **)(back + ITEM_TEXT) = "@PLATFORM_BACK_CAPS";
+	*(void **)(back + ITEM_TEXT_EXP) = NULL;
+	*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+	set_rect(back, -100, 420, 200, 20, 2, 1);
+	*(int *)(back + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
+	*(float *)(back + ITEM_TEXT_ALIGN_X) = 0;
+	list[n++] = back;
+	*(uint8_t ***)(page + MENU_ITEMS) = list;
+	*(int *)(page + MENU_ITEM_COUNT) = n;
+	if (ui_register_menu(page))
+		log_printf("menus: About page added (%d items, icons %s)", n, card_material ? "on" : "no picture");
+}
+
 static int name_in(const char *name, const char *const *list)
 {
 	for (; *list; list++)
@@ -501,13 +676,35 @@ static void patch_main_menu(void)
 		uint8_t **cl = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(*cl));
 		int n = 0;
 		uint8_t *level = NULL;
+		int extra = 0; // the mod's buttons of the page (menus.menu, menuDef "mw2coop_campaign"): Co-op and Split screen, under Mission Select
+		while (menutable_item("mw2coop_campaign", extra))
+			extra++;
+		cl = HeapAlloc(GetProcessHeap(), 0, (count + extra + 1) * sizeof(*cl));
+		float level_y = 0;
 		for (int i = 0; i < count; i++) {
 			const char *name = *(const char **)ci[i];
-			if (name_in(name, campaign_gone))
+			if (name_in(name, campaign_gone) || !strcmp(item_material_name(ci[i]), "logo_cod2")) // (the logo is the main menu's only)
 				continue;
-			if (name && !strcmp(name, "levelselect"))
-				level = ci[i];
+			if (level && *(float *)(ci[i] + ITEM_RECT_Y) >= level_y + BUTTON_HEIGHT - 0.5f && *(float *)(ci[i] + ITEM_RECT_Y) < 1000) { // below Mission Select: moves down
+				*(float *)(ci[i] + ITEM_RECT_Y) += extra * BUTTON_HEIGHT;
+				*(float *)(ci[i] + ITEM_RECT_CLIENT_Y) += extra * BUTTON_HEIGHT;
+			}
 			cl[n++] = ci[i];
+			if (name && !strcmp(name, "levelselect")) {
+				level = ci[i];
+				level_y = *(float *)(level + ITEM_RECT_Y);
+				for (int b = 0; b < extra; b++) {
+					const MenuItem *def = menutable_item("mw2coop_campaign", b);
+					uint8_t *item = ui_clone_item(level, camp);
+					float y = level_y + (b + 1) * BUTTON_HEIGHT;
+					*(const char **)item = def->name;
+					*(const char **)(item + ITEM_TEXT) = def->text;
+					*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(def->action);
+					*(float *)(item + ITEM_RECT_Y) = y;
+					*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
+					cl[n++] = item;
+				}
+			}
 		}
 		if (level) {
 			uint8_t *back = ui_clone_item(level, camp);
@@ -530,40 +727,19 @@ static void patch_main_menu(void)
 			log_printf("menus: campaign page added (%d items)", n);
 	}
 
-	// the look: the logo moves to the top of the left panel with the mod's name under it, and the buttons go down to make room (menus.menu has the entries)
-	const float header_dy = 24.0f;
-	void *fade_material = NULL;
-	for (int i = 0; i < count; i++) {
-		uint8_t *it = items[i];
-		const char *text = *(const char **)(it + ITEM_TEXT);
-		const char **mat = *(const char ***)(it + ITEM_BACKGROUND_PTR);
-		const char *mat_name = mat && !IsBadReadPtr(mat, sizeof(*mat)) && *mat && !IsBadStringPtrA(*mat, 16) ? *mat : "";
-		float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4); // rect and rectClient: x, y, width, height
-		if (!strcmp(mat_name, "logo_cod2")) {
-			rect[0] = client[0] = 0, rect[1] = client[1] = 4, rect[2] = client[2] = 216, rect[3] = client[3] = 54;
-			it[ITEM_RECT_ALIGN_H] = 1, it[ITEM_RECT_ALIGN_V] = 1;
-		} else if (!strcmp(mat_name, "gradient_fadein_fadebottom") || !strcmp(mat_name, "gradient_fadein")) {
-			// the dark panel behind the list ends in a hard edge on the right, and so does the line in it. A negative width draws the picture mirrored over the same
-			// place; the horizontal fade-in of the line's material, mirrored, fades out to the right: the panel gets that material too
-			if (!fade_material)
-				for (int k = 0; k < count; k++) {
-					const char **m = *(const char ***)(items[k] + ITEM_BACKGROUND_PTR);
-					if (m && !IsBadReadPtr(m, sizeof(*m)) && *m && !IsBadStringPtrA(*m, 16) && !strcmp(*m, "gradient_fadein"))
-						fade_material = *(void **)(items[k] + ITEM_BACKGROUND_PTR);
-				}
-			if (fade_material && strcmp(mat_name, "gradient_fadein"))
-				*(void **)(it + ITEM_BACKGROUND_PTR) = fade_material;
-			if (rect[2] > 0)
-				rect[2] = client[2] = -rect[2];
-		} else if (text && !strcmp(text, "@MENU_SP_FOR_THE_RECORD")) {
-			*(const char **)(it + ITEM_TEXT) = "@MW2COOP_SUBTITLE";
-			*(void **)(it + ITEM_TEXT_EXP) = NULL;
-			rect[1] = client[1] = -6;
-		}
-	}
+	add_about_page(menu, count, src);
+
+	// the look (style_items): the logo at the top of the left panel, the panel and its line fading out to the right; the buttons go down to make room
+	const float header_dy = 10.0f;
+	style_items(items, count);
 	// the top level: the game's four buttons are replaced by the table's
-	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + nbuttons) * sizeof(*list));
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + nbuttons + 1) * sizeof(*list));
 	int n = 0, inserted = 0;
+	const MenuItem *about = menutable_item("main_text_about", 0); // the About button goes under the last Credits item
+	int last_credits = -1;
+	for (int i = 0; i < count; i++)
+		if (!strcmp(*(const char **)items[i] ? *(const char **)items[i] : "", "credits"))
+			last_credits = i;
 	for (int i = 0; i < count; i++) {
 		const char *name = *(const char **)items[i];
 		if (name_in(name, top_gone_more))
@@ -592,7 +768,7 @@ static void patch_main_menu(void)
 			*(const char **)(items[i] + ITEM_TEXT) = "@MW2COOP_SETTINGS";
 		// Stats and the Main menu button are gone: Credits moves up one row, Quit two
 		if (name && (!strcmp(name, "credits") || !strcmp(name, "button_quit"))) {
-			float up = BUTTON_HEIGHT * (!strcmp(name, "credits") ? 1 : 2);
+			float up = BUTTON_HEIGHT * (!strcmp(name, "credits") ? 1 : about ? 1 : 2);
 			*(float *)(items[i] + ITEM_RECT_Y) -= up;
 			*(float *)(items[i] + ITEM_RECT_CLIENT_Y) -= up;
 		}
@@ -601,6 +777,18 @@ static void patch_main_menu(void)
 			*(float *)(items[i] + ITEM_RECT_CLIENT_Y) += header_dy;
 		}
 		list[n++] = items[i];
+		if (about && i == last_credits) {
+			uint8_t *item = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
+			memcpy(item, src, ITEM_SIZE);
+			float y = *(float *)(items[i] + ITEM_RECT_Y) + BUTTON_HEIGHT;
+			*(const char **)item = about->name;
+			*(const char **)(item + ITEM_TEXT) = about->text;
+			*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(about->action);
+			*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
+			*(float *)(item + ITEM_RECT_Y) = y;
+			*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
+			list[n++] = item;
+		}
 	}
 	// the old items stay valid, so the UI may read the new array before the new count
 	main_items = list;
@@ -614,6 +802,7 @@ static void patch_main_menu(void)
 static uint8_t *selection_patched; // the menu object whose onOpen was extended
 static void patch_selection_menu(void)
 {
+
 	uint8_t *sel = ui_find_menu("main_selection");
 	if (!sel || sel == selection_patched || !ui_find_menu("main_text"))
 		return;
@@ -902,6 +1091,21 @@ static void show_row(uint8_t *menu, const char *row, int visible)
 		*flags |= WINDOW_VISIBLE;
 	else
 		*flags &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
+}
+
+// mw2coop_open_url <1-4>: opens one of the About page's pages in the browser (1 GitHub, 2 Nexus Mods, 3 PlayGround, 4 Discord). The pages are fixed here (what a menus.menu can ask for is a number, never an address).
+static void open_url_f(void)
+{
+	static const char *const urls[] = {"https://github.com/stxlvn/mw2_enhanced", "https://www.nexusmods.com/codmw2/mods/99",
+					   "https://www.playground.ru/call_of_duty_modern_warfare_2/file/call_of_duty_modern_warfare_2_mw2_coop_kooperativnaya_kampaniya_0_5_0_beta-1883975",
+					   "https://discord.gg/q882kMMEY"};
+	int k = game_cmd_argc() > 1 ? atoi(game_cmd_argv(1)) : 0;
+	if (k < 1 || k > 4) {
+		log_printf("menus: mw2coop_open_url %d: no such page", k);
+		return;
+	}
+	log_printf("menus: opening %s", urls[k - 1]);
+	ShellExecuteA(NULL, "open", urls[k - 1], NULL, NULL, SW_SHOWNORMAL);
 }
 
 static void add_multiplayer_menu(void)
@@ -2398,6 +2602,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_menu", NULL, NULL, split_menu_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_open_url", NULL, NULL, open_url_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},

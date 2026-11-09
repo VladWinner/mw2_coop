@@ -148,9 +148,41 @@ REFERENCE           MW2COOP_SETTINGS
 LANG_ENGLISH        "SETTINGS"
 LANG_RUSSIAN        "НАСТРОЙКИ"
 
-REFERENCE           MW2COOP_SUBTITLE
-LANG_ENGLISH        "ENHANCED"
-LANG_RUSSIAN        "ENHANCED"
+REFERENCE           MW2COOP_ABOUT
+LANG_ENGLISH        "ABOUT THE MOD"
+LANG_RUSSIAN        "О МОДЕ"
+
+REFERENCE           MW2COOP_CREDIT_0
+LANG_ENGLISH        "CREDITS"
+LANG_RUSSIAN        "СОЗДАТЕЛИ МОДА"
+
+REFERENCE           MW2COOP_CREDIT_1
+LANG_ENGLISH        "stxlvn: the mod"
+LANG_RUSSIAN        "stxlvn: автор мода"
+
+REFERENCE           MW2COOP_CREDIT_2
+LANG_ENGLISH        "VladWinner: Russian fonts, the developer console, fixes and performance"
+LANG_RUSSIAN        "VladWinner: русские шрифты, консоль разработчика, исправления и скорость"
+
+REFERENCE           MW2COOP_CREDIT_3
+LANG_ENGLISH        "alicealys and the h2-mod contributors: the model for this mod"
+LANG_RUSSIAN        "alicealys и участники h2-mod: образец для этого мода"
+
+REFERENCE           MW2COOP_CREDIT_4
+LANG_ENGLISH        "COD-MOD (momo5502, FreeTheTech101 and contributors): the first MW2 campaign co-op"
+LANG_RUSSIAN        "COD-MOD (momo5502, FreeTheTech101 и участники): первая кооп-кампания MW2"
+
+REFERENCE           MW2COOP_CREDIT_5
+LANG_ENGLISH        "H*-Mod fonts (Vlad Loktionov)"
+LANG_RUSSIAN        "Шрифты H*-Mod (Влад Локтионов)"
+
+REFERENCE           MW2COOP_CREDIT_6
+LANG_ENGLISH        "iw4x-sp (AlterWare): reference"
+LANG_RUSSIAN        "iw4x-sp (AlterWare): справочный материал"
+
+REFERENCE           MW2COOP_CREDIT_7
+LANG_ENGLISH        "Infinity Ward: the game and its Spec Ops co-op"
+LANG_RUSSIAN        "Infinity Ward: игра и её кооператив Spec Ops"
 
 REFERENCE           MW2COOP_CALLSIGN_A
 LANG_ENGLISH        "Alpha"

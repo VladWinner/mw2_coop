@@ -31,6 +31,8 @@ mkdir -p "$OUT/mw2coop/localizedstrings"
 cp content/release/localizedstrings/*.str "$OUT/mw2coop/localizedstrings/"
 cp content/release/missions.csv "$OUT/mw2coop/"
 cp content/release/menus.menu "$OUT/mw2coop/"
+cp content/release/logo-enhanced.tga "$OUT/mw2coop/"
+cp content/release/about-icons.tga "$OUT/mw2coop/"
 case "$2" in x86|iw4x) cp content/release/addresses-x86.txt "$OUT/mw2coop/" ;; *) cp content/release/addresses-x64.txt "$OUT/mw2coop/" ;; esac
 sed "s/{VERSION}/$VERSION/" $INSTALL | sed 's/$/\r/' > "$OUT/INSTALL.txt"
 sed 's/$/\r/' LICENSE > "$OUT/LICENSE.txt"

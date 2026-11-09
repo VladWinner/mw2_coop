@@ -37,6 +37,8 @@ for t in "$@"; do
 	cp content/release/localizedstrings/*.str "$t/mw2coop/localizedstrings/"
 	cp content/release/missions.csv "$t/mw2coop/"
 	cp content/release/menus.menu "$t/mw2coop/"
+	cp content/release/logo-enhanced.tga "$t/mw2coop/"
+	cp content/release/about-icons.tga "$t/mw2coop/"
 	case "$BITS" in 32) AF=addresses-x86.txt ;; *) AF=addresses-x64.txt ;; esac
 	[ "$MW2COOP_IW4X" = 1 ] && AF=addresses-x86.txt
 	cp "content/release/$AF" "$t/mw2coop/"

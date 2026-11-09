@@ -26,7 +26,7 @@ def check(text):
         name = re.search(r'name\s+"([^"]+)"', block).group(1)
         items = len(re.findall(r"\bitemDef\b", block))
         want = 2 if re.search(r"\bquestion\b", block) else 4  # a yes/no popup has Yes and No
-        if name != "main_text" and items != want:
+        if name not in ("main_text", "main_text_about", "mw2coop_campaign", "mw2coop_about") and items != want:  # those two are lists of buttons
             raise SystemExit("menus.menu: popup %s has %d items, expected %d" % (name, items, want))
 
 
