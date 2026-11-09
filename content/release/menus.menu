@@ -95,18 +95,22 @@ menuDef {
 	}
 	itemDef {
 		name "mw2coop_link_github"
+		text "GITHUB"
 		action { play "mouse_click"; exec "mw2coop_open_url 1"; }
 	}
 	itemDef {
 		name "mw2coop_link_nexus"
+		text "NEXUS MODS"
 		action { play "mouse_click"; exec "mw2coop_open_url 2"; }
 	}
 	itemDef {
 		name "mw2coop_link_playground"
+		text "PLAYGROUND"
 		action { play "mouse_click"; exec "mw2coop_open_url 3"; }
 	}
 	itemDef {
 		name "mw2coop_link_discord"
+		text "DISCORD"
 		action { play "mouse_click"; exec "mw2coop_open_url 4"; }
 	}
 }

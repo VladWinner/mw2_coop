@@ -510,7 +510,8 @@ static void style_items(uint8_t **items, int count)
 
 // The About page (menus.menu, menuDef "mw2coop_about"): a page of its own, made from a copy of the game's main menu. From the top: the logo centered in the header, the credits
 // (the itemDefs without an action: lines of text, centered), the four source links as icons (a strip of four pictures, mw2coop\about-icons.tga, in the place of the picture of one
-// of the game's menu cards; the itemDefs with an action are the clickable places over the icons) and Back at the bottom. Over the whole page lies the dark panel of the main menu.
+// of the game's menu cards; the itemDefs with an action are the clickable places over the icons) and Back at the bottom. ABOUT_ICONS is 0: the card pictures are the
+// main menu's hero art (they are drawn there too), so the icons cannot go in them; the links are text buttons in a row until another picture is found. Over the whole page lies the dark panel of the main menu.
 #ifdef _WIN64
 #define ITEM_FONT 0xd0 // int fontEnum, then textAlignMode (int), textalignx and textaligny (float), textscale (float)
 #else
@@ -520,11 +521,14 @@ static void style_items(uint8_t **items, int count)
 #define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
 #define ITEM_TEXT_SCALE (ITEM_FONT + 16)
 #define ALIGN_MIDDLE_CENTER 5
+#define ABOUT_ICONS 0
 
 static void set_rect(uint8_t *it, float x, float y, float w, float h, int align_h, int align_v)
 {
 	float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4);
-	rect[0] = client[0] = x, rect[1] = client[1] = y, rect[2] = client[2] = w, rect[3] = client[3] = h;
+	rect[0] = x, rect[1] = y, rect[2] = client[2] = w, rect[3] = client[3] = h;
+	client[0] = x + (align_h == 2 ? 320.0f : 0.0f); // (the engine puts a centered item's client rectangle at the center of the 640 x 480 screen)
+	client[1] = y + (align_v == 2 ? 240.0f : 0.0f);
 	it[ITEM_RECT_ALIGN_H] = (uint8_t)align_h, it[ITEM_RECT_ALIGN_V] = (uint8_t)align_v;
 }
 
@@ -599,7 +603,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 	}
 	// the icons: one picture of four, 64 x 64 units each, with a button over each
 	float icons_y = y + 14;
-	if (logo_item && card_material && icons_install(card_material)) {
+	if (ABOUT_ICONS && logo_item && card_material && icons_install(card_material)) {
 		uint8_t *strip = ui_clone_item(logo_item, page);
 		*(const char **)strip = "mw2coop_about_icons";
 		*(void **)(strip + ITEM_BACKGROUND_PTR) = card_material;
@@ -615,10 +619,16 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 			continue;
 		uint8_t *hit = ui_clone_item(button, page);
 		*(const char **)hit = def->name;
-		*(const char **)(hit + ITEM_TEXT) = "";
+		*(const char **)(hit + ITEM_TEXT) = ABOUT_ICONS ? "" : def->text;
 		*(void **)(hit + ITEM_TEXT_EXP) = NULL;
 		*(MenuEventHandlerSet **)(hit + ITEM_ACTION) = ui_script_set(def->action);
-		set_rect(hit, -128 + 64 * b++, icons_y, 64, 64, 2, 1);
+		if (ABOUT_ICONS)
+			set_rect(hit, -128 + 64 * b++, icons_y, 64, 64, 2, 1);
+		else {
+			set_rect(hit, -240 + 120 * b++, icons_y, 120, 20, 2, 1);
+			*(int *)(hit + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
+			*(float *)(hit + ITEM_TEXT_ALIGN_X) = 0;
+		}
 		list[n++] = hit;
 	}
 	// Back at the bottom
