@@ -36,6 +36,7 @@
 #include "gfxopts.h"
 #include "log.h"
 #include "missions.h"
+#include "menutable.h"
 #include "settings.h"
 #include "upnp.h"
 #include "menus.h"
@@ -452,25 +453,14 @@ int ui_register_menu(uint8_t *menu)
 
 static uint8_t **main_items; // our items array for main_text, NULL until patched
 
-static const char online_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_host_menu\" ; ";
-
-// the split screen button: the same host popup, and the lobby it opens brings the second player (this PC's second process, instance.c)
-static const char split_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_split_menu\" ; ";
-
-static const char join_action[] =
-	"\"play\" \"mouse_click\" ; "
-	"\"exec\" \"xrequirelivesignin\" ; "
-	"\"exec\" \"mw2coop_find\" ; ";
-
-// Buttons added under Mission Select, in this order
-static const struct {
-	const char *name, *text, *action;
-} main_buttons[] = {
-	{"mw2coop_online", "@MENU_SP_TWO_PLAYER_ONLINE_CAPS", online_action},
-	{"mw2coop_find", "@MW2COOP_JOIN", join_action},
-	{"mw2coop_splitscreen", "@MW2COOP_SPLITSCREEN", split_action},
-};
-#define MAIN_BUTTONS (int)(sizeof(main_buttons) / sizeof(main_buttons[0]))
+// Buttons added under Mission Select, in the order of the itemDefs of menuDef "main_text" in menus.menu (src/menutable.c)
+static int main_button_count(void)
+{
+	int n = 0;
+	while (menutable_item("main_text", n))
+		n++;
+	return n;
+}
 
 static void patch_main_menu(void)
 {
@@ -482,7 +472,8 @@ static void patch_main_menu(void)
 		return;
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	int at = ui_item_index(menu, "levelselect");
-	if (at < 0 || ui_item_index(menu, main_buttons[0].name) >= 0) {
+	const int nbuttons = main_button_count();
+	if (at < 0 || !nbuttons || ui_item_index(menu, menutable_item("main_text", 0)->name) >= 0) {
 		log_printf("menus: main_text has no levelselect button, no co-op buttons added");
 		main_items = items;
 		return;
@@ -490,33 +481,34 @@ static void patch_main_menu(void)
 	uint8_t *src = items[at];
 	float y0 = *(float *)(src + ITEM_RECT_Y) + BUTTON_HEIGHT;
 
-	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + MAIN_BUTTONS) * sizeof(*list));
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + nbuttons) * sizeof(*list));
 	memcpy(list, items, (at + 1) * sizeof(*list));
-	for (int b = 0; b < MAIN_BUTTONS; b++) {
+	for (int b = 0; b < nbuttons; b++) {
 		uint8_t *item = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
 		memcpy(item, src, ITEM_SIZE);
 		float y = y0 + b * BUTTON_HEIGHT;
-		*(const char **)item = main_buttons[b].name;
-		*(const char **)(item + ITEM_TEXT) = main_buttons[b].text;
-		*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(main_buttons[b].action);
+		const MenuItem *def = menutable_item("main_text", b);
+		*(const char **)item = def->name;
+		*(const char **)(item + ITEM_TEXT) = def->text;
+		*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(def->action);
 		*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
 		*(float *)(item + ITEM_RECT_Y) = y;
 		*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
 		list[at + 1 + b] = item;
 	}
-	memcpy(list + at + 1 + MAIN_BUTTONS, items + at + 1, (count - at - 1) * sizeof(*list));
+	memcpy(list + at + 1 + nbuttons, items + at + 1, (count - at - 1) * sizeof(*list));
 	// everything below the new buttons moves down
-	for (int i = at + 1 + MAIN_BUTTONS; i < count + MAIN_BUTTONS; i++) {
+	for (int i = at + 1 + nbuttons; i < count + nbuttons; i++) {
 		if (*(float *)(list[i] + ITEM_RECT_Y) >= y0 - 0.5f) {
-			*(float *)(list[i] + ITEM_RECT_Y) += MAIN_BUTTONS * BUTTON_HEIGHT;
-			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += MAIN_BUTTONS * BUTTON_HEIGHT;
+			*(float *)(list[i] + ITEM_RECT_Y) += nbuttons * BUTTON_HEIGHT;
+			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += nbuttons * BUTTON_HEIGHT;
 		}
 	}
 	// the old items stay valid, so the UI may read the new array before the new count
 	main_items = list;
 	*(uint8_t ***)(menu + MENU_ITEMS) = list;
-	*(int *)(menu + MENU_ITEM_COUNT) = count + MAIN_BUTTONS;
-	log_printf("menus: main_text: co-op buttons added under Mission Select (%d items)", count + MAIN_BUTTONS);
+	*(int *)(menu + MENU_ITEM_COUNT) = count + nbuttons;
+	log_printf("menus: main_text: co-op buttons added under Mission Select (%d items)", count + nbuttons);
 }
 
 // No Russian in Mission Select (owner, 2026-11-04): the PC game's Act I list holds Trainer, Roadkill, Cliffhanger and Favela but not the airport mission. A button for it is cloned from
@@ -758,6 +750,24 @@ static uint8_t *rows_popup(const char *name, const char *title, const char *cons
 	return ui_register_menu(menu) ? menu : NULL;
 }
 
+// A popup whose heading and four rows come from menus.menu (menutable.c)
+static uint8_t *table_popup(const char *name)
+{
+	const char *names[LIST_ROWS], *texts[LIST_ROWS], *actions[LIST_ROWS];
+	for (int r = 0; r < LIST_ROWS; r++) {
+		const MenuItem *it = menutable_item(name, r);
+		if (!it) {
+			log_printf("menus: menus.menu has no item %d for the popup %s", r + 1, name);
+			return NULL;
+		}
+		names[r] = it->name;
+		texts[r] = it->text;
+		actions[r] = it->action;
+	}
+	const char *title = menutable_title(name);
+	return rows_popup(name, title ? title : "", names, texts, actions);
+}
+
 // show or hide a popup row (WINDOW_VISIBLE in dynamicFlags; a hidden row cannot have the focus)
 static void show_row(uint8_t *menu, const char *row, int visible)
 {
@@ -775,15 +785,8 @@ static void add_lobbies_menu(void)
 {
 	if (ui_find_menu("mw2coop_lobbies"))
 		return;
-	// rows 1..3: the lobbies found; row 4: enter an address
-	static const char *const names[LIST_ROWS] = {"mw2coop_lobby_1", "mw2coop_lobby_2", "mw2coop_lobby_3", "mw2coop_lobby_4"};
-	static const char *const texts[LIST_ROWS] = {"@MW2COOP_LOBBY_1", "@MW2COOP_LOBBY_2", "@MW2COOP_LOBBY_3", "@MW2COOP_BY_ADDRESS"};
-	static const char *const actions[LIST_ROWS] = {
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found 1\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found 2\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_found 3\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_join_address\" ; "};
-	if (rows_popup("mw2coop_lobbies", "@MW2COOP_LOBBIES", names, texts, actions))
+	// rows 1..3: the lobbies found; row 4: enter an address (menus.menu)
+	if (table_popup("mw2coop_lobbies"))
 		log_printf("menus: list of games on the network added");
 }
 
@@ -800,14 +803,7 @@ static void add_host_menu(void)
 {
 	if (ui_find_menu("mw2coop_host"))
 		return;
-	static const char *const names[LIST_ROWS] = {"mw2coop_continue", "mw2coop_new", "mw2coop_pick", "mw2coop_host_4"};
-	static const char *const texts[LIST_ROWS] = {"@MW2COOP_CONTINUE", "@MW2COOP_NEW_CAMPAIGN", "@MENU_MISSION_SELECT_CAPS", "@MW2COOP_PICK_SAVE"};
-	static const char *const actions[LIST_ROWS] = {
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_go\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_new\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_host_pick\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_saves_menu\" ; "};
-	uint8_t *menu = rows_popup("mw2coop_host", "@MENU_SP_TWO_PLAYER_ONLINE", names, texts, actions);
+	uint8_t *menu = table_popup("mw2coop_host");
 	if (menu) {
 		show_row(menu, "mw2coop_host_4", 0);
 		log_printf("menus: host popup added");
@@ -889,14 +885,7 @@ static void add_saves_menu(void)
 {
 	if (ui_find_menu("mw2coop_saves"))
 		return;
-	static const char *const names[LIST_ROWS] = {"mw2coop_save_1", "mw2coop_save_2", "mw2coop_save_3", "mw2coop_save_4"};
-	static const char *const texts[LIST_ROWS] = {"@MW2COOP_SAVE_1", "@MW2COOP_SAVE_2", "@MW2COOP_SAVE_3", "@MW2COOP_SAVE_4"};
-	static const char *const actions[LIST_ROWS] = {
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_save_pick 1\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_save_pick 2\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_save_pick 3\" ; ",
-		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_save_pick 4\" ; "};
-	if (rows_popup("mw2coop_saves", "@MW2COOP_SAVES", names, texts, actions))
+	if (table_popup("mw2coop_saves"))
 		log_printf("menus: saves popup added");
 }
 

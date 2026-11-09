@@ -1,0 +1,106 @@
+// mw2coop menus, in the .menu syntax of Call of Duty (the subset the mod reads: menuDef, itemDef, name, text, title, action).
+// The mod does not load .menu files into the game; it reads this file to build what it adds to the game's own menus.
+// Edit a text or an action and restart the game; an item you delete keeps the mod's built-in values (the built-in copy of this file is compiled in).
+//
+//   menuDef name "main_text"   the game's main menu: its itemDefs are buttons added under Mission Select, in this order
+//   menuDef name "<other>"     a popup the mod adds; title "..." is its heading, and it has exactly four itemDefs (its rows), in this order
+//   itemDef name               the button's or row's name; the code finds some of them by name, so do not rename them (mw2coop_host_4 is shown or hidden by the code)
+//   itemDef text               what is written on it; "@NAME" is a text of the game or of mw2coop\localizedstrings\mw2coop.str (shown in the game's language)
+//   itemDef action { ... }     what a click does: the menu script of the game. Some commands: play "mouse_click"; close self; open <menu>; exec "<console command>";
+
+menuDef {
+	name "main_text"
+	itemDef {
+		name "mw2coop_online"
+		text "@MENU_SP_TWO_PLAYER_ONLINE_CAPS"
+		action { play "mouse_click"; exec "mw2coop_host_menu"; }
+	}
+	itemDef {
+		name "mw2coop_find"
+		text "@MW2COOP_JOIN"
+		action { play "mouse_click"; exec "xrequirelivesignin"; exec "mw2coop_find"; }
+	}
+	itemDef {
+		name "mw2coop_splitscreen"
+		text "@MW2COOP_SPLITSCREEN"
+		action { play "mouse_click"; exec "mw2coop_split_menu"; }
+	}
+}
+
+// the games found on the network (Join)
+menuDef {
+	name "mw2coop_lobbies"
+	title "@MW2COOP_LOBBIES"
+	itemDef {
+		name "mw2coop_lobby_1"
+		text "@MW2COOP_LOBBY_1"
+		action { play "mouse_click"; close self; exec "mw2coop_join_found 1"; }
+	}
+	itemDef {
+		name "mw2coop_lobby_2"
+		text "@MW2COOP_LOBBY_2"
+		action { play "mouse_click"; close self; exec "mw2coop_join_found 2"; }
+	}
+	itemDef {
+		name "mw2coop_lobby_3"
+		text "@MW2COOP_LOBBY_3"
+		action { play "mouse_click"; close self; exec "mw2coop_join_found 3"; }
+	}
+	itemDef {
+		name "mw2coop_lobby_4"
+		text "@MW2COOP_BY_ADDRESS"
+		action { play "mouse_click"; close self; exec "mw2coop_join_address"; }
+	}
+}
+
+// the host's popup: continue, new campaign, a mission, a save
+menuDef {
+	name "mw2coop_host"
+	title "@MENU_SP_TWO_PLAYER_ONLINE"
+	itemDef {
+		name "mw2coop_continue"
+		text "@MW2COOP_CONTINUE"
+		action { play "mouse_click"; close self; exec "mw2coop_host_go"; }
+	}
+	itemDef {
+		name "mw2coop_new"
+		text "@MW2COOP_NEW_CAMPAIGN"
+		action { play "mouse_click"; close self; exec "mw2coop_host_new"; }
+	}
+	itemDef {
+		name "mw2coop_pick"
+		text "@MENU_MISSION_SELECT_CAPS"
+		action { play "mouse_click"; close self; exec "mw2coop_host_pick"; }
+	}
+	itemDef {
+		name "mw2coop_host_4"
+		text "@MW2COOP_PICK_SAVE"
+		action { play "mouse_click"; close self; exec "mw2coop_saves_menu"; }
+	}
+}
+
+// the host's saves (the newest four; their texts are made by the mod)
+menuDef {
+	name "mw2coop_saves"
+	title "@MW2COOP_SAVES"
+	itemDef {
+		name "mw2coop_save_1"
+		text "@MW2COOP_SAVE_1"
+		action { play "mouse_click"; close self; exec "mw2coop_save_pick 1"; }
+	}
+	itemDef {
+		name "mw2coop_save_2"
+		text "@MW2COOP_SAVE_2"
+		action { play "mouse_click"; close self; exec "mw2coop_save_pick 2"; }
+	}
+	itemDef {
+		name "mw2coop_save_3"
+		text "@MW2COOP_SAVE_3"
+		action { play "mouse_click"; close self; exec "mw2coop_save_pick 3"; }
+	}
+	itemDef {
+		name "mw2coop_save_4"
+		text "@MW2COOP_SAVE_4"
+		action { play "mouse_click"; close self; exec "mw2coop_save_pick 4"; }
+	}
+}
