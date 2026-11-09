@@ -1,10 +1,9 @@
 #!/bin/sh
 # Build the release archive: an optimized, stripped winmm.dll, the mod's scripts and patches,
 # the fonts (SIL OFL, with their licenses), settings.ini, the firewall helper script and INSTALL.txt, ready to copy into the game folder.
-# Usage: tools/make_release.sh <version> [x86|iw4x]   e.g. tools/make_release.sh v0.2.0-alpha
+# Usage: tools/make_release.sh <version> [x86]   e.g. tools/make_release.sh v0.2.0-alpha
 #   x86:  the experimental archive for the older 32-bit game (build/x86/winmm.dll, INSTALL-x86.txt)
-#   iw4x: the experimental archive for the iw4x-sp client, its 1.0.159 iw4sp.exe (build/x86-iw4x/winmm.dll, INSTALL-iw4x.txt)
-# Output: dist/mw2coop-<version>[-x86|-iw4x].zip and its .sha256
+# Output: dist/mw2coop-<version>[-x86].zip and its .sha256
 set -e
 cd "$(dirname "$0")/.."
 VERSION=${1:?version, e.g. v0.2.0-alpha}
@@ -13,9 +12,7 @@ case "$2" in
 	DLL=build/winmm.dll; NAME=$VERSION; INSTALL=content/release/INSTALL.txt ;;
 x86)	sh build.sh x86 release
 	DLL=build/x86/winmm.dll; NAME=$VERSION-x86; INSTALL=content/release/INSTALL-x86.txt ;;
-iw4x)	sh build.sh x86 iw4x release
-	DLL=build/x86-iw4x/winmm.dll; NAME=$VERSION-iw4x; INSTALL=content/release/INSTALL-iw4x.txt ;;
-*)	echo "unknown build $2 (x86 or iw4x)"; exit 1 ;;
+*)	echo "unknown build $2 (x86)"; exit 1 ;;
 esac
 # the release DLL must not carry local paths (debug info, pdb names)
 if grep -a -q -i -e 'users' -e '\.pdb' $DLL; then
@@ -33,7 +30,7 @@ cp content/release/missions.csv "$OUT/mw2coop/"
 cp content/release/menus.menu "$OUT/mw2coop/"
 cp content/release/logo-enhanced.tga "$OUT/mw2coop/"
 cp content/release/about-icons.tga "$OUT/mw2coop/"
-case "$2" in x86|iw4x) cp content/release/addresses-x86.txt "$OUT/mw2coop/" ;; *) cp content/release/addresses-x64.txt "$OUT/mw2coop/" ;; esac
+case "$2" in x86) cp content/release/addresses-x86.txt "$OUT/mw2coop/" ;; *) cp content/release/addresses-x64.txt "$OUT/mw2coop/" ;; esac
 sed "s/{VERSION}/$VERSION/" $INSTALL | sed 's/$/\r/' > "$OUT/INSTALL.txt"
 sed 's/$/\r/' LICENSE > "$OUT/LICENSE.txt"
 ( cd dist && python -I -c "

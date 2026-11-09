@@ -1,6 +1,6 @@
 name: Nightly build
 
-# Builds the 64-bit, 32-bit and iw4x-sp archives from main on every push to main that changes more than text files (README, CHANGELOG, docs, LICENSE are ignored), and on demand
+# Builds the 64-bit and 32-bit archives from main on every push to main that changes more than text files (README, CHANGELOG, docs, LICENSE are ignored), and on demand
 # and publishes them as the rolling pre-release "nightly" (the previous build is replaced). A run that finds
 # main still at the commit of the published build (a manual run without "force") builds nothing.
 # Needs no game files: the build is the same tools/make_release.sh that makes the real releases.
@@ -74,14 +74,13 @@ jobs:
           tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP"
           echo "LLVM_MINGW=$RUNNER_TEMP/${name}" >> "$GITHUB_ENV"
 
-      - name: Build the three archives
+      - name: Build the two archives
         if: steps.moved.outputs.build == 'true'
         run: |
           version="nightly-$(date -u +%Y%m%d)-${{ steps.moved.outputs.short }}"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           sh tools/make_release.sh "$version"
           sh tools/make_release.sh "$version" x86
-          sh tools/make_release.sh "$version" iw4x
           ls -l dist/*.zip dist/*.sha256
 
       - name: Release notes
@@ -93,8 +92,7 @@ jobs:
             echo "**A nightly is a test build, not a release.** It is untested beyond compiling. Back up your \`mw2coop\` folder and \`winmm.dll\` before using it (see INSTALL.txt inside)."
             echo
             echo "- \`mw2coop-${VERSION}.zip\`: the 64-bit (current Steam) game"
-            echo "- \`mw2coop-${VERSION}-x86.zip\`: the older 32-bit game"
-            echo "- \`mw2coop-${VERSION}-iw4x.zip\`: the iw4x-sp client"
+            echo "- \`mw2coop-${VERSION}-x86.zip\`: the older 32-bit game and the iw4x-sp client"
             echo
             echo "SHA-256 of each archive is in the \`.sha256\` file next to it."
             echo

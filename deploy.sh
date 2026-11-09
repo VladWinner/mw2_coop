@@ -10,8 +10,8 @@ cd "$(dirname "$0")"
 ROOT=${MW2COOP_TEST_ROOT:-/d/coop-test}
 BITS=${MW2COOP_BITS:-64}
 if [ "$MW2COOP_IW4X" = 1 ]; then
-	# the iw4x-sp client: the 32-bit DLL with the 1.0.159 profile, into mw2-iw4x and mw2-iw4x-b
-	DLL=build/x86-iw4x/winmm.dll; sh build.sh x86 iw4x
+	# the iw4x-sp client: the 32-bit DLL (it recognises the client by itself), into mw2-iw4x and mw2-iw4x-b
+	DLL=build/x86/winmm.dll; sh build.sh x86
 	[ $# -gt 0 ] || set -- "$ROOT/mw2-iw4x" "$ROOT/mw2-iw4x-b"
 elif [ "$BITS" = 32 ]; then DLL=build/x86/winmm.dll; sh build.sh x86; else DLL=build/winmm.dll; sh build.sh; fi
 if [ -n "$MW2COOP_GSC_DIR" ]; then

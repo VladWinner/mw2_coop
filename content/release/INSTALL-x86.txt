@@ -4,8 +4,8 @@ https://github.com/stxlvn/mw2_enhanced
 === По-русски ===
 
 Это сборка для старой 32-битной версии MW2 из Steam (до сентябрьского обновления 2026, iw4sp.exe
-32-бит). Для актуальной 64-битной версии берите обычный архив mw2coop-<версия>.zip, для клиента iw4x-sp - архив
-mw2coop-<версия>-iw4x.zip (экспериментальный). На любой другой сборке игры мод сам выключается и ничего не делает.
+32-бит). Для актуальной 64-битной версии берите обычный архив mw2coop-<версия>.zip, клиент iw4x-sp тоже
+работает с этим архивом. На любой другой сборке игры мод сам выключается и ничего не делает.
 
 Установка (у обоих игроков): в папку игры (рядом с iw4sp.exe) положите winmm.dll и папку mw2coop из этого архива.
 Ничего из игры не заменяется. Остальное (лобби, вход, сохранения, брандмауэр, разделённый экран) как в обычном
@@ -20,11 +20,15 @@ mw2coop-<версия>-iw4x.zip (экспериментальный). На лю�
 кампания целиком, настоящие геймпады.
 Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
 
+Клиент iw4x-sp: этот архив работает и с ним. Положите winmm.dll и папку mw2coop рядом с iw4sp.exe и iw4x-sp.exe (iw4sp.exe версии 1.0.159) и запускайте игру через iw4x-sp.exe как
+обычно; мод сам узнаёт клиент. iw4x-sp по умолчанию зовёт всех "Unknown Soldier": задайте свой ник командой name <ник> в консоли.
+Проверено ботами на клиенте iw4x-sp: сетевой кооператив двух копий на одном ПК (тренировка) и разделённый экран на тренировке.
+
 === English ===
 
 This is the build for the older 32-bit Modern Warfare 2 on Steam (before the September 2026 update, 32-bit
-iw4sp.exe). For the current 64-bit game use the normal archive mw2coop-<version>.zip, for the iw4x-sp client the
-archive mw2coop-<version>-iw4x.zip (experimental). On any other build of the game the mod switches itself off.
+iw4sp.exe). For the current 64-bit game use the normal archive mw2coop-<version>.zip, the iw4x-sp client works with
+this archive too. On any other build of the game the mod switches itself off.
 
 Install (both players): the game folder (next to iw4sp.exe) <- winmm.dll and the mw2coop folder from this archive.
 Nothing of the game is replaced. The rest (lobby, joining, saves, firewall, split screen) works as in the normal
@@ -37,6 +41,10 @@ Checked with bots: online co-op of two copies on one PC, a 64-bit host with a 32
 screen on the Trainer and Cliffhanger. Not checked: playing over the internet between two PCs on this build, the whole
 campaign, real gamepads.
 Problems: attach mw2coop\mw2coop.log from both players.
+
+The iw4x-sp client: this archive works with it too. Put winmm.dll and the mw2coop folder next to iw4sp.exe and iw4x-sp.exe (the 1.0.159 iw4sp.exe) and start the game through
+iw4x-sp.exe as usual; the mod recognises the client by itself. iw4x-sp calls everybody "Unknown Soldier" by default: set your own name with name <nick> in the console.
+Checked with bots on the iw4x-sp client: online co-op of two copies on one PC (the Trainer) and the split screen on the Trainer.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT licensed (LICENSE.txt).
 No game files are included.

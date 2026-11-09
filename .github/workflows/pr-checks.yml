@@ -3,7 +3,7 @@ name: PR checks
 # Runs on every pull request to main (and when a PR gets new commits). Two independent jobs:
 #   Checks  tools/pr_checks.py: patch hunks well formed, scripts balanced, no game files, no personal paths,
 #           (warning) changelog entries in both languages
-#   Build   the 64-bit, 32-bit and iw4x-sp archives are built with the real release script; they are kept as
+#   Build   the 64-bit and 32-bit archives are built with the real release script; they are kept as
 #           workflow artifacts for 14 days so a reviewer can try the PR's build
 # Needs no game files and no secrets, so it is safe for pull requests from forks (read-only token).
 # NOT checked here: that the patches apply to the game's scripts (tools/check_patches.py needs the extracted game
@@ -55,12 +55,11 @@ jobs:
           tar -xJf "$RUNNER_TEMP/llvm-mingw.tar.xz" -C "$RUNNER_TEMP"
           echo "LLVM_MINGW=$RUNNER_TEMP/${name}" >> "$GITHUB_ENV"
 
-      - name: Build the three archives
+      - name: Build the two archives
         run: |
           version="pr${{ github.event.pull_request.number }}-${GITHUB_SHA:0:7}"
           sh tools/make_release.sh "$version"
           sh tools/make_release.sh "$version" x86
-          sh tools/make_release.sh "$version" iw4x
           ls -l dist/*.zip
 
       - name: Keep the archives
