@@ -35,7 +35,7 @@ https://github.com/stxlvn/mw2_enhanced
 Если брандмауэр Windows не пускает второго игрока, игра сама предложит это исправить, когда
 хост откроет лобби (Windows один раз спросит права администратора). Через интернет без общей
 сети: роутер хоста сам откроет порт, если на нём включён UPnP; иначе нужен проброс UDP-порта
-28960 или Radmin VPN. Порт меняется в mw2coop\settings.ini (у обоих одинаковый).
+28960 или Radmin VPN. Порт меняется в mw2coop\settings.ini (у обоих одинаковый). Этот файл мод создаёт сам при первом запуске игры и при каждом запуске дополняет новыми настройками, не трогая ваши значения (прежний файл сохраняется как settings.ini.bak).
 
 Удаление: удалите из папки игры winmm.dll и папку mw2coop.
 (Правило брандмауэра, если его добавлял мод: "Call of Duty MW2 co-op (mw2coop)".)
@@ -84,7 +84,7 @@ your partner's, Pick a save any of them. Keep mw2coop\player.ini: saves know you
 If Windows Firewall would keep the partner out, the game offers to fix it when the host opens
 the lobby (Windows asks for administrator rights once). Over the internet without a shared
 network: the host's router opens the port itself if UPnP is on; otherwise forward UDP port
-28960, or use Radmin VPN. The port can be changed in mw2coop\settings.ini (the same on both PCs).
+28960, or use Radmin VPN. The port can be changed in mw2coop\settings.ini (the same on both PCs). The mod makes this file itself at the first start of the game and brings it up to date at every start, keeping the values you changed (the old file is saved as settings.ini.bak).
 
 Uninstall: delete winmm.dll and the mw2coop folder from the game folder. Problems: attach mw2coop\mw2coop.log from both players.
 

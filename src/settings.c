@@ -21,7 +21,9 @@
 
 #include "log.h"
 #include "game.h"
+#include "inisync.h"
 #include "settings.h"
+#include "settings_template_gen.h"
 #include "voicefix.h"
 
 #define DEFAULT_PORT 28960
@@ -136,6 +138,13 @@ void settings_load(void)
 		n--;
 	path[n] = 0;
 	lstrcatA(path, "mw2coop\\settings.ini");
+	{
+		static int synced;
+		if (!synced) {
+			synced = 1;
+			ini_sync_file(path, settings_template);
+		}
+	}
 	UINT p = GetPrivateProfileIntA("network", "port", DEFAULT_PORT, path);
 	if (p > 0 && p < 65536)
 		port = (uint16_t)p;

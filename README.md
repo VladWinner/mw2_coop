@@ -171,7 +171,7 @@ connect <host IP> 8305
 
 Everything the mod shows or decides is in readable files in the game's `mw2coop` folder; edit one with the game closed.
 
-- `settings.ini`: the options. Every key the mod reads, with its default, is listed in [docs/settings-reference.md](docs/settings-reference.md).
+- `settings.ini`: the options. The mod makes it at the first start of the game and brings it up to date at every start (new keys and comments come in, the values you changed stay; the old file is saved as `settings.ini.bak`). Every key the mod reads, with its default, is listed in [docs/settings-reference.md](docs/settings-reference.md).
 - `localizedstrings\mw2coop.str` and `console.str`: the mod's texts, English and Russian, in the `.str` format of the Call of Duty engines.
 - `missions.csv`: the missions (title in Discord, Spec Ops zone, lobby picture).
 - `menus.menu`: the buttons and popups the mod adds to the main menu, in the `.menu` syntax of Call of Duty.

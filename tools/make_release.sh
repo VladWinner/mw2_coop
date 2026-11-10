@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build the release archive: an optimized, stripped winmm.dll, the mod's scripts and patches,
-# the fonts (SIL OFL, with their licenses), settings.ini, the firewall helper script and INSTALL.txt, ready to copy into the game folder.
+# the fonts (SIL OFL, with their licenses), the firewall helper script and INSTALL.txt, ready to copy into the game folder.
 # Usage: tools/make_release.sh <version> [x86]   e.g. tools/make_release.sh v0.2.0-alpha
 #   x86:  the experimental archive for the older 32-bit game (build/x86/winmm.dll, INSTALL-x86.txt)
 # Output: dist/mw2coop-<version>[-x86].zip and its .sha256
@@ -23,7 +23,8 @@ rm -rf "$OUT" "$OUT.zip"
 mkdir -p "$OUT/mw2coop"
 cp $DLL "$OUT/winmm.dll"
 cp -r content/scripts content/patches content/fonts "$OUT/mw2coop/"
-cp content/release/settings.ini content/release/mw2coop-firewall.ps1 "$OUT/mw2coop/"
+# (no settings.ini in the archive: the mod makes it at the first start of the game, and an update never overwrites the player's)
+cp content/release/mw2coop-firewall.ps1 "$OUT/mw2coop/"
 mkdir -p "$OUT/mw2coop/localizedstrings"
 cp content/release/localizedstrings/*.str "$OUT/mw2coop/localizedstrings/"
 cp content/release/missions.csv "$OUT/mw2coop/"

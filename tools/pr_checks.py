@@ -167,6 +167,14 @@ def check_changelog(base):
              'under "Unreleased" for every change' % (len(code), ' and '.join(missing)))
 
 
+# 5. generated headers --------------------------------------------------------------------------------------------
+def check_generated():
+    for tool in ('gen_menus.py', 'gen_settings_template.py'):
+        r = subprocess.run([sys.executable, '-I', os.path.join('tools', tool), '--check'], capture_output=True, text=True)
+        if r.returncode != 0:
+            fail('tools/' + tool, 1, (r.stdout + r.stderr).strip() or 'the generated header is out of date')
+
+
 def main():
     base = None
     if '--base' in sys.argv:
@@ -176,6 +184,7 @@ def main():
     check_gsc(files)
     check_files(files)
     check_privacy(files)
+    check_generated()
     if base:
         check_changelog(base)
     print('%d tracked files checked: %d errors, %d warnings' % (len(files), len(errors), len(warnings)))
