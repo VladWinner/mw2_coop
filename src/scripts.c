@@ -19,6 +19,12 @@
 //   @@@ end
 // Lines outside blocks are comments.
 //
+// The mod's scripts and patches are for a co-op session only (the dvar "coop" is 1: split screen or network, campaign or Spec Ops). In single player (one player: the campaign or a
+// Spec Ops mission played alone) no co-op script of ours is loaded and no co-op patch is applied: the game runs its own scripts as shipped. The dvar is read at every script load, so a
+// session of one after a session of two (and the other way round) gets the right text.
+// The exception is the fixes of the game's own bugs that have nothing to do with a second player (the Museum civilians): those are patch files named <name>.fix.patch and scripts
+// named maps\_mw2fix*.gsc, and they are loaded in every session, single player too. Nothing in them may refer to maps\_mw2coop*.
+//
 // Co-op runs in lockstep (both PCs run the level scripts), so every machine must end up with
 // the same text. The log prints an FNV-1a hash of each changed script to compare host/client.
 //
@@ -59,6 +65,24 @@ typedef char *(*add_source_buffer_t)(const char *filename, const char *ext, cons
 static add_source_buffer_t chained;	// another mod's replacement installed before ours
 
 #define FN(rva, type) ((type)(base + (rva)))
+int game_dvar_raw(const char *name, char *buf, int size); // game.c (not included here: the 32-bit build has its own RVA macros above)
+
+// true when the level being loaded is a co-op session (see the top of the file)
+static int coop_session(void)
+{
+	char v[8] = "";
+	return game_dvar_raw("coop", v, sizeof(v)) && v[0] == '1';
+}
+
+// A script of ours that is loaded in every session: the fixes that are no part of the co-op (maps/_mw2fix*.gsc)
+static int fix_script(const char *name)
+{
+	const char *base_name = name;
+	for (const char *p = name; *p; p++)
+		if (*p == '/' || *p == '\\')
+			base_name = p + 1;
+	return strncmp(base_name, "_mw2fix", 7) == 0;
+}
 typedef void *(*db_find_header_t)(int type, const char *name);
 typedef int (*db_is_default_t)(int type, const char *name);
 typedef int (*db_rawfile_len_t)(void *raw);
@@ -329,13 +353,15 @@ static char *to_hunk(const char *text, int len)
 
 // The zone text of `ext` (buf, len) with the patch files applied: a malloc'd copy and its length in *n, or NULL when the
 // script has no patch file. Logs the result (the FNV hash is what host and client compare).
-static char *patched_text(const char *ext, const char *buf, int len, int *n)
+static char *patched_text(const char *ext, const char *buf, int len, int *n, int coop)
 {
 	// Patch a working copy; the zone text keeps its CR, which the compiler ignores.
 	int plen;
-	char *probe = read_mod_file("patches", ext, ".patch", &plen);
-	if (!probe)
+	char *probe = coop ? read_mod_file("patches", ext, ".patch", &plen) : NULL;
+	if (!probe && coop)
 		probe = read_mod_file("patches", ext, ".cp.patch", &plen);
+	if (!probe)
+		probe = read_mod_file("patches", ext, ".fix.patch", &plen); // (every session)
 	if (!probe)
 		return NULL;
 	free(probe);
@@ -346,8 +372,11 @@ static char *patched_text(const char *ext, const char *buf, int len, int *n)
 			work[(*n)++] = buf[i];
 	work[*n] = 0;
 	int applied = 0, total = 0;
-	work = apply_patches(ext, ".patch", work, n, &applied, &total);
-	work = apply_patches(ext, ".cp.patch", work, n, &applied, &total);
+	if (coop) {
+		work = apply_patches(ext, ".patch", work, n, &applied, &total);
+		work = apply_patches(ext, ".cp.patch", work, n, &applied, &total);
+	}
+	work = apply_patches(ext, ".fix.patch", work, n, &applied, &total);
 	scrdebug_note_source(ext, work, *n);
 	log_printf("scripts: %s <- zone + %d/%d patches (%d bytes, hash %08x)%s", ext, applied, total, *n,
 		   fnv1a(work, *n), applied == total ? "" : "  !!! PATCH FAILURES");
@@ -357,7 +386,13 @@ static char *patched_text(const char *ext, const char *buf, int len, int *n)
 static char *add_source_buffer(const char *filename, const char *ext, const char *code_pos, int archive)
 {
 	int size;
-	char *own = read_mod_file("scripts", ext, "", &size);
+	int coop = coop_session();
+	static int last_coop = -1;
+	if (coop != last_coop) {
+		last_coop = coop;
+		log_printf("scripts: %s", coop ? "co-op session: the mod's scripts and patches are loaded" : "single player: the game's own scripts (only the fixes that are no part of the co-op: *.fix.patch, _mw2fix*)");
+	}
+	char *own = coop || fix_script(ext) ? read_mod_file("scripts", ext, "", &size) : NULL;
 	if (own) {
 		char *buf = to_hunk(own, size);
 		log_printf("scripts: %s <- mw2coop (%d bytes, hash %08x)", ext, size, fnv1a(own, size));
@@ -382,7 +417,7 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 	}
 
 	int n;
-	char *work = patched_text(ext, buf, len, &n);
+	char *work = patched_text(ext, buf, len, &n, coop);
 	if (!work) {
 		scrdebug_note_source(ext, buf, len);
 		return buf;
@@ -416,9 +451,10 @@ typedef struct {
 	char *text; // the mod's text, NULL: the zone's own
 	int n;
 	int own; // the text is a file of ours (no zone rawfile behind it)
+	int coop; // made for a co-op session (the other kind has the fixes only)
 	raw_file_t fake;
 } script_entry_t;
-static script_entry_t entries[160];
+static script_entry_t entries[320]; // (a script asked in both kinds of session has two)
 static int entry_count;
 static CRITICAL_SECTION entries_lock;
 static volatile LONG lock_ready;
@@ -436,11 +472,12 @@ static int is_script_name(const char *name)
 // no rawfile to make one from.
 static script_entry_t *script_entry(const char *name, raw_file_t *raw)
 {
+	int coop = coop_session(); // single player: the zone's own text and the fixes that are no part of the co-op (an entry is kept for its kind of session)
 	for (int i = 0; i < entry_count; i++)
-		if (strcmp(entries[i].name, name) == 0)
+		if (entries[i].coop == coop && strcmp(entries[i].name, name) == 0)
 			return &entries[i];
 	int size;
-	char *own = read_mod_file("scripts", name, "", &size);
+	char *own = coop || fix_script(name) ? read_mod_file("scripts", name, "", &size) : NULL;
 	if (!own && !raw)
 		return NULL;
 	if (entry_count >= (int)(sizeof(entries) / sizeof(entries[0]))) {
@@ -449,6 +486,9 @@ static script_entry_t *script_entry(const char *name, raw_file_t *raw)
 	}
 	script_entry_t *e = &entries[entry_count];
 	lstrcpynA(e->name, name, sizeof(e->name));
+	e->coop = coop;
+	e->text = NULL;
+	e->own = 0;
 	if (own) {
 		e->text = own;
 		e->n = size;
@@ -460,7 +500,7 @@ static script_entry_t *script_entry(const char *name, raw_file_t *raw)
 		char *buf = malloc(len + 1);
 		buffer_original(raw, buf, len);
 		buf[len] = 0;
-		e->text = patched_text(name, buf, len, &e->n);
+		e->text = patched_text(name, buf, len, &e->n, coop);
 		if (!e->text)
 			scrdebug_note_source(name, buf, len); // (the zone's own script: its function names are for the call stacks too)
 		free(buf);

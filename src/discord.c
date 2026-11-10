@@ -140,6 +140,11 @@ void discord_poll(void)
 	}
 	game_dvar_raw("mapname", map, sizeof(map));
 	game_dvar_raw("mw2coop_mode", mode, sizeof(mode));
+	{ // the scripts that set it are not loaded in single player: the value left from a co-op level is stale
+		char coop[8] = "";
+		if (mode[0] && (!game_dvar_raw("coop", coop, sizeof(coop)) || coop[0] != '1'))
+			snprintf(mode, sizeof(mode), "solo");
+	}
 	game_dvar_raw("mw2coop_native_split", split, sizeof(split));
 	if (!map[0] || !json_safe(map) || !strcmp(mode, "") || !strcmp(map, "ui")) {
 		snprintf(details, sizeof(details), "In the menus");

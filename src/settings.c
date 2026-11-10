@@ -30,6 +30,7 @@ static int steam_relay;
 static int fonts_on = 1;
 static int fontmip_on = 1;
 static int darktitle_on = 1;
+static int safearea_on = 1;
 static int hwgamma_on = 1;
 static int unlinkguard_on = 1;
 static int hotguards_on = 1;
@@ -189,6 +190,7 @@ void settings_load(void)
 	fonts_on = GetPrivateProfileIntA("display", "fonts", 1, path) != 0;
 	fontmip_on = GetPrivateProfileIntA("display", "fontmip", 1, path) != 0;
 	darktitle_on = GetPrivateProfileIntA("display", "darktitle", 1, path) != 0;
+	safearea_on = GetPrivateProfileIntA("display", "safearea_auto", 1, path) != 0;
 	hwgamma_on = GetPrivateProfileIntA("display", "hwgamma", 1, path) != 0;
 	unlinkguard_on = GetPrivateProfileIntA("native", "unlinkguard", 1, path) != 0;
 	hotguards_on = GetPrivateProfileIntA("native", "hotguards", 1, path) != 0;
@@ -257,6 +259,11 @@ int settings_fontmip(void)
 int settings_darktitle(void)
 {
 	return darktitle_on;
+}
+
+int settings_safearea(void)
+{
+	return safearea_on;
 }
 
 int settings_hwgamma(void)

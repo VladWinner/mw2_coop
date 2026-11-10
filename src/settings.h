@@ -13,6 +13,8 @@ int settings_fonts(void);
 int settings_fontmip(void);
 // settings.ini [display] darktitle (default 1): the game window gets the dark title bar and square corners of Windows 10/11 (window.c); 0 leaves it as the game makes it.
 int settings_darktitle(void);
+// settings.ini [display] safearea_auto (default 1): on a screen wider than 16:9 the dvar safeArea_horizontal is lowered by 16:9 / the screen's ratio, so the menus keep the 16:9 margins (window.c); 0 leaves it as it is.
+int settings_safearea(void);
 // settings.ini [display] hwgamma (default 1): the game sets the display's hardware gamma ramp from r_gamma (default 0.8, a darker picture than the windowed and borderless modes, which have no ramp) in exclusive full screen; 0 sets r_ignorehwgamma so that full screen looks like them (guards.c).
 int settings_hwgamma(void);
 // settings.ini [native] unlinkguard (default 1): the iw4x-sp client only, see guards.c.
