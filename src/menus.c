@@ -476,6 +476,8 @@ static const char *item_material_name(const uint8_t *it)
 	return mat && !IsBadReadPtr(mat, sizeof(*mat)) && *mat && !IsBadStringPtrA(*mat, 16) ? *mat : "";
 }
 
+static const char split_specops_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_split_specops\" ; ";
+
 static void place_logo(uint8_t *it)
 {
 	float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4); // rect and rectClient: x, y, width, height
@@ -944,6 +946,56 @@ static void patch_selection_menu(void)
 	log_printf("menus: main_selection opens main_text (onOpen had %d handlers)", n);
 }
 
+// Special Ops' menu (main_specops): a split screen button under its "two players online" one (the button is found by its text, so a game build that words it otherwise gets none: the log
+// says so). It opens the same lobby as that button does, with the second player on this PC (mw2coop_split_specops).
+static uint8_t **specops_items; // our items array for main_specops
+static void patch_specops_menu(void)
+{
+	uint8_t *menu = ui_find_menu("main_specops");
+	if (!menu)
+		return;
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	if (items == specops_items)
+		return;
+	int count = *(int *)(menu + MENU_ITEM_COUNT), at = -1;
+	for (int i = 0; i < count; i++) {
+		const char *name = *(const char **)items[i];
+		const char *text = *(const char **)(items[i] + ITEM_TEXT);
+		if (name && !strcmp(name, "mw2coop_specops_split"))
+			return;
+		if (at < 0 && ((text && strstr(text, "TWO_PLAYER_ONLINE")) || (name && strstr(name, "TWO_PLAYER_ONLINE"))))
+			at = i;
+	}
+	specops_items = items;
+	if (at < 0) {
+		log_printf("menus: main_specops has no two players online button, no split screen button added");
+		return;
+	}
+	uint8_t *src = items[at];
+	float y = *(float *)(src + ITEM_RECT_Y) + BUTTON_HEIGHT;
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(*list));
+	memcpy(list, items, (at + 1) * sizeof(*list));
+	uint8_t *item = ui_clone_item(src, menu);
+	*(const char **)item = "mw2coop_specops_split";
+	*(const char **)(item + ITEM_TEXT) = "@MW2COOP_SPLITSCREEN";
+	*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(split_specops_action);
+	*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
+	*(float *)(item + ITEM_RECT_Y) = y;
+	*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
+	list[at + 1] = item;
+	memcpy(list + at + 2, items + at + 1, (count - at - 1) * sizeof(*list));
+	for (int i = at + 2; i < count + 1; i++) { // everything below moves down
+		if (*(float *)(list[i] + ITEM_RECT_Y) >= y - 0.5f) {
+			*(float *)(list[i] + ITEM_RECT_Y) += BUTTON_HEIGHT;
+			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += BUTTON_HEIGHT;
+		}
+	}
+	specops_items = list;
+	*(uint8_t ***)(menu + MENU_ITEMS) = list;
+	*(int *)(menu + MENU_ITEM_COUNT) = count + 1;
+	log_printf("menus: main_specops: split screen button added (%d items)", count + 1);
+}
+
 // No Russian in Mission Select (owner, 2026-11-04): the PC game's Act I list holds Trainer, Roadkill, Cliffhanger and Favela but not the airport mission. A button for it is cloned from
 // Cliffhanger's, put after it (the ones below move down), always selectable (it takes Trainer's visibility expression), and starts the level at once with the profile's difficulty
 // (devmap airport; in a co-op pick the devmap hook above takes it into the lobby as for the other missions). Its picture and text come from the airport's own strings.
@@ -1258,9 +1310,14 @@ static void add_host_menu(void)
 	}
 }
 
+static int so_name(const char *map)
+{
+	return map && strncmp(map, "so_", 3) == 0;
+}
+
 static volatile LONG split_pending; // the lobby about to be hosted is a split screen one
 static volatile LONG split_mode;    // the lobby being hosted is a split screen one (the second player is on this PC, his process starts at Start)
-static volatile LONG split_lobby_returning; // the local campaign mission ended; listen is reopening its campaign lobby
+static volatile LONG split_lobby_returning; // the local mission ended; listen is reopening its lobby
 static volatile LONG split_lobby_return_tick;
 static volatile LONG split_lobby_return_attempts;
 static volatile LONG split_return_devices_valid;
@@ -1413,19 +1470,31 @@ static void steam_lobby_fail_install(void)
 	log_printf("menus: a failed Steam lobby no longer ends a split screen lobby (steamlobbycreatefail)");
 }
 
-// Host a lobby: what the Spec Ops "two players online" button runs, then mw2coop_online [map].
+static int continuing, add_member;
+static volatile LONG partner_confirmed;
+
+// Host a lobby: what the Spec Ops "two players online" button runs, then mw2coop_online [map] (or, for a Spec Ops op, the op).
 static void host_lobby(const char *map)
 {
 	if (split_pending)
 		steam_lobby_fail_install();
-	lobby_music_patch(1); // listen activates coop_lobby immediately after mw2coop_online
+	int specops = so_name(map); // a Special Ops op: the lobby is the native one, only the second player is on this PC
+	lobby_music_patch(!specops); // listen activates coop_lobby immediately after mw2coop_online
 	char cmd[512];
+	char online[160];
+	if (specops) {
+		continuing = 0;
+		add_member = 0;
+		InterlockedExchange(&partner_confirmed, 0);
+		snprintf(online, sizeof(online), "set specialops 1\nset coop_mapName %s\n", map);
+	} else
+		snprintf(online, sizeof(online), "mw2coop_online %s\n", map ? map : "");
 	snprintf(cmd, sizeof(cmd),
 		 "set arcademode 0\nset arcademode_full 0\nset solo_play 0\nset ui_skip_level_select 1\n"
 		 "set so_ophud_player0 0\nset so_ophud_player1 0\nxrequirelivesignin\n"
 		 "stopListening\nset arcademode_lives 2\nset arcademode_combined_score 0\nset mblur_enable 0\n"
-		 "mw2coop_online %s\nlisten\n",
-		 map ? map : "");
+		 "%slisten\n",
+		 online);
 	game_cbuf_addtext(cmd);
 	if (InterlockedExchange(&split_pending, 0)) { // a split screen lobby: the second player presses a button on his device first
 		InterlockedExchange(&split_mode, 1);
@@ -1448,6 +1517,18 @@ static void host_lobby(const char *map)
 static void split_menu_f(void)
 {
 	host_menu_open(1);
+}
+
+// mw2coop_split_specops: the split screen button of Special Ops' menu. The lobby is Spec Ops' own (Change Op, difficulty), with the second player on this PC.
+static void split_specops_f(void)
+{
+	char map[64] = "";
+	game_dvar_raw("coop_mapName", map, sizeof(map));
+	if (!so_name(map))
+		lstrcpynA(map, "so_killspree_trainer", sizeof(map)); // the lobby shows an op; the stale campaign mission of an earlier lobby is not one
+	InterlockedExchange(&split_pending, 1);
+	log_printf("menus: Special Ops split screen lobby on '%s'", map);
+	host_lobby(map);
 }
 
 static void host_go_f(void)
@@ -1512,6 +1593,19 @@ static int campaign_lobby(void)
 		return 0;
 	game_dvar_raw("coop_mapName", v, sizeof(v));
 	return v[0] && strncmp(v, "so_", 3) != 0;
+}
+
+// Both PCs' view of a split screen lobby holding a Special Ops op (the lobby is the native one; only its Start is ours, the second player being on this PC)
+static int spec_split_lobby(void)
+{
+	if (!base[RVA_PARTY_ACTIVE] || !(split_mode || split_lobby_returning))
+		return 0;
+	char v[64] = "";
+	game_dvar_raw("sv_running", v, sizeof(v));
+	if (v[0] == '1')
+		return 0;
+	game_dvar_raw("coop_mapName", v, sizeof(v));
+	return so_name(v);
 }
 
 // Leaving the campaign lobby: coop_lobby is the Special Ops lobby, and its "leave" popup (leave_lobby_warning) sends the player on to main_specops. Where that is done by a menu script
@@ -1676,7 +1770,7 @@ static int item_by_text(uint8_t *menu, const char *text, const LobbySwap *w)
 // (invite a friend, access, password, the network type), and each player's card shows the picture of his device (keyboard and mouse, a gamepad, none before he has
 // pressed). Everything goes back when the lobby is an online one again. The cards' pictures are the two 64 x 64 items at x -176 (y 70: player 1, y 148: player 2), whose
 // window background (Material *, ITEM_BACKGROUND_PTR) is the game's "pc_keyboard_mouse".
-static void patch_split_lobby(uint8_t *menu)
+static void patch_split_lobby(uint8_t *menu, int spec_split)
 {
 	static uint8_t *kb_material;
 	static uint8_t *cards[2], *title_item;
@@ -1767,17 +1861,17 @@ static void patch_split_lobby(uint8_t *menu)
 			ff_float_exps = *(void **)(ff + ITEM_FLOAT_EXPS), ff_disabled_exp = *(void **)(ff + ITEM_DISABLED_EXP);
 		}
 		if (ff && ready) {
-			float dy = split ? *(float *)(ready + ITEM_RECT_Y) - ff_y : 0;
+			float dy = split && !spec_split ? *(float *)(ready + ITEM_RECT_Y) - ff_y : 0; // (Special Ops: its difficulty row stays where it is)
 			*(float *)(ff + ITEM_RECT_Y) = ff_y + dy;
 			*(float *)(ff + ITEM_RECT_CLIENT_Y) = ff_cy + dy;
-			*(void **)(ff + ITEM_FLOAT_EXPS) = split ? NULL : ff_float_exps;
-			*(void **)(ff + ITEM_DISABLED_EXP) = split ? NULL : ff_disabled_exp;
+			*(void **)(ff + ITEM_FLOAT_EXPS) = split && !spec_split ? NULL : ff_float_exps;
+			*(void **)(ff + ITEM_DISABLED_EXP) = split && !spec_split ? NULL : ff_disabled_exp;
 		}
 	}
 	split_was = split;
 }
 
-static void patch_lobby(int campaign)
+static void patch_lobby(int campaign, int spec_split)
 {
 	uint8_t *menu = ui_find_menu("coop_lobby");
 	if (!menu)
@@ -1804,17 +1898,18 @@ static void patch_lobby(int campaign)
 		}
 		if (!w->campaign)
 			w->campaign = w->script ? ui_script_set(w->script) : (void *)w->value;
-		void *want = campaign ? w->campaign : w->native;
+		int is_start = strncmp(w->item, "startmatch", 10) == 0;
+		void *want = (campaign || (spec_split && is_start)) ? w->campaign : w->native; // a split Special Ops lobby: native op and difficulty, our Start
 		if (*field != want) {
 			*field = want;
 			changed = 1;
 		}
 	}
 	patch_lobby_mission(menu, campaign);
-	patch_split_lobby(menu);
-	if (changed || campaign != lobby_campaign_set)
-		log_printf("menus: coop_lobby set for %s", campaign ? "a campaign mission" : "Spec Ops");
-	lobby_campaign_set = campaign;
+	patch_split_lobby(menu, spec_split);
+	if (changed || campaign * 2 + spec_split != lobby_campaign_set)
+		log_printf("menus: coop_lobby set for %s", campaign ? "a campaign mission" : spec_split ? "a split screen Spec Ops op" : "Spec Ops");
+	lobby_campaign_set = campaign * 2 + spec_split;
 }
 
 // The lobby's mission picture and name: Spec Ops ops get them from sp/specOpsTable.csv (the
@@ -2095,7 +2190,7 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 	if (len == (int)sizeof(find) - 1 && memcmp(buf, find, len) == 0) {
 		// answer only while hosting a campaign lobby that still has room
 		char lock = access_lobby_flag();
-		if (base[RVA_PARTY_IS_HOST] && lobby_campaign_set && !party_full() && lock) {
+		if (base[RVA_PARTY_IS_HOST] && lobby_campaign_set >= 2 && !party_full() && lock) {
 			char map[64] = "", name[33] = "";
 			game_dvar_raw("coop_mapName", map, sizeof(map));
 			// the host's name as its party has it (slot 0, rva 0x5dd960, set by the party join 0xd7220)
@@ -2192,7 +2287,7 @@ static void update_texts(void)
 		localize_set_text("MW2COOP_READY", "");
 	else
 		localize_select("MW2COOP_READY", my_ready ? "MW2COOP_READY_UNSET" : "MW2COOP_READY_SET");
-	show_row(ui_find_menu("coop_lobby"), "dont_selectdiff", !split_mode);
+	show_row(ui_find_menu("coop_lobby"), "dont_selectdiff", !split_mode || spec_split_lobby()); // (Special Ops keeps its difficulty row)
 	const char *start;
 	if (split_mode)
 		start = split_devices_chosen() ? "MW2COOP_START_GO" : "MW2COOP_START_NEED_DEVICES";
@@ -2245,8 +2340,10 @@ static void native_launch(void)
 	game_dvar_raw("coop_mapName", map, sizeof(map));
 	if (!map[0] || strpbrk(map, " \t;\"\n"))
 		lstrcpyA(map, "trainer");
-	// the second player is a member of the save like a partner who joins it
-	progress_begin(continuing, "split-screen", 0x53504c4954ULL, "Player 2", 1);
+	int specops = so_name(map);
+	// the second player is a member of the save like a partner who joins it (a Special Ops op has no save)
+	if (!specops)
+		progress_begin(continuing, "split-screen", 0x53504c4954ULL, "Player 2", 1);
 	int dev0 = devices_get(0), dev1 = devices_get(1);
 	if (!native_split_start2(dev0, dev1)) {
 		log_printf("menus: Start: the split screen could not be started");
@@ -2262,8 +2359,9 @@ static void native_launch(void)
 	InterlockedExchange(&split_mode, 0);
 	((void (*)(void))(base + RVA_PARTY_RESET))();
 	char cmd[160];
-	campaign_loading_begin();
-	snprintf(cmd, sizeof(cmd), "stopListening\nset mw2coop_split_view 0\nmap %s\n", map);
+	if (!specops)
+		campaign_loading_begin(); // (a Special Ops op keeps its own loading screen: specialops stays 1)
+	snprintf(cmd, sizeof(cmd), "stopListening\nset mw2coop_split_view 0\n%smap %s\n", specops ? "set specialops 1\n" : "", map);
 	game_cbuf_addtext(cmd);
 	InterlockedExchange(&native_started, (LONG)GetTickCount() | 1);
 }
@@ -2292,7 +2390,7 @@ static void native_session_tick(void)
 			InterlockedExchange(&split_lobby_returning, 1);
 			InterlockedExchange(&split_pending, 1);
 			host_lobby(split_return_map);
-			log_printf("menus: campaign mission ended; returning split screen to coop_lobby on '%s'", split_return_map);
+			log_printf("menus: %s ended; returning split screen to coop_lobby on '%s'", so_name(split_return_map) ? "Special Ops op" : "campaign mission", split_return_map);
 		} else {
 			InterlockedExchange(&split_return_devices_valid, 0);
 			split_return_map[0] = 0;
@@ -2716,6 +2814,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_menu", NULL, NULL, split_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_open_url", NULL, NULL, open_url_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_split_specops", NULL, NULL, split_specops_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},
@@ -3087,12 +3186,15 @@ void menus_poll(void)
 		char mapn[64] = "";
 		game_dvar_raw("coop_mapName", mapn, sizeof(mapn));
 		int campaign = base[RVA_PARTY_ACTIVE] && mapn[0] && strncmp(mapn, "so_", 3) != 0;
+		int split_so = so_name(split_return_map) && (native_split_active() || split_lobby_returning); // a split screen Special Ops op: its own loading screen, no campaign briefing
 		int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
-		if (campaign || native_split_active() || split_lobby_returning || (specialops_forced && v[0] == '1'))
+		if (split_so)
+			campaign = 0;
+		if (!split_so && (campaign || native_split_active() || split_lobby_returning || (specialops_forced && v[0] == '1')))
 			sticky = 1;
 		else
 			sticky = 0; // a Spec Ops lobby, or the player has left the campaign lobby
-		if ((!campaign || lobby_ui != 0x0b) && split_lobby_returning &&
+		if ((!(campaign || split_so) || lobby_ui != 0x0b) && split_lobby_returning &&
 			   GetTickCount() - (DWORD)InterlockedCompareExchange(&split_lobby_return_tick, 0, 0) > 20000) {
 			InterlockedExchange(&split_lobby_returning, 0); // don't keep the campaign dvar forced if listen failed
 			InterlockedExchange(&split_lobby_return_tick, 0);
@@ -3128,6 +3230,7 @@ static void tick_f(void)
 	patch_selection_menu();
 	patch_specops_return();
 	patch_act1_menu();
+	patch_specops_menu();
 	add_lobbies_menu();
 	add_host_menu();
 	add_saves_menu();
@@ -3138,10 +3241,12 @@ static void tick_f(void)
 	unlock_missions_tick();
 	find_tick();
 	int campaign = campaign_lobby();
+	int spec_split = spec_split_lobby();
+	int split_lobby = campaign || spec_split; // the lobby of a split screen game of ours: the return to it is looked after for a Special Ops op too
 	int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
-	patch_lobby(campaign);
+	patch_lobby(campaign, spec_split);
 	leave_warning_patch(campaign);
-	if (campaign && lobby_ui == 0x0b && InterlockedCompareExchange(&split_lobby_returning, 0, 0)) {
+	if (split_lobby && lobby_ui == 0x0b && InterlockedCompareExchange(&split_lobby_returning, 0, 0)) {
 		// The lobby is now live: restore both device cards once, against the final menu.
 		if (InterlockedExchange(&split_return_devices_valid, 0))
 			devices_begin_assigned(split_return_devices[0], split_return_devices[1]);
@@ -3149,7 +3254,7 @@ static void tick_f(void)
 		InterlockedExchange(&split_lobby_return_tick, 0);
 		InterlockedExchange(&split_lobby_return_attempts, 0);
 		log_printf("menus: split campaign lobby restored with the original device assignments");
-	} else if ((!campaign || lobby_ui != 0x0b) && InterlockedCompareExchange(&split_lobby_returning, 0, 0) &&
+	} else if ((!split_lobby || lobby_ui != 0x0b) && InterlockedCompareExchange(&split_lobby_returning, 0, 0) &&
 		   GetTickCount() - (DWORD)InterlockedCompareExchange(&split_lobby_return_tick, 0, 0) > 1200 &&
 		   InterlockedCompareExchange(&split_lobby_return_attempts, 0, 0) < 3) {
 		LONG attempt = InterlockedIncrement(&split_lobby_return_attempts);
@@ -3180,6 +3285,8 @@ static void tick_f(void)
 		partner_heard = 0;
 		partner_id[0] = 0;
 		partner_xuid = 0;
+		if (spec_split)
+			update_texts(); // the Start button's text and the device cards of a split screen Special Ops lobby
 		return;
 	}
 	if (GetTickCount() - ready_sent >= 1000)
