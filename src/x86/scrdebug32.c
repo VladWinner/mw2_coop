@@ -401,9 +401,9 @@ static void svlog_install(void)
 	static const uint8_t init_bytes[] = {0x53, 0x55, 0x8b, 0x6c, 0x24, 0x0c, 0x56};                      // push ebx / push ebp / mov ebp,[esp+0xc] / push esi
 	static const uint8_t connect_bytes[] = {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c};                         // push esi / push edi / mov edi,[esp+0xc]
 	int ok = 0;
-	ok += hook_function(base + 0xaf600, begin_bytes, sizeof(begin_bytes), clientbegin_hook, (void **)&clientbegin_next);
-	ok += hook_function(base + 0xcf5d0, init_bytes, sizeof(init_bytes), clientinit_hook, (void **)&clientinit_next);
-	ok += hook_function(base + 0x60f60, connect_bytes, sizeof(connect_bytes), svconnect_hook, (void **)&svconnect_next);
+	ok += hook_function(base + XR(0xaf600), begin_bytes, sizeof(begin_bytes), clientbegin_hook, (void **)&clientbegin_next);
+	ok += hook_function(base + XR(0xcf5d0), init_bytes, sizeof(init_bytes), clientinit_hook, (void **)&clientinit_next);
+	ok += hook_function(base + XR(0x60f60), connect_bytes, sizeof(connect_bytes), svconnect_hook, (void **)&svconnect_next);
 	log_printf("svlog: %d of 3 level-start hooks in place (they only log)", ok);
 }
 

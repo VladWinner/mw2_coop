@@ -24,9 +24,9 @@
 #define RVA_KB_ADS 0x52fc84   // input block (rva 0x52fbc0) + 0xc4: the active byte of +speed_throw
 #define RVA_ADS_STATE 0x533cc0 // mouse state byte +0
 #else
-#define RVA_PS_FLAGS 0x526c64
-#define RVA_KB_ADS 0x488a74
-#define RVA_ADS_STATE 0x525be0
+#define RVA_PS_FLAGS XR(0x526c64)
+#define RVA_KB_ADS XR(0x488a74)
+#define RVA_ADS_STATE XR(0x525be0)
 #endif
 
 static uint8_t *base;
@@ -109,6 +109,6 @@ void climbads_install(void)
 	log_printf("climbads: the usercmd aim/movement function at rva 0xcf900 %s", hook_function(base + 0xcf900, bytes, sizeof(bytes), (void *)climbads_hook, (void **)&climbads_original) ? "is watched" : "is not as expected, not watched");
 #else
 	static const uint8_t bytes[6] = {0x51, 0x55, 0x8b, 0x6c, 0x24, 0x0c}; // push ecx; push ebp; mov ebp, [esp+0xc]
-	log_printf("climbads: the usercmd aim/movement function at VA 0x578c20 %s", hook_function(base + 0x178c20, bytes, sizeof(bytes), (void *)climbads_stub32, &climbads_orig32) ? "is watched" : "is not as expected, not watched");
+	log_printf("climbads: the usercmd aim/movement function at VA 0x578c20 %s", hook_function(base + XR(0x178c20), bytes, sizeof(bytes), (void *)climbads_stub32, &climbads_orig32) ? "is watched" : "is not as expected, not watched");
 #endif
 }

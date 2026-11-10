@@ -9,6 +9,7 @@
 
 #include "gfxopts.h"
 #include "log.h"
+#include "game.h"
 #include "menus_ui.h"
 
 #define ITEM_TYPE_SLIDER 10
@@ -19,7 +20,7 @@
 #define UI_MENUS_AT 0x38
 #define UI_COUNT_AT 0x1438
 #else
-#define RVA_UI 0x151cef0
+#define RVA_UI XR(0x151cef0)
 #define UI_MENUS_AT 0x38
 #define UI_COUNT_AT 0xa38
 #endif

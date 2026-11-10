@@ -80,3 +80,11 @@
 0x2e8c18 -> 0x2ebb38    # builtin entry givemaxammo
 0x2e8c0c -> 0x2ebb2c    # builtin entry givestartammo
 0x2eb140 -> 0x2ee030    # builtin entry setthreatbiasgroup
+0xfb410 -> 0x0    # the name table lookup that guards.c guards (official build only; not on the iw4x-sp 1.0.159 exe)
+0x526c64 -> 0x0    # climbads.c RVA_PS_FLAGS (official only)
+0x488a74 -> 0x0    # climbads.c RVA_KB_ADS (official only)
+0x525be0 -> 0x0    # climbads.c RVA_ADS_STATE (official only)
+0x178c20 -> 0x0    # climbads.c: the usercmd aim/movement function (official only)
+0xaf600 -> 0x0    # svlog (scrdebug32.c): ClientBegin (official only)
+0xcf5d0 -> 0x0    # svlog (scrdebug32.c): the per-client init (official only)
+0x60f60 -> 0x0    # svlog (scrdebug32.c): the level spawn's server client connect (official only)

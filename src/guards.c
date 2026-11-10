@@ -411,13 +411,13 @@ void guards_install(void)
 		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);
 		uint8_t want[11];
 		memcpy(want, lookup_head, 7);
-		memcpy(want + 7, b32 + 0xfb410 + 7, 4); // (the table's address is relocated when the exe is not at its preferred address: take what is there)
+		memcpy(want + 7, b32 + XR(0xfb410) + 7, 4); // (the table's address is relocated when the exe is not at its preferred address: take what is there)
 		void *dummy = NULL;
-		if (b32[0xfb41b] != 0x8b || memcmp(b32 + 0xfb410, lookup_head, 7)) {
+		if (b32[XR(0xfb410) + 0xb] != 0x8b || memcmp(b32 + XR(0xfb410), lookup_head, 7)) {
 			log_printf("guards: the name table lookup at rva 0xfb410 is not as expected, not guarded");
 		} else {
-			name_table = *(const void *const *const *)(b32 + 0xfb410 + 7);
-			log_printf("guards: the name table lookup at rva 0xfb410 %s", hook_function(b32 + 0xfb410, want, sizeof(want), (void *)name_lookup_guarded, &dummy) ? "is guarded" : "NOT guarded (hook failed)");
+			name_table = *(const void *const *const *)(b32 + XR(0xfb410) + 7);
+			log_printf("guards: the name table lookup at rva 0xfb410 %s", hook_function(b32 + XR(0xfb410), want, sizeof(want), (void *)name_lookup_guarded, &dummy) ? "is guarded" : "NOT guarded (hook failed)");
 		}
 	}
 #endif
