@@ -34,6 +34,21 @@ int game_init(void)
 		if (addr_layout_same() && !forced) {
 			ready = 1; // the layout of the known build: its addresses hold; hooks verify their own bytes
 			log_printf("game: unknown build with the layout of the known one: the mod runs with the known addresses");
+		} else if (total > 0 && found * 100 >= total * 85) {
+			// a build whose addresses moved: best effort, only when the settings ask for it ([native] movedbuilds=1, or MW2COOP_MOVED for QA). Every address goes through addr_xr(); one that
+			// was not found points at a harmless block (addr.c), so the features that need it do nothing, and each hook verifies the bytes it patches.
+			char ini[MAX_PATH];
+			DWORD n = GetModuleFileNameA(NULL, ini, MAX_PATH);
+			while (n > 0 && ini[n - 1] != 0x5c)
+				n--;
+			ini[n] = 0;
+			lstrcatA(ini, "mw2coop\\settings.ini");
+			if (getenv("MW2COOP_MOVED") != NULL || GetPrivateProfileIntA("native", "movedbuilds", 0, ini) != 0) {
+				ready = 1;
+				log_printf("game: unknown build, addresses moved: %d of %d found; the mod runs with them (best effort, [native] movedbuilds)", found, total);
+			} else {
+				log_printf("game: unknown build, addresses moved: %d of %d found. Nothing is patched; [native] movedbuilds=1 in mw2coop\\settings.ini makes the mod try (best effort)", found, total);
+			}
 		}
 	}
 #else

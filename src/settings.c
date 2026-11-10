@@ -59,7 +59,8 @@ static char player_id[33];
 static char player_ini[MAX_PATH];
 
 #ifdef _WIN64
-static const uint32_t net_port_immediates[] = {0x293381, 0x292f03}; // "mov edx, 28960": ba 20 71 00 00
+static const uint32_t net_port_immediates_official[] = {0x293381, 0x292f03}; // "mov edx, 28960": ba 20 71 00 00
+static uint32_t net_port_immediates[2];
 #define PORT_OPCODE 0xba
 #else
 // the 32-bit build registers net_port with "push 28960" (68 20 71 00 00) before "push 'net_port'" (0x48c5f6, 0x63908e)
@@ -71,10 +72,8 @@ static uint32_t net_port_immediates[2];
 static void patch_port(uint16_t value)
 {
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
-#ifndef _WIN64
 	for (int i = 0; i < 2; i++)
 		net_port_immediates[i] = XR(net_port_immediates_official[i]);
-#endif
 	for (size_t i = 0; i < sizeof(net_port_immediates) / sizeof(net_port_immediates[0]); i++) {
 		uint8_t *at = base + net_port_immediates[i];
 		if (!game_mem_readable(at - 1, 5) || at[-1] != PORT_OPCODE || *(uint32_t *)at != DEFAULT_PORT) {

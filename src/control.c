@@ -187,8 +187,8 @@ static void partner_name_poll(void)
 static void bind_f(void)
 {
 #ifdef _WIN64
-#define RVA_BIND_INDEX   0x0d1810 // int (const char *name): the name's place in the bind table, 0 if none
-#define RVA_EXEC_BINDING 0x0ce450 // void (int localClient, int index, int key)
+#define RVA_BIND_INDEX   XR(0x0d1810) // int (const char *name): the name's place in the bind table, 0 if none
+#define RVA_EXEC_BINDING XR(0x0ce450) // void (int localClient, int index, int key)
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	const char *name = game_cmd_argv(1);
 	int index = ((int (*)(const char *))(base + RVA_BIND_INDEX))(name);
@@ -464,7 +464,7 @@ static LONG CALLBACK watchw_veh(EXCEPTION_POINTERS *ep)
 		const uintptr_t *st = (const uintptr_t *)sp;
 		for (int i = 0; i < 400 && n < 1400; i++) {
 			uintptr_t v = st[i];
-			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && (((uint8_t *)v)[-5] == 0xe8 || ((uint8_t *)v)[-2] == 0xff || ((uint8_t *)v)[-6] == 0xff))
+			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + XR(0x2a00000) && !IsBadReadPtr((void *)(v - 5), 5) && (((uint8_t *)v)[-5] == 0xe8 || ((uint8_t *)v)[-2] == 0xff || ((uint8_t *)v)[-6] == 0xff))
 				n += snprintf(line + n, sizeof(line) - n, " %x", (unsigned)(v - (uintptr_t)base));
 		}
 		log_printf("%s", line);

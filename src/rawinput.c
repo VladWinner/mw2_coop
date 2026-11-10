@@ -11,9 +11,10 @@
 #include "inputlog.h"
 #include "log.h"
 #include "rawinput.h"
+#include "game.h"
 
 #ifdef _WIN64
-#define MOUSE_POLL_CALL 0x28ee87
+#define MOUSE_POLL_CALL XR(0x28ee87)
 static volatile LONG raw_dx, raw_dy;
 static volatile LONG raw_events;
 static uint64_t (*consumer_original)(int, int, int, int);

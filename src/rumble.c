@@ -15,9 +15,9 @@
 
 #ifdef _WIN64
 #define RVA_EMPTY_BUILTIN 0xa650
-#define RVA_SCR_GET_STRING 0x223440 // const char *Scr_GetString(int index)
-#define RVA_SCR_GET_VECTOR 0x223540 // void Scr_GetVector(int index, float out[3])
-#define RVA_G_ENTITIES 0xd9e070
+#define RVA_SCR_GET_STRING XR(0x223440) // const char *Scr_GetString(int index)
+#define RVA_SCR_GET_VECTOR XR(0x223540) // void Scr_GetVector(int index, float out[3])
+#define RVA_G_ENTITIES XR(0xd9e070)
 #define GENTITY_SIZE 0x2a0
 #define GENTITY_ORIGIN 0xe8   // r.currentOrigin
 #define GENTITY_CLIENT 0x108

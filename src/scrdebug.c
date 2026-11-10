@@ -27,21 +27,21 @@
 #include "scrdebug.h"
 #include "scrdebug_stack.h"
 
-#define RVA_SCR_ERROR        0x2226a0
-#define RVA_SCR_ERR_FLAG_A   0x15a038b // uint8
-#define RVA_SCR_ERR_FLAG_B   0x1463bce // uint8
-#define RVA_SCR_ERR_DEPTH    0x18f44a0 // int32, scrVmPub.function_count
-#define RVA_SCR_JMPBUF_INDEX 0x18fca44 // int32
-#define RVA_SCR_JMPBUFS      0x18fca50 // jmp_buf[], 0x100 bytes each
-#define RVA_LONGJMP          0x2e485c  // the game's CRT longjmp
-#define RVA_TLS_BLOCK        0x203700  // void *Sys_GetValue(int)
-#define RVA_VM_POS           0x1900b78 // const char *, live code position of the running thread
-#define RVA_VM_FRAMES        0x18f44c0 // function_frame_t[], saved code position at +0
+#define RVA_SCR_ERROR        XR(0x2226a0)
+#define RVA_SCR_ERR_FLAG_A   XR(0x15a038b) // uint8
+#define RVA_SCR_ERR_FLAG_B   XR(0x1463bce) // uint8
+#define RVA_SCR_ERR_DEPTH    XR(0x18f44a0) // int32, scrVmPub.function_count
+#define RVA_SCR_JMPBUF_INDEX XR(0x18fca44) // int32
+#define RVA_SCR_JMPBUFS      XR(0x18fca50) // jmp_buf[], 0x100 bytes each
+#define RVA_LONGJMP          XR(0x2e485c)  // the game's CRT longjmp
+#define RVA_TLS_BLOCK        XR(0x203700)  // void *Sys_GetValue(int)
+#define RVA_VM_POS           XR(0x1900b78) // const char *, live code position of the running thread
+#define RVA_VM_FRAMES        XR(0x18f44c0) // function_frame_t[], saved code position at +0
 #define VM_FRAME_SIZE        0x28
-#define RVA_PROGRAM_BUFFER   0x15a03e0 // const char *
-#define RVA_GET_FUNC_HANDLE  0x216920  // int Scr_GetFunctionHandle(const char *file, const char *name)
-#define RVA_END_LOAD_SCRIPTS 0x2166d0  // void Scr_EndLoadScripts(void)
-#define RVA_END_LOAD_CALLEE  0x21a3b0  // its first call
+#define RVA_PROGRAM_BUFFER   XR(0x15a03e0) // const char *
+#define RVA_GET_FUNC_HANDLE  XR(0x216920)  // int Scr_GetFunctionHandle(const char *file, const char *name)
+#define RVA_END_LOAD_SCRIPTS XR(0x2166d0)  // void Scr_EndLoadScripts(void)
+#define RVA_END_LOAD_CALLEE  XR(0x21a3b0)  // its first call
 
 static uint8_t *base;
 
@@ -145,7 +145,7 @@ void scrdebug_install(void)
 	}
 	hook_jump(target, 14, scr_error, 0x90);
 	log_printf("scrdebug: Scr_Error replaced (runtime script errors are logged)");
-	static const scrdebug_vm_t vm = {RVA_GET_FUNC_HANDLE, RVA_PROGRAM_BUFFER, RVA_VM_POS, RVA_SCR_ERR_DEPTH, RVA_VM_FRAMES, 0, VM_FRAME_SIZE};
+	const scrdebug_vm_t vm = {RVA_GET_FUNC_HANDLE, RVA_PROGRAM_BUFFER, RVA_VM_POS, RVA_SCR_ERR_DEPTH, RVA_VM_FRAMES, 0, VM_FRAME_SIZE};
 	scrdebug_stack_init(base, &vm);
 	hook_end_load();
 }

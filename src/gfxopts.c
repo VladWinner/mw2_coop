@@ -16,7 +16,7 @@
 #define MENU_NAME_MAX 640
 
 #ifdef _WIN64
-#define RVA_UI 0x1a3ab00
+#define RVA_UI XR(0x1a3ab00)
 #define UI_MENUS_AT 0x38
 #define UI_COUNT_AT 0x1438
 #else

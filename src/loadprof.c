@@ -8,6 +8,7 @@
 
 #include "log.h"
 #include "loadprof.h"
+#include "game.h"
 
 #ifdef _WIN64
 #define MAX_KEYS 4096
@@ -145,13 +146,13 @@ static DWORD WINAPI aspect_thread(LPVOID unused)
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	for (;;) {
 		Sleep(5000);
-		log_printf("aspectlog: video %g pixel %g cgame %g render %g height %d", *(float *)(base + 0x4113738), *(float *)(base + 0x411373c), *(float *)(base + 0x43c640), *(float *)(base + 0x548c0c),
-			   *(int *)(base + 0x4113724));
+		log_printf("aspectlog: video %g pixel %g cgame %g render %g height %d", *(float *)(base + XR(0x4113738)), *(float *)(base + XR(0x411373c)), *(float *)(base + XR(0x43c640)), *(float *)(base + XR(0x548c0c)),
+			   *(int *)(base + XR(0x4113724)));
 		for (int n = 0; n < 6; n++) { // the screen placements (rva 0x5e0b80 + n * 0x70) and the flag the place lookup tests (0x5e0ccc)
-			const float *q = (const float *)(base + 0x5e0b80 + n * 0x70);
+			const float *q = (const float *)(base + XR(0x5e0b80) + n * 0x70);
 			log_printf("aspectlog: placement %d: scale %g %g | full %g %g | real viewport %g %g %g %g | virt view %g %g %g %g | real view %g %g %g %g | last %g %g", n, q[0], q[1], q[2], q[3], q[6], q[7], q[8], q[9], q[10], q[11], q[12], q[13], q[14], q[15], q[16], q[17], q[26], q[27]);
 		}
-		log_printf("aspectlog: place lookup flag (0x5e0ccc) = %d", *(int *)(base + 0x5e0ccc));
+		log_printf("aspectlog: place lookup flag (0x5e0ccc) = %d", *(int *)(base + XR(0x5e0ccc)));
 	}
 	return 0;
 }
@@ -197,7 +198,7 @@ static DWORD WINAPI readlog_thread(LPVOID unused)
 void readlog_start(void)
 {
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
-	void **slot = (void **)(base + 0x31c308);
+	void **slot = (void **)(base + XR(0x31c308));
 	DWORD old;
 	if (*slot != (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ReadFile") && *slot != (void *)GetProcAddress(GetModuleHandleA("kernelbase.dll"), "ReadFile")) {
 		log_printf("readlog: the ReadFile import is not where expected");

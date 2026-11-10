@@ -231,7 +231,7 @@ static intptr_t table_entry_guarded(uint64_t index)
 		table_cache_owner = NULL;
 		table_cache = NULL;
 	}
-	uint8_t *g = *(uint8_t **)(base + 0x4115920);
+	uint8_t *g = *(uint8_t **)(base + XR(0x4115920));
 	if (!g) {
 		if (table_cache_owner) // the renderer's device data is gone (the level shut down): every thread's cached zone regions go with it, not only this thread's table
 			InterlockedIncrement(&cache_generation);
@@ -368,14 +368,14 @@ void guards_install(void)
 		log_printf("guards: the entity table lookup at 0x2a70 is not as expected, not guarded");
 	if (settings_unlinkguard()) {
 		static const uint8_t unlink_bytes[15] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20}; // mov [rsp+8], rbx; mov [rsp+0x10], rsi; push rdi; sub rsp, 0x20
-		log_printf("guards: the list unlink at rva 0x1cb9f0 %s", hook_function(base + 0x1cb9f0, unlink_bytes, sizeof(unlink_bytes), (void *)unlink64_guarded, (void **)&unlink64_original) ? "is guarded" : "is not as expected, not guarded");
+		log_printf("guards: the list unlink at rva 0x1cb9f0 %s", hook_function(base + XR(0x1cb9f0), unlink_bytes, sizeof(unlink_bytes), (void *)unlink64_guarded, (void **)&unlink64_original) ? "is guarded" : "is not as expected, not guarded");
 	}
 	if (!settings_hotguards())
 		return;
 	{
 		// at 0xb0715: mov dl,1; mov rcx,rax; mov r14,rax; call 0x299ee0; movss xmm0,[rdi-8] (18 bytes), rax = the DObj just fetched
 		static const uint8_t removal_bytes[18] = {0xb2, 0x01, 0x48, 0x8b, 0xc8, 0x4c, 0x8b, 0xf0, 0xe8, 0xbe, 0x97, 0x1e, 0x00, 0xf3, 0x0f, 0x10, 0x47, 0xf8};
-		if (memcmp(base + 0xb0715, removal_bytes, sizeof(removal_bytes))) {
+		if (memcmp(base + XR(0xb0715), removal_bytes, sizeof(removal_bytes))) {
 			log_printf("guards: the removed entity loop at 0xb0715 is not as expected, not guarded");
 		} else {
 			uint8_t code[58] = {0x48, 0x85, 0xc0, 0x75, 0x0e,                           // 0: test rax, rax; jnz run
@@ -384,22 +384,22 @@ void guards_install(void)
 					    0x48, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xd0,         // 27: mov rax, <0x299ee0 at 29>; call rax
 					    0xf3, 0x0f, 0x10, 0x47, 0xf8,                           // 39: movss xmm0, [rdi-8]
 					    0xff, 0x25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};        // 44: jmp [rip+0], the address at 50: 0xb0727
-			uint64_t skip = (uint64_t)(base + 0xb07f6), flag = (uint64_t)(base + 0x299ee0), back = (uint64_t)(base + 0xb0727);
+			uint64_t skip = (uint64_t)(base + XR(0xb07f6)), flag = (uint64_t)(base + XR(0x299ee0)), back = (uint64_t)(base + XR(0xb0727));
 			memcpy(code + 11, &skip, 8);
 			memcpy(code + 29, &flag, 8);
 			memcpy(code + 50, &back, 8);
 			uint8_t *cave = hook_code(code, sizeof(code));
 			if (cave) {
-				hook_jump(base + 0xb0715, sizeof(removal_bytes), cave, 0x90);
+				hook_jump(base + XR(0xb0715), sizeof(removal_bytes), cave, 0x90);
 				log_printf("guards: the removed entity loop at 0xb0715 is guarded (an entity without a DObj is skipped)");
 			} else
 				log_printf("guards: the removed entity loop at 0xb0715 NOT guarded (no hook page)");
 		}
 		static const uint8_t flag_bytes[15] = {0x44, 0x0f, 0xb6, 0x41, 0x0f, 0x41, 0x0f, 0xb6, 0xc0, 0x41, 0x80, 0xc8, 0x01, 0x24, 0xfe}; // movzx r8d,[rcx+0xf]; movzx eax,r8b; or r8b,1; and al,0xfe
-		log_printf("guards: the DObj flag setter at 0x299ee0 %s", hook_function(base + 0x299ee0, flag_bytes, sizeof(flag_bytes), (void *)dobj_flag_guarded, (void **)&dobj_flag_original) ? "ignores a null DObj" : "is not as expected, not guarded");
+		log_printf("guards: the DObj flag setter at 0x299ee0 %s", hook_function(base + XR(0x299ee0), flag_bytes, sizeof(flag_bytes), (void *)dobj_flag_guarded, (void **)&dobj_flag_original) ? "ignores a null DObj" : "is not as expected, not guarded");
 	}
-	uint8_t *site = base + 0x9eb1c; // call 0x140085850 (the table lookup)
-	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + 0x85850) {
+	uint8_t *site = base + XR(0x9eb1c); // call 0x140085850 (the table lookup)
+	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + XR(0x85850)) {
 		log_printf("guards: weapon definition lookup not guarded (bytes differ)");
 		return;
 	}

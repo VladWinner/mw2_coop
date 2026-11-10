@@ -7254,7 +7254,7 @@ static void *game_device(void)
 {
 #ifdef _WIN64
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
-	return *(void **)(base + 0x410fd20); // the 64-bit game keeps its device here (native.c RVA_D3D_DEVICE)
+	return *(void **)(base + XR(0x410fd20)); // the 64-bit game keeps its device here (native.c RVA_D3D_DEVICE)
 #else
 	return d3dcap_device();
 #endif

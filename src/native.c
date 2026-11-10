@@ -43,13 +43,13 @@
 // Both builds compile this file; the 64-bit addresses below are used by the 64-bit build, the 32-bit ones are found in docs/32bit-native-map/ and come in piece by piece
 // (NATIVE32_READY in native_install says what is switched on).
 #ifdef _WIN64
-#define RVA_CG_DRAW 0x0bca00         // void (unsigned local_client, int, int): the cgame's frame; it calls the begin-frame below in the middle
-#define RVA_BEGIN_FRAME 0x00c840     // void (void): swaps the renderer's two frame data sets and resets their command buffers: once per frame
-#define RVA_SUBWINDOW_DVAR 0x4116158 // dvar_t *, the value (4 floats) at +0x10
+#define RVA_CG_DRAW XR(0x0bca00)         // void (unsigned local_client, int, int): the cgame's frame; it calls the begin-frame below in the middle
+#define RVA_BEGIN_FRAME XR(0x00c840)     // void (void): swaps the renderer's two frame data sets and resets their command buffers: once per frame
+#define RVA_SUBWINDOW_DVAR XR(0x4116158) // dvar_t *, the value (4 floats) at +0x10
 
 static const uint8_t cg_draw_bytes[] = {0x48, 0x8b, 0xc4, 0x55, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xc0, 0x00, 0x00, 0x00};
 static const uint8_t begin_frame_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20};
-#define RVA_CG_TIME 0x422434 // cg.time
+#define RVA_CG_TIME XR(0x422434) // cg.time
 #else
 // The 32-bit official build (docs/32bit-native-map/render.md): the cgame's DrawActiveFrame is cdecl (local client, int, int); its first five bytes (sub esp,0xc; push ebx; push ebp) are clean to copy.
 // The begin-frame is not hooked at its start (its first instructions are a push run and a relative call) but at its call in the cgame draw.
@@ -71,40 +71,40 @@ static uint8_t *base;
 #define CTX_SP(c) ((uintptr_t)(c).Esp)
 #endif
 #ifdef _WIN64
-#define RVA_LOCAL_PLAYERS_STORE 0x1714a6
-#define RVA_SV_ADD_COMMAND 0x232c30
-#define RVA_COM_ERROR 0x1fb5f0 // void (int code, const char *format, ...)
-#define RVA_SV_CLIENTS 0x19ada98
+#define RVA_LOCAL_PLAYERS_STORE XR(0x1714a6)
+#define RVA_SV_ADD_COMMAND XR(0x232c30)
+#define RVA_COM_ERROR XR(0x1fb5f0) // void (int code, const char *format, ...)
+#define RVA_SV_CLIENTS XR(0x19ada98)
 #define SV_CLIENT_STRIDE 0x1678
-#define RVA_COOP_BYTE 0x52fb5c
-#define RVA_LOCAL_PLAYERS 0x3c3eb0
-#define RVA_COOP_SLOTS 0x540bb0 // slot p: type int at +p*0x2650
+#define RVA_COOP_BYTE XR(0x52fb5c)
+#define RVA_LOCAL_PLAYERS XR(0x3c3eb0)
+#define RVA_COOP_SLOTS XR(0x540bb0) // slot p: type int at +p*0x2650
 #define SLOT_STRIDE 0x2650
-#define RVA_SV_CLIENT_THINK 0x22d000 // void (int lc, const usercmd_t *): copies the cmd into client_t[lc] + 0x1630 and runs the player's think
-#define RVA_CLIENT_COMMAND 0x166710 // void (int client, const char *text): the server's ClientCommand (thunk 0x22d150); "n <index>" wakes a NotifyOnPlayerCommand
+#define RVA_SV_CLIENT_THINK XR(0x22d000) // void (int lc, const usercmd_t *): copies the cmd into client_t[lc] + 0x1630 and runs the player's think
+#define RVA_CLIENT_COMMAND XR(0x166710) // void (int client, const char *text): the server's ClientCommand (thunk 0x22d150); "n <index>" wakes a NotifyOnPlayerCommand
 #define CLC_SEQ 0   // the client's reliable command ring (rva 0x545844 for local client 0): the sequence queued
 #define CLC_ACK 4   // the number handed to the server
 #define CLC_TEXT 8  // the texts, 0x40 bytes each, indexed by number & 0x7f
-#define RVA_KEY_CATCHERS 0x533cb0
-#define RVA_PM_FLAGS 0x535d44 // the live context's playerstate flags that CL_MouseMove (rva 0xcfcf0) tests with 0x800: set, it skips the whole mouse look and its view angle limits
-#define RVA_CLS_STATE 0x533cb8
-#define RVA_ACC_PITCH 0x533d14 // the live view angle accumulators (pitch, then yaw)
+#define RVA_KEY_CATCHERS XR(0x533cb0)
+#define RVA_PM_FLAGS XR(0x535d44) // the live context's playerstate flags that CL_MouseMove (rva 0xcfcf0) tests with 0x800: set, it skips the whole mouse look and its view angle limits
+#define RVA_CLS_STATE XR(0x533cb8)
+#define RVA_ACC_PITCH XR(0x533d14) // the live view angle accumulators (pitch, then yaw)
 #define ACC_IN_CLS (0x533d14 - 0x533cb8)
-#define RVA_CG_CLIENTNUM 0x40caa0 // the cgame's copy of the client number; +4: its local client number
-#define RVA_CL_PS 0x535d38 // the live cl block's playerstate
+#define RVA_CG_CLIENTNUM XR(0x40caa0) // the cgame's copy of the client number; +4: its local client number
+#define RVA_CL_PS XR(0x535d38) // the live cl block's playerstate
 #define CL_RING_MASK 127
 #define CL_CMDNUM 0x2000
 #define CL_SENT 0x2004
 #define CL_BLOCK_PS 0x2018
-#define RVA_NOPREDICT_DVAR 0x51e028
-#define RVA_FOV_DVAR 0x51e1a8
-#define RVA_DRAWGUN_DVAR 0x51e120
-#define RVA_WAIT_TYPE 0x300a0
-#define RVA_CLIENT_INIT_A 0xb8830 // the per-client parts of the cgame init
-#define RVA_CLIENT_INIT_B 0xb87b0
-#define RVA_COOP_DVAR 0x1905308
+#define RVA_NOPREDICT_DVAR XR(0x51e028)
+#define RVA_FOV_DVAR XR(0x51e1a8)
+#define RVA_DRAWGUN_DVAR XR(0x51e120)
+#define RVA_WAIT_TYPE XR(0x300a0)
+#define RVA_CLIENT_INIT_A XR(0xb8830) // the per-client parts of the cgame init
+#define RVA_CLIENT_INIT_B XR(0xb87b0)
+#define RVA_COOP_DVAR XR(0x1905308)
 #define MSG_T_SIZE 0x30
-#define RVA_CENT 0x441070 // cg_entities
+#define RVA_CENT XR(0x441070) // cg_entities
 #define CENT_SIZE 0x1a8
 #define CENT_TYPE 0xe0
 #define CENT_FLAGS 0xec
@@ -119,12 +119,12 @@ static uint8_t *base;
 #define P0_REST 0x30 // the rest of the pose
 #define P0_REST_LEN 0x30
 #define P0_TREE 0x170 // the event sequence and the event bytes (cgame check events, rva 0x9f840: +0x170 sequence, +0x174 events, +0x194 previous sequence); once taken for an animation tree reference
-#define SLOT_END_PAST(q) ((q) > base + 0x545857)
-#define RVA_AIM_GLOB 0x3cf180 // aaGlob
-#define RVA_AIM_TARGET_GLOB 0x3d0530
-#define RVA_XFER_APPLY 0x29a210 // the animation transfer queue's apply loop (the entity cleanup function's first call)
-#define RVA_LEVEL_NUM_ENT 0xd96e80
-#define RVA_GENTITIES 0xd9e070
+#define SLOT_END_PAST(q) ((q) > base + XR(0x545857))
+#define RVA_AIM_GLOB XR(0x3cf180) // aaGlob
+#define RVA_AIM_TARGET_GLOB XR(0x3d0530)
+#define RVA_XFER_APPLY XR(0x29a210) // the animation transfer queue's apply loop (the entity cleanup function's first call)
+#define RVA_LEVEL_NUM_ENT XR(0xd96e80)
+#define RVA_GENTITIES XR(0xd9e070)
 #define GENT_SIZE 0x2a0
 #define GENT_SENTIENT 0x118
 #define SENT_TEAM 8
@@ -133,22 +133,22 @@ static uint8_t *base;
 #define WD_AIM_RANGE 0x42c // the weapon def's aim assist ranges: aiming down the sight, auto aim
 #define WD_AIM_RANGE_ADS 0x430
 #define WD_AUTO_RANGE 0x428
-#define WEAPON_DEF(w) (((const uint8_t *(*)(int64_t))(base + 0x85850))(w))
-#define RVA_RENDER_WIDTH 0x4113720 // the active render/backbuffer dimensions
-#define RVA_RENDER_HEIGHT 0x4113724
-#define RVA_CG_ASPECT 0x43c640 // the cgame's aspect
-#define RVA_PIXEL_ASPECT 0x411373c // the pixel aspect of the 2D
-#define RVA_VIDEO_ASPECT 0x4113738
-#define RVA_WAIT_ALPHA_SITE 0x94039
-#define RVA_ENT_FLAGS 0x52c300 // the bit set of entities the snapshot transition flagged for the cleanup
-#define RVA_CLIENT_DOBJ 0x1fece0 // DObj *(int entity): the client's DObj table
-#define RVA_SERVER_DOBJ 0x1fee30
-#define RVA_ENT_INFO 0x234520 // the server's entity info of an entity
-#define RVA_SDOBJ_INFO 0x2968e0 // the first field of a DObj (the tree)
-#define RVA_DOBJ_CLRBIT 0x1fefa0
+#define WEAPON_DEF(w) (((const uint8_t *(*)(int64_t))(base + XR(0x85850)))(w))
+#define RVA_RENDER_WIDTH XR(0x4113720) // the active render/backbuffer dimensions
+#define RVA_RENDER_HEIGHT XR(0x4113724)
+#define RVA_CG_ASPECT XR(0x43c640) // the cgame's aspect
+#define RVA_PIXEL_ASPECT XR(0x411373c) // the pixel aspect of the 2D
+#define RVA_VIDEO_ASPECT XR(0x4113738)
+#define RVA_WAIT_ALPHA_SITE XR(0x94039)
+#define RVA_ENT_FLAGS XR(0x52c300) // the bit set of entities the snapshot transition flagged for the cleanup
+#define RVA_CLIENT_DOBJ XR(0x1fece0) // DObj *(int entity): the client's DObj table
+#define RVA_SERVER_DOBJ XR(0x1fee30)
+#define RVA_ENT_INFO XR(0x234520) // the server's entity info of an entity
+#define RVA_SDOBJ_INFO XR(0x2968e0) // the first field of a DObj (the tree)
+#define RVA_DOBJ_CLRBIT XR(0x1fefa0)
 #define DOBJ_NUMMODELS 0xd
 #define DOBJ_MODELS 0xa8
-#define P0GENERAL_RET(r) ((r) >= base + 0x9ea20 && (r) < base + 0x9ea20 + 1102)
+#define P0GENERAL_RET(r) ((r) >= base + XR(0x9ea20) && (r) < base + XR(0x9ea20) + 1102)
 #else
 // the 32-bit official build: docs/32bit-native-map/clientctx.md
 #define RVA_LOCAL_PLAYERS_STORE XR(0xbf9db)
@@ -331,7 +331,7 @@ static float *subwindow(void)
 // ---- the compositor (mode 2): one scene per frame, the two halves kept between frames
 // Each frame the cgame draws one player's view into one half of the picture (r_subwindow). The frame's end (EndScene of the game's device, on the render thread)
 // copies that half into a texture of its own and fills the other half from the other texture, so the picture always has both views whole.
-#define RVA_D3D_DEVICE 0x410fd20
+#define RVA_D3D_DEVICE XR(0x410fd20)
 static volatile LONG ring[8];
 static volatile DWORD render_tid;
 static volatile LONG ring_head, ring_tail; // frames queued by the main thread, and the halves they were drawn into, in order
@@ -1064,7 +1064,7 @@ static void perf_report(void)
 		   (double)perf_wait * ms / sec, (double)perf_copy * ms / sec, nc, nc ? (double)perf_comp * ms / nc : 0.0);
 #ifdef _WIN64
 	if (CFG_ONCE("sndlog", 0)) { // the engine's two sound listeners (rva 0x1a28f48, 0x3c bytes each: origin, active flag at +0x38)
-		const uint8_t *l = base + 0x1a28f48;
+		const uint8_t *l = base + XR(0x1a28f48);
 		log_printf("native: sound listeners: 0 %s at %.0f %.0f %.0f, 1 %s at %.0f %.0f %.0f", l[0x38] ? "on" : "off", (double)((const float *)l)[0], (double)((const float *)l)[1], (double)((const float *)l)[2],
 			   l[0x3c + 0x38] ? "on" : "off", (double)((const float *)(l + 0x3c))[0], (double)((const float *)(l + 0x3c))[1], (double)((const float *)(l + 0x3c))[2]);
 		if (snd_ctx_ptr)
@@ -2222,7 +2222,7 @@ static void scene2d_hook(void *vp)
 		if (armed < 0)
 			armed = cfg("scenescan", 0);
 		if (armed && split_on && ++n >= 200 && n < 206) {
-			int t = *(int *)(base + 0x422434);
+			int t = *(int *)(base + XR(0x422434));
 			char line[900];
 			int len = snprintf(line, sizeof(line), "native: scenescan %p t=%d half %d:", vp, t, ring_head != ring_tail ? (int)ring[ring_tail & 7] : -1);
 			const int *d = (const int *)vp;
@@ -2520,7 +2520,7 @@ static void vid_restart_hook(void)
 	// The engine restores the level after a vid_restart from a save it makes itself; a co-op session saves nothing (progress.c), so the reload ends in the engine's error "Trying to read
 	// corrupted file" and the players are thrown out to the menu (checked with a split session, v0.6.0 report: alt+enter). A running co-op level therefore does not restart its video
 	// ([native] vidrestart=1 lets it through); in the menus it is as before.
-	if (!cfg("vidrestart", 0) && *(volatile int *)(base + 0x533cb8) == 6) { // RVA_CLIENT_STATE: 6 = a level is running
+	if (!cfg("vidrestart", 0) && *(volatile int *)(base + XR(0x533cb8)) == 6) { // RVA_CLIENT_STATE: 6 = a level is running
 		char coop[8] = "";
 		game_dvar_string("coop", coop, sizeof(coop));
 		if (coop[0] == '1') {
@@ -2544,9 +2544,9 @@ static void vid_restart_hook(void)
 }
 static void vid_restart_install(void)
 {
-	void **entry = (void **)(base + 0x5dae38 + 0x20);
+	void **entry = (void **)(base + XR(0x5dae38) + 0x20);
 	DWORD old;
-	if (*entry != (void *)(base + 0xd51d0)) {
+	if (*entry != (void *)(base + XR(0xd51d0))) {
 		log_printf("native: vid_restart not hooked (the command table entry differs)");
 		return;
 	}
@@ -2825,7 +2825,7 @@ static void cent_trans_install(void)
 	if (done)
 		return;
 	done = 1;
-	log_printf("native: centskip hook %s", hook_function(base + 0xb8d80, b, sizeof(b), (void *)cent_trans_hook, (void **)&cent_trans_orig) ? "installed" : "FAILED");
+	log_printf("native: centskip hook %s", hook_function(base + XR(0xb8d80), b, sizeof(b), (void *)cent_trans_hook, (void **)&cent_trans_orig) ? "installed" : "FAILED");
 }
 // The server frame body (rva 0x173e90) is a state machine (phase at rva 0xd97bf8, the entity think index at 0xd97c04) that a time budget can suspend: mode 1 = run until the rdtsc
 // deadline, mode 0 = run to the end. [native] slicelog=1 records every call (context, mode, phase and index before and after, result, duration) and the server steps between them,
@@ -2859,7 +2859,7 @@ static uint64_t slice_hook(int mode, int deadline)
 	LARGE_INTEGER c, hz;
 	QueryPerformanceCounter(&c);
 	QueryPerformanceFrequency(&hz);
-	const int ph0 = *(const int *)(base + 0xd97bf8), i0 = *(const int *)(base + 0xd97c04);
+	const int ph0 = *(const int *)(base + XR(0xd97bf8)), i0 = *(const int *)(base + XR(0xd97c04));
 	LONGLONG t0 = c.QuadPart;
 	uint64_t r = slice_orig(mode, deadline);
 	QueryPerformanceCounter(&c);
@@ -2872,9 +2872,9 @@ static uint64_t slice_hook(int mode, int deadline)
 		slice_ev[k].dur = (double)(c.QuadPart - t0) * 1000.0 / (double)hz.QuadPart;
 		slice_ev[k].mode = mode;
 		slice_ev[k].ph0 = ph0;
-		slice_ev[k].ph1 = *(const int *)(base + 0xd97bf8);
+		slice_ev[k].ph1 = *(const int *)(base + XR(0xd97bf8));
 		slice_ev[k].i0 = i0;
-		slice_ev[k].i1 = *(const int *)(base + 0xd97c04);
+		slice_ev[k].i1 = *(const int *)(base + XR(0xd97c04));
 		slice_ev[k].ret = (int)(r & 0xff);
 		slice_ev[k].ctx = ctx_current == 1 ? 1 : 0;
 		if (slice_n == 700)
@@ -2901,7 +2901,7 @@ static void slice_install(void)
 	if (done)
 		return;
 	done = 1;
-	log_printf("native: slicelog hook %s", hook_function(base + 0x173e90, b, sizeof(b), (void *)slice_hook, (void **)&slice_orig) ? "installed" : "FAILED");
+	log_printf("native: slicelog hook %s", hook_function(base + XR(0x173e90), b, sizeof(b), (void *)slice_hook, (void **)&slice_orig) ? "installed" : "FAILED");
 }
 #endif // _WIN64 (the diagnostics above)
 // The snapshot's entity states. In single player the server and the cgame share ONE array of them (rva 0x19c6410, 0xac bytes each, entity number as the index): the server's
@@ -2997,8 +2997,8 @@ static void trans_note(int site)
 	trans_n[site][c]++;
 	static int logged;
 	if (logged < 3000 && ++logged > 20)
-		log_printf("native: transition site %s ctx %d: client time %d, cg.snap %d, cg.nextSnap %d", site ? "b8c50" : "b8d30", ctx_current, *(const int *)(base + 0x51dca8), *(const int *)(*(const uintptr_t *)(base + 0x51b078) + 4),
-			   *(const int *)(*(const uintptr_t *)(base + 0x51b080) + 4));
+		log_printf("native: transition site %s ctx %d: client time %d, cg.snap %d, cg.nextSnap %d", site ? "b8c50" : "b8d30", ctx_current, *(const int *)(base + XR(0x51dca8)), *(const int *)(*(const uintptr_t *)(base + XR(0x51b078)) + 4),
+			   *(const int *)(*(const uintptr_t *)(base + XR(0x51b080)) + 4));
 	static LONGLONG next;
 	LARGE_INTEGER q, f;
 	QueryPerformanceCounter(&q);
@@ -3027,7 +3027,7 @@ static void trans_install(void)
 	if (done)
 		return;
 	done = 1;
-	log_printf("native: transitionlog hooks %s", hook_call(base + 0xb8d55, (void *)trans_a_hook, (void **)&trans_a_orig) && hook_call(base + 0xb8cee, (void *)trans_b_hook, (void **)&trans_b_orig) ? "installed" : "FAILED");
+	log_printf("native: transitionlog hooks %s", hook_call(base + XR(0xb8d55), (void *)trans_a_hook, (void **)&trans_a_orig) && hook_call(base + XR(0xb8cee), (void *)trans_b_hook, (void **)&trans_b_orig) ? "installed" : "FAILED");
 }
 // (the diagnostics again)
 static void svslice_install(void)
@@ -3036,7 +3036,7 @@ static void svslice_install(void)
 	if (done)
 		return;
 	done = 1;
-	log_printf("native: svslice hook %s", hook_call(base + 0xbcc5a, (void *)svslice_hook, (void **)&svslice_orig) ? "installed" : "FAILED");
+	log_printf("native: svslice hook %s", hook_call(base + XR(0xbcc5a), (void *)svslice_hook, (void **)&svslice_orig) ? "installed" : "FAILED");
 }
 // [native] framelog=1 (plain game, 2026-11-02): where the time of a frame goes. Com_Frame (rva 0x1fbde0) reads the clock, runs the server frame (rva 0x233190) and the client
 // frame (rva 0xd4ad0); the cgame draw sits inside. For 80 frames in a row (after the first 600 draws): the period from one Com_Frame start to the next, the server frame's and the
@@ -3105,8 +3105,8 @@ static void fs_install(void)
 	done = 1;
 	// the server and client frames start with RIP-relative loads, so they are hooked at their call sites in Com_Frame (rva 0x1fc2ef, 0x1fc304); Com_Frame itself has 15 plain bytes
 	static const uint8_t com_b[15] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18};
-	fs_on = hook_function(base + 0x1fbde0, com_b, sizeof(com_b), (void *)fs_com_hook, (void **)&fs_com_orig) && hook_call(base + 0x1fc2ef, (void *)fs_sv_hook, (void **)&fs_sv_orig) &&
-		hook_call(base + 0x1fc304, (void *)fs_cl_hook, (void **)&fs_cl_orig);
+	fs_on = hook_function(base + XR(0x1fbde0), com_b, sizeof(com_b), (void *)fs_com_hook, (void **)&fs_com_orig) && hook_call(base + XR(0x1fc2ef), (void *)fs_sv_hook, (void **)&fs_sv_orig) &&
+		hook_call(base + XR(0x1fc304), (void *)fs_cl_hook, (void **)&fs_cl_orig);
 	log_printf("native: framelog hooks %s", fs_on ? "installed" : "FAILED");
 }
 // [native] pace=1 (experiment, needs framelog=1): the draw ends at a fixed offset from the clock read of its Com_Frame. The offset is the 85th percentile of the last 128 frames'
@@ -3240,7 +3240,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		if (++p0cnt_draws >= 100) {
 			const float *e = (const float *)(base + RVA_CENT);
 			log_printf("native: p0cnt ctx1 draws %u adds of entity 0 %u | slot0 pos %.1f %.1f %.1f | cg.ps (p2) %.1f %.1f | last add: arg5 %.1f %.1f %.1f pose %.1f %.1f %.1f | flags ctx1 ent0 %08x ctx0 ent1 %08x", p0cnt_draws, p0cnt_adds, (double)e[63], (double)e[64], (double)e[65],
-				   (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460), (double)p0cnt_draw_org[0], (double)p0cnt_draw_org[1], (double)p0cnt_draw_org[2],
+				   (double)*(const float *)(base + XR(0x42245c)), (double)*(const float *)(base + XR(0x422460)), (double)p0cnt_draw_org[0], (double)p0cnt_draw_org[1], (double)p0cnt_draw_org[2],
 				   (double)p0cnt_draw_org_b[0], (double)p0cnt_draw_org_b[1], (double)p0cnt_draw_org_b[2], p0cnt_flags1, p0cnt_flags0);
 			p0cnt_draws = p0cnt_adds = 0;
 			{
@@ -3300,7 +3300,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				int linked, stance;
 				if (game_dvar_raw("mw2coop_p2pos", v, sizeof(v)) && sscanf(v, "%f %f %f %d %d", &bx, &by, &bz, &linked, &stance) == 5) {
 #ifdef _WIN64
-					const uint8_t *ps = base + 0x422440;
+					const uint8_t *ps = base + XR(0x422440);
 #else
 					const uint8_t *ps = base + RVA_CL_PS;
 #endif
@@ -3346,12 +3346,12 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		static unsigned sn[2];
 		if (++sn[ctx_current] % 30 == 0) {
 			#ifdef _WIN64
-			const float *s = (const float *)(base + 0x45851b0); // (the RANGE_SUN range, defined further down)
+			const float *s = (const float *)(base + XR(0x45851b0)); // (the RANGE_SUN range, defined further down)
 #else
 			const float *s = (const float *)(base + XR(0x204a260));
 #endif
 			log_printf("native: sunlog ctx %d state %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f cg.time %d", ctx_current, (double)s[0], (double)s[1], (double)s[2], (double)s[3], (double)s[4], (double)s[5],
-				   (double)s[6], (double)s[7], (double)s[8], (double)s[9], *(int *)(base + 0x422434));
+				   (double)s[6], (double)s[7], (double)s[8], (double)s[9], *(int *)(base + XR(0x422434)));
 		}
 	}
 	if (CFG_ONCE("viewlog", 0) >= 2 && ctx_on) {
@@ -3360,8 +3360,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		static float last[2][3];
 		static unsigned quiet[2], lines[2];
 #ifdef _WIN64
-		const uint8_t *ps = base + 0x422440;
-		int cgtime = *(int *)(base + 0x422434);
+		const uint8_t *ps = base + XR(0x422440);
+		int cgtime = *(int *)(base + XR(0x422434));
 #else
 		const uint8_t *ps = base + RVA_CL_PS; // (32 bits: the client block's copy, as the viewlog=1 lines do)
 		int cgtime = 0;
@@ -3382,7 +3382,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		static unsigned vn;
 		if (++vn % 25 == 0 && vn < 20000) {
 #ifdef _WIN64
-			const uint8_t *ps = base + 0x422440;
+			const uint8_t *ps = base + XR(0x422440);
 #else
 			const uint8_t *ps = base + RVA_CL_PS; // (32 bits: the cgame's own copy was not looked for; the client block's copy is the one the next frame is predicted from)
 #endif
@@ -3401,16 +3401,16 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			QueryPerformanceCounter(&pc);
 			QueryPerformanceFrequency(&hz);
 			log_printf("native: timelog #%u wall %.1f ctx %d cg.time %d frametime %d interp %.3f cl.serverTime %d frac %.3f", seq, (double)pc.QuadPart * 1000.0 / (double)hz.QuadPart,
-				   ctx_current, *(int *)(base + 0x422434), *(int *)(base + 0x422430), (double)*(float *)(base + 0x42242c), *(int *)(base + 0x51dca8), (double)*(float *)(base + 0x51dcb0));
+				   ctx_current, *(int *)(base + XR(0x422434)), *(int *)(base + XR(0x422430)), (double)*(float *)(base + XR(0x42242c)), *(int *)(base + XR(0x51dca8)), (double)*(float *)(base + XR(0x51dcb0)));
 			if (CFG_ONCE("timelog", 0) > 1) {
 				// "as on ice": where player 2 is by his own context's playerState (cg.ps origin, rva 0x42245c, live in context 1) and where context 0's cgame has his entity (slot 1,
 				// interpolated origin floats 63..65); both on the same cg.time scale
-				const float *ps = (const float *)(base + 0x42245c);
+				const float *ps = (const float *)(base + XR(0x42245c));
 				const float *e1 = (const float *)(base + RVA_CENT + CENT_SIZE);
 				if (ctx_current == 1)
-					log_printf("native: timelog p2ps cg.time %d pos %.1f %.1f %.1f", *(int *)(base + 0x422434), (double)ps[0], (double)ps[1], (double)ps[2]);
+					log_printf("native: timelog p2ps cg.time %d pos %.1f %.1f %.1f", *(int *)(base + XR(0x422434)), (double)ps[0], (double)ps[1], (double)ps[2]);
 				else
-					log_printf("native: timelog p2ent cg.time %d pos %.1f %.1f %.1f", *(int *)(base + 0x422434), (double)e1[63], (double)e1[64], (double)e1[65]);
+					log_printf("native: timelog p2ent cg.time %d pos %.1f %.1f %.1f", *(int *)(base + XR(0x422434)), (double)e1[63], (double)e1[64], (double)e1[65]);
 			}
 		}
 		seq++;
@@ -3658,7 +3658,7 @@ static const range_t ranges[] = {
 static int render_idle_pred(void)
 {
 #ifdef _WIN64
-	return *(volatile int *)(base + 0x1429b5c) < 1;
+	return *(volatile int *)(base + XR(0x1429b5c)) < 1;
 #else
 	return *(volatile int *)(base + XR(0x1151b60)) < 1;
 #endif
@@ -3666,7 +3666,7 @@ static int render_idle_pred(void)
 static void render_wait_idle(void)
 {
 #ifdef _WIN64
-	((void (*)(int (*)(void)))(base + 0x301e0))(render_idle_pred);
+	((void (*)(int (*)(void)))(base + XR(0x301e0)))(render_idle_pred);
 #else
 	// (32-bit: the engine's loop, VA 0x52afc0, takes the predicate in ESI and has another shape in the iw4x-sp exe, so the counter is polled here, 50 ms at most)
 	const DWORD t0 = GetTickCount();
@@ -3681,7 +3681,7 @@ int native_log_ctx(void) { return native_active ? ctx_current : 0; } // (for the
 #ifdef _WIN64
 static const char *vision_name_of(int ctx) // the cgame block's visionset_naked name of a context (live when it is the current one)
 {
-	return ctx == ctx_current ? (const char *)(base + 0x43c0ac) : ctx_store[ctx][0] ? (const char *)(ctx_store[ctx][0] + (0x43c0ac - 0x404450)) : NULL;
+	return ctx == ctx_current ? (const char *)(base + XR(0x43c0ac)) : ctx_store[ctx][0] ? (const char *)(ctx_store[ctx][0] + (0x43c0ac - 0x404450)) : NULL;
 }
 #else
 static const char *vision_name_of(int ctx) { (void)ctx; return NULL; }
@@ -3696,7 +3696,7 @@ static struct { unsigned rva, size; uint8_t *store[2]; } xr[24];
 static int xr_n = -1;
 static int xr_render_idle(void)
 {
-	return *(volatile int *)(base + 0x1429b5c) < 1;
+	return *(volatile int *)(base + XR(0x1429b5c)) < 1;
 }
 static void xr_parse(void)
 {
@@ -3730,7 +3730,7 @@ static void ctx_ensure(void)
 		if (cfg("xswap", 0) & (1 << i)) {
 			x_store[0][i] = VirtualAlloc(NULL, xranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 			x_store[1][i] = VirtualAlloc(NULL, xranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-			memcpy(x_store[1][i], base + xranges[i].rva, xranges[i].size);
+			memcpy(x_store[1][i], base + XR(xranges[i].rva), xranges[i].size);
 		}
 #endif
 }
@@ -3851,8 +3851,8 @@ static void ctx_swap_mask(int to, unsigned mask)
 	if (mask == CTX_ALL)
 		for (int i = 0; i < 3; i++)
 			if (x_store[0][i]) {
-				memcpy(x_store[ctx_current][i], base + xranges[i].rva, xranges[i].size);
-				memcpy(base + xranges[i].rva, x_store[to][i], xranges[i].size);
+				memcpy(x_store[ctx_current][i], base + XR(xranges[i].rva), xranges[i].size);
+				memcpy(base + XR(xranges[i].rva), x_store[to][i], xranges[i].size);
 			}
 	if (mask == CTX_ALL) {
 		if (xr_n < 0)
@@ -3861,7 +3861,7 @@ static void ctx_swap_mask(int to, unsigned mask)
 			static int (*idle)(void);
 			if (!idle)
 				idle = xr_render_idle;
-			((void (*)(int (*)(void)))(base + 0x301e0))(idle);
+			((void (*)(int (*)(void)))(base + XR(0x301e0)))(idle);
 		}
 		for (int i = 0; i < xr_n; i++) {
 			memcpy(xr[i].store[ctx_current], base + xr[i].rva, xr[i].size);
@@ -3966,10 +3966,10 @@ static void client_n_install(void)
 	*n_client = 1;
 	int done = 0;
 	for (size_t i = 0; i < sizeof(client_n_sites) / sizeof(client_n_sites[0]); i++) {
-		uint8_t *site = base + client_n_sites[i].rva;
+		uint8_t *site = base + XR(client_n_sites[i].rva);
 		int32_t old;
 		memcpy(&old, site + client_n_sites[i].disp, 4);
-		if ((uint8_t *)(site + client_n_sites[i].length + old) != base + 0x3c3eb0)
+		if ((uint8_t *)(site + client_n_sites[i].length + old) != base + XR(0x3c3eb0))
 			continue; // not the instruction the build has
 		int64_t to = (int64_t)((uint8_t *)n_client - (site + client_n_sites[i].length));
 		if (to > INT32_MAX || to < INT32_MIN)
@@ -3993,11 +3993,11 @@ static void client_n_install(void)
 #ifdef _WIN64
 static void list_players_install(void)
 {
-	uint8_t *site = base + 0x23459a;
+	uint8_t *site = base + XR(0x23459a);
 	int32_t old;
 	memcpy(&old, site + 3, 4);
 	int32_t *zero = (int32_t *)hook_page_near(base + RVA_LOCAL_PLAYERS_STORE);
-	if (!zero || (uint8_t *)(site + 7 + old) != base + 0x3c3eb0) {
+	if (!zero || (uint8_t *)(site + 7 + old) != base + XR(0x3c3eb0)) {
 		log_printf("native: entity list patch: unexpected code");
 		return;
 	}
@@ -4019,7 +4019,7 @@ static void (*usercmd_step_original)(int);
 static void (*snapshot_msg_original)(void *, int);
 static void (*cg_init_all_original)(void);
 static void (*snapshot_take_original)(void);
-#define RVA_LOCAL_PLAYERS_N 0x3c3eb0
+#define RVA_LOCAL_PLAYERS_N XR(0x3c3eb0)
 
 // A client-side function that loops over the local clients (and calls others that touch the client statics without a client number): run for context 0 and, once context 1
 // exists, for context 1, each time with the number of local players set to 1 so that every loop sees only client 0, which in context 1 is client 1.
@@ -4190,7 +4190,7 @@ static DWORD WINAPI hang_watch_thread(LPVOID unused)
 
 static void cg_init_all_hook(void)
 {
-	log_printf("native: cgame init (context 0; context 1 follows after the first frames), dvar ptr 0x52bfc0 = %p", *(void **)(base + 0x52bfc0));
+	log_printf("native: cgame init (context 0; context 1 follows after the first frames), dvar ptr 0x52bfc0 = %p", *(void **)(base + XR(0x52bfc0)));
 	{
 		static int started;
 		if (!started && cfg("hangwatch", 1)) {
@@ -4217,7 +4217,7 @@ static void cg_init_all_hook(void)
 		// came up, in the render thread (rva 0x11b6f6) and the main thread (0x1bdef0), in 1 of 2 v0.6.0 runs of QA scenario hop (Trainer to Roadkill).
 		ctx_seeded = 0;
 	}
-	log_printf("native: cgame init done, dvar ptr 0x52bfc0 = %p", *(void **)(base + 0x52bfc0));
+	log_printf("native: cgame init done, dvar ptr 0x52bfc0 = %p", *(void **)(base + XR(0x52bfc0)));
 }
 
 static void snapshot_take_hook(void)
@@ -4257,7 +4257,7 @@ static void ctx_jitter_log(void)
 		return;
 	char line[1200];
 	int n = snprintf(line, sizeof(line), "native: ctx1 ps frame %u:", seen);
-	const float *f = (const float *)(base + 0x422440);
+	const float *f = (const float *)(base + XR(0x422440));
 	for (int i = 0; i < 70; i++) {
 		float v = f[i];
 		if (v > -100000.0f && v < 100000.0f && (v > 0.0001f || v < -0.0001f))
@@ -4275,7 +4275,7 @@ static void ctx_entity_log(void)
 	if (++seen[ctx_current] != 600)
 		return;
 	{
-		const float *f = (const float *)(base + 0x422440);
+		const float *f = (const float *)(base + XR(0x422440));
 		char line[1500];
 		int n = snprintf(line, sizeof(line), "native: ctx %d cg ps floats:", ctx_current);
 		for (int i = 0; i < 100; i++)
@@ -4284,7 +4284,7 @@ static void ctx_entity_log(void)
 		log_printf("%s", line);
 	}
 	{
-		const float *f = (const float *)(base + 0x43c200);
+		const float *f = (const float *)(base + XR(0x43c200));
 		char line[1500];
 		int n = snprintf(line, sizeof(line), "native: ctx %d refdef-ish floats @43c200:", ctx_current);
 		for (int i = 0; i < 90; i++)
@@ -4292,8 +4292,8 @@ static void ctx_entity_log(void)
 				n += snprintf(line + n, sizeof(line) - n, " %x=%.2f", i * 4, f[i]);
 		log_printf("%s", line);
 	}
-	const float *cam = (const float *)(base + 0x42245c);
-	log_printf("native: ctx %d camera %.0f %.0f %.0f, clientNum %d", ctx_current, cam[0], cam[1], cam[2], *(int *)(base + 0x40caa0));
+	const float *cam = (const float *)(base + XR(0x42245c));
+	log_printf("native: ctx %d camera %.0f %.0f %.0f, clientNum %d", ctx_current, cam[0], cam[1], cam[2], *(int *)(base + XR(0x40caa0)));
 	for (int i = 0; i < 1024; i++) {
 		const uint8_t *e = base + RVA_CENT + (size_t)i * CENT_SIZE;
 		const float *o = (const float *)(e + 0x18);
@@ -4330,7 +4330,7 @@ static void npc_log(void)
 		int n = snprintf(line, sizeof(line), "native: npcsnap ctx %d:", ctx_current);
 		for (int off = 0x404450; off < 0x44f000; off += 8) {
 			uintptr_t v = *(const uintptr_t *)(base + off);
-			if (v >= (uintptr_t)base + 0x51b078 && v < (uintptr_t)base + 0x51dcb0 + 0x100)
+			if (v >= (uintptr_t)base + XR(0x51b078) && v < (uintptr_t)base + XR(0x51dcb0) + 0x100)
 			{
 				n += snprintf(line + n, sizeof(line) - n, " [%x]=snap+%x:", off, (unsigned)(v - (uintptr_t)base - 0x51b078));
 				for (int k = 0; k < 12; k++)
@@ -4409,7 +4409,7 @@ static void npc_log(void)
 	}
 	if (CFG_ONCE("npcptr", 0) >= 2 && c == 0) { // the head of the next snapshot structure, to find numEntities
 		static int last_t = -1, dumps;
-		const uintptr_t ns = *(const uintptr_t *)(base + 0x40cac8);
+		const uintptr_t ns = *(const uintptr_t *)(base + XR(0x40cac8));
 		const int tm = ns ? *(const int *)(ns + 4) : -1;
 		if (tm != last_t && dumps < 12) {
 			last_t = tm;
@@ -4420,17 +4420,17 @@ static void npc_log(void)
 		}
 	}
 	if (pick >= 0 && logged[c] < 9000 && CFG_ONCE("npcptr", 0)) { // the snapshot pointers and the fraction the pose interpolation (rva 0x9da90) reads: 0x51b078 / 0x51b080 -> snapshot, +4 = serverTime; 0x51dcb0
-		const uintptr_t pa = *(const uintptr_t *)(base + 0x51b078), pb = *(const uintptr_t *)(base + 0x51b080);
+		const uintptr_t pa = *(const uintptr_t *)(base + XR(0x51b078)), pb = *(const uintptr_t *)(base + XR(0x51b080));
 		log_printf("native: npcptr ctx %d ent %d poseA %d poseB %d frac %.3f | cg.snap %d cg.next %d | cg.time %d", ctx_current, pick, pa ? *(const int *)(pa + 4) : -1, pb ? *(const int *)(pb + 4) : -1,
-			   (double)*(const float *)(base + 0x51dcb0), *(const int *)(*(const uintptr_t *)(base + 0x40cac0) + 4), *(const int *)(*(const uintptr_t *)(base + 0x40cac8) + 4), *(const int *)(base + 0x422434));
+			   (double)*(const float *)(base + XR(0x51dcb0)), *(const int *)(*(const uintptr_t *)(base + XR(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR(0x40cac8)) + 4), *(const int *)(base + XR(0x422434)));
 	}
 	if (pick >= 0 && logged[c] < 9000) {
 		const uint8_t *e = base + RVA_CENT + (size_t)pick * CENT_SIZE;
 		const float *o = (const float *)(e + 0x18), *n2 = (const float *)(e + 0xfc), *c2 = (const float *)(e + 0x80);
 		logged[c]++;
-		log_printf("native: npc ctx %d ent %d wall %.2f cg.time %d interp %.3f snap %d frac %.3f pos %.2f %.2f next %.2f %.2f cur %.2f %.2f type %u flags %08x s0 %d s1 %d srv %.2f %.2f", ctx_current, pick, wall_now * 1000.0, *(int *)(base + 0x422434),
-			   (double)*(float *)(base + 0x42242c), *(int *)(base + 0x51dca8), (double)*(float *)(base + 0x51dcb0), (double)o[0], (double)o[1], (double)n2[0], (double)n2[1], (double)c2[0], (double)c2[1], (unsigned)e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS),
-			   *(const int *)(*(const uintptr_t *)(base + 0x40cac0) + 4), *(const int *)(*(const uintptr_t *)(base + 0x40cac8) + 4), (double)gx, (double)gy);
+		log_printf("native: npc ctx %d ent %d wall %.2f cg.time %d interp %.3f snap %d frac %.3f pos %.2f %.2f next %.2f %.2f cur %.2f %.2f type %u flags %08x s0 %d s1 %d srv %.2f %.2f", ctx_current, pick, wall_now * 1000.0, *(int *)(base + XR(0x422434)),
+			   (double)*(float *)(base + XR(0x42242c)), *(int *)(base + XR(0x51dca8)), (double)*(float *)(base + XR(0x51dcb0)), (double)o[0], (double)o[1], (double)n2[0], (double)n2[1], (double)c2[0], (double)c2[1], (unsigned)e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS),
+			   *(const int *)(*(const uintptr_t *)(base + XR(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR(0x40cac8)) + 4), (double)gx, (double)gy);
 	}
 }
 
@@ -4446,7 +4446,7 @@ static void time_log(void)
 		return;
 	if (++n < 3000 || n >= 3040)
 		return;
-	len += snprintf(line + len, sizeof(line) - len, " %d:%d", ctx_current, *(int *)(base + 0x422434));
+	len += snprintf(line + len, sizeof(line) - len, " %d:%d", ctx_current, *(int *)(base + XR(0x422434)));
 	if (n == 3039)
 		log_printf("native: cg.time per drawn frame (context:time):%s", line);
 }
@@ -4474,7 +4474,7 @@ static void ctx_after_draw(void)
 	log_printf("native: starting context 1");
 	ctx_seed_cgame();
 #ifdef _WIN64
-	memset(ctx_store[1][0] + (0x440730 - RANGE_RVA(0)), 0, 0x40); // context 1 makes its own view model (see viewmodel_setup_hook)
+	memset(ctx_store[1][0] + (0x440730 - ranges[0].rva), 0, 0x40); // (an offset inside range 0) // context 1 makes its own view model (see viewmodel_setup_hook)
 #else
 	memset(ctx_store[1][9], 0, ranges[9].size); // (32 bits: the view model pointers are a range of their own)
 #endif
@@ -4537,9 +4537,9 @@ static void server_cmds_hook(uintptr_t lc, int *msg)
 // (the call of the apply function 0xbfd90 at 0xb592e). The script builtin is wrapped to note the names of the calls made for everybody; when the cgame of context 0 then applies such
 // a name, the same call runs again in context 1 (its own cgame block: its own time and vision state). VisionSetNakedForPlayer (the Predator's black flashes of the pilot) is no call
 // of the wrapped builtin, so it stays with the player it was made for. [native] visionfwd=0 turns it off.
-#define RVA_VISION_NAKED_CALL 0xb592e
-#define RVA_FN_VISIONSETNAKED_ENTRY 0x3c2c28
-#define RVA_CG_VISION_NAKED_NAME 0x43c0ac
+#define RVA_VISION_NAKED_CALL XR(0xb592e)
+#define RVA_FN_VISIONSETNAKED_ENTRY XR(0x3c2c28)
+#define RVA_CG_VISION_NAKED_NAME XR(0x43c0ac)
 static uint64_t (*vision_apply_original)(uintptr_t, int, int, const char *, int);
 static void (*vision_global_original)(void);
 static struct {
@@ -4622,7 +4622,7 @@ static void snapshot_msg_hook(void *msg, int time)
 		QueryPerformanceFrequency(&hz);
 		if (++sn > (unsigned)CFG_ONCE("snaplog", 0) && sn < (unsigned)CFG_ONCE("snaplog", 0) + 400)
 			log_printf("native: snapmsg #%u wall %.1f time %d ctx %d msg ints %d %d %d %d %d %d cg.time %d", sn, (double)pc.QuadPart * 1000.0 / (double)hz.QuadPart, time, ctx_current, ((int *)msg)[0], ((int *)msg)[1], ((int *)msg)[2],
-				   ((int *)msg)[3], ((int *)msg)[4], ((int *)msg)[5], *(int *)(base + 0x422434));
+				   ((int *)msg)[3], ((int *)msg)[4], ((int *)msg)[5], *(int *)(base + XR(0x422434)));
 	}
 	int was = ctx_current;
 	if (was)
@@ -4691,7 +4691,7 @@ static void pad_action(const char *name)
 #else
 static void pad_action(const char *name)
 {
-	int index = ((int (*)(const char *))(base + 0xd1810))(name);
+	int index = ((int (*)(const char *))(base + XR(0xd1810)))(name);
 	if (!index) {
 		static char logged[16][24];
 		static int count;
@@ -4703,7 +4703,7 @@ static void pad_action(const char *name)
 		log_printf("native: pad: no action '%s'", name);
 		return;
 	}
-	((void (*)(int, int, int))(base + 0xce450))(0, index, 0x1ff);
+	((void (*)(int, int, int))(base + XR(0xce450)))(0, index, 0x1ff);
 }
 #endif
 static void pad_binding(const char *name, int down)
@@ -4717,7 +4717,7 @@ static void pad_binding(const char *name, int down)
 #ifdef _WIN64
 static void pad_key(int key, int down)
 {
-	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, down, (unsigned)GetTickCount());
+	((void (*)(int, int, int, unsigned))(base + XR(0xd0f80)))(0, key, down, (unsigned)GetTickCount());
 }
 #else
 static void (*key_event_original)(int, int, int, unsigned);
@@ -4852,7 +4852,7 @@ static const uint8_t *dobj_model_names(const uint8_t *dobj, const char *out[8], 
 	return dobj;
 }
 #ifdef _WIN64
-#define DOBJ_MAKE_DIRECT(info, sinfo) ((int)((int (*)(void *, void *))(base + 0xb86f0))(info, sinfo))
+#define DOBJ_MAKE_DIRECT(info, sinfo) ((int)((int (*)(void *, void *))(base + XR(0xb86f0)))(info, sinfo))
 #else
 static unsigned dobj_make_original(void *info, void *dobj_info); // (below) the 32-bit engine's make takes EDI and EBX
 #define DOBJ_MAKE_DIRECT(info, sinfo) ((int)dobj_make_original(info, sinfo))
@@ -4913,7 +4913,7 @@ static void xfer_hook(void *src, void *dest, unsigned t)
 			calls[0] = calls[1] = 0;
 			sum[0] = sum[1] = 0;
 		}
-		if (ctx_current == 1 && CFG_ONCE("xferskip", 0) && dest != (void *)((const uint8_t *(*)(int))(base + 0x1fece0))(0)) {
+		if (ctx_current == 1 && CFG_ONCE("xferskip", 0) && dest != (void *)((const uint8_t *(*)(int))(base + XR(0x1fece0)))(0)) {
 			skipped++;
 			return;
 		}
@@ -4998,6 +4998,8 @@ static float aa_dvar(uint32_t rva) // the aim_* dvar pointers: rva 0x3cf050 .. 0
 {
 #ifndef _WIN64
 	rva = XR(aim_dvar_rvas32[(rva - 0x3cf050) / 8]);
+#else
+	rva = XR(0x3cf050) + (rva - 0x3cf050); // the dvar pointers are one array: its start through the resolver, the index by the reference layout
 #endif
 	const dvar_t *d = *(const dvar_t **)(base + rva);
 	return !d ? 0.0f : d->type == DVAR_TYPE_BOOL ? (float)d->current.enabled : d->current.value;
@@ -5273,7 +5275,7 @@ static int video_pushed;
 // adjustable rectangles; the console's split screen sets the per-client one to the half it draws into) are given the half: a 1920 x height/2 viewport with the scale of that height, so the
 // client lays its 2D out for a half and the text keeps its shape (the virtual canvas becomes wider, as on a 16:9 screen).
 #ifdef _WIN64
-#define PLACE_RVA 0x5e0b80
+#define PLACE_RVA XR(0x5e0b80)
 #define PLACE_SIZE 0x70
 #define PLACE_PTR(n) ((float *)(base + PLACE_RVA + (n) * PLACE_SIZE))
 #else
@@ -5327,7 +5329,7 @@ static void place_push(void)
 // hudss=0 off). The HUD is drawn from an item's rectClient (added to its menu's place), so both rects are moved. A menu is left as it is when its first item is not
 // where the full screen HUD has it (another build of the menus). The PC's d-pad (the action slot keys, bottom centre) has no console counterpart and stays.
 #ifdef _WIN64
-#define CG_DC_RVA 0x51e330   // the cgame's UI context of local client 0 (ui/hud.txt is added to it at rva 0xa6b7f), menus[] at +0x38, their count at +0x1438
+#define CG_DC_RVA XR(0x51e330)   // the cgame's UI context of local client 0 (ui/hud.txt is added to it at rva 0xa6b7f), menus[] at +0x38, their count at +0x1438
 #define ITEM_TEXT_SCALE 0xe0 // itemDef_t: type, dataType, alignment, font, textAlignMode, textalignx, textaligny, textscale
 #else
 #define CG_DC_RVA 0x354d28 // VA 0x754d28 (+ 0x1684 per local client; the list is added at VA 0x5658a4)
@@ -5684,7 +5686,7 @@ static void video_push(void)
 	}
 	if (mode != 9 || !comp_w || !comp_h)
 		return;
-	int *h1 = (int *)(base + 0x4113724), *h2 = (int *)(base + 0x411372c), *h3 = (int *)(base + 0x4358e84);
+	int *h1 = (int *)(base + XR(0x4113724)), *h2 = (int *)(base + XR(0x411372c)), *h3 = (int *)(base + XR(0x4358e84));
 	float *a = (float *)(base + RVA_VIDEO_ASPECT), *pa = (float *)(base + RVA_PIXEL_ASPECT), *ca = (float *)(base + RVA_CG_ASPECT);
 	int half = (int)(comp_h / 2);
 	if (!video_pushed) { // the first time: what the engine had, to give back when the picture is not split any more
@@ -5706,9 +5708,9 @@ static void video_pop(void)
 	place_pop();
 	if (!video_pushed)
 		return;
-	*(int *)(base + 0x4113724) = video_saved_i[0];
-	*(int *)(base + 0x411372c) = video_saved_i[1];
-	*(int *)(base + 0x4358e84) = video_saved_i[2];
+	*(int *)(base + XR(0x4113724)) = video_saved_i[0];
+	*(int *)(base + XR(0x411372c)) = video_saved_i[1];
+	*(int *)(base + XR(0x4358e84)) = video_saved_i[2];
 	*(float *)(base + RVA_VIDEO_ASPECT) = video_saved_f[0];
 	*(float *)(base + RVA_PIXEL_ASPECT) = video_saved_f[1];
 	*(float *)(base + RVA_CG_ASPECT) = video_saved_f[2];
@@ -6084,7 +6086,7 @@ static float wait_alpha_hook(int lc)
 	if ((a != 0.0f || !logged) && logged < 5) {
 		logged++;
 #ifdef _WIN64
-		log_printf("native: waiting alpha for lc %d = %f (coop byte %d, cls %d)", lc, a, *(base + 0x52fb5c), *(int *)(base + 0x533cb8));
+		log_printf("native: waiting alpha for lc %d = %f (coop byte %d, cls %d)", lc, a, *(base + XR(0x52fb5c)), *(int *)(base + XR(0x533cb8)));
 #else
 		log_printf("native: waiting alpha for lc %d = %f", lc, (double)a);
 #endif
@@ -6687,7 +6689,7 @@ static const uint8_t name_self_bytes[] = {0x8b, 0xc7, 0x84, 0xc9, 0x74, 0x03, 0x
 #ifdef _WIN64
 static void name_self_install(void)
 {
-	uint8_t *site = base + 0x93daa;
+	uint8_t *site = base + XR(0x93daa);
 	if (memcmp(site, name_self_bytes, sizeof(name_self_bytes))) {
 		log_printf("native: name loop bytes differ");
 		return;
@@ -6704,9 +6706,9 @@ static void name_self_install(void)
 	static const uint8_t mid[] = {0x83, 0x3a, 0x01, 0x5a, 0x75, 0x05, 0x83, 0xf8, 0x01, 0xeb, 0x02, 0x3b, 0xe8, 0x74, 0x0e};
 	memcpy(code + n, mid, sizeof(mid));
 	n += sizeof(mid);
-	hook_jump_bytes(code + n, base + 0x93dbb); // not this client: the name is drawn
+	hook_jump_bytes(code + n, base + XR(0x93dbb)); // not this client: the name is drawn
 	n += 14;
-	hook_jump_bytes(code + n, base + 0x93edc); // this client: the next one
+	hook_jump_bytes(code + n, base + XR(0x93edc)); // this client: the next one
 	n += 14;
 	uint8_t *stub = hook_code(code, n);
 	if (!stub) {
@@ -6890,7 +6892,7 @@ static void pass2_hook(unsigned lc)
 		if (tl < 0)
 			tl = cfg("timelog2", 0);
 		if (tl && (ctx_current == 0 || ctx_current == 1)) {
-			int t = *(const int *)(base + 0x422434);
+			int t = *(const int *)(base + XR(0x422434));
 			int was = last_t[ctx_current];
 			last_t[ctx_current] = t;
 			if (ctx_current == 1 && last_t[0] && abs(t - last_t[0]) > 50 && logged < 200)
@@ -6940,7 +6942,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			}
 			log_printf("%s", line);
 			for (int h = 0; h < 2; h++) { // the engine's own DObj of entity h, and the slot's client number the draw looked it up by
-				const uint8_t *pool = ((const uint8_t *(*)(int))(base + 0x1fece0))(h);
+				const uint8_t *pool = ((const uint8_t *(*)(int))(base + XR(0x1fece0)))(h);
 				int nm = pool ? pool[0xd] : -1;
 				const uint8_t *const *mm = pool ? *(const uint8_t *const **)(pool + 0xa8) : NULL;
 				char names[300] = "";
@@ -6976,13 +6978,13 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 				sscanf(v, "%d %d %f", &n, &script_len, &rate);
 			if (at && ent >= 0)
 			{
-				const uint8_t *cd = ((const uint8_t *(*)(int))(base + 0x1fece0))(ent), *sd = ((const uint8_t *(*)(int))(base + 0x1fee30))(ent);
+				const uint8_t *cd = ((const uint8_t *(*)(int))(base + XR(0x1fece0)))(ent), *sd = ((const uint8_t *(*)(int))(base + XR(0x1fee30)))(ent);
 				int pool = 0;
 				for (int k = 0; k < 0x70; k++)
-					pool += base[0xf50ec0 + k] != 0;
+					pool += base[XR(0xf50ec0) + k] != 0;
 				log_printf("native: speed entity %d: drawn path ctx0 %.0f ctx1 %.0f units per second, script %d units per second (playback rate %.2f), client DObj %p (%d models), server DObj %p (%d models), actor DObj pool %d of 112 in use, flags150 %08x",
 					   ent, path[0], path[1], script_len, rate, (const void *)cd, cd ? cd[0xd] : -1, (const void *)sd, sd ? sd[0xd] : -1, pool,
-					   ent >= 0 && ent < 2048 ? *(const unsigned *)(base + 0xd9e070 + (size_t)ent * 0x2a0 + 0x150) : 0u);
+					   ent >= 0 && ent < 2048 ? *(const unsigned *)(base + XR(0xd9e070) + (size_t)ent * 0x2a0 + 0x150) : 0u);
 			}
 			ent = n;
 			path[0] = path[1] = 0;
@@ -7017,7 +7019,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			const float *org = (const float *)e;
 			int len = snprintf(line, sizeof(line), "native: tree t=%lu ent %d idx %d pos %.1f %.1f:", (unsigned long)GetTickCount(), ent, idx, e ? org[0] : 0.0f, e ? org[1] : 0.0f);
 			for (int k = 0; idx > 0 && k < 5 && len < (int)sizeof(line) - 200; k++) {
-				const uint8_t *node = base + 0x1bc0a30 + (size_t)idx * 0x40;
+				const uint8_t *node = base + XR(0x1bc0a30) + (size_t)idx * 0x40;
 				const float *f = (const float *)node;
 				len += snprintf(line + len, sizeof(line) - len, " [n%d", idx);
 				for (int j = 0; j < 16; j++) {
@@ -7184,12 +7186,12 @@ static void own_write_hook(unsigned lc)
 	if (ctx_current == 1 && CFG_ONCE("pslog", 0)) {
 		static unsigned seen;
 		if (++seen % 60 == 1 && seen < 4000) {
-			const uint8_t *nps = *(const uint8_t **)(base + 0x40cad8), *pps = *(const uint8_t **)(base + 0x40cad0);
+			const uint8_t *nps = *(const uint8_t **)(base + XR(0x40cad8)), *pps = *(const uint8_t **)(base + XR(0x40cad0));
 			const float *f0 = (const float *)(base + RVA_CENT), *f1 = (const float *)(base + RVA_CENT + CENT_SIZE);
 			{
 				const float *q1 = (const float *)(base + RVA_CL_PS), *q0 = ctx_store[0][5] ? (const float *)(ctx_store[0][5] + CL_BLOCK_PS) : NULL;
 				log_printf("native: ps1(live) +0x100..: %d %.1f %.1f %.1f %.1f %.1f %.1f | ps0(store) %d %.1f %.1f %.1f %.1f %.1f %.1f | acc1 %.1f", *(const int *)(q1 + 64), q1[65], q1[66], q1[67], q1[68], q1[69], q1[70],
-					   q0 ? *(const int *)(q0 + 64) : -9, q0 ? q0[65] : 0, q0 ? q0[66] : 0, q0 ? q0[67] : 0, q0 ? q0[68] : 0, q0 ? q0[69] : 0, q0 ? q0[70] : 0, *(const float *)(base + 0x533d18));
+					   q0 ? *(const int *)(q0 + 64) : -9, q0 ? q0[65] : 0, q0 ? q0[66] : 0, q0 ? q0[67] : 0, q0 ? q0[68] : 0, q0 ? q0[69] : 0, q0 ? q0[70] : 0, *(const float *)(base + XR(0x533d18)));
 			}
 			log_printf("native: ctx1 b28b0 lc %u: nextPs clientNum %d prevPs clientNum %d | slot0 %.1f %.1f valid %x | slot1 %.1f %.1f valid %x", lc, nps ? *(const int *)(nps + 0x100) : -9,
 				   pps ? *(const int *)(pps + 0x100) : -9, f0[6], f0[7], *(const uint32_t *)((const uint8_t *)f0 + CENT_VALID), f1[6], f1[7], *(const uint32_t *)((const uint8_t *)f1 + CENT_VALID));
@@ -7308,7 +7310,7 @@ static void add_entity_hook(int n)
 				const uint8_t *e = base + RVA_CENT;
 				if (++pl % 10 == 0 && pl < 30000)
 					log_printf("native: p0log ctx1 draws entity0: ok %d copied %d pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x | own p2 pos %.1f %.1f", p0_ent_ok, p0copy, (double)((const float *)e)[CF_ORG2], (double)((const float *)e)[CF_ORG2 + 1], (double)((const float *)e)[CF_ORG2 + 2],
-						   (double)((const float *)e)[CF_YAW2], e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS), *(const unsigned *)(e + CENT_VALID), (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460));
+						   (double)((const float *)e)[CF_YAW2], e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS), *(const unsigned *)(e + CENT_VALID), (double)*(const float *)(base + XR(0x42245c)), (double)*(const float *)(base + XR(0x422460)));
 			}
 			if (n == 0 && lag_history_needed())
 				lag_record();
@@ -7476,7 +7478,7 @@ static void ent_clean_hook(void)
 		// Now context 0's transition runs at every hand-over, from context 1's frame too ([native] transfix=0 off).
 		// (64-bit: the call at rva 0xb8d55 in 0xb8d30; 32-bit: the call at rva 0x59d71, the one after the server step call 0x59d6c)
 #ifdef _WIN64
-		if (CFG_ONCE("transfix", 1) && ctx1_ready && split_on && __builtin_return_address(0) == (void *)(base + 0xb8d5a)) {
+		if (CFG_ONCE("transfix", 1) && ctx1_ready && split_on && __builtin_return_address(0) == (void *)(base + XR(0xb8d5a))) {
 #else
 		if (CFG_ONCE("transfix", 1) && ctx1_ready && split_on && __builtin_return_address(0) == (void *)(base + XR(0x59d71) + 5)) {
 #endif
@@ -7516,14 +7518,14 @@ static void ent_clean_hook(void)
 					saved[count].ent = n;
 					saved[count].flag = *(const int *)(slot + 0x16c) == 0xffffff;
 					saved[count].key = *(const unsigned short *)(slot + 0x164);
-					((void (*)(void *, const uint8_t *, uint8_t, uint16_t))(base + 0x115110))(saved[count].buf, client_dobj(n), (uint8_t)saved[count].flag, saved[count].key);
+					((void (*)(void *, const uint8_t *, uint8_t, uint16_t))(base + XR(0x115110)))(saved[count].buf, client_dobj(n), (uint8_t)saved[count].flag, saved[count].key);
 					count++;
 				}
 		ent_clean_original();
 		if (count) {
 			ctx_swap(1);
 			for (int i = 0; i < count; i++)
-				((void (*)(void *, int, int, const uint8_t *, char, short))(base + 0x1151d0))(saved[i].buf, 0, saved[i].ent, client_dobj(saved[i].ent), (char)saved[i].flag, (short)saved[i].key);
+				((void (*)(void *, int, int, const uint8_t *, char, short))(base + XR(0x1151d0)))(saved[i].buf, 0, saved[i].ent, client_dobj(saved[i].ent), (char)saved[i].flag, (short)saved[i].key);
 			ctx_swap(0);
 		}
 		return;
@@ -7598,7 +7600,7 @@ static void aim_targets_update(void)
 	const uint8_t *own = *(uint8_t **)(base + RVA_GENTITIES + GENT_SENTIENT); // player 1's sentient: his team at +8 (32 bits +4)
 	const int team = own ? *(const int *)(own + SENT_TEAM) : -1;
 #ifdef _WIN64
-	void (*for_client)(int, uint8_t *) = (void (*)(int, uint8_t *))(base + 0x6b630);
+	void (*for_client)(int, uint8_t *) = (void (*)(int, uint8_t *))(base + XR(0x6b630));
 #else
 	// 32 bits: the per-client check takes the gentity in EAX and the client on the stack
 #define for_client(c, ent) AIM_FOR_CLIENT32(c, ent)
@@ -8078,37 +8080,37 @@ static void contexts_install(void)
 		if (cfg("sndcount", 0)) {
 			static const uint8_t snd_play_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x18, 0x48, 0x89, 0x70, 0x20};
 			snd_ctx_ptr = &ctx_current;
-			if (!jhook_function(base + 0x23a9b0, snd_play_bytes, sizeof(snd_play_bytes), snd_count_stub, &snd_count_orig))
+			if (!jhook_function(base + XR(0x23a9b0), snd_play_bytes, sizeof(snd_play_bytes), snd_count_stub, &snd_count_orig))
 				{
-				const uint8_t *t = base + 0x23a9b0;
+				const uint8_t *t = base + XR(0x23a9b0);
 				log_printf("native: sound play bytes differ: %02x %02x %02x %02x %02x %02x %02x %02x", t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7]);
 			}
 		}
-		if (!jhook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
+		if (!jhook_function(base + XR(0x9c960), add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
-		if (!jhook_function(base + 0xb0680, pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
+		if (!jhook_function(base + XR(0xb0680), pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
 			log_printf("native: second entity pass bytes differ");
-		if (!jhook_function(base + 0xb86f0, dobj_make_bytes, sizeof(dobj_make_bytes), dobj_make_hook, (void **)&dobj_make_original))
+		if (!jhook_function(base + XR(0xb86f0), dobj_make_bytes, sizeof(dobj_make_bytes), dobj_make_hook, (void **)&dobj_make_original))
 			log_printf("native: client DObj make bytes differ");
-		if (!jhook_call(base + 0x896d3, ik_hook, (void **)&ik_original))
+		if (!jhook_call(base + XR(0x896d3), ik_hook, (void **)&ik_original))
 			log_printf("native: no call at the foot adjustment");
-		if (!jhook_function(base + 0x29a120, xfer_bytes, sizeof(xfer_bytes), xfer_hook, (void **)&xfer_original))
+		if (!jhook_function(base + XR(0x29a120), xfer_bytes, sizeof(xfer_bytes), xfer_hook, (void **)&xfer_original))
 			log_printf("native: DObj transfer bytes differ");
 		if (!jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 			log_printf("native: dobj add bytes differ");
-		if (!jhook_function(base + 0xb28b0, own_write_bytes, sizeof(own_write_bytes), own_write_hook, (void **)&own_write_original))
+		if (!jhook_function(base + XR(0xb28b0), own_write_bytes, sizeof(own_write_bytes), own_write_hook, (void **)&own_write_original))
 			log_printf("native: own entity write bytes differ");
-		if (!jhook_function(base + 0xa5ec0, slot_bytes, sizeof(slot_bytes), local_slot_hook, (void **)&slot_original))
+		if (!jhook_function(base + XR(0xa5ec0), slot_bytes, sizeof(slot_bytes), local_slot_hook, (void **)&slot_original))
 			log_printf("native: local slot function bytes differ");
-		if (!jhook_function(base + 0xcb4f0, msgwin_bytes, sizeof(msgwin_bytes), msgwin_hook, (void **)&msgwin_original))
+		if (!jhook_function(base + XR(0xcb4f0), msgwin_bytes, sizeof(msgwin_bytes), msgwin_hook, (void **)&msgwin_original))
 			log_printf("native: game message window draw bytes differ");
-		if (!jhook_call(base + 0x1fbc1d, key_event_hook, (void **)&key_event_original))
+		if (!jhook_call(base + XR(0x1fbc1d), key_event_hook, (void **)&key_event_original))
 			log_printf("native: no call at the event loop's key event");
-		if (cfg("titles", 1) && !jhook_function(base + 0xa3b80, hudelem_bytes, sizeof(hudelem_bytes), hudelem_hook, (void **)&hudelem_original))
+		if (cfg("titles", 1) && !jhook_function(base + XR(0xa3b80), hudelem_bytes, sizeof(hudelem_bytes), hudelem_hook, (void **)&hudelem_original))
 			log_printf("native: HUD element draw bytes differ");
 		if (cfg("namefix", 1)) {
 			name_self_install();
-			if (!jhook_call(base + 0x93e2f, name_get_hook, (void **)&name_get_original))
+			if (!jhook_call(base + XR(0x93e2f), name_get_hook, (void **)&name_get_original))
 				log_printf("native: no call at the name loop's name lookup");
 		}
 	}
@@ -8118,7 +8120,7 @@ static void contexts_install(void)
 	skip_hud_mask = cfg("skiphud", 0);
 	skip_ctx = cfg("skipctx", 1);
 	if (cfg("entclean", 1) &&
-	    !jhook_function(base + 0xb9320, ent_clean_bytes, sizeof(ent_clean_bytes), ent_clean_hook, (void **)&ent_clean_original))
+	    !jhook_function(base + XR(0xb9320), ent_clean_bytes, sizeof(ent_clean_bytes), ent_clean_hook, (void **)&ent_clean_original))
 		log_printf("native: entity cleanup bytes differ");
 	ctx_on = 1;
 	log_printf("native: client contexts on (call sites redirected)");
@@ -8259,17 +8261,17 @@ static int hooks_apply(void)
 	jgroup = 0;
 	if (cfg("ctx", 1))
 		contexts_install();
-	if (cfg("logcbuf", 0) && !jhook_function(base + 0x1ee890, cbuf_bytes, sizeof(cbuf_bytes), cbuf_hook, (void **)&cbuf_original))
+	if (cfg("logcbuf", 0) && !jhook_function(base + XR(0x1ee890), cbuf_bytes, sizeof(cbuf_bytes), cbuf_hook, (void **)&cbuf_original))
 		log_printf("native: Cbuf_AddText bytes differ");
 	if (!jhook_function(base + RVA_BEGIN_FRAME, begin_frame_bytes, sizeof(begin_frame_bytes), begin_frame_hook, (void **)&begin_frame_original) || !cg_draw_install()) {
 		log_printf("native: unexpected code at the cgame draw or begin frame, the split screen is off");
 		return 0;
 	}
-	if (*(base + 0x5c5bf) != 0xe8 || !jhook_call(base + 0x5c5bf, (void *)scene2d_hook, (void **)&scene2d_original)) {
+	if (*(base + XR(0x5c5bf)) != 0xe8 || !jhook_call(base + XR(0x5c5bf), (void *)scene2d_hook, (void **)&scene2d_original)) {
 		log_printf("native: unexpected code at the scene's 2D pass, mode 10 is off");
 		return 0;
 	}
-	if (*(base + 0x4545b) != 0xe8 || !jhook_call(base + 0x4545b, (void *)final2d_hook, (void **)&final2d_original)) {
+	if (*(base + XR(0x4545b)) != 0xe8 || !jhook_call(base + XR(0x4545b), (void *)final2d_hook, (void **)&final2d_original)) {
 		log_printf("native: unexpected code at the frame's 2D command list, mode 10 is off");
 		return 0;
 	}
@@ -8486,8 +8488,8 @@ void native_menu_key(int key)
 {
 	unsigned t = (unsigned)GetTickCount();
 #ifdef _WIN64
-	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, 1, t);
-	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, 0, t);
+	((void (*)(int, int, int, unsigned))(base + XR(0xd0f80)))(0, key, 1, t);
+	((void (*)(int, int, int, unsigned))(base + XR(0xd0f80)))(0, key, 0, t);
 #else
 	if (!key_event_original)
 		return;

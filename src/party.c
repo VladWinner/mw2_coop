@@ -173,11 +173,11 @@ void party_log_state(void)
 	int now = FN(RVA_SYS_MILLISECONDS, int (*)(void))();
 	for (int i = 0; i < 2; i++) {
 		char used = FN(RVA_LOBBY_SLOT_USED, char (*)(void *, int))(lobby, i);
-		uint64_t xuid = FN(0x236b30, uint64_t (*)(void *, int))(lobby, i);
-		char local = FN(0x28fdf0, char (*)(uint64_t))(xuid);
+		uint64_t xuid = FN(XR(0x236b30), uint64_t (*)(void *, int))(lobby, i);
+		char local = FN(XR(0x28fdf0), char (*)(uint64_t))(xuid);
 		uint8_t addr[24] = {0};
-		FN(0x2367f0, void *(*)(void *, void *, int))(addr, lobby, i);
-		int heard = *(int *)(base + 0x5dd984 + i * 0x38), sent = *(int *)(base + 0x5dd980 + i * 0x38);
+		FN(XR(0x2367f0), void *(*)(void *, void *, int))(addr, lobby, i);
+		int heard = *(int *)(base + XR(0x5dd984) + i * 0x38), sent = *(int *)(base + XR(0x5dd980) + i * 0x38);
 		log_printf("party: slot %d used %d xuid %016llx local %d heard %d ms ago, sent %d ms ago, addr type %d %u.%u.%u.%u:%u",
 			   i, used, (unsigned long long)xuid, local, now - heard, now - sent, *(int *)addr, addr[4], addr[5],
 			   addr[6], addr[7], (unsigned)((addr[8] << 8) | addr[9]));

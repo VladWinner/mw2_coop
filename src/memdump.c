@@ -126,7 +126,7 @@ static void print_handlers(const char *what, uint8_t *set, int depth)
 // int type (0 operator, 1 operand) at +0; operator number at +8, or operand {int dataType
 // (0 int, 1 float, 2 string) at +8, value at +0x10}. Operators 27 and up are functions named by
 // the exe's table at rva 0x3c4b38 ("int", "string", "float", "sin", ... "dvarbool" = 36).
-#define RVA_EXP_FUNCTION_NAMES 0x3c4b38
+#define RVA_EXP_FUNCTION_NAMES XR(0x3c4b38)
 #define EXP_FIRST_FUNCTION 27
 #define EXP_FUNCTION_COUNT 169
 static void print_statement(const char *what, uint8_t *st)
@@ -377,7 +377,7 @@ int memdump_command(char *line)
 	}
 	if (strcmp(line, "!menus") == 0) {
 		// the UI's loaded menus (uiContext rva 0x1a3ab00: menus +0x38, count +0x1438)
-		uint8_t *ui = (uint8_t *)GetModuleHandleA(NULL) + 0x1a3ab00;
+		uint8_t *ui = (uint8_t *)GetModuleHandleA(NULL) + XR(0x1a3ab00);
 		int count = *(int *)(ui + 0x1438);
 		char buf[1024];
 		int n = 0;
@@ -397,8 +397,8 @@ int memdump_command(char *line)
 		// 0x3ee320 (BG_GetWeaponDef 0x85850); ints +0x40..+0x64 of each WeaponDef
 		uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 		for (int i = 1; i < 256; i++) {
-			uint8_t *complete = ((uint8_t **)(base + 0x3edce0))[i];
-			uint8_t *def = ((uint8_t **)(base + 0x3ee320))[i];
+			uint8_t *complete = ((uint8_t **)(base + XR(0x3edce0)))[i];
+			uint8_t *def = ((uint8_t **)(base + XR(0x3ee320)))[i];
 			if (!complete || !def || !readable((uintptr_t)complete, 8) || !readable((uintptr_t)def, 0x68))
 				break;
 			const char *name = *(const char **)complete;

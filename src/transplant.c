@@ -363,7 +363,7 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 static uint8_t *pick_model, *pick_source;
 #define CLONE_NAME "mw2coop_rider" // model and dvar: the dvar holds "<skeleton> <mesh>"
 #ifdef _WIN64
-#define RVA_POOLS 0x3bfe00 // void *[43]: { free list head; entries[] } (see zones.c)
+#define RVA_POOLS XR(0x3bfe00) // void *[43]: { free list head; entries[] } (see zones.c)
 #else
 #define RVA_POOLS XRA(0x3307f8) // void *[43] at 0x7307f8, read by the per-type allocator (0x5801b0 for models): { free list head; entries[] }
 #endif
@@ -644,9 +644,9 @@ static const uint8_t is_default_bytes[] = {0x53, 0x8b, 0x5c, 0x24, 0x0c, 0x56, 0
 // for ever: the intermittent hang of both copies a moment after a level start (32-bit contingency, 2026-10-28).
 // The not-found exit jumps to a small cave that does the decrement first.
 #ifdef _WIN64
-#define LEAK_EXIT_RVA 0xf00c3
-#define LEAK_COUNT_RVA 0xa8a830
-#define LEAK_RESUME_RVA 0xf00c8 // the epilogue the found path also ends in
+#define LEAK_EXIT_RVA XR(0xf00c3)
+#define LEAK_COUNT_RVA XR(0xa8a830)
+#define LEAK_RESUME_RVA XR(0xf00c8) // the epilogue the found path also ends in
 static const uint8_t leak_exit_bytes[] = {0xb8, 0x01, 0x00, 0x00, 0x00}; // mov eax,1
 #else
 #define LEAK_EXIT_RVA XRA(0xc332d) // (the iw4x-sp client's exe: DB_IsXAssetDefault at 0x1ab70, the same not-found exit at +0x7d: 0x1abed)
@@ -663,7 +663,7 @@ static void fix_reader_leak(void)
 	}
 	uint8_t *cave = NULL;
 #ifdef _WIN64
-	for (uintptr_t at = (uintptr_t)base - 0x10000000; at < (uintptr_t)base + 0x10000000 && !cave; at += 0x10000)
+	for (uintptr_t at = (uintptr_t)base - 0x10000000; at < (uintptr_t)base + XR(0x10000000) && !cave; at += 0x10000)
 		cave = VirtualAlloc((void *)at, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 #else
 	cave = VirtualAlloc(NULL, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);

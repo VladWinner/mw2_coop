@@ -47,7 +47,7 @@
 #include "progress.h"
 
 #ifdef _WIN64
-#define RVA_UI_CONTEXT 0x1a3ab00 // uiContext_t (Menus_OpenByName's first argument, "openmenu" @0x24ca10)
+#define RVA_UI_CONTEXT XR(0x1a3ab00) // uiContext_t (Menus_OpenByName's first argument, "openmenu" @0x24ca10)
 #define UI_MENUS 0x38		 // menuDef_t *menus[]
 #define UI_MENU_COUNT 0x1438	 // int
 #define UI_MAX_MENUS 640	 // (0x1438 - 0x38) / 8
@@ -1429,7 +1429,7 @@ static void save_pick_f(void)
 // made in a row: issue 11, "Steam connect failed" in the Campaign split screen lobby) the game's console command steamlobbycreatefail shows the error and drops the lobby. Its command
 // node is looked at once the game has registered it (at the Steam start-up) and the function in it is put behind ours: a split screen lobby ignores the failure, a network one still shows it.
 #ifdef _WIN64
-#define STEAM_LOBBY_FAIL_NODE 0x1a2f758 // the cmd_function node of steamlobbycreatefail (function at 0x241120)
+#define STEAM_LOBBY_FAIL_NODE XR(0x1a2f758) // the cmd_function node of steamlobbycreatefail (function at 0x241120)
 #else
 #define STEAM_LOBBY_FAIL_NODE XR(0x17eb4e4) // VA 0x1beb4e4 (function at VA 0x66b0c0)
 #endif
@@ -2691,7 +2691,7 @@ static void player_info_hook(int lc, int *args, int *out)
 	if (n < 0 || n > 1)
 		return;
 #ifdef _WIN64
-	const char *field = ((const char *(*)(int *))(base + 0x2447c0))(args + 4);
+	const char *field = ((const char *(*)(int *))(base + XR(0x2447c0)))(args + 4);
 #else
 	const char *field = args[PI_STRIDE] == 2 ? *(const char **)(args + PI_STRIDE + 1) : NULL; // the field name is a string argument (the engine's text function returns it as it is)
 #endif
@@ -2931,15 +2931,15 @@ static DWORD WINAPI loading_thread(LPVOID unused)
 // on either PC: each PC tells the other when its own is (the packet mw2coop_briefdone), so a skip on one PC is a skip on both. The split screen has one PC and the single player
 // wait already (engine co-op byte 0).
 #ifdef _WIN64
-#define RVA_COOP_WAIT 0x22e170
-#define RVA_COOP_BYTE_E 0x52fb5c	  // the engine's co-op byte
-#define RVA_UI_STATE 0x1a49dc4
-#define RVA_CLIENT_STATE 0x533cb8
-#define RVA_FILM_ON 0x45859c4		  // the cinematic state the single player test reads: on, and two counters that differ when it is over
-#define RVA_FILM_A 0x45859cc
-#define RVA_FILM_B 0x45859d0
-#define RVA_ENGINE_WAIT_A 0x192d7e3
-#define RVA_ENGINE_WAIT_B 0x192d8f4
+#define RVA_COOP_WAIT XR(0x22e170)
+#define RVA_COOP_BYTE_E XR(0x52fb5c)	  // the engine's co-op byte
+#define RVA_UI_STATE XR(0x1a49dc4)
+#define RVA_CLIENT_STATE XR(0x533cb8)
+#define RVA_FILM_ON XR(0x45859c4)		  // the cinematic state the single player test reads: on, and two counters that differ when it is over
+#define RVA_FILM_A XR(0x45859cc)
+#define RVA_FILM_B XR(0x45859d0)
+#define RVA_ENGINE_WAIT_A XR(0x192d7e3)
+#define RVA_ENGINE_WAIT_B XR(0x192d8f4)
 #else
 // the 32-bit build (the same code at VA 0x40af30; the UI frame is 0x4b5c50, its state variable 0x1926b84)
 #define RVA_COOP_WAIT XR(0xaf30)
@@ -3350,8 +3350,8 @@ void menus_install(void)
 	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
 		game_add_command(&commands[i]);
 #ifdef _WIN64
-	if (memcmp(base + 0x2442b0, player_info_bytes, sizeof(player_info_bytes)) ||
-	    !hook_function(base + 0x2442b0, player_info_bytes, sizeof(player_info_bytes), player_info_hook, (void **)&player_info_original))
+	if (memcmp(base + XR(0x2442b0), player_info_bytes, sizeof(player_info_bytes)) ||
+	    !hook_function(base + XR(0x2442b0), player_info_bytes, sizeof(player_info_bytes), player_info_hook, (void **)&player_info_original))
 		log_printf("menus: coopPlayerInfo not hooked (bytes differ)");
 #else
 	if (memcmp(base + XR(0x21c430), player_info_bytes, sizeof(player_info_bytes)) ||

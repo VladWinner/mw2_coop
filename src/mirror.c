@@ -24,7 +24,7 @@
 #include "mirror.h"
 
 #ifdef _WIN64
-#define RVA_G_ENTITIES 0xd9e070
+#define RVA_G_ENTITIES XR(0xd9e070)
 #define GENTITY_SIZE 0x2a0
 #else
 // 32-bit: g_entities at 0xea76b8, 0x270 bytes each; the entity reference is the method's one stack argument

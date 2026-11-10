@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include "addr.h"
+#include "game.h"
 
 // An address of the reference build, translated for the running build (addr.c): the same number as long as the build is the reference one. The 32-bit official block of RVA_
 // macros below goes through it; the iw4x-sp profile has its own values.
@@ -19,50 +20,50 @@ int game_is_iw4x(void);
 // SHA-256 2F8C9CFD...D805), as RVAs from the image base. Found with Ghidra, see NOTES.md.
 #define IW4SP_TIMESTAMP 0x6aaaa257u
 
-#define RVA_CBUF_ADDTEXT   0x1ee890  // void Cbuf_AddText(int localClientNum, const char *text); locks CS 0x24
-#define RVA_DVAR_FINDVAR   0x26bdf0  // dvar_t *Dvar_FindVar(const char *name); reader-locked, thread safe
-#define RVA_DVAR_HASH      0x1b21e90 // dvar_t *table[1024]: the buckets Dvar_FindVar walks (chain: dvar_t.hash_next)
-#define RVA_CMD_FUNCTIONS  0x1315308 // cmd_function_t *cmd_functions (list head)
+#define RVA_CBUF_ADDTEXT   XR(0x1ee890)  // void Cbuf_AddText(int localClientNum, const char *text); locks CS 0x24
+#define RVA_DVAR_FINDVAR   XR(0x26bdf0)  // dvar_t *Dvar_FindVar(const char *name); reader-locked, thread safe
+#define RVA_DVAR_HASH      XR(0x1b21e90) // dvar_t *table[1024]: the buckets Dvar_FindVar walks (chain: dvar_t.hash_next)
+#define RVA_CMD_FUNCTIONS  XR(0x1315308) // cmd_function_t *cmd_functions (list head)
 // Console command arguments {int nesting; ...; int argc[8]; char **argv[8]}: console commands
 // (connect @0xd23c0) and server commands (devmap @0x22cb70) have one each.
-#define RVA_CMD_ARGS         0x13151b0 // nesting; argc +0x44, argv +0x68
-#define RVA_SV_CMD_ARGS      0x1315260 // nesting; argc +0x44, argv +0x68
-#define RVA_SV_CMD_DEVMAP    0x1904f60 // server cmd_function_t node of "devmap" (handler @0x22cb70)
-#define RVA_XUID_TABLE     0x1bbaad8 // uint64 xuid of local client i at +i*0x68 (Live_GetXuid, rva 0x28f8b0)
+#define RVA_CMD_ARGS         XR(0x13151b0) // nesting; argc +0x44, argv +0x68
+#define RVA_SV_CMD_ARGS      XR(0x1315260) // nesting; argc +0x44, argv +0x68
+#define RVA_SV_CMD_DEVMAP    XR(0x1904f60) // server cmd_function_t node of "devmap" (handler @0x22cb70)
+#define RVA_XUID_TABLE     XR(0x1bbaad8) // uint64 xuid of local client i at +i*0x68 (Live_GetXuid, rva 0x28f8b0)
 
 // Co-op party (lobby) state
-#define RVA_PARTY_SKILL          0x5dd988 // int: party member n's difficulty at +n*0x38 (rva 0xd7710 reads it)
-#define RVA_PARTY_LOBBY          0x5dd958 // lobby object *: +0x10 active, +0x70/+0xa8 member slots
-#define RVA_PARTY_IS_HOST        0x5dd950 // uint8
-#define RVA_PARTY_ACTIVE         0x5dd951 // uint8, gates the party frame (0xd74a0)
-#define RVA_PARTY_LAUNCH         0x5dd953 // uint8, set by coopLaunch (0xd7a50)
-#define RVA_PARTY_MEMBER_NAMES   0x5dd960 // char[32] per member, stride 0x38 (slot 0: the host)
-#define RVA_PARTY_START_TIME     0x5dd954 // int32
-#define RVA_LOBBY_SLOT_USED      0x236bc0 // char (lobby, slot): slot taken (party state @0xd7ee0)
-#define RVA_PARTY_RESET          0x0d7dd0 // void Party_Reset(void)
-#define RVA_PARTY_CLEAR_MEMBERS  0x236920 // void (int)
-#define RVA_LOBBY_JOIN           0x236d50 // char Lobby_Join(lobby, localClient, 0x322, hostInfo[8], 0, 2, 0)
-#define RVA_PARTY_ACTIVATE       0x0d7380 // void Party_Activate(void): active = 1, member timers
-#define RVA_PARTY_AFTER_JOIN     0x0d6820 // void (void), called at the end of PartyClient_Join (0xd7cb0)
-#define RVA_SYS_MILLISECONDS     0x293dc0 // int Sys_Milliseconds(void)
-#define RVA_COOP_LAUNCH_MAP      0x22e1a0 // void (int localClient): coop slot state 3, net rates, "map <coop_mapName>"
-#define RVA_COOP_SLOT_STATE      0x533cb8 // int32 per local client (stride 16): 0 idle, 3 launched
+#define RVA_PARTY_SKILL          XR(0x5dd988) // int: party member n's difficulty at +n*0x38 (rva 0xd7710 reads it)
+#define RVA_PARTY_LOBBY          XR(0x5dd958) // lobby object *: +0x10 active, +0x70/+0xa8 member slots
+#define RVA_PARTY_IS_HOST        XR(0x5dd950) // uint8
+#define RVA_PARTY_ACTIVE         XR(0x5dd951) // uint8, gates the party frame (0xd74a0)
+#define RVA_PARTY_LAUNCH         XR(0x5dd953) // uint8, set by coopLaunch (0xd7a50)
+#define RVA_PARTY_MEMBER_NAMES   XR(0x5dd960) // char[32] per member, stride 0x38 (slot 0: the host)
+#define RVA_PARTY_START_TIME     XR(0x5dd954) // int32
+#define RVA_LOBBY_SLOT_USED      XR(0x236bc0) // char (lobby, slot): slot taken (party state @0xd7ee0)
+#define RVA_PARTY_RESET          XR(0x0d7dd0) // void Party_Reset(void)
+#define RVA_PARTY_CLEAR_MEMBERS  XR(0x236920) // void (int)
+#define RVA_LOBBY_JOIN           XR(0x236d50) // char Lobby_Join(lobby, localClient, 0x322, hostInfo[8], 0, 2, 0)
+#define RVA_PARTY_ACTIVATE       XR(0x0d7380) // void Party_Activate(void): active = 1, member timers
+#define RVA_PARTY_AFTER_JOIN     XR(0x0d6820) // void (void), called at the end of PartyClient_Join (0xd7cb0)
+#define RVA_SYS_MILLISECONDS     XR(0x293dc0) // int Sys_Milliseconds(void)
+#define RVA_COOP_LAUNCH_MAP      XR(0x22e1a0) // void (int localClient): coop slot state 3, net rates, "map <coop_mapName>"
+#define RVA_COOP_SLOT_STATE      XR(0x533cb8) // int32 per local client (stride 16): 0 idle, 3 launched
 
 // Co-op lobby (see NOTES.md): listen @0xd25e0, connect @0xd23c0, coopLaunch @0xd25d0,
 // host-side coopConnect handler @0x22d830. Online gate @0x28fc00 needs Steam logged on and
 // the DemonWare state (rva 0x115c07c) == 4.
 
 // Script loading
-#define RVA_SCR_ADD_SOURCE_BUFFER 0x217950 // char *Scr_AddSourceBuffer(filename, extFilename, codePos, archive)
-#define RVA_DB_FIND_HEADER  0x0ef5d0 // void *DB_FindXAssetHeader(int type, const char *name)
-#define RVA_DB_IS_DEFAULT   0x0efff0 // int DB_IsXAssetDefault(int type, const char *name)
-#define RVA_DB_RAWFILE_LEN  0x0efdc0 // int DB_GetRawFileLen(RawFile *)
-#define RVA_DB_RAW_BUFFER   0x0efc70 // void DB_GetRawBuffer(RawFile *, char *buf, int size)
-#define RVA_HUNK_TEMP_HIGH  0x2693f0 // void *Hunk_AllocateTempMemoryHigh(int64 size)
+#define RVA_SCR_ADD_SOURCE_BUFFER XR(0x217950) // char *Scr_AddSourceBuffer(filename, extFilename, codePos, archive)
+#define RVA_DB_FIND_HEADER  XR(0x0ef5d0) // void *DB_FindXAssetHeader(int type, const char *name)
+#define RVA_DB_IS_DEFAULT   XR(0x0efff0) // int DB_IsXAssetDefault(int type, const char *name)
+#define RVA_DB_RAWFILE_LEN  XR(0x0efdc0) // int DB_GetRawFileLen(RawFile *)
+#define RVA_DB_RAW_BUFFER   XR(0x0efc70) // void DB_GetRawBuffer(RawFile *, char *buf, int size)
+#define RVA_HUNK_TEMP_HIGH  XR(0x2693f0) // void *Hunk_AllocateTempMemoryHigh(int64 size)
 
 // The script builtin table entry of "setdvar" ({name, function, developer}) and Scr_GetString(index)
-#define RVA_FN_SETDVAR_ENTRY 0x3c1568
-#define RVA_SCR_GET_STRING   0x223440
+#define RVA_FN_SETDVAR_ENTRY XR(0x3c1568)
+#define RVA_SCR_GET_STRING   XR(0x223440)
 #else
 // Addresses in iw4sp.exe of the 32-bit official Steam build (linked 2010-02-10, code SHA-256 FC9E4843...52D7), as RVAs
 // from the image base 0x400000. Found with Ghidra on the memory dump, see docs/32bit-plan.md. Names as above; a 0 means
@@ -220,10 +221,9 @@ const char *game_sv_cmd_argv(int i);
 
 // The 32-bit native code (native.c, rumble.c, padopts.c, padglyphs.c) is written with the official 32-bit build's addresses. In the iw4x-sp profile (1.0.159) XR() turns an
 // official RVA into the 159 RVA through a table that tools/gen_addr159.py builds from the source (tools/map159.py maps by byte signatures); XV() does the same for a VA.
+#define XR(r) addr_xr(r) // (64-bit too: the number as it is on the reference build, the resolved one on a build whose addresses moved)
 #ifndef _WIN64
-#define XR(r) addr_xr(r)
 #define XV(va) (0x400000u + addr_xr((va) - 0x400000u))
 #else
-#define XR(r) (r)
 #define XV(va) (va)
 #endif

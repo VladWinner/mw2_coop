@@ -23,8 +23,8 @@
 #include "game.h"
 #include "transplant.h"
 
-#define RVA_LOAD_LEVEL_ZONES 0x0f09b0
-#define RVA_DB_LOAD_XASSETS  0x0f0ae0
+#define RVA_LOAD_LEVEL_ZONES XR(0x0f09b0)
+#define RVA_DB_LOAD_XASSETS  XR(0x0f0ae0)
 #else
 // The 32-bit official build (docs/32bit-plan.md): the level zone loader (map, flag) at 0x4d0450 and DB_LoadXAssets at
 // 0x49edb0, both cdecl; the model transplant and the pool extension are not ported yet.
@@ -57,8 +57,8 @@ static load_level_zones_t original;
 // with that message when the list is empty. More entries are linked in front of the list; the
 // ones in use stay where they are. The size table is only read for that message and DB_Init.
 #ifdef _WIN64
-#define RVA_POOL_SIZES 0x3bf930 // int[43]
-#define RVA_POOLS      0x3bfe00 // void *[43]
+#define RVA_POOL_SIZES XR(0x3bf930) // int[43]
+#define RVA_POOLS      XR(0x3bfe00) // void *[43]
 #else
 // 32-bit: the per-type tables the asset alloc (0x57ea60) reads: sizes at 0x730510, pool pointers at 0x7307f8
 #define RVA_POOL_SIZES XRA(0x330510)

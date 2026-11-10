@@ -20,12 +20,12 @@
 #include "padglyphs.h"
 
 #ifdef _WIN64
-#define RVA_DB_FIND 0x0ef5d0 // void *DB_FindXAssetHeader(int type, const char *name)
+#define RVA_DB_FIND XR(0x0ef5d0) // void *DB_FindXAssetHeader(int type, const char *name)
 #define MATERIAL_TABLE 0x60
 #define IMAGE_DIMS 0x18
-#define TEXT_DRAW_SITE 0x44c12 // the text command's call of the text draw
-#define BINDING_SITE_A 0x2513ce // the text localizer's call of the binding function
-#define BINDING_SITE_B 0x1913fa // the scripts' GetKeyBinding
+#define TEXT_DRAW_SITE XR(0x44c12) // the text command's call of the text draw
+#define BINDING_SITE_A XR(0x2513ce) // the text localizer's call of the binding function
+#define BINDING_SITE_B XR(0x1913fa) // the scripts' GetKeyBinding
 #else
 // the 32-bit official build (docs/32bit-native-map/inputui.md)
 #define RVA_DB_FIND XR(0x0f6f10)
@@ -425,7 +425,7 @@ __asm__(".text\n"
 
 #ifdef _WIN64
 // QA ([native] hudlog=3): the rectangle the cursor hint's draw (rva 0xac1f0: local client, rect x y w h, font, scale, style) is given
-#define RVA_HINT_DRAW 0xac1f0
+#define RVA_HINT_DRAW XR(0xac1f0)
 static const uint8_t hint_head[14] = {0x4c, 0x8b, 0xdc, 0x55, 0x56, 0x41, 0x55, 0x48, 0x81, 0xec, 0x20, 0x03, 0x00, 0x00};
 static void (*hint_original)(int, float *, void *, float, int);
 static void hint_hook(int lc, float *rect, void *font, float scale, int style)
@@ -437,7 +437,7 @@ static void hint_hook(int lc, float *rect, void *font, float scale, int style)
 		static int dumped;
 		if (dumped++ < 2) // the engine's screen placements (rva 0x5e0b80, 0x70 bytes each; six of them in case the console's four local clients have their own)
 			for (int n = 0; n < 6; n++) {
-				const float *q = (const float *)(base + 0x5e0b80 + n * 0x70);
+				const float *q = (const float *)(base + XR(0x5e0b80) + n * 0x70);
 				log_printf("padglyphs: placement %d: scale %g %g | full %g %g | viewport %g %g %g %g | virt view %g %g %g %g | real view %g %g %g %g | virt adj %g %g %g %g | real adj %g %g %g %g | %g %g", n, q[0], q[1], q[2], q[3], q[6], q[7], q[8], q[9], q[10], q[11], q[12], q[13], q[14], q[15], q[16], q[17], q[18], q[19], q[20], q[21], q[22], q[23], q[24], q[25], q[26], q[27]);
 			}
 	}

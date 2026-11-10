@@ -199,18 +199,18 @@ static void steam_host_info(uint8_t *host_info)
 }
 
 #ifdef _WIN64
-#define RVA_STEAM_JOIN 0x22dda0
-#define RVA_PARTY_CLIENT_JOIN 0x0d7cb0
-#define RVA_PARTY_STOP 0x0d7dd0
+#define RVA_STEAM_JOIN XR(0x22dda0)
+#define RVA_PARTY_CLIENT_JOIN XR(0x0d7cb0)
+#define RVA_PARTY_STOP XR(0x0d7dd0)
 
 static char steam_join(int local_client, uint8_t *host_info, uint8_t *ip_out, uint16_t *port_out)
 {
 	steam_host_info(host_info);
 	// the original 0x22dda0
-	if (base[0x52fb5c]) {
-		base[0x52fb5c] = 0;
-		base[0x1905302] = 0;
-		((void (*)(void *, char))(base + 0x26d800))(*(void **)(base + 0x1905308), 0);
+	if (base[XR(0x52fb5c)]) {
+		base[XR(0x52fb5c)] = 0;
+		base[XR(0x1905302)] = 0;
+		((void (*)(void *, char))(base + XR(0x26d800)))(*(void **)(base + XR(0x1905308)), 0);
 		((void (*)(void))(base + RVA_PARTY_STOP))();
 	}
 	return ((char (*)(int, uint8_t *, uint8_t *, uint16_t *))(base + RVA_PARTY_CLIENT_JOIN))(local_client, host_info,

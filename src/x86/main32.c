@@ -292,7 +292,7 @@ static DWORD WINAPI identify(LPVOID unused)
 		while (n > 0 && ini[n - 1] != 0x5c)
 			n--;
 		ini[n] = 0;
-		lstrcatA(ini, "mw2coop\settings.ini");
+		lstrcatA(ini, "mw2coop\\settings.ini");
 		int allowed = getenv("MW2COOP_MOVED") != NULL || GetPrivateProfileIntA("native", "movedbuilds", 0, ini) != 0;
 		if (total > 0 && found * 100 >= total * 85) {
 			if (allowed) {
@@ -300,7 +300,7 @@ static DWORD WINAPI identify(LPVOID unused)
 				install_all();
 				return 0;
 			}
-			log_printf("main32: unknown build, addresses moved: %d of %d found. Nothing is patched; [native] movedbuilds=1 in mw2coop\settings.ini makes the mod try (best effort)", found, total);
+			log_printf("main32: unknown build, addresses moved: %d of %d found. Nothing is patched; [native] movedbuilds=1 in mw2coop\\settings.ini makes the mod try (best effort)", found, total);
 			return 0;
 		}
 	}
