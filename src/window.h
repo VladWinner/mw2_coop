@@ -2,4 +2,5 @@
 
 // Dark title bar and square corners on the game's window (Windows 10 / 11), like current clients: set while the window has a title bar, so borderless and full screen are left alone.
 // Re-applied when the window or its style changes (vid_restart, alt+enter). [display] darktitle=0 in settings.ini switches it off.
+// Also the ultrawide safe area (safeArea_horizontal lowered on a screen wider than 16:9; [display] safearea_auto=0 switches it off).
 void window_install(void);
