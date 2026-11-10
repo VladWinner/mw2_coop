@@ -340,6 +340,73 @@ static void xfer_install(void)
 	log_printf("scrdebug: animation transfer queue events are logged: %s", ok ? "on" : "bytes did not match");
 }
 
+// Diagnostics of the 32-bit co-op client crash at the level start (2026-11-10): ClientSpawn(entity 1) read ent->sentient = NULL (iw4sp.exe+0x414e3). ent->sentient is set by the per-client
+// init (0x4cf5d0, run for the server clients that are in state 4 when the level is spawned, 0x65c0c0), but the client begin (0x4af600) is run for every co-op slot: if the two do not agree for
+// client 1 the begin faults. These three hooks only LOG (nothing is changed): the state of the entity, the server client, the co-op flag and slots, before each step. Official 32-bit build only.
+#define SVLOG_ENT_VA     0xea76b8u // g_entities (0x270 bytes each); +0x108 client, +0x110 sentient
+#define SVLOG_ENT_SIZE   0x270u
+#define SVLOG_SVCL_VA    0x1b23988u // server clients (0x1674 bytes each), +0 state (4 = to be connected at the level spawn)
+#define SVLOG_SVCL_SIZE  0x1674u
+#define SVLOG_COOP_BYTE  0x88897cu // the engine's co-op running flag
+#define SVLOG_COUNT_VA   0x738c6cu // the local client count
+#define SVLOG_SLOTS_VA   0x88f560u // co-op slot flags, 0x263c bytes each
+
+static void (*clientbegin_next)(int);
+static int (*clientinit_next)(int);
+static void (*svconnect_next)(uint8_t *);
+
+static const uint8_t *svlog_at(uint32_t va)
+{
+	return (const uint8_t *)(uintptr_t)XV(va);
+}
+
+static void svlog_state(const char *what, int idx)
+{
+	if (idx < 0 || idx >= 64)
+		return;
+	const uint8_t *ent = svlog_at(SVLOG_ENT_VA) + (size_t)idx * SVLOG_ENT_SIZE;
+	const uint8_t *cl = svlog_at(SVLOG_SVCL_VA) + (size_t)idx * SVLOG_SVCL_SIZE;
+	const uint8_t *slot = svlog_at(SVLOG_SLOTS_VA) + (size_t)idx * 0x263cu;
+	log_printf("svlog: %s(%d): ent sentient %p, ent client %p | server client state %d | co-op byte %d, local count %d, co-op slot %d", what, idx,
+		   (void *)*(const uint32_t *)(ent + 0x110), (void *)*(const uint32_t *)(ent + 0x108), *(const int *)cl, *svlog_at(SVLOG_COOP_BYTE),
+		   *(const int *)svlog_at(SVLOG_COUNT_VA), *(const int *)slot);
+}
+
+static void clientbegin_hook(int idx)
+{
+	svlog_state("ClientBegin", idx);
+	if (idx >= 0 && idx < 64 && *(const uint32_t *)(svlog_at(SVLOG_ENT_VA) + (size_t)idx * SVLOG_ENT_SIZE + 0x110) == 0)
+		log_printf("svlog: ClientBegin(%d) with no sentient: ClientSpawn is about to fault (the per-client init did not run for it, or its allocation failed)", idx);
+	clientbegin_next(idx);
+}
+
+static int clientinit_hook(int idx)
+{
+	svlog_state("client init, before", idx);
+	int r = clientinit_next(idx);
+	svlog_state("client init, after", idx);
+	return r;
+}
+
+static void svconnect_hook(uint8_t *cl)
+{
+	int idx = (int)(((uintptr_t)cl - (uintptr_t)svlog_at(SVLOG_SVCL_VA)) / SVLOG_SVCL_SIZE);
+	log_printf("svlog: level spawn connects server client %d (state %d)", idx, cl ? *(const int *)cl : -1);
+	svconnect_next(cl);
+}
+
+static void svlog_install(void)
+{
+	static const uint8_t begin_bytes[] = {0x8b, 0x44, 0x24, 0x04, 0x8b, 0x15, 0x10, 0x3c, 0x0a, 0x01}; // mov eax,[esp+4] / mov edx,[0x10a3c10]
+	static const uint8_t init_bytes[] = {0x53, 0x55, 0x8b, 0x6c, 0x24, 0x0c, 0x56};                      // push ebx / push ebp / mov ebp,[esp+0xc] / push esi
+	static const uint8_t connect_bytes[] = {0x56, 0x57, 0x8b, 0x7c, 0x24, 0x0c};                         // push esi / push edi / mov edi,[esp+0xc]
+	int ok = 0;
+	ok += hook_function(base + 0xaf600, begin_bytes, sizeof(begin_bytes), clientbegin_hook, (void **)&clientbegin_next);
+	ok += hook_function(base + 0xcf5d0, init_bytes, sizeof(init_bytes), clientinit_hook, (void **)&clientinit_next);
+	ok += hook_function(base + 0x60f60, connect_bytes, sizeof(connect_bytes), svconnect_hook, (void **)&svconnect_next);
+	log_printf("svlog: %d of 3 level-start hooks in place (they only log)", ok);
+}
+
 void scrdebug_install(void)
 {
 	const uint32_t flag_va = XV(0x18e3f8f); // the address of the error flag (a VA: it goes into the instruction as it is)
@@ -347,6 +414,8 @@ void scrdebug_install(void)
 	memcpy(flag_addr, &flag_va, 4);
 	const uint8_t expected[] = {0x80, 0x3d, flag_addr[0], flag_addr[1], flag_addr[2], flag_addr[3], 0x00};
 	base = (uint8_t *)GetModuleHandleA(NULL);
+	if (!game_is_iw4x())
+		svlog_install();
 	if (!hook_function(base + RVA_ERROR_HANDLER, expected, sizeof(expected), error_hook, (void **)&handler_original)) {
 		log_printf("scrdebug: unexpected bytes at the script error handler, script errors are not logged");
 		return;
