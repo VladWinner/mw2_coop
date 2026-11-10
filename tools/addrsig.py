@@ -406,29 +406,67 @@ def load_addresses_x86(path):
     return sorted(set(int(m.group(1), 16) for m in re.finditer(r"\{(0x[0-9a-f]+), 0x[0-9a-f]+\}", src)))
 
 
+def _strip_comments(t):
+    t = re.sub(r"/\*.*?\*/", " ", t, flags=re.S)
+    return re.sub(r"//[^\n]*", "", t)
+
+
+def _code64(text):
+    """The lines that only the 64-bit build compiles (inside #ifdef _WIN64 up to its #else, or #ifndef _WIN64's #else), comments stripped."""
+    out, stack = [], []  # stack of [is_win64_condition, negated, in_else]
+    for line in text.split("\n"):
+        m = re.match(r"\s*#\s*(ifdef|ifndef|if|elif|else|endif)\b(.*)", line)
+        if m:
+            k, rest = m.group(1), m.group(2)
+            if k in ("ifdef", "ifndef", "if"):
+                neg = k == "ifndef" or "!defined(_WIN64)" in rest
+                stack.append(["_WIN64" in rest, neg, False])
+            elif k in ("elif", "else"):
+                stack[-1][2] = True
+            elif k == "endif":
+                stack.pop()
+            out.append("")
+            continue
+        ok = True
+        for win64, neg, els in stack:
+            if win64 and not ((not neg and not els) or (neg and els)):
+                ok = False
+        out.append(_strip_comments(line) if ok else "")
+    return "\n".join(out)
+
+
+def _array_members(code, name, first_only):
+    """The hex numbers of `name[] = {...};` (the first member of each {..} entry when first_only)."""
+    res = []
+    for m in re.finditer(r"\b%s\[[^\]]*\]\s*=\s*\{" % re.escape(name), code):
+        i, depth, j = m.end(), 1, m.end()
+        while j < len(code) and depth:
+            depth += {"{": 1, "}": -1}.get(code[j], 0)
+            j += 1
+        body = code[i:j - 1]
+        if first_only:
+            res += [int(h, 16) for h in re.findall(r"\{\s*(0x[0-9a-fA-F]+)\s*,", body)]
+        else:
+            res += [int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", body)]
+    return res
+
+
 def x64_addresses():
-    """The 64-bit addresses the sources use: the RVA_ macros of the 64-bit regions."""
+    """The 64-bit addresses the sources use: every XR(0x..) of the 64-bit code, the RVA_ macros of the 64-bit regions, and the tables the code walks (ranges, call sites,
+    context hook sites, probes)."""
     out = {}
     for fn in sorted(os.listdir(os.path.join(HERE, "..", "src"))):
-        if not fn.endswith((".c", ".h")):
+        if not fn.endswith((".c", ".h")) or fn in ("addr159.c",):
             continue
         text = open(os.path.join(HERE, "..", "src", fn), encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
-        stack = []
-        for line in text.split("\n"):
-            t = line.strip()
-            if t.startswith("#ifdef _WIN64"):
-                stack.append(True)
-            elif t.startswith("#if"):
-                stack.append(None)
-            elif t.startswith(("#else", "#elif")):
-                if stack and stack[-1] is True:
-                    stack[-1] = False
-            elif t.startswith("#endif"):
-                if stack:
-                    stack.pop()
-            m = re.match(r"#define\s+(RVA_[A-Z0-9_]+)\s+(0x[0-9a-fA-F]+)", t)
-            if m and all(s is not False for s in stack):
-                out[int(m.group(2), 16)] = m.group(1)
+        code = _code64(text)
+        for m in re.finditer(r"\bXR\((0x[0-9a-fA-F]+)\)", code):
+            out.setdefault(int(m.group(1), 16), fn)
+        for m in re.finditer(r"#define\s+RVA_[A-Z0-9_]+\s+(0x[0-9a-fA-F]+)", code):
+            out.setdefault(int(m.group(1), 16), fn)
+        for name, first in (("ranges", True), ("xranges", True), ("client_n_sites", True), ("sites", True), ("probes", False), ("net_port_immediates_official", False)):
+            for v in _array_members(code, name, first):
+                out.setdefault(v, fn + ":" + name)
     return out
 
 

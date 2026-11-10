@@ -57,20 +57,22 @@ were found, the build has the reference build's layout: the same addresses with 
 | 32-bit reference -> a second official-layout exe (D:\ install of the owner, 33 patched places, 174 differing bytes; the layout is identical, so every answer must be identity) | **235 of 241 found, all identity**; in the game the mod recognised the layout, installed all its modules and started split screen with the same hooks as on the official exe |
 | 64-bit reference -> itself, inside the running game (forced) | 115 of 120 found in 110 ms (code 55 of 55, data 60 of 65), all identity; this is the "same layout" case, so a 64-bit exe with the reference layout now runs |
 
-## A build whose addresses moved (32-bit, experimental)
+## A build whose addresses moved (experimental)
 
-`[native] movedbuilds=1` (or `MW2COOP_MOVED=1`) lets the 32-bit mod run on an exe whose addresses it had to look up (85% or more found). The code asks `addr_xr(reference rva)`:
+`[native] movedbuilds=1` (or `MW2COOP_MOVED=1`) lets the mod, 32-bit or 64-bit, run on an exe whose addresses it had to look up (85% or more found). The code asks `addr_xr(reference rva)`:
 the same number on a known build, the resolved one on this build, and for an address that was not found the offset of a private block (a block of `ret` bytes for code, zeros for
 data; `# code <rva> <rva>` lines of the signature file give the reference build's code ranges) so a hook sees the wrong bytes and refuses, a read gives zeros and a call returns.
 The player-method table of mirror.c is found by the method names instead of by address. Tried on the iw4x-sp 1.0.159 exe: 213 of 241 found, no crash, most hooks refused (that exe's
-code differs from the official one: the iw4x profile build is for it). Not covered: the 64-bit code (hundreds of inline `base + 0x...` addresses outside the signature file) and the
-32-bit files that still use inline addresses (guards.c, transplant.c, steamnet.c, party.c, ...): on a moved build those read whatever lies at the old address.
+code differs from the official one: the iw4x profile build is for it). The 64-bit code goes through `XR()` the same way since 2026-11-10 (the `RVA_` macros, every `base + XR(0x...)`, the tables of ranges, call sites and hook sites; 295 addresses in
+`addresses-x64.txt`, 281 of them found with signatures on the reference exe, all themselves; the other 14 are renderer and dvar globals that no signature reaches, the neighbour
+rule may place them). Not covered: diagnostics that are off by default (the `scenescan`, `npcsnap` and other test switches read raw addresses) and `crash.c`'s check of one place of
+the known build. **The 64-bit moved-build path has only been proven on the reference exe** (every address resolves to itself; the compiled code of the 64-bit DLL was byte-identical
+before `XR()` became the resolver): no second 64-bit build exists here to run it on.
 
 ## What is not done
 
-* The 64-bit code writes most of its addresses inline (`base + 0x...`, several hundred in native.c, guards.c, console.c and others), and the signature
-  file covers only the `RVA_` macros (120). A 64-bit build whose addresses moved is therefore reported but not run; a 64-bit build with the reference
-  layout runs.
+* A 64-bit build whose addresses moved runs only with `movedbuilds=1` and only if 85% of the addresses are found; it has never been run (no such build to try). A 64-bit
+  build with the reference layout runs as before.
 * A 32-bit build whose addresses moved is not run yet either. The native code already goes through `XR()` / `XV()` (the iw4x-sp profile maps them
   through `addr159()`), but the generic hooks use `RVA_` macros and inline addresses (scrdebug32.c, climbads.c), and every consumer has to survive an
   address that stays unresolved (`addr_xr()` gives 0). Routing half of them would be worse than none: a moved build runs only when all of them are routed.

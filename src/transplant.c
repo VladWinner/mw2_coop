@@ -663,7 +663,7 @@ static void fix_reader_leak(void)
 	}
 	uint8_t *cave = NULL;
 #ifdef _WIN64
-	for (uintptr_t at = (uintptr_t)base - 0x10000000; at < (uintptr_t)base + XR(0x10000000) && !cave; at += 0x10000)
+	for (uintptr_t at = (uintptr_t)base - 0x10000000; at < (uintptr_t)base + 0x10000000 && !cave; at += 0x10000)
 		cave = VirtualAlloc((void *)at, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 #else
 	cave = VirtualAlloc(NULL, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
