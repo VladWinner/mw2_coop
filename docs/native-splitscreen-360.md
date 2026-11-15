@@ -368,3 +368,18 @@ Read from the 360 image, for the phase-D items the PC still shares between the t
 and multiplies it by the view's own scale (`+0x4c`, `+0x5c`); the split's `experiment=11` code sets that dvar per draw (top half for player 1, bottom for player 2), so the
 transform the 360 does per call is applied per call on the PC too. The rectangle is not the smear's source, and no porting is needed there. What remains from the 360 comparison
 is the per-client scene record (its time at `+0x2f4`) against the PC's single scene record, which is the next thing to check.
+
+## Scene time: the 360 keeps one per local client, the PC has one (2026-11-15)
+
+Read on both, side by side:
+- **360** `R_RenderScene` (`0x8238b158`) calls `0x82391220` first: it loads the renderer's local player (`0x8244b424` is not used here — it reads `0x83c93900 + 0x15b8` for the
+  current client record, `0x15c0` for the base, stride `0x2130`) and writes that client's scene time at `+0x2f4`. The scene record is per local client by construction.
+- **PC** `0x8210` (`R_RenderScene`) begins with `0x268540` / `0x268740` (the view's command arena), stores the view's command pointer at view `+0x308`, `0xdad10` (the
+  post-process), then `0xbd3d0` with the renderer's local player (`0x51deb8`), then copies the sun and angles into the shared renderer block (`0x4113434..`). **No time is
+  written for the scene at all**, and there is no per-client index for one: the scene record (`0x13a0` bytes at frame data `+0x41a38 + n * 0x13a0`) is one per submitted
+  scene, and the frame's "current scene" (`+0x41a30`) is what the back end's 3D pass reads (`0x4df70`, `0x4e030`).
+
+So for two players' scenes in one frame, anything on the PC that reads a clock through the *scene record* gets the last scene's, which is the shape of the smear the
+`exp11noscene` capture isolated. Next: find what the PC's `+0x2f4` equivalent is — the field the 360 writes per client — by looking for the PC's per-scene time field in the
+`0x13a0` record (the candidate: the pass's `0x4df70` reads a time out of the frame data; check which `+0x…` it uses), and whether `0xdad10` (the post-process) or the culling
+path uses it per scene.
