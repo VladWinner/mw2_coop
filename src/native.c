@@ -2906,7 +2906,9 @@ static void (*rs_shock_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr
 static void (*rs_cgents_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d);
 static int rs_player1; // inside player 2's R_RenderScene with the renderer's local player at 1
 static int p2_frame; // exp11frames: player 2's draw is under way in its own renderer frame
+#ifdef _WIN64 // (natframe2.c is 64-bit only)
 extern int ngfr_skip_reset_2d; // natframe2.c: the second frame of an engine frame does not reset the 2D state again
+#endif
 static unsigned end_frame_flags; // exp11frames: the flags the screen update's end-frame call (0xd5aaf) uses instead of 3, once
 static void (*end_frame_original)(unsigned flags);
 static void end_frame_hook(unsigned flags)
@@ -2915,7 +2917,9 @@ static void end_frame_hook(unsigned flags)
 		flags = end_frame_flags;
 		end_frame_flags = 0;
 		p2_frame = 0;
+#ifdef _WIN64
 		ngfr_skip_reset_2d = 0;
+#endif
 		p2_fd = *(void **)(base + XR(0x410fd00));
 		static int nlog2;
 		if (nlog2 < 4) {
@@ -3978,6 +3982,20 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			((void (*)(unsigned))(base + XR(0xc4c0)))(1);
 			if (nlog1 < 4)
 				nlog1++, log_printf("native: exp11frames: p1 end-frame done");
+			if (CFG_ONCE("p2skindump", 0)) { // QA: which records and skin offsets player 2's frame leaves behind, before the clear
+				const unsigned count = *(const unsigned *)(base + XR(0x40dd754));
+				unsigned shown = 0;
+				for (unsigned i = 0; i < count && i < 0x200 && shown < 24; i++) {
+					const uint8_t *r = base + XR(0x40dd760) + (size_t)i * 0x90;
+					const unsigned ent = (*(const unsigned *)(r + 0x70) >> 7) & 0xfff;
+					const unsigned st = *(const unsigned *)(r + 0x28);
+					if (ent <= 1 || st > 4) {
+						log_printf("native: p2skin rec %u ent %u state %u dobj %p pose %p", i, ent, st, *(void *const *)(r + 0x78), *(void *const *)(r + 0x30));
+						shown++;
+					}
+				}
+				log_printf("native: p2skin %u records before the clear", count);
+			}
 			// The scene's model records (0x1440dd760, 0x90 each, count 0x1440dd754; state at +0x28 up to "skinned at arena offset + 4") are cleared once per screen
 			// update (0x7b60 from 0xbc1a0), and the front end's loops (cull 0x17740, 0x16cc0, 0x16f80, 0x19000, 0x319a0, ...) walk all of them. So player 2's frame
 			// also drew player 1's records, skinned into player 1's frame data (crash in the model surfaces 0x642e0). His frame starts with a clean model list.
@@ -3992,8 +4010,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				((void (*)(void))(base + XR(0x7b60)))();
 			}
 			p2_frame = 1;
+#ifdef _WIN64
 			if (CFG_ONCE("exp11reset", 1)) // the mod's reset_2d runs once per engine frame, as the game's own state reset does (natframe2.c)
 				ngfr_skip_reset_2d = 1;
+#endif
 		} else if (p2draw) {
 			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
 			if (fd)

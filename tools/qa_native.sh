@@ -31,6 +31,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 		echo "players=2"
 		echo "coopdvar=1"
 		echo "experiment=${MW2COOP_MODE:-10}"
+		# The split's modes are only meaningful on the mod's own renderer: warn loudly when a run asks for one without a [display] section, which would
+		# silently run the game's Direct3D 9 instead (and, for mode 11, not even the mode asked for).
+		case "${MW2COOP_MODE:-10}" in
+		11) [ -z "${MW2COOP_DISPLAY:-}" ] && echo "WARNING: MW2COOP_MODE=${MW2COOP_MODE:-10} without MW2COOP_DISPLAY: the run uses the game's Direct3D 9 and the native path is not installed" >&2 ;;
+		esac
 		echo "fov=${MW2COOP_FOV:-49}"
 		echo "p1cmd=1"
 		echo "listplayers=1"
