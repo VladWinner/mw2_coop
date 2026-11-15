@@ -379,7 +379,12 @@ Read on both, side by side:
   written for the scene at all**, and there is no per-client index for one: the scene record (`0x13a0` bytes at frame data `+0x41a38 + n * 0x13a0`) is one per submitted
   scene, and the frame's "current scene" (`+0x41a30`) is what the back end's 3D pass reads (`0x4df70`, `0x4e030`).
 
-So for two players' scenes in one frame, anything on the PC that reads a clock through the *scene record* gets the last scene's, which is the shape of the smear the
-`exp11noscene` capture isolated. Next: find what the PC's `+0x2f4` equivalent is — the field the 360 writes per client — by looking for the PC's per-scene time field in the
-`0x13a0` record (the candidate: the pass's `0x4df70` reads a time out of the frame data; check which `+0x…` it uses), and whether `0xdad10` (the post-process) or the culling
-path uses it per scene.
+**Followed up on the PC side, and this lead does not hold either.** The back end's per-scene pass head (`0x4df70`) reads `0x4358e10` (the 2D / view state object) and scales
+by the global block `0x4115920` (`+0x1f8..+0x200`, the sun colour); scene records live in a global array `0x4351b0` with stride `0x38`, and `0x4d890` walks them from the frame
+counter `0x411375c`. Nothing in `0x8210` / `0x5160` / the pass writes or reads a per-scene time, so the PC simply has no scene clock to make per player: what it has is one
+clock for the frame, which both scenes share *legitimately*. The 360's per-client time is part of its per-client scene record, which the PC folded away together with the rest
+of the local-client arrays.
+
+Conclusion for the smear: the difference is not a missing clock on the PC. The next candidate in the same family is the shared post-process / 2D state (`0x4358e10`, `0x4357760`),
+which the 360 also keeps per player and which the PC's frame end resets once — the frame-end reset (`reset_2d`) runs between the players' frames in mode 11 (`exp11frames=2`)
+and the second run rewrites state the first player's scene record still points into.
