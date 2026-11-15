@@ -215,3 +215,24 @@ Measured in the game (`clearlog=1`, `rslog=1`, `exp11raw=1`, 1280x720, Trainer):
 - **Where the black is written is therefore still open**, but the candidates are now narrow: the front end's own frame clear (the `real clear` of the scene target, inside the
   worker's pass), the post-process composite (`fn_484c0`), or the scene target's first switch by `reset_2d` (`ngfr_453c0`). The next instrument is inside `ngfr_453c0` and the
   worker pass: log every `nd_clear` (the native device's clear) with its target and rectangle for two frames of the split, and compare with `raw1-*.bmp`.
+
+## The split's 2D command list crashes with index 0 (2026-11-15 morning)
+
+A native-mode-11 run with the native device's clears traced (`[native] ndclearlog=1`) died 12 ms after `split view on`, on the first clear of the second scene's frame:
+
+```
+CRASH: access violation (write 0x0) at address 0x7ffd40e6a1b9
+CRASH: stack rvas: 61710 458abe0 0 0 0 458fb00 619b8 4357760 4356bc0 0 458fb00 487d0 4357760 4356bc0 7eb940 7ec138
+```
+
+Reading those frames: `0x619b8` -> `0x61710`, both in the scene's 2D command loop (`0x61740`-ish, the loop that iterates the command list). At `0x6170b` the loop calls
+`0x61020` and gets back `EAX` = 0; `0x61723`-`0x6172e` does `DEC EAX; CDQE; MOV RAX, qword ptr [0x1441159e8 + RAX*8]` — with 0 that is `[0x1441159e0]`, the guard word *before*
+a table of 8-byte entries at `0x1441159e8`, and `[0x1441159e0]` is 0, so the loop writes through a NULL pointer at `RCX = 1`. **So `0x61020` returned an index of 0 where the code
+expects 1-based indices (the `DEC` makes the table lookup safe only for `EAX >= 1`).**
+
+`0x61020` is the engine function that appends a command and returns its index; its three callers are `0x6134f`, `0x6137b` (both in the same 2D path) and `0x6170b`. Why it
+returned 0 in the split is not yet known — the first candidate is the command arena bookkeeping being run twice per frame (player 1's and player 2's 2D lists) with the
+frame's counter reset between them (`0x44d00` resets the arena at the start of every frame, and mode 11 now has two frames per engine frame on the native path).
+
+The trace itself did not cause it: with the same build and `ndclearlog=0` the identical run does not crash (100 s, see above). Treat `[native] experiment=11` + `ndclearlog` as a
+crash-prone combination until this is understood; it is nevertheless the only way to see what clears what.
