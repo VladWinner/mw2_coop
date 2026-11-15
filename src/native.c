@@ -1130,6 +1130,8 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 		if (at == -2)
 			at = cfg("shot11", -1), step = cfg("shot11step", 600);
 		const LONG k = InterlockedIncrement(&n);
+		if (k == 300 || (k % 1200) == 0) // QA: how many presents happen once the split is on (the capture's <present> counts these)
+			log_printf("native: shot11: present %ld, mode 11 on, at %d step %d", (long)k, at, step);
 		if (at >= 0 && k >= at && (k - at) % (step > 0 ? step : 1) == 0 && (k - at) / (step > 0 ? step : 1) < 4) {
 			char name[32];
 			snprintf(name, sizeof(name), "m11-%ld", (long)k);
@@ -2527,6 +2529,7 @@ static int comp_hook(IDirect3DDevice9 *hint)
 		InterlockedExchange(&comp_hook_busy, 0);
 		return 0;
 	}
+	{ static LONG once; if (InterlockedCompareExchange(&once, 1, 0) == 0) log_printf("native: comp_hook on device %p, vt[17] %p vt[42] (EndScene) %p, the_device %p", (void *)dev, vt[17], vt[42], (void *)the_device); }
 	if (!present_base_orig && vt[17] != (void *)present_hook)
 		present_base_orig = (present_t)vt[17];
 	if (!patch_slot(&vt[17], (void *)present_hook, (void **)&present_orig)) {

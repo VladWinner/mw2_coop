@@ -336,3 +336,14 @@ and a D3D trace that picks out the body's draws.
   written by `0x9df60`, outside every swapped range) made per player (`ctlsplit=1`): the shards came back and player 1's view showed bodies from the inside, because the copy
   of player 1's body into context 1 relies on the shared table. Next: what else player 2's draw rewrites that player 1's body uses (skeleton memory of the client, the DObj's
   own cached skeleton), read on the 360 where each local client has its own.
+
+## Why `shot11` produced no files in mode 11: the Present hooks were never installed (2026-11-15, fixed)
+
+Every mode 11 QA capture from the afternoon runs came out empty, and nothing in the log said why. The reason: the mod reaches the game's present path only through the
+EndScene bootstrap, and that bootstrap is armed only when the debug console opens (`set_open` -> `present_bootstrap_request` -> `native_present_hooks()` on the console's
+setup thread, completed on the render thread). A QA run that never opens the console therefore never wraps `Present` — so no frame queue, no compositor, no `shot11`, no
+`[native] d3dtrace` from that path, while the split itself (which does not need Present) looks fine. Fix: `[native] presentkeep=1` arms the same bootstrap from the console's
+setup thread at start-up. With it, `shot11=<present>` writes `m11-*.bmp` as documented (`shots/m11-1200.bmp` ... ).
+
+Also: the presenter counts presents from the moment the hooks are in, not from the split, so a `shot11` value has to be small (~1200 is about a second after the level loads,
+not 2400+ as the earlier notes assumed); `[native] shot11: present <n>` logs the count every 300 presents to place a capture.

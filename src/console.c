@@ -7562,6 +7562,13 @@ static DWORD WINAPI setup_thread(LPVOID unused)
 	console_load_layout();
 	console_print_text("CON_BANNER");
 	// the game may make its window again (a video restart): the watcher puts the console's procedure on whichever window is the game's
+	{ // QA: keep the game's Present path (the mod's frame queue and its captures live there) without opening the console: [native] presentkeep=1
+		static int keep = -1;
+		if (keep < 0)
+			keep = console_settings_path_init() && GetPrivateProfileIntA("native", "presentkeep", 0, console_settings_file) != 0;
+		if (keep)
+			InterlockedExchange(&present_bootstrap_request, 1);
+	}
 	for (;;) {
 		HWND now = NULL;
 		native_present_poll();
