@@ -347,3 +347,23 @@ setup thread at start-up. With it, `shot11=<present>` writes `m11-*.bmp` as docu
 
 Also: the presenter counts presents from the moment the hooks are in, not from the split, so a `shot11` value has to be small (~1200 is about a second after the level loads,
 not 2400+ as the earlier notes assumed); `[native] shot11: present <n>` logs the count every 300 presents to place a capture.
+
+## Ported reading: how the 360 sets up one player's scene beside another (2026-11-15, `8238b158`)
+
+Read from the 360 image, for the phase-D items the PC still shares between the two players. The 360's `R_RenderScene` (`0x8238b158`) does, per player and in order:
+
+1. `0x82391220`: **scene time** written per local client: `0x83c93900` is the client-state table, and the time goes to `[clientState(localClient) + 0x2f4]` — i.e. the
+   360's renderer scene record is indexed by the local client (`0x2130` stride). The PC (`native.c` `rs_log`/the scene set-up) has one scene record; a second scene thus
+   shares the time field. (The PC's `0x51deb8` is the renderer's local player, set per draw; the 360's equivalent global `0x8244b424` is what `0x82113110` stores and
+   `R_RenderScene` reads.)
+2. `0x821410c8`, `0x82393cc0` (frame helpers), `0x82112298(lc)` (the shellshock for that player, PC `0xbd3d0`), then the sun and view angles copied into the shared renderer
+   block `0x83c934e0` at `+0x154..+0x168` (PC: the renderer state object, rva `0x4357660` — the block the PC's own scene set-up fills from the same refdef fields).
+3. `0x82391570` returns the view record; then **the rectangle is transformed through a scale pair** read from the vector table at `0x83c911a8` (`x * v[0] / v[1]`, `y * v[2] /
+   v[3]`) into the view's `+0x118..+0x128`; when the refdef's flag `+0x3f54` is set, the window's drawable rectangle (`+0x3f44`, `+0x3f48`, `+0x3f4c`) goes through the same
+   scale into `+0x128..+0x130`. On the PC the same maths sits in `0x7e40`/`0x8050` (view parameters `+0x60..+0x74`) against the global rectangle pair at `0x4113718`,
+   which `r_subwindow` writes — so the pair is **one global today** and a per-player setup with two rectangles would need it per scene.
+4. `0x82389878` (view list), `0x823898f0`, then the scene set-up `0x8238a288` (PC `0x8210` -> `0x5160`).
+
+What this adds to the split's open items: the 360 has no `r_subwindow`-style global pair; every rectangle it uses is transformed per call from the refdef and the view
+record, and the per-client scene record (`+0x2f4` time and friends) is addressed by the local client. Both are places where the PC still has one slot where the 360 has one per
+player, and both are cheaper than the design's phase D guesses. Not yet checked against the PC's `0x7e40` callers, into which scene each writes.
