@@ -364,6 +364,7 @@ Read from the 360 image, for the phase-D items the PC still shares between the t
    which `r_subwindow` writes — so the pair is **one global today** and a per-player setup with two rectangles would need it per scene.
 4. `0x82389878` (view list), `0x823898f0`, then the scene set-up `0x8238a288` (PC `0x8210` -> `0x5160`).
 
-What this adds to the split's open items: the 360 has no `r_subwindow`-style global pair; every rectangle it uses is transformed per call from the refdef and the view
-record, and the per-client scene record (`+0x2f4` time and friends) is addressed by the local client. Both are places where the PC still has one slot where the 360 has one per
-player, and both are cheaper than the design's phase D guesses. Not yet checked against the PC's `0x7e40` callers, into which scene each writes.
+**Checked on the PC afterwards: this does not cost the split anything.** The PC's view set-up `0x7e40` reads the rectangle from the dvar at `0x4113718` (its `+0x10..+0x1c`)
+and multiplies it by the view's own scale (`+0x4c`, `+0x5c`); the split's `experiment=11` code sets that dvar per draw (top half for player 1, bottom for player 2), so the
+transform the 360 does per call is applied per call on the PC too. The rectangle is not the smear's source, and no porting is needed there. What remains from the 360 comparison
+is the per-client scene record (its time at `+0x2f4`) against the PC's single scene record, which is the next thing to check.
