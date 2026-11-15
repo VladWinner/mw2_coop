@@ -661,3 +661,7 @@ Done:
   plane turns), not at the half's lower edge: not reproduced, the old compositor layout's problem.
 - **Snowrace camera / jitter:** player 1's view yaw changes while the sled is driven (the camera turns). A frame-to-frame jitter log exists now (`[native] viewjit=<s>`: origin, pitch, yaw of both contexts for 150 draws); the
   run ended the mission at 24 s without input, so no jitter numbers yet.
+
+- **Snowrace jitter at a standstill (`viewjit=4`, so_snowrace2_cliffhanger, during the start countdown, 1280x720, 210 fps):** for 150 draws of each context the player state's origin, pitch and yaw do not change at all
+  (step sd 0.001 units / 0.000 degrees; frame time 4.69 ms, sd 0.6): the view is built from steady data, so Vlad's jitter at the spot is not reproduced in mode 11 (it can be the old compositor's alternate frames, or the sled after
+  the start, which this test does not cover).
