@@ -190,6 +190,12 @@ main()
 			thread angles_log();
 			airjump();
 			break;
+		case "ac130fire":
+			ac130fire();
+			break;
+		case "foleylook":
+			foleylook();
+			break;
 		case "airwalk":
 			thread angles_log();
 			airwalk();
@@ -865,6 +871,49 @@ p2walk()
 	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
 }
 
+// ac130fire: (native split screen test, so_ac130_co_hunted, set specialops 1) 20 s in, the gunner fires once with the game's own binding; a second later the native side saves a burst of
+// consecutive frames ([native] burst11=-2): where does the shell land in his view, against the cross hair at the centre of his half?
+ac130fire()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 20;
+	if ( !isdefined( level.ac130player ) )
+	{
+		report( "ac130fire: no gunner" );
+		return;
+	}
+	report( "ac130fire: gunner is " + player_name( level.ac130player ) + ", firing" );
+	press( level.ac130player, "attack", 200 );
+	wait 0.8;
+	SetDvar( "mw2coop_qa_burst", "1" );
+	wait 8;
+	report( "ac130fire: done" );
+}
+
+// foleylook: (native split screen test, Trainer) player 1's cross hair is put on the first friendly actor (Sgt. Foley) 25 s into the level and held for 12 s; player 2 looks elsewhere.
+// The friendly's name shows under the cross hair of the player who aims at him: does it show in player 2's half too?
+foleylook()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 25;
+	allies = GetAIArray( "allies" );
+	if ( !allies.size )
+	{
+		report( "foleylook: no friendly actor" );
+		return;
+	}
+	target = allies[ 0 ];
+	for ( i = 0; i < 1500; i++ )
+	{
+		to = ( target.origin[ 0 ], target.origin[ 1 ], target.origin[ 2 ] + 60 ) - level.player GetEye();
+		level.player SetPlayerAngles( VectorToAngles( to ) );
+		wait 0.05;
+	}
+	report( "foleylook: done, target " + target.name );
+}
+
 // p2away: (native split screen test) player 2 is put about 350 units away from where he starts, on free ground (the mod's follow and leash are off), 25 s into the level:
 // does a prop near his start (the rifle on the Trainer's table) keep its size in his half? A composed frame every second as in p1front.
 p2away()
@@ -890,6 +939,15 @@ p2away()
 		level.player SetOrigin( b.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 250 + ( 0, 0, 12 ) );
 		level.player SetPlayerAngles( ( 0, yaw + 180, 0 ) );
 		report( "p2away: player 1 placed " + level.player.origin + " p2 " + b.origin + " p2 server yaw " + yaw + " p1 yaw " + level.player GetPlayerAngles()[ 1 ] );
+		if ( GetDvarInt( "mw2coop_qa_p1walk" ) )
+		{
+			// player 1 walks toward player 2 on the pad dvar for 6 s (his body runs in player 2's view: does its animation move as smoothly as the other actors'?)
+			wait 3;
+			press( level.player, "forward", 5000 ); // the game's own binding, as padwalk does (the pad dvar did not move him)
+			wait 0.7;
+			SetDvar( "mw2coop_qa_burst", "1" ); // the native side saves a burst of consecutive frames when this is set ([native] burst11=-2)
+			wait 4.5;
+		}
 		if ( GetDvarInt( "mw2coop_qa_p2walk" ) )
 		{
 			// player 2 walks on the pad dvar (forward, back, left, right, 1.2 s each, three rounds); the position lines come from p1front_frames

@@ -1,0 +1,12 @@
+mw2coop patch for maps/so_snowrace_code.gsc (Spec Ops snowmobile races): the console game's split screen.
+
+1. The fog-clear sound is played once in a split screen ("only need to play it on one player then"): both players are on this PC and hear the same speakers, so the second copy is the doubled sound.
+@@@ replace
+			if ( issplitscreen() )
+			{
+				// only need to play it on one player then
+@@@ with
+			if ( issplitscreen() || GetDvarInt( "mw2coop_native_split" ) )
+			{
+				// only need to play it on one player then
+@@@ end

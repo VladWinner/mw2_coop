@@ -1,0 +1,24 @@
+mw2coop patch for maps/_ac130.gsc (the AC-130 gunner HUD, Modern Warfare 2, 64-bit Steam build): the console game's split screen layout.
+
+1. Font scale 2.5 -> 1.5, cross hair at 80 %, the HUD blocks moved in from the half's edges. The console game builds this for its split screen (IsSplitscreen()). The native split screen on one machine is that layout, but IsSplitScreen() is false there: the mod's dvar mw2coop_native_split stands in for it (set while the picture is split; see _utility.gsc.patch hunk 6).
+@@@ replace
+	if ( IsSplitscreen() )
+	{
+		level.ac130_fontscale = 1.5;
+@@@ with
+	if ( IsSplitscreen() || GetDvarInt( "mw2coop_native_split" ) )
+	{
+		level.ac130_fontscale = 1.5;
+@@@ end
+
+2. The short right text block (the long one is cut off at the bottom of a half). The console game builds this for its split screen (IsSplitscreen()). The native split screen on one machine is that layout, but IsSplitScreen() is false there: the mod's dvar mw2coop_native_split stands in for it (set while the picture is split; see _utility.gsc.patch hunk 6).
+@@@ replace
+		if ( IsSplitscreen() )
+		{
+			level.HUDItem[ "hud_text_right" ] settext( &"AC130_HUD_RIGHT_BLOCK_SHORT" );
+@@@ with
+		if ( IsSplitscreen() || GetDvarInt( "mw2coop_native_split" ) )
+		{
+			level.HUDItem[ "hud_text_right" ] settext( &"AC130_HUD_RIGHT_BLOCK_SHORT" );
+@@@ end
+

@@ -347,11 +347,14 @@ static void unlink_guarded(void *node)
 static DWORD WINAPI hud_text_thread(LPVOID unused)
 {
 	(void)unused;
-	static const char *const names[] = {"objectiveFontSize", "friendlyNameFontSize", "friendlyNameFontSizeSplitscreen"};
+	// coopNameFontSize / coopNameFontSizeSplitscreen are the names over the other local or co-op player ("Alpha", "Bravo": the loop at rva 0x93ac0 reads coopNameFontSize); only the
+	// popup friendly name ("Sgt. Foley") has the friendlyName* pair. The coop pair was never scaled, so in the split screen (whose placement is now 1.5 times bigger, hudsplitscale) the
+	// names were the biggest text on the screen: they take [display] nametagscale too (2026-11-16, owner's screenshots).
+	static const char *const names[] = {"objectiveFontSize", "friendlyNameFontSize", "friendlyNameFontSizeSplitscreen", "coopNameFontSize", "coopNameFontSizeSplitscreen"};
 	// (the percents are read in every round: the options page, enhopts.c, changes them while the game runs)
-	int own[3] = {0, 0, 0}; // the first value seen was not the default: the player's own, left alone
-	float applied[3] = {0, 0, 0}; // the value this thread wrote last
-	int seen[3] = {0, 0, 0};
+	int own[5] = {0, 0, 0, 0, 0}; // the first value seen was not the default: the player's own, left alone
+	float applied[5] = {0, 0, 0, 0, 0}; // the value this thread wrote last
+	int seen[5] = {0, 0, 0, 0, 0};
 	int logged = 0;
 	for (;;) {
 		for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {

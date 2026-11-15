@@ -1,0 +1,11 @@
+mw2coop patch for maps/so_assault_oilrig.gsc (Spec Ops oil rig assault): the console game's split screen.
+
+1. The helicopter spotlight. The console game builds this for its split screen (IsSplitscreen()). The native split screen on one machine is that layout, but IsSplitScreen() is false there: the mod's dvar mw2coop_native_split stands in for it (set while the picture is split; see _utility.gsc.patch hunk 6).
+@@@ replace
+	if ( issplitscreen() )
+		level._effect[ "_attack_heli_spotlight" ]	 = LoadFX( "misc/spotlight_large" );
+@@@ with
+	if ( issplitscreen() || GetDvarInt( "mw2coop_native_split" ) )
+		level._effect[ "_attack_heli_spotlight" ]	 = LoadFX( "misc/spotlight_large" );
+@@@ end
+

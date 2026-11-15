@@ -1,0 +1,24 @@
+mw2coop patch for maps/so_chopper_invasion.gsc (Spec Ops chopper mission): the console game's split screen.
+
+1. Effects removed in a split screen. The console game builds this for its split screen (IsSplitscreen()). The native split screen on one machine is that layout, but IsSplitScreen() is false there: the mod's dvar mw2coop_native_split stands in for it (set while the picture is split; see _utility.gsc.patch hunk 6).
+@@@ replace
+	if ( IsSplitscreen() )
+	{
+		array[ array.size ] = "heli_crash_fire";
+@@@ with
+	if ( IsSplitscreen() || GetDvarInt( "mw2coop_native_split" ) )
+	{
+		array[ array.size ] = "heli_crash_fire";
+@@@ end
+
+2. The minigun shells are not shown in a split screen. The console game builds this for its split screen (IsSplitscreen()). The native split screen on one machine is that layout, but IsSplitScreen() is false there: the mod's dvar mw2coop_native_split stands in for it (set while the picture is split; see _utility.gsc.patch hunk 6).
+@@@ replace
+	if ( !IsSplitscreen() )
+	{
+		level.chopperplayer thread chopper_minigun_shells();
+@@@ with
+	if ( !( IsSplitscreen() || GetDvarInt( "mw2coop_native_split" ) ) )
+	{
+		level.chopperplayer thread chopper_minigun_shells();
+@@@ end
+

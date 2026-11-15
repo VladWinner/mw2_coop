@@ -1,0 +1,13 @@
+mw2coop patch for maps/so_ac130_co_hunted.gsc (Spec Ops "Overwatch"... the AC-130 mission): the console game's split screen layout.
+
+1. The gunner's timer sits at the top of his half. The console game builds this for its split screen (IsSplitscreen()). The native split screen on one machine is that layout, but IsSplitScreen() is false there: the mod's dvar mw2coop_native_split stands in for it (set while the picture is split; see _utility.gsc.patch hunk 6).
+@@@ replace
+	if ( IsSplitScreen() )
+	{
+		level.ac130player.hud_so_timer_msg.y = 0;
+@@@ with
+	if ( IsSplitScreen() || GetDvarInt( "mw2coop_native_split" ) )
+	{
+		level.ac130player.hud_so_timer_msg.y = 0;
+@@@ end
+

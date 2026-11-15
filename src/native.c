@@ -1022,6 +1022,38 @@ static void skip_rotation(IDirect3DDevice9 *dev)
 		shot_save_now(dev, name);
 	}
 }
+// QA ([native] exp11cycle=<seconds>, mode 11): player 2's 2D switches every <seconds> through three states, one frame saved ("cyc<n>_<state>") at the end of each window:
+// 0 per-client placement + his 2D on, 1 no placement (full-screen placement as before) + his 2D on, 2 placement + his 2D off.
+static int exp11_cycle_state(void)
+{
+	static int sec = -1;
+	static DWORD t0;
+	if (sec < 0)
+		sec = cfg("exp11cycle", 0);
+	if (sec <= 0 || mode != 11 || !split_on)
+		return -1;
+	if (!t0)
+		t0 = GetTickCount();
+	return (int)(((GetTickCount() - t0) / ((unsigned)sec * 1000)) % 3);
+}
+static void exp11_cycle_shot(IDirect3DDevice9 *dev)
+{
+	static int sec = -1, shot_win = -1;
+	static DWORD t0;
+	if (sec < 0)
+		sec = cfg("exp11cycle", 0);
+	if (sec <= 0 || mode != 11 || !split_on)
+		return;
+	if (!t0)
+		t0 = GetTickCount();
+	const unsigned period = (unsigned)sec * 1000, win = (GetTickCount() - t0) / period;
+	if ((int)win != shot_win && (GetTickCount() - t0) % period > period * 3 / 4 && win < 12) {
+		char name[24];
+		shot_win = (int)win;
+		snprintf(name, sizeof(name), "cyc%02d_%d", (int)win, (int)(win % 3));
+		shot_save_now(dev, name);
+	}
+}
 // [native] perflog=1: where a second of split screen goes (milliseconds, QueryPerformanceCounter): the waits for the renderer's workers, the copying of the contexts' ranges,
 // the two contexts' client frames, the gap between the engine's frames, and the compositor (render thread)
 static LARGE_INTEGER perf_freq;
@@ -1119,6 +1151,7 @@ static void perf_report(void)
 extern int ngfr_trace_scene; // natframe2.c: the frame end's preconditions are logged while set (QA [native] tracescene=1)
 #endif
 static volatile int skip_this_present;
+static volatile int title_shot_req; // QA ([native] titleshot=1): a capture of the frame with the intro title lines (set in hudelem_hook)
 static void before_present_inner(int via, IDirect3DDevice9 *dev)
 {
 	trace_present();
@@ -1129,6 +1162,36 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 		static int at = -2, step;
 		if (at == -2)
 			at = cfg("shot11", -1), step = cfg("shot11step", 600);
+		if (title_shot_req) {
+			char tn[24];
+			snprintf(tn, sizeof(tn), "title%d", title_shot_req);
+			title_shot_req = 0;
+			shot_save_now(dev, tn);
+		}
+		exp11_cycle_shot(dev);
+		if (CFG_ONCE("burst11", -1) == -2) { // armed by the dvar mw2coop_qa_burst (set by a QA script): the next burst11n presents are saved
+			static int left = -1;
+			static LONG bn2;
+			char bv[16];
+			if (left < 0 && (++bn2 % 8) == 0 && game_dvar_raw("mw2coop_qa_burst", bv, sizeof(bv)) && bv[0] == '1')
+				left = CFG_ONCE("burst11n", 60);
+			if (left > 0) {
+				char bname[32];
+				snprintf(bname, sizeof(bname), "b11-%04d", CFG_ONCE("burst11n", 60) - left);
+				shot_save_now(dev, bname);
+				left--;
+			}
+		}
+		if (CFG_ONCE("burst11", -1) >= 0) { // QA: [native] burst11=<present>;burst11n=<count>: that many consecutive presents are saved ("b11-<present>"), to compare how the poses change from frame to frame
+			static LONG bn;
+			const LONG bk = InterlockedIncrement(&bn);
+			if (bk >= CFG_ONCE("burst11", -1) && bk < CFG_ONCE("burst11", -1) + CFG_ONCE("burst11n", 30)) {
+				char bname[32];
+				snprintf(bname, sizeof(bname), "b11-%ld", (long)bk);
+				shot_save_now(dev, bname);
+			}
+		}
+		skip_rotation(dev); // QA: [native] skiprot=<seconds> in mode 11 too: the HUD part player 2 skips changes every <seconds>, a frame is saved before each change
 		const LONG k = InterlockedIncrement(&n);
 		if (k == 300 || (k % 1200) == 0) // QA: how many presents happen once the split is on (the capture's <present> counts these)
 			log_printf("native: shot11: present %ld, mode 11 on, at %d step %d", (long)k, at, step);
@@ -1277,9 +1340,32 @@ static void present_stat(void)
 	last = c.QuadPart;
 }
 
+// Player 1's frame in mode 11 is ended with the "show" bit too (0xc4c0(3), the bit 0x80 only marks it for the back end): the back end runs a frame's post-process composite and its
+// 2D (the HUD) only for a frame that has bit 1 (0x453c0 tests `flags & 2`; 0x45060 presents on the same bit). Player 1's frame had flags 1, so it got neither a post-process nor
+// its HUD; only player 2's frame (flags 3) did, which is also why his 2D painted over the half (2D of one frame only). The 360 draws each view with its own 2D.
+// The back end's call of 0x45060 (at 0x45757) strips the mark, and the Present that frame makes is skipped, so one picture is shown per engine frame ([native] exp11p1show=0 off).
+#ifdef _WIN64
+static volatile int be_skip_present;
+static void (*be_end_original)(unsigned flags);
+static void be_end_hook(unsigned flags)
+{
+	if (flags & 0x80) {
+		flags &= ~0x80u;
+		be_skip_present = 1;
+	}
+	be_end_original(flags);
+	be_skip_present = 0;
+}
+#endif
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
 	skip_this_present = 0;
+#ifdef _WIN64
+	if (be_skip_present) { // the frame that is not shown (player 1's): everything the Present hook does for a shown frame waits for player 2's
+		skip_this_present = 1;
+		return;
+	}
+#endif
 	int on = CFG_ONCE("perflog", 0);
 	if (CFG_ONCE("presentlog", 0))
 		present_stat();
@@ -2062,6 +2148,15 @@ static HRESULT STDMETHODCALLTYPE t_clear(IDirect3DDevice9 *dev, DWORD n, const D
 	// Player 1's frame has the same first clear, and the viewport it finds is the last one set: player 2's bottom half from the frame before. So player 1's half was
 	// never cleared, colour nor depth, and each frame drew only where it was nearer than the old depth: the "smeared" picture of mode 11 (old frames showing through
 	// in bands, the bodies most). Each player's frame clears its own half of the back buffer.
+	if (mode == 11 && split_on && CFG_ONCE("clearlog11", 0) && GetTickCount() - split_tick > 15000) { // QA: the device clears of a few frames, 15 s into the split: flags, rectangles, viewport, which frame's data the back end holds
+		static unsigned cl_n;
+		D3DVIEWPORT9 lv = {0};
+		IDirect3DDevice9_GetViewport(dev, &lv);
+		if (cl_n < 60)
+			cl_n++, log_printf("native: clear11 #%u: flags %lx n %lu rect %ld,%ld,%ld,%ld color %08lx | viewport %lu,%lu %lux%lu | fd %p (p2 fd %p) | caller rva %llx", cl_n, (unsigned long)f, (unsigned long)n, r && n ? (long)r[0].x1 : 0, r && n ? (long)r[0].y1 : 0, r && n ? (long)r[0].x2 : 0,
+					   r && n ? (long)r[0].y2 : 0, (unsigned long)c, (unsigned long)lv.X, (unsigned long)lv.Y, (unsigned long)lv.Width, (unsigned long)lv.Height, *(void **)(base + XR(0x4358f58)), p2_fd,
+					   (unsigned long long)((uint8_t *)__builtin_return_address(0) - base));
+	}
 	IDirect3DSurface9 *rt0 = NULL, *bb = NULL;
 	const int on_bb = mode == 11 && split_on && p2_fd && n == 0 && (f & D3DCLEAR_TARGET) && CFG_ONCE("exp11clip", 1) &&
 			  SUCCEEDED(IDirect3DDevice9_GetRenderTarget(dev, 0, &rt0)) && SUCCEEDED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && rt0 == bb;
@@ -3160,6 +3255,79 @@ static void p0dump_diff(const char *what, const uint8_t *a, const uint8_t *b, in
 }
 static float p0cnt_draw_org[3], p0cnt_draw_org_b[3]; // the two origins the last two adds of entity 0 were given (5th argument and the pose at rdx) // [native] p0cnt=1: context 1's draws, and the adds of entity 0's DObj to its scene, per second
 static void cg_draw_hook_inner(unsigned local_client, int a, int b);
+#ifdef _WIN64
+static double lag_now(void);
+// QA ([native] viewjit=<seconds>): from that many seconds after the split, 150 consecutive draws of each context: the player state's origin, pitch and yaw (what the view is built
+// from) with the wall clock, to see the frame to frame jitter of a camera at a standstill
+static void viewjit_log(int ctx)
+{
+	static int at = -2;
+	static unsigned n[2];
+	if (at == -2)
+		at = cfg("viewjit", -1);
+	if (at < 0 || !split_tick || GetTickCount() - split_tick < (DWORD)at * 1000 || ctx < 0 || ctx > 1 || n[ctx] >= 150)
+		return;
+	n[ctx]++;
+	const uint8_t *ps = base + XR(0x422440);
+	log_printf("native: viewjit ctx %d #%u t=%.2f cg.time %d origin %.2f %.2f %.2f pitch %.3f yaw %.3f roll %.3f", ctx, n[ctx], lag_now() * 1000.0, *(int *)(base + XR(0x422434)), (double)*(float *)(ps + 0x1c),
+		   (double)*(float *)(ps + 0x20), (double)*(float *)(ps + 0x24), (double)*(float *)(ps + 0x108), (double)*(float *)(ps + 0x10c), (double)*(float *)(ps + 0x110));
+}
+static int be_end_installed;
+static unsigned p1_frame_flags(void)
+{
+	return be_end_installed && CFG_ONCE("exp11p1show", 1) ? 0x83u : 1u;
+}
+#else
+static unsigned p1_frame_flags(void)
+{
+	return 1u;
+}
+#endif
+#ifdef _WIN64
+// Each player's 2D in his own half, the engine's way (2026-11-16, from the 360 and the PC's own placement code; [native] exp11place=0 off). The cgame's 2D code takes its
+// screen placement from rva 0xdaf10(lc): while CG_DrawActiveFrame has switched the placements to "per client" (0xdad10, called at 0xbca35) that is the one at rva
+// 0x5e0c60, otherwise the full screen one at 0x5e0bf0. The placement is set by 0xdb0b0(placement, x, y, w, h, screen w, screen h) (0xdb060 does it for the whole screen, at the
+// video start and restart): scales, the safe area and the viewable rectangles of a viewport at (x, y). The 360 sets its per-client placement to the half of the player whose view
+// is drawn; so each player's draw gets the rectangle of his half (player 1 the top, player 2 the bottom) and the 2D he records (HUD, fades, hints) lands in it.
+static int place_use_k = 1; // the HUD scale below applies (0: the half's own scale, for scripted HUD elements: see hudelem_hook)
+static void place_client_set(int bottom, int whole)
+{
+	static int on = -1;
+	if (on < 0)
+		on = cfg("exp11place", 1);
+	if (!on)
+		return;
+	if (exp11_cycle_state() == 1) // QA cycle: the whole-screen placement for both players
+		bottom = 0, whole = 1;
+	const int sw = *(const int *)(base + XR(0x548bfc)), sh = *(const int *)(base + XR(0x548c00));
+	if (sw <= 0 || sh <= 0)
+		return;
+	const int top_h = sh / 2;
+	const float x = 0.0f, y = whole || !bottom ? 0.0f : (float)top_h, w = (float)sw, h = whole ? (float)sh : bottom ? (float)(sh - top_h) : (float)top_h;
+	static unsigned logged;
+	if (logged < 6)
+		logged++, log_printf("native: exp11place: the 2D placement of the %s is (%g, %g, %g, %g) of a %dx%d screen", whole ? "whole screen" : bottom ? "bottom half" : "top half", (double)x, (double)y, (double)w, (double)h, sw, sh);
+	float *pl = (float *)(base + XR(0x5e0c60));
+	((void (*)(float *, float, float, float, float, int, int))(base + XR(0xdb0b0)))(pl, x, y, w, h, sw, sh);
+	// The size of the 2D in a half. A half is 0.5 of the screen high, so the engine's scale (height / 480) makes a HUD that is half the size of the single picture's: barely
+	// readable. The 360 enlarges the HUD of its split views: cg_hudLegacySplitscreenScale (registered at 0x82140e60: default 1.5, minimum 1; "Screen scale for hud elements in
+	// splitscreen", with cg_hudSplitscreenOffsetsUseScale 1: the offsets scale too), the active factor kept in 0x8266be6c (0x82140de8: that dvar while the screen is split, else 1) and
+	// applied to the HUD menu items of the console's *_ss menus. Here the whole placement gets it, so every 2D item of the half grows with it, from its own anchor ([native]
+	// hudsplitscale=<percent>, 150 default, 100 off): the scales are multiplied, the virtual rectangles (viewable, adjustable) shrink by the same factor, the 4:3 centring is made again.
+	if (!whole) {
+		const float k = place_use_k ? (float)CFG_ONCE("hudsplitscale", 150) / 100.0f : 1.0f;
+		if (k > 1.001f && k < 4.0f) {
+			pl[0] *= k, pl[1] *= k, pl[2] *= k, pl[3] *= k;
+			pl[4] /= k, pl[5] /= k;
+			for (int i = 10; i <= 13; i++)
+				pl[i] /= k;
+			for (int i = 18; i <= 21; i++)
+				pl[i] /= k;
+			pl[26] = (pl[8] - pl[0] * 640.0f) * 0.5f; // the free width left and right of the 4:3 area (0xdb0b0: (w - 4:3 width) * 0.5)
+		}
+	}
+}
+#endif
 // [native] smoothlog=1: how evenly the camera of each view moves from one draw to the next while it walks (the draws in a row that did not move although it did, the speed per draw)
 static void smooth_sample(int k)
 {
@@ -3367,6 +3535,26 @@ static void slice_step_note(void)
 	slice_ev[slice_n].t = (double)(c.QuadPart - slice_t0) * 1000.0 / (double)hz.QuadPart;
 	if (++slice_n == 700)
 		slice_flush();
+}
+// QA ([native] quadlog=1, 64-bit): the back end's 2D quad (rva 0x3cff0: material, x, y, w, h, s0, t0, s1, t1, color), the big ones of a few frames, 15 s into the split: which
+// material paints how much of the picture (the black half of player 2's view while his 2D is on).
+static void (*quad_orig)(void *, float, float, float, float, unsigned, unsigned, unsigned, unsigned, unsigned);
+static void quad_hook(void *mat, float x, float y, float w, float h, unsigned s0, unsigned t0, unsigned s1, unsigned t1, unsigned col)
+{
+	static unsigned n;
+	const int sw = *(const int *)(base + XR(0x548bfc)), sh = *(const int *)(base + XR(0x548c00));
+	if (n < 120 && split_on && GetTickCount() - split_tick > 15000 && w * h > 0.15f * (float)sw * (float)sh * 0.5f) {
+		const char *name = mat && !IsBadReadPtr(mat, 8) && *(const char *const *)mat && !IsBadReadPtr(*(const char *const *)mat, 4) ? *(const char *const *)mat : "?";
+		n++;
+		log_printf("native: quad #%u: material %.40s at %g %g size %g x %g uv %g %g %g %g color %08x | fd %p", n, name, (double)x, (double)y, (double)w, (double)h, (double)*(float *)&s0, (double)*(float *)&t0, (double)*(float *)&s1,
+			   (double)*(float *)&t1, col, *(void **)(base + XR(0x4358f58)));
+	}
+	quad_orig(mat, x, y, w, h, s0, t0, s1, t1, col);
+}
+static void quad_install(void)
+{
+	static const uint8_t b[15] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x50, 0x0f, 0x29, 0x74, 0x24, 0x40};
+	log_printf("native: quadlog hook %s", hook_function(base + XR(0x3cff0), b, sizeof(b), (void *)quad_hook, (void **)&quad_orig) ? "installed" : "FAILED");
 }
 static void slice_install(void)
 {
@@ -3954,6 +4142,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				log_printf("native: split rects p1: view rect %.3f %.3f %.3f %.3f | cg view %d %d %d %d | picture %d %d", (double)vrect[0], (double)vrect[1], (double)vrect[2],
 					   (double)vrect[3], cvr[0], cvr[1], cvr[2], cvr[3], sw_px, sh_px);
 		}
+#ifdef _WIN64
+		place_client_set(0, 0); // player 1's 2D goes to the top half
+		viewjit_log(0);
+#endif
 		cg_draw_original(local_client, a, b);
 		if (CFG_ONCE("camlog", 0)) { // QA: player 1's camera (the refdef origin, rva 0x42d310) and his own entity's lerp origin, sampled
 			static unsigned k1;
@@ -4009,7 +4201,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			static int nlog1;
 			if (nlog1 < 4)
 				log_printf("native: exp11frames: p1 end-frame (fd %p) ...", *(void **)(base + XR(0x410fd00)));
-			((void (*)(unsigned))(base + XR(0xc4c0)))(1);
+			((void (*)(unsigned))(base + XR(0xc4c0)))(p1_frame_flags());
 			if (nlog1 < 4)
 				nlog1++, log_printf("native: exp11frames: p1 end-frame done");
 			if (CFG_ONCE("p2skindump", 0)) { // QA: which records and skin offsets player 2's frame leaves behind, before the clear
@@ -4053,12 +4245,22 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			vrect[1] = 0.5f;
 			if (!CFG_ONCE("exp11same", 0)) // QA: exp11same=1 draws player 1 again in the second frame (no context swap)
 				ctx_swap(1);
+			// The cgame's aspect (RVA_CG_ASPECT, read by CG_CalcFov) is part of each context's cgame block: the value set above for player 1's draw went into context 0's copy, and
+			// player 2's block still held the aspect of the whole screen, so his field of view was built for another shape than player 1's (a different zoom in the bottom half).
+			// His copy gets the half's shape too ([native] exp11aspect=0 off).
+			if (sw_px > 0 && sh_px > 0 && CFG_ONCE("exp11aspect", 1)) {
+				static unsigned said_a;
+				if (said_a++ < 3)
+					log_printf("native: exp11aspect: player 2's cgame aspect was %.4f, player 1's draw used %.4f", (double)*(float *)(base + RVA_CG_ASPECT), (double)(float)sw_px / ((float)sh_px * 0.5f));
+				*(float *)(base + RVA_CG_ASPECT) = (float)sw_px / ((float)sh_px * 0.5f);
+			}
 			if (sw_px > 0 && sh_px > 0)
 				cvr[0] = 0, cvr[1] = sh_px / 2, cvr[2] = sw_px, cvr[3] = sh_px - sh_px / 2;
 			static dvar_t *draw2d;
 			if (!draw2d)
 				draw2d = game_find_dvar("cg_draw2D");
-			const int no2d = draw2d && CFG_ONCE("exp11no2d", 1); // test: player 2's 2D (HUD, fades) is drawn over the whole screen until the 2D is placed per view (phase B)
+			// player 2's 2D (HUD, fades) is drawn over the whole screen unless the 2D is placed per view (exp11place, on by default: it goes into his half)
+			const int no2d = draw2d && (exp11_cycle_state() >= 0 ? exp11_cycle_state() == 2 : CFG_ONCE("exp11no2d", CFG_ONCE("exp11place", 1) ? 0 : 1));
 			const int was2d = no2d ? draw2d->current.enabled : 0;
 			if (no2d)
 				draw2d->current.enabled = 0;
@@ -4075,8 +4277,25 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			const int wasgun = nogun11 ? gun11->current.enabled : 0;
 			if (nogun11)
 				gun11->current.enabled = 0;
+			if (CFG_ONCE("timelog", 0)) { // QA: context 1's times at its draw, in the same form as context 0's lines (the draw hook below does not see this call)
+				static unsigned seq1;
+				LARGE_INTEGER pc, hz;
+				QueryPerformanceCounter(&pc);
+				QueryPerformanceFrequency(&hz);
+				if (seq1 >= (unsigned)CFG_ONCE("timelogskip", 0) && seq1 < (unsigned)CFG_ONCE("timelogskip", 0) + 6000)
+					log_printf("native: timelog #%u wall %.1f ctx %d cg.time %d frametime %d interp %.3f cl.serverTime %d frac %.3f", seq1, (double)pc.QuadPart * 1000.0 / (double)hz.QuadPart, ctx_current,
+						   *(int *)(base + XR64(0x422434)), *(int *)(base + XR64(0x422430)), (double)*(float *)(base + XR64(0x42242c)), *(int *)(base + XR64(0x51dca8)), (double)*(float *)(base + XR64(0x51dcb0)));
+				seq1++;
+			}
 			second_pass = frames ? 0 : 1;
+#ifdef _WIN64
+			place_client_set(1, 0); // player 2's 2D goes to the bottom half
+			viewjit_log(1);
+#endif
 			cg_draw_original(0, a, b);
+#ifdef _WIN64
+			place_client_set(0, 1); // the whole screen again, as at the video start
+#endif
 			second_pass = 0;
 			if (nogun11)
 				gun11->current.enabled = (uint8_t)wasgun;
@@ -6478,7 +6697,7 @@ static void hud_hint_single_tick(void)
 }
 static void hud_layout_tick(int split)
 {
-	if (split && mode == 10 && CFG_ONCE("hudss", 1)) {
+	if (split && (mode == 10 || mode == 11) && CFG_ONCE("hudss", 1)) {
 		if (!hud_applied)
 			hud_apply();
 		hud_write();
@@ -7555,7 +7774,28 @@ static void msgwin_hook(int lc, int window, int x, int y, int horz, int vert, vo
 		on = cfg("subonce", 1);
 		sub_top = cfg("subtop", 1);
 	}
-	if (on && mode == 10 && native_active && split_on && ((window == 2 && ctx_current == (sub_top ? 1 : 0)) || (window == 0 && ctx_current == 1)))
+	const int once = on && (mode == 10 || mode == 11) && native_active && split_on && ((window == 2 && ctx_current == (sub_top ? 1 : 0)) || (window == 0 && ctx_current == 1)); // (mode 11 too: both views of a frame draw these windows)
+	if (CFG_ONCE("msglog", 0) && mode == 11 && split_on) { // QA: how many times each context's draw reaches each message window, and how many of those calls are dropped, every 5 s
+		static unsigned calls[2][4], dropped[2][4];
+		static DWORD last;
+		if (ctx_current >= 0 && ctx_current < 2 && window >= 0 && window < 4) {
+			calls[ctx_current][window]++;
+			dropped[ctx_current][window] += once;
+		}
+		if (GetTickCount() - last > 5000) {
+			last = GetTickCount();
+			log_printf("native: msgwin calls ctx0 [%u %u %u %u] ctx1 [%u %u %u %u], dropped ctx0 [%u %u %u %u] ctx1 [%u %u %u %u]", calls[0][0], calls[0][1], calls[0][2], calls[0][3], calls[1][0], calls[1][1], calls[1][2], calls[1][3],
+				   dropped[0][0], dropped[0][1], dropped[0][2], dropped[0][3], dropped[1][0], dropped[1][1], dropped[1][2], dropped[1][3]);
+		}
+	}
+	if (CFG_ONCE("msglog", 0) >= 2 && mode == 11 && split_on && window == 2 && ctx_current == 0) { // QA: where the subtitle window is drawn, once a second
+		static DWORD lastp;
+		if (GetTickCount() - lastp > 1000) {
+			lastp = GetTickCount();
+			log_printf("native: subtitle window: x %d y %d horz %d vert %d scale %g style %d align %d how %d", x, y, horz, vert, (double)scale, style, align, how);
+		}
+	}
+	if (once)
 		return;
 	msgwin_original(lc, window, x, y, horz, vert, font, scale, color, style, align, how);
 }
@@ -7643,8 +7883,32 @@ static void name_self_install(void)
 // below its half, which overlay_titles lays over the bottom half. So the split can come while the title is still on screen without cutting it in two ([native] titles=0 off).
 static const uint8_t hudelem_bytes[] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0x68, 0xfc, 0xff, 0xff, 0x48, 0x81, 0xec, 0x98, 0x04, 0x00, 0x00};
 static void (*hudelem_original)(int, void *);
+#ifdef _WIN64
+#define TITLE_BYTES 0xc0
+#endif
 static void hudelem_hook(int lc, void *e)
 {
+#ifdef _WIN64
+	if (mode == 11 && split_on && CFG_ONCE("hudelemlog", 0) && GetTickCount() - split_tick > 15000) { // QA: the HUD elements each context draws: shader name (configstring of the index at +0x4c), colour, sort, position
+		static unsigned hn;
+		if (hn < 150 && e && !IsBadReadPtr(e, 0xb0)) {
+			char nm[64] = "?";
+			const int idx = *(const int *)((const uint8_t *)e + 0x4c);
+			((int (*)(int, int, char *, int))(base + XR(0xb0610)))(lc, idx, nm, sizeof(nm));
+			const uint32_t *d = (const uint32_t *)e;
+			hn++;
+			if (!strcmp(nm, "black") || hn < 12) {
+				uint8_t rgba[8] = {0};
+				const int tnow = *(const int *)(base + XR(0x51dca8));
+				((void (*)(void *, int, void *))(base + XR(0x73eb0)))(e, tnow, rgba); // the colour at the client's time, as the draw reads it
+				char all[400] = "";
+				for (int k = 0; k < 0x2c; k++)
+					snprintf(all + strlen(all), sizeof(all) - strlen(all), "%x ", d[k]);
+				log_printf("native: hudelem #%u ctx %d lc %d: shader %.40s idx %d sort %g | time %d colour %02x %02x %02x %02x | dwords %s", hn, ctx_current, lc, nm, idx, (double)*(const float *)((const uint8_t *)e + 0x88), tnow, rgba[0], rgba[1], rgba[2], rgba[3], all);
+			}
+		}
+	}
+#endif
 	if (mode == 10 && native_active && split_on && *(const float *)((const uint8_t *)e + 0x88) == 1.0078125f) {
 		if (ctx_current == 1)
 			return;
@@ -7657,6 +7921,35 @@ static void hudelem_hook(int lc, void *e)
 		title_tick = GetTickCount();
 		return;
 	}
+#ifdef _WIN64
+	if (mode == 11 && native_active && split_on && CFG_ONCE("exp11titles", 1) && e && !IsBadReadPtr(e, TITLE_BYTES) && *(const float *)((const uint8_t *)e + 0x88) == 1.0078125f) {
+		// The title lines (maps\_introscreen patch: sort 1.0078125) are laid out for the whole screen, as in single player (mode 10 drew them once over the whole picture), and each half's
+		// 2D shows its part: a half's 2D is placed relative to its own viewport, so the whole-screen placement is set for the call and player 2's copy is moved up by half the screen
+		// (240 virtual units, whatever the resolution: half the height over a scale of height / 480). One copy across the boundary ([native] exp11titles=0: each half's own title).
+		uint8_t tmp[TITLE_BYTES];
+		memcpy(tmp, e, sizeof(tmp));
+		if (ctx_current == 1)
+			*(float *)(tmp + 8) -= 240.0f;
+		static unsigned tc;
+		if (CFG_ONCE("titleshot", 0) && ctx_current == 0 && ++tc % 80 == 5)
+			title_shot_req = (int)tc; // QA: a capture of every 80th frame with title lines
+		place_client_set(0, 1);
+		hudelem_original(lc, tmp);
+		place_client_set(ctx_current == 1, 0);
+		return;
+	}
+	// The scripted HUD elements keep the half's own scale ([native] hudelemk=1 gives them hudsplitscale too). The console enlarges only its HUD menus (the *_ss menus flagged
+	// LEGACY_SPLIT_SCREEN_SCALE, cg_hudLegacySplitscreenScale 1.5); the scripts that make HUD elements adapt themselves to the split screen (IsSplitscreen(): the AC-130 HUD uses font
+	// scale 1.5 instead of 2.5, shorter text blocks, 80 % cross hair), so a 1.5 times bigger placement on top of that cut the AC-130's text and overlapped the timers (owner's screenshots).
+	if (mode == 11 && native_active && split_on && !CFG_ONCE("hudelemk", 0)) {
+		place_use_k = 0;
+		place_client_set(ctx_current == 1, 0);
+		hudelem_original(lc, e);
+		place_use_k = 1;
+		place_client_set(ctx_current == 1, 0);
+		return;
+	}
+#endif
 	hudelem_original(lc, e);
 }
 
@@ -7775,6 +8068,15 @@ static void pass2_hook(unsigned lc)
 {
 	if (ctx_current == 1 && CFG_ONCE("p2skip", 0)) // QA: context 1 draws no other-player body (is a stray mesh player 1's body?)
 		return;
+	// The other player's body in player 2's view (centshare: slot 0, written by context 0): its yaw and pitch (the torso's and head's aim) come from the entity state, which the
+	// cgame refreshes only when a snapshot arrives (20 a second), so the partner's aim moved in steps. Player 1's playerState (his client block, in the context-0 store) is
+	// current every frame: his yaw and pitch go into the slot's three yaws and pitches for the pass, as the earlier copy did ([native] p0aim=0 off).
+	if (ctx_current == 1 && mode == 11 && cent_share_on() && ctx_store[0][5] && CFG_ONCE("p0aim", 1)) {
+		float *f = (float *)(base + RVA_CENT);
+		const float y = *(const float *)(ctx_store[0][5] + CL_BLOCK_PS + 0x10c), pt = *(const float *)(ctx_store[0][5] + CL_BLOCK_PS + 0x108);
+		f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = y;
+		f[CF_YAW0 - 1] = f[CF_YAW1 - 1] = f[CF_YAW2 - 1] = pt;
+	}
 	if (CFG_ONCE("p2hooklog", 0)) { // QA: what the second entity pass sees in both slots
 		static unsigned k;
 		if (++k % 60 == 0 && k < 6000) {
@@ -7935,6 +8237,30 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 				}
 				len += snprintf(line + len, sizeof(line) - len, "]");
 				idx = *(const uint16_t *)(node + 0xc); // the first child
+			}
+			log_printf("%s", line);
+		}
+	}
+	if (CFG_ONCE("animlog", 0) && a && !IsBadReadPtr(a, 0xb0) && ((ctx_current == 1 && (c & 0xffff) == 0) || (ctx_current == 0 && (c & 0xffff) == 1)) && split_tick && GetTickCount() - split_tick > (DWORD)CFG_ONCE("animlogat", 30) * 1000) {
+		// QA ([native] animlog=1, animlogat=<s>): the other player's body (entity 0 in context 1, entity 1 in context 0): wall clock, the draw origin and the animation tree's first nodes at each
+		// draw, 60 draws per context, to see whether the animation advances every frame or in steps
+		static unsigned an[2];
+		if (an[ctx_current] < 60) {
+			an[ctx_current]++;
+			const uint8_t *tree = *(const uint8_t *const *)a;
+			int idx = tree && !IsBadReadPtr(tree, 16) ? *(const short *)(tree + 8) : 0;
+			char line[900];
+			const float *org = (const float *)e;
+			int len = snprintf(line, sizeof(line), "native: anim ctx %d t=%.1f cg.time %d idx %d pos %.1f %.1f:", ctx_current, lag_now() * 1000.0, *(int *)(base + XR64(0x422434)), idx, e ? org[0] : 0.0f, e ? org[1] : 0.0f);
+			for (int k = 0; idx > 0 && k < 3 && len < (int)sizeof(line) - 160; k++) {
+				const uint8_t *node = base + XR64(0x1bc0a30) + (size_t)idx * 0x40;
+				const float *f = (const float *)node;
+				len += snprintf(line + len, sizeof(line) - len, " [n%d", idx);
+				for (int j = 0; j < 16; j++)
+					if (f[j] != 0 && fabsf(f[j]) > 1e-6f && fabsf(f[j]) < 1e6f)
+						len += snprintf(line + len, sizeof(line) - len, " %x:%.3f", j * 4, (double)f[j]);
+				len += snprintf(line + len, sizeof(line) - len, "]");
+				idx = *(const uint16_t *)(node + 0xc);
 			}
 			log_printf("%s", line);
 		}
@@ -9288,17 +9614,55 @@ static int hooks_apply32(void)
 #endif
 
 #ifdef _WIN64
+// The popup friendly name (the name of the friendly under the cross hair, "Sgt. Foley": rva 0x94e00(local client), called from the HUD at 0x93cf0). The game's server sets it per local
+// client as two configstrings, 0xc + 2 * client and 0xd + 2 * client (the cgame reads the table of 16-bit string indices at rva 0x5d8d02 through 0xca1e0); the HUD draw is called for
+// local client 0 in both contexts, so player 2's half showed the name that player 1's cross hair had put in 0xc / 0xd (the owner: "Sgt. Foley on both halves when the top one looks at
+// him"). In context 1 the entries of client 1 take their place for the call ([native] exp11friend=0 off).
+static void (*friend_original)(int);
+static void friend_hook(int lc)
+{
+	if (mode == 11 && split_on && ctx_current == 1 && CFG_ONCE("exp11friend", 1)) {
+		uint16_t *t = (uint16_t *)(base + XR(0x5d8d02));
+		uint16_t a = t[0xc], b = t[0xd];
+		t[0xc] = t[0xe], t[0xd] = t[0xf];
+		t[0xe] = a, t[0xf] = b;
+		friend_original(lc);
+		t[0xe] = t[0xc], t[0xf] = t[0xd];
+		t[0xc] = a, t[0xd] = b;
+		return;
+	}
+	friend_original(lc);
+}
 // Each player's cgame step before the views are drawn, as on the 360 (2026-11-15). The 360's screen update (0x82135818) first runs, for every local player,
 // 0x821127a0 (0x82102e60, the snapshots 0x8210d1c0, 0x820e67e0, and the own-entity write 0x82102f28), and only then the loop that draws each player's view.
 // The PC's screen update (0xd5890) has the same step, 0xbc170 (0xb2860, the snapshots 0xb8c50, 0x97ea0, the own-entity write 0xb28b0), called at 0xd58e3
 // for player 1 only: in mode 11 player 2's client runs under the screen update's busy flag and his view is drawn inside player 1's screen update, so his
 // step never ran: his snapshots were not processed there and his own entity (slot 1 with centshare) was not written ([native] p2step=0 off).
 static void (*cg_step_original)(unsigned lc);
+// The screen update sets the client time just before the step: 0xbc1a0(serverTime, ...) writes it to cl.serverTime (rva 0x51dca8, in the swapped cl range; the 360 has a client
+// time per local player). Player 2's screen update never runs in mode 11, so his cl.serverTime stayed at the value of his first frame (450 ms) and everything the HUD code
+// computes from it was wrong: the script's black fade-in (a HUD element with a fade start and duration) never began to fade in his view, and his half stayed black ([native] p2time=0 off).
+static void (*cg_time_original)(unsigned, unsigned, unsigned);
+static unsigned cg_time_arg;
+static int cg_time_have;
+static void cg_time_hook(unsigned t, unsigned b, unsigned c)
+{
+	cg_time_arg = t;
+	cg_time_have = 1;
+	cg_time_original(t, b, c);
+}
 static void cg_step_hook(unsigned lc)
 {
 	cg_step_original(lc);
 	if (mode == 11 && split_on && ctx1_ready && ctx_current == 0 && lc == 0 && CFG_ONCE("p2step", 1)) {
 		ctx_swap(1);
+		if (cg_time_have && CFG_ONCE("p2time", 1)) {
+			int *t = (int *)(base + XR(0x51dca8));
+			static unsigned said;
+			if (said++ < 3)
+				log_printf("native: p2time: player 2's cl.serverTime %d -> %d", *t, (int)cg_time_arg);
+			*t = (int)cg_time_arg;
+		}
 		cg_step_original(0);
 		if (CFG_ONCE("camlog", 0)) { // QA: player 2's slot after his step, next to his snapshot's player state origin (cg.nextSnap ps, rva 0x40cad8, origin +0x1c)
 			static unsigned ks;
@@ -9386,6 +9750,19 @@ static int hooks_apply(void)
 	if (mode == 11 && (*(base + XR(0xd58e3)) != 0xe8 || *(int32_t *)(base + XR(0xd58e4)) + (intptr_t)(base + XR(0xd58e8)) != (intptr_t)(base + XR(0xbc170)) ||
 			   !jhook_call(base + XR(0xd58e3), (void *)cg_step_hook, (void **)&cg_step_original)))
 		log_printf("native: unexpected code at the screen update's cgame step call (0xd58e3): player 2's step does not run (p2step)");
+	if (mode == 11 && (*(base + XR(0x93cf0)) != 0xe8 || *(int32_t *)(base + XR(0x93cf1)) + (intptr_t)(base + XR(0x93cf5)) != (intptr_t)(base + XR(0x94e00)) ||
+			   !jhook_call(base + XR(0x93cf0), (void *)friend_hook, (void **)&friend_original)))
+		log_printf("native: unexpected code at the HUD's popup friendly name call (0x93cf0): both halves show player 1's (exp11friend)");
+	if (mode == 11 && !natboot_active() && CFG_ONCE("exp11p1show", 1)) {
+		if (*(base + XR(0x45757)) == 0xe8 && *(int32_t *)(base + XR(0x45758)) + (intptr_t)(base + XR(0x4575c)) == (intptr_t)(base + XR(0x45060)) &&
+		    jhook_call(base + XR(0x45757), (void *)be_end_hook, (void **)&be_end_original))
+			be_end_installed = 1;
+		else
+			log_printf("native: unexpected code at the back end's frame end call (0x45757): player 1's frame keeps flags 1, no HUD for him (exp11p1show)");
+	}
+	if (mode == 11 && (*(base + XR(0xd58dc)) != 0xe8 || *(int32_t *)(base + XR(0xd58dd)) + (intptr_t)(base + XR(0xd58e1)) != (intptr_t)(base + XR(0xbc1a0)) ||
+			   !jhook_call(base + XR(0xd58dc), (void *)cg_time_hook, (void **)&cg_time_original)))
+		log_printf("native: unexpected code at the screen update's client time call (0xd58dc): player 2's cl.serverTime is not kept (p2time)");
 #endif
 	if (*(base + XR(0xca523)) != 0xe8 || *(base + XR(0x82dd)) != 0xe8 || *(base + XR(0x6356)) != 0xe8 ||
 	    !jhook_call(base + XR(0xca523), (void *)render_scene_hook, (void **)&render_scene_original) ||
@@ -9477,6 +9854,8 @@ static int activate(int players)
 		cent_trans_install();
 	if (cfg("slicelog", 0))
 		slice_install();
+	if (cfg("quadlog", 0))
+		quad_install();
 	if (cfg("transitionlog", 0))
 		trans_install();
 	if (cfg("framelog", 0) || cfg("pace", 0))

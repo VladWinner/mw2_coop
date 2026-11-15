@@ -493,3 +493,171 @@ Result (D3D9, mode 11, 1280x720, the smear's camera, `shot11=1500;shot11step=40`
 same stage** — same plume shape, same size, no age offset between the views, HUD scaling applied equally. With the effects clock advancing once per engine frame
 (`fxclock=1`) the particle system no longer runs a step ahead on one side. Not checked yet: an effect that keeps emitting for longer than one screen update (a smoke
 grenade over several seconds), and the same on the native Direct3D 11 renderer.
+
+### Each player's 2D in his own half: the engine's per-client placement (2026-11-16, `exp11place`, built, NOT yet run)
+
+Phase B's open item: player 2's HUD was off (`exp11no2d`) because every 2D command drew with the full-screen placement, and mode 10's half placements (`place_push`, three
+structs written by hand) belong to the compositor. The PC engine already has the 360's mechanism:
+
+- `0xdaf10(lc)` is what the cgame's 2D code calls (about 150 call sites) to get its screen placement. With the mode word `0x5e0ccc == 1` it returns the per-client placement
+  `0x5e0c60`, otherwise the full-screen one `0x5e0bf0`. The mode is 1 from `0xdad10` (called at `0xbca35` inside `CG_DrawActiveFrame`) until the screen update
+  sets 2 (`0xdaf00` at `0xd5aa0`) after the draws; 0 is set by `0xdad20` at `0xd592a` before them.
+- `0xdb0b0(placement, x, y, w, h, screen w, screen h)` sets a placement for a viewport at (x, y): the three scales, the safe-area rectangles, the viewable
+  rectangles. `0xdb060` calls it for the whole screen (`0x5e0c60`, `x = y = 0`, w and h from `0x548bfc` / `0x548c00`) at the video start (`0xd3d00`) and restart (`0xd4a50`).
+- The 360 sets its per-client placement to the half of the player whose view is being drawn, so the hand-written structs of mode 10 are not the 360's way.
+
+Port: `place_client_set` (64-bit) calls `0xdb0b0` on `0x5e0c60` before each player's `cg_draw_original`: player 1 the top half, player 2 the bottom half (`y = h / 2`), and the
+whole screen again after player 2's draw. Player 2's 2D is on (`exp11no2d` now defaults to 0 while `exp11place` is on), and the console's split HUD layout (`hud_layout_tick`,
+the items of the PC's HUD menus moved like the disc's `hud_splitscreen.txt`, `local/xbox360-ref/hud_ss_*.txt`) now runs in mode 11 as in mode 10 (`hudss=0` off).
+`[native] exp11place=0` gives the old behaviour (player 1's HUD placed for the whole screen, player 2's off).
+
+To look at in the first run: the HUD of each player inside his half (ammo bottom right of the half, compass, hints), no HUD of player 2 over player 1's half, the text size
+(the half's own scale), and the global texts (subtitles, objective) that both contexts draw.
+
+### Checked: player 2's HUD in his half, and why his 2D first painted the half black (2026-11-16, D3D9, Trainer)
+
+First run with `exp11place`: player 1's half fine, **player 2's half completely black**. Narrowed with QA switches (all kept, off by default):
+
+| Test | Result |
+|---|---|
+| `exp11no2d=1` (his 2D off, placement on) | both halves fine: the 3D and the placement are not the cause |
+| `exp11cycle=6` (placement + 2D, whole-screen placement + 2D, placement + no 2D, every 6 s) | black in both 2D-on states, fine with it off: the content of his 2D, not the placement |
+| `skiprot=5` in mode 11 (each of 11 HUD parts skipped in context 1 in turn) | black in every window: not one of those parts |
+| `d3dtrace=1` | same structure of the frame with 2D on or off; only 13 more 2D draws after the post-process composite |
+| `quadlog=1` (back end 2D quad `0x3cff0`) | a half-screen quad of material **"black"**, colour `ffffffff`, drawn after the post-process in his frame |
+| `hudelemlog=1` (hook `0xa3b80`, colour as `0x73eb0(elem, time)` gives it) | both contexts draw the script's `black` HUD element (fade start `0x283c` = 10300 ms, duration 2000 ms); in context 0 the client time is 15514 and the alpha 0, in context 1 the client time is **450** and the alpha 255 |
+
+Cause: `cl.serverTime` (rva `0x51dca8`, inside the swapped cl range) is written only by `0xbc1a0(serverTime, ...)`, which the screen update (`0xd5890`, call at `0xd58dc`) calls
+right before the cgame step `0xbc170` (`0xd58e3`). In mode 11 player 2's screen update never runs (busy flag), so his `cl.serverTime` stayed at its first value (450 ms). Every
+HUD computation from that time was wrong: here the intro's black fade-in never started in his view. On the 360 the same pair belongs to the per-local-player step.
+
+Fix (`p2time=1`, with `p2step`): `0xd58dc` is hooked to remember the time the screen update sets, and player 2's step writes it to his own `cl.serverTime` before it runs
+(`cg_step_hook`). Checked: his time follows player 1's (15550 / 15563), the black element's alpha is 0 in both contexts, and the capture shows both halves live with player 2's
+HUD text ("Pick up your weapon from the table", the Trainer's first hint) at the top left of **his** half. The 2D of the HUD menus follows the per-client placement. Not yet seen:
+the ammo / compass items (the Trainer has no weapon at that moment), player 1's HUD in the top half, other levels, the native Direct3D 11 renderer, global texts (subtitles, objective)
+shown in both halves. `0xbc1a0` also calls `0xb8d30` (snapshot transition), `0x7b60`, `0x8daf0(0)`, `0xa5850` and `0x111c30(0, time)`: only the time is given to context 1 for now.
+
+New QA switches: `exp11cycle=<s>`, `skiprot=<s>` (now also in mode 11), `clearlog11=1`, `quadlog=1`, `hudelemlog=1`.
+
+### Player 1's HUD and post-process were never drawn: his frame had no "show" bit (2026-11-16, `exp11p1show`, checked)
+
+With player 2's HUD fixed, a QA scenario (`mw2coop_qa=hudtest`: a global HUD element, one only for player 1, one only for player 2) showed player 1's half without any 2D: no
+HUD elements, no ammo, no compass, and no post-process either. In the traced frame pair only the second frame has the post-process composite and any 2D draw (z = 0).
+
+Reason (back end, `0x453c0` and `0x45060`): the per-scene post-process composite (`0x484c0`) and the 2D (`0x5c010`) run only for a frame whose flags have bit 1 (`& 2`), and the same bit
+makes `0x45060` Present. `exp11frames=2` ended player 1's frame with `0xc4c0(1)`, begin without show, as on the 360's end-frame `0x82390e20(1)`; on the PC that also leaves his frame
+without HUD and post-process, so the HUD that was visible in his half in the old single-frame design was lost with the per-player frames. Player 2's frame (flags 3) had everything.
+
+Fix: player 1's frame is ended with `0x83` (bit 0x80 only marks it; no code tests it). The back end's call of `0x45060` (at `0x45757`) is hooked: it strips the mark and, for the
+duration of that call, the Present hooks skip the Present (`be_skip_present`), so one picture is shown per engine frame and the engine's own frame bookkeeping (the present
+queue, `0x45060`'s fence) still runs for both frames. Direct3D 9 only: on the native renderers (`natboot_active`) the old flags stay (not checked there). `exp11p1show=0` off.
+
+Checked (D3D9, Trainer, `hudtest`): the top half shows "GLOBAL ELEM", "PLAYER ONE ELEM", the M4A1 ammo count and the compass, the bottom half "GLOBAL ELEM" and "PLAYER TWO ELEM";
+no crash. Each half shows the global element once and its player's own element only in his half.
+
+### The global texts once, as in mode 10 (2026-11-16, `msgwin_hook` in mode 11, checked)
+
+The mode 10 design drew the game's global texts once (docs/native-splitscreen-plan.md, "Global texts once"): the game message windows (rva `0x52f348`, one set outside the swapped
+ranges, drawn by `0xcb4f0(local client, window, x, y, ...)`) are drawn by both contexts, so the subtitles (window 2, console channel "subtitle") and the notices at the top left
+(window 0, "gamenotify obituary": a new objective, "Pick up your weapon from the table") came twice. The hook only ran in mode 10. Mode 11 draws the windows in both views of a
+frame in the same way, so the hook now runs in mode 11 too: context 1 drops windows 0 and 2, the texts are in the top half only, as the 360 has them (its `subtitles_ss` menu is
+visible for local player 0 only). `[native] subonce=0` / `subtop=0` as before.
+
+Checked (D3D9, Trainer, `msglog=1`): per context each of windows 0, 1 and 2 is called once per frame; the drops are all of context 1's windows 0 and 2 and none of window 1 or of
+context 0. The captures show the subtitle at the bottom of the top half and the objective notice at its top left, nothing in the bottom half.
+
+Decided against porting from mode 10 (and why): the intro's title lines (`hudelem_hook`, sort 1.0078125) were drawn once over the whole picture there because the compositor
+could lay one layer over both halves; in mode 11 each half has its own 2D viewport, so each half shows the title at its own half's scale, which is the console's way for a view
+without a shared layer. The layer comparison (`dedupe`) stays off. Window 1 ("boldgame", the bold centre messages) stays in both halves as in mode 10. Not checked in mode 11:
+the "Follow" waypoint hint in both halves (open since mode 10), the name tags (`namefix`, installed in every mode), the native Direct3D 11 renderer.
+
+### The size of the 2D in a half: `hudsplitscale` (2026-11-16, from the 360, checked on D3D9)
+
+Owner: the HUD is barely visible. The engine's placement scales by the viewport's height / 480, and a half is 0.5 of the screen high, so every 2D element of a half was half the
+size of the single picture's. The 360 enlarges the HUD of its split views: `cg_hudLegacySplitscreenScale` (registered in `0x82140e60`; default 1.5, minimum 1, "Screen scale for hud
+elements in splitscreen"), with `cg_hudSplitscreenOffsetsUseScale` (default 1: the offsets scale too). `0x82140de8` keeps the active factor in `0x8266be6c` (the dvar while the
+screen is split, else 1.0) and the console's `*_ss` menu items flagged `LEGACY_SPLIT_SCREEN_SCALE` (`local/xbox360-ref/hud_ss_menus.txt`) use it; the 360 also has per-element scales
+(`cg_hudSplitscreenCompassScale`, `...StanceScale`, `waypointSplitscreenScale`, `con_gameMsgWindow%dSplitscreenScale`, default 0.85).
+
+Port (`place_client_set`, `[native] hudsplitscale=<percent>`, default 150, 100 off): after the engine's `0xdb0b0` has set the half's placement, its scales (`[0]..[3]`) are
+multiplied by the factor, the real-to-virtual scales (`[4]`, `[5]`) divided, the virtual rectangles (viewable `[10..13]`, adjustable `[18..21]`) shrink by it and the 4:3 centring
+(`[26]`, `(w - 640 * scale) / 2`) is made again, so every 2D element of the half (HUD menus, script HUD elements, message windows, the names over players) grows from its own anchor.
+The constants were read from the exe (640, 480, 4/3). Checked: Trainer `p2away` frames, ammo, compass, subtitle and the names (Alpha, Bravo) readable in both halves. The names are
+now large (their own size option `nametagscale` is 70 %): the 360 has per-element scales below 1 for some elements; tune `hudsplitscale` or `nametagscale` after a look at the owner's screen.
+
+"The environment disappears" (owner's second report) was looked for on Trainer `p2away` and on Favela's intro with player 1 moving: no missing world in 8 captures. The only matching
+older report is "flying glasses, half of the environment disappears" (2026-11-04, the old weapon-FOV/body copy). Still needs a level and a moment from the owner.
+
+### The intro's title lines once, over the whole picture, as in mode 10 (2026-11-16, `exp11titles`, owner's request, checked on D3D9)
+
+The section above kept the title lines per half; the owner asked for mode 10's way: one copy at single player's size and place. Mode 10 drew them in context 0 with the full-screen
+placement and laid the layer over both halves. Mode 11 has no compositor, but each half's 2D is placed **relative to its own viewport** (found with the quad and trace logs: the black
+quad was at y 0 of player 2's viewport `0,360`), so a whole-screen layout can be drawn in both halves and each clips its part:
+
+- `hudelem_hook` (the HUD element draw `0xa3b80`) catches the elements with sort `1.0078125` (the `_introscreen` patch's marker) in both contexts; per call it sets the **whole-screen**
+  placement (`place_client_set(0, 1)`, no `hudsplitscale`), draws a copy of the element and puts the half's placement back;
+- player 2's copy has its y (dword 2 of the element) moved by -240 virtual units: half the screen over a scale of height / 480, whatever the resolution, so the part of the layout in
+  the bottom half lands at the same screen place; player 1's copy stays where it is.
+
+Result (Favela intro): on the black screen the title lines stand once, at the bottom left of the **whole** screen, at single player's size; during the car scene they run across the bottom
+half in the same size. `[native] exp11titles=0` gives each half its own title again (half scale).
+
+What did not work first, kept so it is not tried again: drawing the collected copies in the screen update's final 2D section (the call of `0x94740` at `0xd5a7a`, after `0xe900`, the
+placement mode 0): the calls ran and the elements' alpha was 255, but nothing appeared. Neither the HUD menus painted there nor the title text showed in that section in mode 11
+(the engine's final 2D after a split frame is not where the halves' 2D goes). QA: `titleshot=1` saves every 80th frame that has title lines.
+
+### Checks after the 2D work (2026-11-16)
+
+- **1920x1080, Trainer (D3D9):** the intro's five title lines stand once at the bottom left of the whole screen at single player's size (the -240 virtual shift of player 2's copy is resolution
+  independent as computed); both halves are live. `hudsplitscale` and the titles hold at 1080p.
+- **Native Direct3D 11 (`MW2COOP_DISPLAY="directx11=1"`, captures with the console `!shot`, since `shot11` is a Direct3D 9 Present feature):** the title lines draw once over the whole
+  picture there too (first capture), but after the intro **the top half is black and the bottom half shows player 2's view** (name "Alpha" over player 1 in his view). This is the known
+  native mode 11 failure of the earlier notes (the top half cleared or never drawn); `exp11p1show` is Direct3D 9 only on purpose (the native frame end is the mod's own, `natframe2.c`), so
+  player 1's frame there still has no show bit and no 2D. Mode 11 on the native renderers needs its own pass; the Direct3D 9 path is the one checked today.
+
+### Bottom half: aspect (FOV) and the partner's choppy animation (2026-11-16)
+
+- **FOV (`exp11aspect`, fixed):** `RVA_CG_ASPECT` (`0x43c640`, read by CG_CalcFov) lives in each context's cgame block. Player 1's draw was given the half's aspect 3.5556 (live block = context
+  0); player 2's block kept the whole screen's 1.7778 (logged: "was 1.7778"), so his field of view was built for another shape. His block gets 3.5556 after `ctx_swap(1)`.
+- **Partner's body animation (owner: "partner's body" looks like a lower frame rate in the bottom half, the environment fine):** measured, not reproduced. Context 1's `cg.time` /
+  `cl.serverTime` advance every frame (5-9 ms steps, `timelog=1` now logs context 1 too), and two 60-frame bursts (`burst11`, consecutive presents) show both bodies changing in every
+  frame, no every-other-frame pattern. The Trainer's intro keeps the players frozen, so no walking could be driven by `fakepad0`, the pad dvar or `press` in these runs.
+  Likely cause (not proven): with `centshare` the slot 0 yaw and pitch (the torso/head aim, floats 9 / 41 / 72 before each yaw) are the entity state's, refreshed only at a snapshot
+  (20 a second); the earlier copy (`p0_put`: `yawkeep`, `pitchkeep`) put player 1's playerState values in every draw, and `lag_fix_yaw` only fixes the yaw. `p0aim=1` (default) now does
+  that for the second entity pass (pass2_hook) from player 1's client block in the context-0 store. Checked only that the body is still drawn right; needs a play test with the partner
+  looking up and down and turning. QA kept: `burst11=<present>;burst11n=<n>`, `burst11=-2` (armed by the dvar `mw2coop_qa_burst`), `animlog=1`, `p2away` with `mw2coop_qa_p1walk`.
+
+### The popup friendly name ("Sgt. Foley") in both halves (2026-11-16, `exp11friend`, owner's report, checked)
+
+Owner: the name of Sgt. Foley shows in both halves when the top player looks at him. The popup name under the cross hair is drawn by `0x94e00(local client)`, called from the HUD
+(`0x93ac0`, call at `0x93cf0`) once per cgame draw, with local client 0 in **both** contexts. It reads the name the game's server put in two configstrings per local client,
+`0xc + 2 * client` and `0xd + 2 * client` (the 16-bit string index table at rva `0x5d8d02`, read through `0xca1e0`); the PC even registers `friendlyNameFontSizeSplitscreen`. So player 2's
+draw showed the strings of client 0, the ones player 1's cross hair had set, at his own cross hair. Repro: QA `mw2coop_qa=foleylook` (player 1's view is held on the first friendly actor).
+
+Fix: the call at `0x93cf0` is hooked; in context 1 the entries of client 1 (`0xe`, `0xf`) are swapped into `0xc`, `0xd` for the duration of the call and swapped back. Checked (D3D9, Trainer):
+with player 1 on Sgt. Foley the name shows at the top half's cross hair and not in the bottom half. Not checked: whether the server fills `0xe` / `0xf` when player 2's cross hair is on a
+friendly (his half shows no name for him until it does). `[native] exp11friend=0` off.
+
+### What the 360 does for the HUD in a split screen, and what the PC mod now takes from it (2026-11-16 night)
+
+**Two layers, as on the console.** (1) The HUD *menus* (`ui/hud_splitscreen.txt`, 22 `*_ss` menus, all flagged `LEGACY_SPLIT_SCREEN_SCALE`) are enlarged by `cg_hudLegacySplitscreenScale`
+(default 1.5): the PC mod does this through the per-half placement (`hudsplitscale`, default 150). (2) The HUD elements that *scripts* make (timers, the AC-130's text and cross hair, counters)
+are **not** enlarged: the scripts adapt themselves with `IsSplitscreen()` (AC-130: font scale 2.5 -> 1.5, cross hair 80 %, the short right text block `AC130_HUD_RIGHT_BLOCK_SHORT`, the HUD
+blocks moved in; the Spec Ops timer at the top of the gunner's half; the download counters of "Download"; no minigun shells and fewer fx in the chopper mission; the sound of the snowmobile
+races once). On the PC `IsSplitscreen()` is false in the native split screen (the mod's dvar `mw2coop_native_split` stands in for it), so those branches never ran.
+
+Done:
+- **Scripted HUD elements keep the half's own scale** (`hudelem_hook`: the placement scale is 1.0 for their draw, `[native] hudelemk=1` gives them `hudsplitscale` too). The 1.5 scale on top of the
+  scripts' own adaptation had cut the AC-130's right text column at the bottom of the half and overlapped the timer.
+- **The 360's script branches are taken in the native split screen**: new patches `_ac130.gsc` (2 hunks), `so_ac130_co_hunted.gsc`, `so_download_arcadia_code.gsc`, `so_snowrace_code.gsc` (the fog-clear sound once
+  instead of for each player: Vlad's "player 2's sound overlaps with a delay" for the races, if it is this sound), `so_chopper_invasion.gsc` (2), `so_assault_oilrig.gsc`, each with `|| GetDvarInt( "mw2coop_native_split" )`.
+  `tools/check_patches.py` applies them to the extracted scripts: all hunks ok. QA runs need `set mw2coop_native_split 1` (the lobby launch sets it; `MW2COOP_PRE='set specialops 1;set mw2coop_native_split 1'`).
+- **Names over the other player** ("Alpha", "Bravo") use the dvar `coopNameFontSize` (the loop at `0x93ac0`), which `nametagscale` never touched (only the popup friendly name pair): `guards.c` scales it now.
+- **Checked (D3D9, 1280x720):** AC-130: the gunner's HUD fits the top half (text small, short right block, cross hair at its centre, weapon list at the bottom, timer apart), name tag small; `so_bridge` both halves have their minimap
+  (the owner's screenshots without it were not reproduced: the HUD may have been fading in); a Spec Ops sweep of all 25 `so_*` levels: no crash, script errors only in `so_ghillies` and `so_showers_gulag`.
+- **Not bugs of the mod:** `so_ghillies` is not an operation of the console game (`give_loadout_specialops` lists `so_hidden_so_ghillies` only: `so_ghillies` falls to "No level listing ... giving default guns", whose
+  coop path precaches weapons its zone lacks); `so_showers_gulag`: `gulag_code::player_riotshield_threatbias` adds to `level.player.threatbias`, which a Spec Ops start never sets (the 360 has the same script).
+- **AC-130 shell aim (Vlad, mode 10: "the game takes the centre of the whole screen"):** with the gunner's trigger held (fake pad) in mode 11 the shells land near the cross hair at the centre of his half (a bit off while the
+  plane turns), not at the half's lower edge: not reproduced, the old compositor layout's problem.
+- **Snowrace camera / jitter:** player 1's view yaw changes while the sled is driven (the camera turns). A frame-to-frame jitter log exists now (`[native] viewjit=<s>`: origin, pitch, yaw of both contexts for 150 draws); the
+  run ended the mission at 24 s without input, so no jitter numbers yet.
