@@ -2906,6 +2906,7 @@ static void (*rs_shock_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr
 static void (*rs_cgents_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d);
 static int rs_player1; // inside player 2's R_RenderScene with the renderer's local player at 1
 static int p2_frame; // exp11frames: player 2's draw is under way in its own renderer frame
+extern int ngfr_skip_reset_2d; // natframe2.c: the second frame of an engine frame does not reset the 2D state again
 static unsigned end_frame_flags; // exp11frames: the flags the screen update's end-frame call (0xd5aaf) uses instead of 3, once
 static void (*end_frame_original)(unsigned flags);
 static void end_frame_hook(unsigned flags)
@@ -2914,6 +2915,7 @@ static void end_frame_hook(unsigned flags)
 		flags = end_frame_flags;
 		end_frame_flags = 0;
 		p2_frame = 0;
+		ngfr_skip_reset_2d = 0;
 		p2_fd = *(void **)(base + XR(0x410fd00));
 		static int nlog2;
 		if (nlog2 < 4) {
@@ -3990,6 +3992,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				((void (*)(void))(base + XR(0x7b60)))();
 			}
 			p2_frame = 1;
+			if (CFG_ONCE("exp11reset", 1)) // the mod's reset_2d runs once per engine frame, as the game's own state reset does (natframe2.c)
+				ngfr_skip_reset_2d = 1;
 		} else if (p2draw) {
 			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
 			if (fd)

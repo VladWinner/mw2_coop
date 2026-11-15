@@ -388,3 +388,15 @@ of the local-client arrays.
 Conclusion for the smear: the difference is not a missing clock on the PC. The next candidate in the same family is the shared post-process / 2D state (`0x4358e10`, `0x4357760`),
 which the 360 also keeps per player and which the PC's frame end resets once — the frame-end reset (`reset_2d`) runs between the players' frames in mode 11 (`exp11frames=2`)
 and the second run rewrites state the first player's scene record still points into.
+
+## The 2D state reset: the mod makes it, the game does not (2026-11-15, `exp11reset`, tried)
+
+A static scan of the reference exe for the three 2D-state globals the port's `reset_2d` writes (`0x4358e90`, `0x4358e8c`, `0x4358e94`) finds **no writer in the game**: the
+only references are comparisons in `0x3d890` (the 2D layer setup, called from the composite `0x484c0`) and reads in the post-process `0x48xxx`. So `reset_2d`
+(`natframe2.c`, copied there from the engine's frame end by an earlier session) writes state the game never rewrites per frame — and in `exp11frames=2` it now runs
+**twice per engine frame**, between and at the end of the two players' frames.
+
+Tried `exp11reset=1` (default): the second frame of an engine frame skips `reset_2d` (`ngfr_skip_reset_2d`, cleared at the screen update's end-frame). Result on the fixed
+camera (1280x720, D3D9, `setviewpos -2515 5190 -56 163 0`): no crash, and the top view shows **no visible smear** in the captures (`scratch/reset-no-1200.png`), while the
+same view before the change showed the partner's helmet layered in thin bands. Not yet a conclusion: the bodies are behind the camera in this framing, so the next capture has
+to look straight at player 2's body, and the same must be checked with `exp11reset=0` on the identical view.
