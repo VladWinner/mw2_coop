@@ -237,5 +237,5 @@ frame's counter reset between them (`0x44d00` resets the arena at the start of e
 **Reproduced three times out of three with `ndclearlog=1`, never with the trace off** (same build, `ndclearlog=0` and `ndclearlog=2`/`3` both ran their full minute). So the
 logging call is the trigger, not the clear: the trace's `nat_log_hook(...)` runs on the render path between the 3D pass and the second scene's 2D list, and whatever it
 disturbs (a stack slot, a timing window, or the log's own lock) is what makes the arena return index 0. It is worth knowing for the owners of other traces in this code that a
-log line placed on the frame path can change the frame: the crash was found by the trace and does not happen without it. The underlying 1-based-index assumption in the 2D
-command loop (`0x61723`: `DEC EAX` then an 8-byte table at `0x1441159e8`) is still a real hazard worth fixing, but it is not the bug the players see.
+log line placed on the frame path can change the frame: the crash was found by the trace and does not happen without it. What the crash does establish is the only clear of the second scene's frame: the 3D pass's colour clear runs with `target scene 1280x720 viewport 0 0 1280 720`, i.e. the
+whole picture — so the pass's clear does not carve out a half, and whatever makes the top half black is drawn after it.
