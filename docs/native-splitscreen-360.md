@@ -312,3 +312,15 @@ player 2's 2D is still off (`exp11no2d`), and none of this is checked on the nat
 - Fix: before that clear, wait until the render thread has finished: the engine's count of frames handed over and not done (rva `0x1429b5c`, raised by `0x204230`; the
   begin-frame waits for <= 1 through `0x2039f0`) must be 0, waited for with the engine's own wait that runs worker jobs meanwhile (`0x301e0(cond)`).
 - Result (Trainer, D3D9, two runs of 70 s, threaded back end): no shards in 8 frames, both bodies whole, no crash, 214-230 fps.
+
+### Open: the other player's body looks smeared in mode 11 (2026-11-15, owner's report)
+
+Seen at full size (`shot11` frames): player 2's body in player 1's view (and player 1's in player 2's, fainter) is layered, as if several copies of the mesh at slightly
+different poses were drawn over each other (the helmet repeated in thin bands). Mode 10 draws the same bodies crisp (Alpha's face, Bravo's helmet). What is ruled out, measured:
+- not extra adds: each body is added to the scene once per frame, at the right place, one model record (`[native] bodyaddlog=1`, both contexts, one window of 60 adds);
+- not the render thread: the same smear with `r_smp_backend 0`;
+- the old one-frame mode 11 (`exp11frames=0`) is broken in other ways (black top half, shards) and cannot be compared.
+Candidates, not checked: the body's skeleton and animation, which the cgame now builds twice per screen update (once per context, each before its own frame's
+begin: `0xb0860` comes before `0xc840` inside `0xbca00`), against a skeleton memory ring of 4 slots advanced per renderer frame (`0xc840`, `0x14488a2e0`), and the
+transplanted body model (`src/transplant.c`). Next: the 360's skeleton and skinning path for two views (owner, 2026-11-15: port it from the 360 and the recompilation),
+and a D3D trace that picks out the body's draws.

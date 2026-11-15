@@ -7768,6 +7768,13 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			p0cnt_draw_org_b[i] = pp ? pp[6 + i] : 0; // the pose's origin sits at +0x18 of what rdx points to (see jumplog)
 		}
 	}
+	if ((c & 0xffff) <= 1 && CFG_ONCE("bodyaddlog", 0)) { // QA: every add of a player entity (0, 1) in a window of the run: context, record index, origin, caller
+		static unsigned kb;
+		const float *p = (const float *)e;
+		if (++kb > 3000 && kb < 3060)
+			log_printf("native: bodyadd #%u ctx %d ent %u rec %u draw %.1f %.1f %.1f from rva %llx", kb, ctx_current, c & 0xffff, *(const unsigned *)(base + XR(0x40dd754)), p ? (double)p[0] : 0,
+				   p ? (double)p[1] : 0, p ? (double)p[2] : 0, (unsigned long long)((uint8_t *)__builtin_return_address(0) - base));
+	}
 	if (ctx_current == 1 && (c & 0xffff) == 0 && CFG_ONCE("p2hooklog", 0)) { // QA: entity 0's body as context 1 adds it, sampled over the whole run
 		static unsigned k0;
 		const float *p = (const float *)e;
