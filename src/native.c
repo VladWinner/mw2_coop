@@ -1628,6 +1628,7 @@ static void trace_draw(IDirect3DDevice9 *dev)
 	}
 	trace_draws++;
 }
+static int trace_on_now(void) { return trace_on; }
 static void trace_event(const char *fmt, ...)
 {
 	trace_flush_draws();
@@ -2927,6 +2928,26 @@ static int rt_frames_done(void) // the render thread has no frame in hand (rva 0
 {
 	return *(volatile int *)(base + XR(0x1429b5c)) <= 0;
 }
+static int trace_on_now(void);
+static void body_rec_log(const char *when) // QA (traceprims): the scene records of the player bodies (entities 0, 1) in the traced frame: index, state (+0x28: skin offset + 4), DObj
+{
+	if (!CFG_ONCE("traceprims", 0) || !trace_on_now())
+		return;
+	const unsigned count = *(const unsigned *)(base + XR(0x40dd754));
+	for (unsigned i = 0; i < count && i < 0x200; i++) {
+		const uint8_t *r = base + XR(0x40dd760) + (size_t)i * 0x90;
+		const unsigned ent = (*(const unsigned *)(r + 0x70) >> 7) & 0xfff;
+		if (ent <= 1)
+			log_printf("native: bodyrec %s: rec %u ent %u state %u dobj %p", when, i, ent, *(const unsigned *)(r + 0x28), *(void *const *)(r + 0x78));
+	}
+	unsigned st[6] = {0};
+	for (unsigned i = 0; i < count && i < 0x200; i++) {
+		const unsigned v = *(const unsigned *)(base + XR(0x40dd760) + (size_t)i * 0x90 + 0x28);
+		st[v < 5 ? v : 5]++;
+	}
+	log_printf("native: bodyrec %s: %u records, states 0:%u 1:%u 2:%u 3:%u 4:%u skinned(>4):%u | scene list start %u count %u", when, count, st[0], st[1], st[2], st[3], st[4], st[5],
+		   *(const unsigned *)(base + XR(0x40f09e4)), *(const unsigned *)(base + XR(0x40f09e8)));
+}
 static void rs_log(const char *when)
 {
 	static int n;
@@ -2946,6 +2967,10 @@ static void render_scene_hook(void *refdef, uintptr_t scene, uintptr_t c, uintpt
 	if (mode != 11 || !(second_pass || p2_frame) || !CFG_ONCE("exp11lc", 1)) {
 		render_scene_original(refdef, scene, c, d);
 		rs_log("after p1");
+		if (CFG_ONCE("traceprims", 0) && trace_on_now()) {
+			ctx_wait_workers();
+			body_rec_log("p1");
+		}
 		return;
 	}
 	rs_log("before p2");
@@ -3919,8 +3944,9 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 					shot_save_now(*(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE), raw_name);
 			}
 		}
+		const int p2draw = ctx1_ready && !CFG_ONCE("exp11nop2", 0); // QA: exp11nop2=1 skips player 2's draw (his client still runs)
 		const int frames = CFG_ONCE("exp11frames", 2); // the 360's way: each player's view is its own renderer frame (docs/native-splitscreen-360.md)
-		if (ctx1_ready && frames) {
+		if (p2draw && frames) {
 			// 360 (screen update 0x82135818): CG_DrawActiveFrame(lc) for each player, and after the first of two views the end-frame 0x82390e20(1): the frame
 			// goes to the back end with "begin" (bit 0) but without "show" (bit 1); the last view ends with 2 (show). The PC kept that end-frame (0xc4c0(flags):
 			// flags at frame data +0x41a60, frame begin 0x44d00 on bit 0, Present in 0x45060 on bit 1). So each view has its own frame data: its own scene,
@@ -3959,12 +3985,12 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				((void (*)(void))(base + XR(0x7b60)))();
 			}
 			p2_frame = 1;
-		} else if (ctx1_ready) {
+		} else if (p2draw) {
 			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
 			if (fd)
 				split_smc_redirect(fd);
 		}
-		if (ctx1_ready) {
+		if (p2draw) {
 			vrect[1] = 0.5f;
 			if (!CFG_ONCE("exp11same", 0)) // QA: exp11same=1 draws player 1 again in the second frame (no context swap)
 				ctx_swap(1);
@@ -4264,11 +4290,15 @@ static const range_t ranges[] = {
                                      // with one state the damage blur of a player who was hit showed in the other half too (v0.6.0 report). [native] blursplit=0 off
     // (tried: 0x548c00 .. 0x589400, 260 KB changed by both contexts with different values and outside every range, the size of the snapshot entity states: swapping it garbled the
     // geometry of the second half in a test, so it is not per-client snapshot data: the shared renderer / model data lives there)
+    {0x51dcb0, 0x51de80 - 0x51dcb0}, // the player bodies' bone controllers (rva 0x9df60 from the pass 0xb0860: new 0x51dcc4, old 0x51dd54, blended 0x51dde4 + entity * 0x48, the
+                                     // interpolation 0x51dcb0), right after the snapshot range: with one table, player 2's cgame wrote over what player 1's had set before player 1's
+                                     // frame skinned the body (tried for the smeared bodies of mode 11: it brought the shards back, the copy of player 1's body into context 1 relies on one table). [native] ctlsplit=1 on, off by default
 };
 #define RANGE_FX 9
 #define RANGE_VIEW 10
 #define RANGE_SUN 11
 #define RANGE_BLUR 12
+#define RANGE_CTL 13
 #define SUNSPLIT_DEFAULT 1
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
@@ -4488,6 +4518,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 #endif
 		if (i == RANGE_BLUR && !CFG_ONCE("blursplit", 1))
 			continue;
+#ifdef RANGE_CTL
+		if (i == RANGE_CTL && !CFG_ONCE("ctlsplit", 0))
+			continue;
+#endif
 		uint8_t *live = base + RANGE_RVA(i);
 		swap_copy(ctx_store[range_owner[i]][i], live, ranges[i].size);
 		swap_copy(live, ctx_store[to][i], ranges[i].size);
@@ -7778,6 +7812,20 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 		for (int i = 0; i < 3; i++) {
 			p0cnt_draw_org[i] = dp ? dp[i] : 0;
 			p0cnt_draw_org_b[i] = pp ? pp[6 + i] : 0; // the pose's origin sits at +0x18 of what rdx points to (see jumplog)
+		}
+	}
+	if (CFG_ONCE("bodyaddlog", 0) == 2 && a && !IsBadReadPtr(a, 0xb0)) { // QA: every add of a coop body model, any entity, both contexts
+		const uint8_t *dj = (const uint8_t *)a;
+		const uint8_t *const *mm = *(const uint8_t *const **)(dj + DOBJ_MODELS);
+		static unsigned kb2;
+		for (int mi = 0; mi < dj[DOBJ_NUMMODELS] && mi < 8 && mm && !IsBadReadPtr(mm + mi, 8); mi++) {
+			const uint8_t *xm = mm[mi];
+			const char *nm = xm && !IsBadReadPtr(xm, 8) ? *(const char *const *)xm : NULL;
+			if (nm && !IsBadReadPtr(nm, 4) && strstr(nm, "coop_body") && ++kb2 > 2000 && kb2 < 2060) {
+				const float *p = (const float *)e;
+				log_printf("native: coopbody add #%u ctx %d ent %u dobj %p models %d [%d] %s draw %.1f %.1f %.1f from rva %llx", kb2, ctx_current, c & 0xffff, a, dj[DOBJ_NUMMODELS], mi, nm,
+					   p ? (double)p[0] : 0, p ? (double)p[1] : 0, p ? (double)p[2] : 0, (unsigned long long)((uint8_t *)__builtin_return_address(0) - base));
+			}
 		}
 	}
 	if ((c & 0xffff) <= 1 && CFG_ONCE("bodyaddlog", 0)) { // QA: every add of a player entity (0, 1) in a window of the run: context, record index, origin, caller

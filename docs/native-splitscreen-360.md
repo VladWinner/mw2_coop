@@ -330,3 +330,9 @@ and a D3D trace that picks out the body's draws.
   With the mod's body adjustments off (`lagfix=0;yawkeep=0;pitchkeep=0`) player 1's body lands on player 2's camera again, so they stay on. A one-frame trace with every
   indexed draw's geometry (`[native] traceprims=1` with `d3dtrace`) shows every skinned mesh drawn several times from the skinned vertex buffer at different offsets, which the
   rangers (one model, many instances) explain as well: the body's own draws still have to be told apart (by its model, through the scene record).
+- 2026-11-15, narrowed: with player 2's draw skipped (`[native] exp11nop2=1`, QA) player 2's body in player 1's view is crisp (one capture, from behind), so the smear needs
+  player 2's draw in the same screen update. Each body is one object with two models, added once per frame (`bodyaddlog=2`). The scene record of the body ends player 1's
+  frame sometimes posed only (state 2), sometimes skinned (state 23) (`traceprims=1` logs it). Tried and off by default: the bodies' bone controller tables (`0x51dcb0..0x51de80`,
+  written by `0x9df60`, outside every swapped range) made per player (`ctlsplit=1`): the shards came back and player 1's view showed bodies from the inside, because the copy
+  of player 1's body into context 1 relies on the shared table. Next: what else player 2's draw rewrites that player 1's body uses (skeleton memory of the client, the DObj's
+  own cached skeleton), read on the 360 where each local client has its own.
