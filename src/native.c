@@ -3013,6 +3013,20 @@ static void rs_shock_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
 {
 	rs_shock_original(rs_player1 ? 0 : lc, b, c, d);
 }
+// The effects clock advances once per engine frame as on the 360 (its 0x82141e70 steps the effects of player 0 only). In mode 11 the second renderer
+// frame runs the same cgame step, so 0xbccdf called the step a second time for the same effects system: smoke and muzzle flashes lived one frame ahead
+// in the other half (owner's report, 2026-11-15). [native] fxclock=0 off.
+static int ctx1_ready; // the second context is live (set when its statics are initialised)
+#ifdef _WIN64
+static void (*fx_step_original)(int *ctx, int time);
+static void fx_step_hook(int *ctx, int time)
+{
+	if (mode == 11 && split_on && ctx1_ready && p2_frame && CFG_ONCE("fxclock", 1))
+		return;
+	fx_step_original(ctx, time);
+}
+#endif
+
 static void rs_cgents_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
 {
 	rs_cgents_original(rs_player1 ? 0 : lc, b, c, d);
@@ -3076,7 +3090,6 @@ static float asp_saved[2];
 static int asp_have;
 static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the intro is over; before that there is one picture
 static int frame_bottom; // mode 5: this client frame is context 1's (the bottom half)
-static int ctx1_ready;
 static int ctx1_clc_synced; // ctx1_deliver_commands: the ring of context 1 has been made equal (nothing pending) since its init
 static void ctx_swap(int to);
 void native_unswap_entities(void);
@@ -9363,6 +9376,10 @@ static int hooks_apply(void)
 			FlushInstructionCache(GetCurrentProcess(), q, 6);
 		}
 	}
+#ifdef _WIN64
+	if (mode == 11 && (*(base + XR(0xbccf0)) != 0xe8 || !jhook_call(base + XR(0xbccf0), (void *)fx_step_hook, (void **)&fx_step_original)))
+		log_printf("native: unexpected code at the cgame's effects step (0xbccf0): the effects clock may advance twice a frame (fxclock)");
+#endif
 	if (mode == 11 && (*(base + XR(0xd5aaf)) != 0xe8 || !jhook_call(base + XR(0xd5aaf), (void *)end_frame_hook, (void **)&end_frame_original)))
 		log_printf("native: unexpected code at the screen update's end-frame call (0xd5aaf): exp11frames cannot end player 2's frame");
 #ifdef _WIN64

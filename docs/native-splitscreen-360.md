@@ -470,3 +470,15 @@ native: p2step #121: ps origin -2588.0 5212.0 | slot1 -2588.0 5212.0 | slot0 -25
 Player 2's own entity is written from his own snapshot (`slot1` == his `ps origin`) on every sample, and player 1's slot is left alone. Before the hook his step never ran in mode 11, so his slot was never his own. `[native] p2step=0` turns it off.
 
 Captures from the same run (`shots/m11-1500.bmp`, `scratch/p2step.png`): both halves complete and lit, the world does not drop out on this view, the partner's body is whole. Still open and visible in the owner's own screenshots: the shared effects (smoke, muzzle flash) show on the wrong player, and in some views the environment disappears under player 2 — the effects system and the remaining shared cgame state, which is the phase-D list.
+
+### The effects clock advanced twice per engine frame (2026-11-15 night, `fxclock`)
+
+The cgame's step calls `0xdb4d0` — a one-instruction predicate, `SETZ` on `lc == 0` — and on true calls the effects time step `0x1e80c0` with `cg.time`
+(`0xbccdf..0xbccf0`). The 360 has the same rule (`0x82141e70` steps the effects of player 0 only). In mode 11 the second renderer frame runs that same cgame
+step again, so the effects system was stepped **twice per engine frame**: particles lived one step ahead of the frame that drew them, which is how smoke and a
+muzzle flash ended up on the wrong half (the owner's screenshot). The step is called with the cgame's local client, not the renderer's local player, so pinning
+the renderer's player does not touch it.
+
+Fix: hook `0xbccf0` and skip the step while player 2's renderer frame is under way (`fxclock=1`, default; `fxclock=0` off). Measured (D3D9, Trainer, the smear's
+view): no crash, both halves complete and lit with the effects drawn where they belong (`scratch/fxclock.png`). Not yet checked: a run with an effect actually
+firing in both views at once (a grenade or a weapon at a fixed spot), and the same on the native Direct3D 11 renderer.
