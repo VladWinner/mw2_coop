@@ -133,7 +133,31 @@ float nd_hud_scale[2];
 int nd_atoc = 1;
 int nd_aniso_override; // [display] aniso: 0 = the game's own, 2..16 = forced for mipmapped textures
 float nd_lod_bias;     // the texture LOD bias of the world pass with FSR 3 / DLSS (natfsr3.c sets it: AMD's log2(render / output) - 1); not applied to the 2D passes (they draw while nd_hud_scale is set)
-int nd_clear_trace; // QA ([native] ndclearlog=1): every clear of the native device is logged with its target and viewport
+int nd_clear_trace; // QA ([native] ndclearlog=1): every colour clear of the native device is recorded, written by nd_clear_flush
+typedef struct {
+	unsigned flags;
+	float rgba[4];
+	unsigned w, h;
+	float vp[4];
+	const char *target;
+} nd_clear_rec;
+static nd_clear_rec clear_recs[64];
+static unsigned clear_n; // total clears since the last flush
+
+void nd_clear_flush(void); // nat11.h (declared here too: d3d11.h does not pull it in)
+void nd_clear_flush(void)
+{
+	for (unsigned i = 0; i < clear_n && i < 64; i++) {
+		const nd_clear_rec *r = &clear_recs[i];
+		if (nat_log_hook)
+			nat_log_hook("native11: clear #%u flags %u rgba %.2f %.2f %.2f %.2f target %s %ux%u viewport %.0f %.0f %.0f %.0f", i + 1, r->flags, r->rgba[0], r->rgba[1], r->rgba[2], r->rgba[3],
+				     r->target, r->w, r->h, r->vp[0], r->vp[1], r->vp[2], r->vp[3]);
+	}
+	if (clear_n > 64 && nat_log_hook)
+		nat_log_hook("native11: clear #64..%u not kept (the buffer holds 64)", clear_n);
+	clear_n = 0;
+}
+
 int nd_trace; // QA (MW2COOP_TRACEFRAME): while set, every draw / clear / stretch is logged with its target, textures and first constants
 
 struct nd_shader {
@@ -367,6 +391,25 @@ static void get_views(nd *d, int srgb, ID3D11RenderTargetView **rtv, ID3D11Depth
 	*dsv = d->ds == ND_NO_DEPTH ? NULL : d->ds ? nat_image_dsv(d->ds) : nat_scene_dsv(d->dev);
 }
 
+// a colour clear with its target and the viewport that is set at that moment (Direct3D 11 clears the whole view, not the viewport)
+static void nd_clear_record(nd *d, unsigned flags, const float rgba[4])
+{
+	if (!(flags & 1)) // (depth-only clears are the shadow passes: many per frame, nothing to see)
+		return;
+	if (clear_n < 64) {
+		nd_clear_rec *r = &clear_recs[clear_n];
+		r->flags = flags;
+		for (int i = 0; i < 4; i++)
+			r->rgba[i] = rgba[i], r->vp[i] = d->vp[i];
+		if (d->rt)
+			nat_image_size(d->rt, &r->w, &r->h, NULL);
+		else
+			nat_get_size(d->dev, &r->w, &r->h);
+		r->target = d->rt ? "image" : "scene";
+	}
+	clear_n++;
+}
+
 void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned stencil)
 {
 	if (nd_trace && nat_log_hook)
@@ -374,18 +417,8 @@ void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned 
 	ID3D11RenderTargetView *rtv;
 	ID3D11DepthStencilView *dsv;
 	get_views(d, 0, &rtv, &dsv);
-	if (nd_clear_trace == 1 && (flags & 1) && nat_log_hook) { // QA: every clear with its target and the viewport that is set at that moment (Direct3D 11 clears the whole view, not the viewport)
-		static unsigned n;
-		unsigned w = 0, h = 0;
-		nat_image *img = d->rt;
-		if (img)
-			nat_image_size(img, &w, &h, NULL);
-		else
-			nat_get_size(d->dev, &w, &h);
-		if (n++ < 20 || n % 600 == 0)
-			nat_log_hook("native11: clear #%u flags %u rgba %.2f %.2f %.2f %.2f target %s %ux%u viewport %.0f %.0f %.0f %.0f", n, flags, rgba[0], rgba[1], rgba[2], rgba[3],
-				     d->rt ? "image" : "scene", w, h, d->vp[0], d->vp[1], d->vp[2], d->vp[3]);
-	}
+	if (nd_clear_trace == 1) // QA: recorded (not logged) on the frame path, written by nd_clear_flush: a log call here changed the frame
+		nd_clear_record(d, flags, rgba);
 	if ((flags & 1) && rtv)
 		ID3D11DeviceContext_ClearRenderTargetView(d->ctx, rtv, rgba);
 	if ((flags & 6) && dsv)

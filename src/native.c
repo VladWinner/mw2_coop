@@ -3829,7 +3829,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		if (sw_px > 0 && sh_px > 0)
 			cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px / 2;
 #ifdef _WIN64 // (the native renderers are 64-bit only)
-		{ extern int nd_clear_trace; static int nc = -1; if (nc < 0) nc = CFG_ONCE("ndclearlog", 0); nd_clear_trace = nc; } // QA: every clear of the native device
+		{ extern int nd_clear_trace; static int nc = -1; if (nc < 0) nc = CFG_ONCE("ndclearlog", 0); nd_clear_trace = nc; } // QA: colours clears of the native device, written once per frame end
 #endif
 		if (CFG_ONCE("clearlog", 0)) { // QA: the rectangles as they are set, once a second
 			static unsigned n;

@@ -239,3 +239,11 @@ logging call is the trigger, not the clear: the trace's `nat_log_hook(...)` runs
 disturbs (a stack slot, a timing window, or the log's own lock) is what makes the arena return index 0. It is worth knowing for the owners of other traces in this code that a
 log line placed on the frame path can change the frame: the crash was found by the trace and does not happen without it. What the crash does establish is the only clear of the second scene's frame: the 3D pass's colour clear runs with `target scene 1280x720 viewport 0 0 1280 720`, i.e. the
 whole picture — so the pass's clear does not carve out a half, and whatever makes the top half black is drawn after it.
+
+## The deferred clear trace (2026-11-15, last change of the morning)
+
+`[native] ndclearlog=1` now records the frame's colour clears into a fixed buffer (`nd_clear_record`, `src/dx/natdraw11.c`) and writes them in one call from `ngfr_453c0`
+(`nd_clear_flush()`), instead of logging inside `nd_clear`. **Not proven clean**: its first run crashed at the same place as the logging version (`0x619b8` -> `0x6170b` ->
+`0x61020`, the index-0 write through NULL), so the deferral is not enough on its own. Until this is settled, treat every instrument on the frame path in mode 11 as suspect, and
+check a claim with the trace off before writing it down. The next owner should either make the trace write nothing at all on the frame path (a raw int array, flushed by the
+client thread once a second) or read the same facts from the game's own command list.

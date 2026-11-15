@@ -122,6 +122,7 @@ static void reset_2d(ngfr_frame *x, uint8_t *scene)
 void ngfr_453c0(ngfr_frame *x)
 {
 	{ static unsigned n; if (ngfr_trace_scene) trace_entry("453c0", n++, x->f->exe); }
+	{ extern int nd_clear_trace; extern void nd_clear_flush(void); if (nd_clear_trace == 1) nd_clear_flush(); } // one write of the frame's recorded clears, off the 3D pass's path
 	{ if (ngfr_trace_scene) { uint8_t *sc = RD_PTR(x->f->exe, G_SCENE); log_printf("native: 453c0 flags 0x%x scenes %u views %u mode %d viewsz %u", sc ? RD_U8(sc, 0x41a60) : 0, sc ? RD_U32(sc, 0x41a34) : 0, sc ? RD_U32(sc, 0x41a34) : 0, RD_I32(x->f->exe, G_SCENE_MODE), sc ? RD_U32(sc, 0x419e8) : 0); } }
 
 	uint8_t *e = x->f->exe;
