@@ -374,7 +374,7 @@ void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned 
 	ID3D11RenderTargetView *rtv;
 	ID3D11DepthStencilView *dsv;
 	get_views(d, 0, &rtv, &dsv);
-	if (nd_clear_trace && nat_log_hook) { // QA: every clear with its target and the viewport that is set at that moment (Direct3D 11 clears the whole view, not the viewport)
+	if (nd_clear_trace == 1 && (flags & 1) && nat_log_hook) { // QA: every clear with its target and the viewport that is set at that moment (Direct3D 11 clears the whole view, not the viewport)
 		static unsigned n;
 		unsigned w = 0, h = 0;
 		nat_image *img = d->rt;
@@ -382,7 +382,7 @@ void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned 
 			nat_image_size(img, &w, &h, NULL);
 		else
 			nat_get_size(d->dev, &w, &h);
-		if (n++ < 30)
+		if (n++ < 20 || n % 600 == 0)
 			nat_log_hook("native11: clear #%u flags %u rgba %.2f %.2f %.2f %.2f target %s %ux%u viewport %.0f %.0f %.0f %.0f", n, flags, rgba[0], rgba[1], rgba[2], rgba[3],
 				     d->rt ? "image" : "scene", w, h, d->vp[0], d->vp[1], d->vp[2], d->vp[3]);
 	}

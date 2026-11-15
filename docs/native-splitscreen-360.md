@@ -234,5 +234,8 @@ expects 1-based indices (the `DEC` makes the table lookup safe only for `EAX >= 
 returned 0 in the split is not yet known — the first candidate is the command arena bookkeeping being run twice per frame (player 1's and player 2's 2D lists) with the
 frame's counter reset between them (`0x44d00` resets the arena at the start of every frame, and mode 11 now has two frames per engine frame on the native path).
 
-The trace itself did not cause it: with the same build and `ndclearlog=0` the identical run does not crash (100 s, see above). Treat `[native] experiment=11` + `ndclearlog` as a
-crash-prone combination until this is understood; it is nevertheless the only way to see what clears what.
+**Reproduced three times out of three with `ndclearlog=1`, never with the trace off** (same build, `ndclearlog=0` and `ndclearlog=2`/`3` both ran their full minute). So the
+logging call is the trigger, not the clear: the trace's `nat_log_hook(...)` runs on the render path between the 3D pass and the second scene's 2D list, and whatever it
+disturbs (a stack slot, a timing window, or the log's own lock) is what makes the arena return index 0. It is worth knowing for the owners of other traces in this code that a
+log line placed on the frame path can change the frame: the crash was found by the trace and does not happen without it. The underlying 1-based-index assumption in the 2D
+command loop (`0x61723`: `DEC EAX` then an 8-byte table at `0x1441159e8`) is still a real hazard worth fixing, but it is not the bug the players see.
