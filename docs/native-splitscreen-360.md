@@ -400,3 +400,16 @@ Tried `exp11reset=1` (default): the second frame of an engine frame skips `reset
 camera (1280x720, D3D9, `setviewpos -2515 5190 -56 163 0`): no crash, and the top view shows **no visible smear** in the captures (`scratch/reset-no-1200.png`), while the
 same view before the change showed the partner's helmet layered in thin bands. Not yet a conclusion: the bodies are behind the camera in this framing, so the next capture has
 to look straight at player 2's body, and the same must be checked with `exp11reset=0` on the identical view.
+
+### The smear fixed: player 1's half was never cleared (2026-11-15 night)
+
+Cause, read from the one-frame D3D9 trace (`[native] d3dtrace=1;tracepops=<n>`): each renderer frame starts with `BeginScene` and `Clear(TARGET|ZBUFFER|STENCIL)` **without
+rectangles, before its viewport is set**. A D3D9 clear without rectangles clears the current viewport, and the viewport player 1's frame inherits is the last one of the frame
+before: player 2's bottom half. So player 1's half was never cleared, colour nor depth: every frame drew only where it was nearer than the old depth, and older frames showed
+through in bands (most visible on the bodies, but the scenery too when the camera turned). `exp11noscene=1` / `exp11nop2=1` "fixed" it only because without player 2's scene
+the last viewport was the full screen. The 360 has one picture per player frame and no such inheritance.
+
+Fix (`exp11clip=1`, extended): in the device's `Clear` hook a rectangle-less clear of the **back buffer** in mode 11 is given the half of the player whose frame the back end is
+drawing (frame data `0x4358f58` == player 2's -> bottom, else top), with the whole picture as viewport for the call. Checked on the reproduction view
+(`setviewpos -2580 5212 -56 270 0`) and on a normal 70 s run: both halves crisp, bodies whole (faces, goggles), no crash, 130 fps. (The reproduction view puts player 1 on
+player 2's spot, so player 2's camera is inside player 1's body there: that is not a bug.)

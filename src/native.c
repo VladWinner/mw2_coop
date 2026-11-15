@@ -2059,11 +2059,22 @@ static HRESULT STDMETHODCALLTYPE t_clear(IDirect3DDevice9 *dev, DWORD n, const D
 		trace_event("Clear flags %lx color %08lx rects %lu", (unsigned long)f, (unsigned long)c, (unsigned long)n);
 	// mode 11, one renderer frame per player: player 2's frame begins the picture again (on the PC the frame begin also uploads the frame's dynamic data) and its
 	// first clear, made before its viewport is set, would erase player 1's half: it clears player 2's half only (the back end's frame data is at rva 0x4358f58)
-	if (mode == 11 && split_on && p2_fd && n == 0 && (f & D3DCLEAR_TARGET) && *(void **)(base + XR(0x4358f58)) == p2_fd && CFG_ONCE("exp11clip", 1)) {
+	// Player 1's frame has the same first clear, and the viewport it finds is the last one set: player 2's bottom half from the frame before. So player 1's half was
+	// never cleared, colour nor depth, and each frame drew only where it was nearer than the old depth: the "smeared" picture of mode 11 (old frames showing through
+	// in bands, the bodies most). Each player's frame clears its own half of the back buffer.
+	IDirect3DSurface9 *rt0 = NULL, *bb = NULL;
+	const int on_bb = mode == 11 && split_on && p2_fd && n == 0 && (f & D3DCLEAR_TARGET) && CFG_ONCE("exp11clip", 1) &&
+			  SUCCEEDED(IDirect3DDevice9_GetRenderTarget(dev, 0, &rt0)) && SUCCEEDED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) && rt0 == bb;
+	if (rt0)
+		IDirect3DSurface9_Release(rt0);
+	if (bb)
+		IDirect3DSurface9_Release(bb);
+	if (on_bb) {
 		const int w = *(int *)(base + XR(0x4113728)), h = *(int *)(base + XR(0x411372c));
 		D3DVIEWPORT9 vp, full = {0, 0, (DWORD)w, (DWORD)h, 0.0f, 1.0f};
 		if (w > 0 && h > 0 && SUCCEEDED(IDirect3DDevice9_GetViewport(dev, &vp))) {
-			const D3DRECT rc = {0, h / 2, w, h};
+			const int p2 = *(void **)(base + XR(0x4358f58)) == p2_fd;
+			const D3DRECT rc = {0, p2 ? h / 2 : 0, w, p2 ? h : h / 2};
 			IDirect3DDevice9_SetViewport(dev, &full); // a clear's rectangles are clipped to the viewport
 			const HRESULT hr = clear_orig(dev, 1, &rc, f, c, z, st);
 			IDirect3DDevice9_SetViewport(dev, &vp);
