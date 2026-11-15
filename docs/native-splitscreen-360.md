@@ -284,3 +284,20 @@ with 2 the frame's 2D drew without vertices). `exp11frames=1`: player 2's frame 
 
 Next: find how the 360 makes the second frame re-add and re-skin every model (its per-player cpose bytes and whatever resets the model records per renderer frame), and give the
 PC a per-player copy of that state instead of the one byte.
+
+### Player 2's frame fixed: both views right, no crash (2026-11-15, `exp11frames=2` now the mode 11 default)
+
+Two more causes, both from running two renderer frames inside one screen update:
+1. **The scene's model records are per screen update, not per frame.** `0x7b60` (from `0xbc1a0`, the PC's version of the 360's `0x82112738` before its player loop) clears
+   the records `0x1440dd760` (0x90 each, count `0x1440dd754`, state at `+0x28`: 0 new, 1 posing, 2 posed, 4 culled, then skin-arena offset + 4) once, and the front end's
+   loops (cull `0x17740`, `0x16cc0`, `0x16f80`, `0x19000`, `0x319a0`, ...) walk all of them. Player 2's frame drew player 1's records with their skin offsets into player 1's
+   frame data (the model-surface records `fd + 0x42980 + (key & 0xffff) * 4`) -> the garbage vertex pointer in `0x642e0`. Fix (`exp11clear=1`): after player 1's frame is
+   handed over (and the workers are done), `0x7b60` again, so player 2's frame starts with a clean model list.
+2. **Player 2's frame begins the picture again.** Its first `Clear(TARGET|ZBUFFER|STENCIL)` (no rectangles, before its viewport is set; seen in a one-frame D3D9 trace,
+   `[native] d3dtrace=1;tracepops=<n>`, now also for mode 11) erased player 1's half: the scene is drawn straight into the back buffer. Fix (`exp11clip=1`): in the device's
+   `Clear` hook (`t_clear`), when the back end's frame data (rva `0x4358f58`) is player 2's (recorded at his end-frame), the clear is given player 2's rectangle only (with the
+   whole picture as viewport for the call, since a clear's rectangles are clipped to the viewport).
+
+Result (Trainer, D3D9, 1280x720, three runs of 60-70 s, frames from `shot11`): **no crash, both halves live, player 1's top view lit and textured like the game**, ~105 fps for
+both players. Open: some frames of player 2's view have large stretched triangles near the camera (looks like the partner's body model; the old "long skinned triangles"),
+player 2's 2D is still off (`exp11no2d`), and none of this is checked on the native D3D11 renderer, in other levels, or for sound/FOV/effects per player.

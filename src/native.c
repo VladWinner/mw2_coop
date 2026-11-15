@@ -2049,10 +2049,24 @@ static HRESULT STDMETHODCALLTYPE t_set_rt(IDirect3DDevice9 *dev, DWORD i, IDirec
 	}
 	return set_rt_orig(dev, i, s);
 }
+static void *volatile p2_fd; // mode 11, exp11frames: the frame data of player 2's renderer frame (set at its end-frame)
 static HRESULT STDMETHODCALLTYPE t_clear(IDirect3DDevice9 *dev, DWORD n, const D3DRECT *r, DWORD f, D3DCOLOR c, float z, DWORD st)
 {
 	if (trace_on)
 		trace_event("Clear flags %lx color %08lx rects %lu", (unsigned long)f, (unsigned long)c, (unsigned long)n);
+	// mode 11, one renderer frame per player: player 2's frame begins the picture again (on the PC the frame begin also uploads the frame's dynamic data) and its
+	// first clear, made before its viewport is set, would erase player 1's half: it clears player 2's half only (the back end's frame data is at rva 0x4358f58)
+	if (mode == 11 && split_on && p2_fd && n == 0 && (f & D3DCLEAR_TARGET) && *(void **)(base + XR(0x4358f58)) == p2_fd && CFG_ONCE("exp11clip", 1)) {
+		const int w = *(int *)(base + XR(0x4113728)), h = *(int *)(base + XR(0x411372c));
+		D3DVIEWPORT9 vp, full = {0, 0, (DWORD)w, (DWORD)h, 0.0f, 1.0f};
+		if (w > 0 && h > 0 && SUCCEEDED(IDirect3DDevice9_GetViewport(dev, &vp))) {
+			const D3DRECT rc = {0, h / 2, w, h};
+			IDirect3DDevice9_SetViewport(dev, &full); // a clear's rectangles are clipped to the viewport
+			const HRESULT hr = clear_orig(dev, 1, &rc, f, c, z, st);
+			IDirect3DDevice9_SetViewport(dev, &vp);
+			return hr;
+		}
+	}
 	return clear_orig(dev, n, r, f, c, z, st);
 }
 static HRESULT STDMETHODCALLTYPE t_stretch(IDirect3DDevice9 *dev, IDirect3DSurface9 *a, const RECT *ra, IDirect3DSurface9 *b, const RECT *rb, D3DTEXTUREFILTERTYPE f)
@@ -2209,6 +2223,12 @@ static void trace_present(void)
 			log_printf("native: D3D TRACE of one frame written to %s (%d bytes)", path, trace_len);
 		}
 		armed = 0;
+	} else if (mode == 11) { // mode 11 (no compositor): the frame after tracepops presents of the split screen
+		static int n11;
+		if (split_on && ++n11 == cfg("tracepops", 600)) {
+			trace_len = 0, trace_draws = 0, bb_pass = 0, bb_pass_done = 0, bb_draws = 0;
+			trace_on = 1;
+		}
 	} else if (pops_total >= cfg("tracepops", 600) && (mode == 10 ? render_half >= 0 && 1 - render_half == cfg("tracehalf", 0) : ring_head - ring_tail >= 2 && (int)ring[(ring_tail + 1) & 7] == cfg("tracehalf", 0))) { // the frame after this one is the wanted half's (the halves alternate)
 		trace_len = 0, trace_draws = 0, bb_pass = 0, bb_pass_done = 0, bb_draws = 0;
 		trace_on = 1;
@@ -2878,6 +2898,7 @@ static void end_frame_hook(unsigned flags)
 		flags = end_frame_flags;
 		end_frame_flags = 0;
 		p2_frame = 0;
+		p2_fd = *(void **)(base + XR(0x410fd00));
 		static int nlog2;
 		if (nlog2 < 4) {
 			nlog2++;
@@ -3882,7 +3903,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 					shot_save_now(*(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE), raw_name);
 			}
 		}
-		const int frames = CFG_ONCE("exp11frames", 0); // (off: player 2's frame still crashes, docs/native-splitscreen-360.md) the 360's way: each player's view is its own renderer frame (docs/native-splitscreen-360.md)
+		const int frames = CFG_ONCE("exp11frames", 2); // the 360's way: each player's view is its own renderer frame (docs/native-splitscreen-360.md)
 		if (ctx1_ready && frames) {
 			// 360 (screen update 0x82135818): CG_DrawActiveFrame(lc) for each player, and after the first of two views the end-frame 0x82390e20(1): the frame
 			// goes to the back end with "begin" (bit 0) but without "show" (bit 1); the last view ends with 2 (show). The PC kept that end-frame (0xc4c0(flags):
@@ -3908,6 +3929,14 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			((void (*)(unsigned))(base + XR(0xc4c0)))(1);
 			if (nlog1 < 4)
 				nlog1++, log_printf("native: exp11frames: p1 end-frame done");
+			// The scene's model records (0x1440dd760, 0x90 each, count 0x1440dd754; state at +0x28 up to "skinned at arena offset + 4") are cleared once per screen
+			// update (0x7b60 from 0xbc1a0), and the front end's loops (cull 0x17740, 0x16cc0, 0x16f80, 0x19000, 0x319a0, ...) walk all of them. So player 2's frame
+			// also drew player 1's records, skinned into player 1's frame data (crash in the model surfaces 0x642e0). His frame starts with a clean model list.
+			if (CFG_ONCE("exp11clear", 1)) {
+				if (CFG_ONCE("exp11wait", 1))
+					ctx_wait_workers();
+				((void (*)(void))(base + XR(0x7b60)))();
+			}
 			p2_frame = 1;
 		} else if (ctx1_ready) {
 			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
