@@ -2911,6 +2911,10 @@ static void end_frame_hook(unsigned flags)
 	end_frame_original(flags);
 }
 static void ctx_wait_workers(void);
+static int rt_frames_done(void) // the render thread has no frame in hand (rva 0x1429b5c: frames handed over by 0x204230 and not finished)
+{
+	return *(volatile int *)(base + XR(0x1429b5c)) <= 0;
+}
 static void rs_log(const char *when)
 {
 	static int n;
@@ -3935,6 +3939,11 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			if (CFG_ONCE("exp11clear", 1)) {
 				if (CFG_ONCE("exp11wait", 1))
 					ctx_wait_workers();
+				// The render thread draws player 1's frame meanwhile, and the back end reads these records too (0x46cc0): clearing them under it skinned the
+				// bodies of both players into shards. Wait until it has finished the frame: the engine's own count of frames handed over and not done
+				// (rva 0x1429b5c; begin-frame waits for <= 1 through 0x2039f0), with its own wait that helps the workers (0x301e0).
+				if (CFG_ONCE("exp11rtwait", 1))
+					((void (*)(int (*)(void)))(base + XR(0x301e0)))(rt_frames_done);
 				((void (*)(void))(base + XR(0x7b60)))();
 			}
 			p2_frame = 1;
@@ -7563,6 +7572,16 @@ static void pass2_original(unsigned lc)
 static const uint8_t pass2_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x68, 0x18, 0x56, 0x57, 0x41, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00};
 static void pass2_hook(unsigned lc)
 {
+	if (ctx_current == 1 && CFG_ONCE("p2skip", 0)) // QA: context 1 draws no other-player body (is a stray mesh player 1's body?)
+		return;
+	if (CFG_ONCE("p2hooklog", 0)) { // QA: what the second entity pass sees in both slots
+		static unsigned k;
+		if (++k % 60 == 0 && k < 6000) {
+			const float *s0 = (const float *)(base + RVA_CENT + 0x18), *s1 = (const float *)(base + RVA_CENT + CENT_SIZE + 0x18);
+			log_printf("native: p2hook ctx %d lc %u ok %d | slot0 pose %.1f %.1f num %u | slot1 pose %.1f %.1f num %u | mine %u", ctx_current, lc, p0_ent_ok, (double)s0[0], (double)s0[1],
+				   *(const uint16_t *)(base + RVA_CENT + 0x15e), (double)s1[0], (double)s1[1], *(const uint16_t *)(base + RVA_CENT + CENT_SIZE + 0x15e), local_slot_hook(lc));
+		}
+	}
 	{ // [native] timelog2=1: each context's cgame time (rva 0x422434) at its entity pass, the two side by side every 120 frames and whenever they are more than 50 ms apart
 		static int tl = -1;
 		static int last_t[2];
@@ -7588,6 +7607,12 @@ static void pass2_hook(unsigned lc)
 		uint8_t saved[CENT_SIZE];
 		memcpy(saved, base + RVA_CENT, sizeof(saved));
 		p0_put(base + RVA_CENT);
+		if (CFG_ONCE("p2hooklog", 0)) {
+			static unsigned k2;
+			if (++k2 % 60 == 0 && k2 < 6000)
+				log_printf("native: p2hook after put: slot0 pose %.1f %.1f | p0_ent pose %.1f %.1f", (double)((const float *)(base + RVA_CENT + 0x18))[0], (double)((const float *)(base + RVA_CENT + 0x18))[1],
+					   (double)((const float *)(p0_ent + 0x18))[0], (double)((const float *)(p0_ent + 0x18))[1]);
+		}
 		pass2_original(lc);
 		p0_tail_take(base + RVA_CENT);
 		memcpy(base + RVA_CENT, saved, sizeof(saved));
@@ -7743,6 +7768,12 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			p0cnt_draw_org_b[i] = pp ? pp[6 + i] : 0; // the pose's origin sits at +0x18 of what rdx points to (see jumplog)
 		}
 	}
+	if (ctx_current == 1 && (c & 0xffff) == 0 && CFG_ONCE("p2hooklog", 0)) { // QA: entity 0's body as context 1 adds it, sampled over the whole run
+		static unsigned k0;
+		const float *p = (const float *)e;
+		if (++k0 % 60 == 0 && k0 < 6000)
+			log_printf("native: ent0 add ctx1 #%u draw %.1f %.1f %.1f from rva %llx", k0, p ? (double)p[0] : 0, p ? (double)p[1] : 0, p ? (double)p[2] : 0, (unsigned long long)((uint8_t *)__builtin_return_address(0) - base));
+	}
 	if (on && ctx_current == 1) {
 		static unsigned seen, frame;
 		if (c == 0 || ++seen % 1 == 0) {
@@ -7750,7 +7781,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 				const float *o = (const float *)b;
 				{ const float *p = (const float *)e; const char *mname = "?";
 				if (a && !IsBadReadPtr(a, 0xb0)) { const uint8_t *dj = (const uint8_t *)a; const uint8_t *const *mm = *(const uint8_t *const **)(dj + DOBJ_MODELS); if (dj[DOBJ_NUMMODELS] && mm && !IsBadReadPtr(mm, 4) && mm[0] && !IsBadReadPtr(mm[0], 8) && *(const char *const *)mm[0] && !IsBadReadPtr(*(const char *const *)mm[0], 4)) mname = *(const char *const *)mm[0]; }
-				log_printf("native: dobj add ctx1 ent %u flags %08x draw %.1f %.1f %.1f | model %s", c & 0xffff, d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, mname); (void)o; }
+				log_printf("native: dobj add ctx1 ent %u flags %08x draw %.1f %.1f %.1f | model %s | from rva %llx", c & 0xffff, d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, mname, (unsigned long long)((uint8_t *)__builtin_return_address(0) - base)); (void)o; }
 			}
 		}
 		(void)frame;
@@ -8014,7 +8045,7 @@ static void add_entity_hook(int n)
 			if (CFG_ONCE("p0log", 0)) { // what context 0's draw hands over as player 1's entity
 				static unsigned cl0;
 				if (++cl0 % 10 == 0 && cl0 < 30000)
-					log_printf("native: p0log ctx0 captured entity0: pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x", (double)((const float *)p0_ent)[CF_ORG2], (double)((const float *)p0_ent)[CF_ORG2 + 1], (double)((const float *)p0_ent)[CF_ORG2 + 2],
+					log_printf("native: p0log ctx0 captured entity0: pose %.1f %.1f %.1f | pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x", (double)((const float *)(p0_ent + 0x18))[0], (double)((const float *)(p0_ent + 0x18))[1], (double)((const float *)(p0_ent + 0x18))[2], (double)((const float *)p0_ent)[CF_ORG2], (double)((const float *)p0_ent)[CF_ORG2 + 1], (double)((const float *)p0_ent)[CF_ORG2 + 2],
 						   (double)((const float *)p0_ent)[CF_YAW2], p0_ent[CENT_TYPE], *(const unsigned *)(p0_ent + CENT_FLAGS), *(const unsigned *)(p0_ent + CENT_VALID));
 			}
 		}

@@ -301,3 +301,14 @@ Two more causes, both from running two renderer frames inside one screen update:
 Result (Trainer, D3D9, 1280x720, three runs of 60-70 s, frames from `shot11`): **no crash, both halves live, player 1's top view lit and textured like the game**, ~105 fps for
 both players. Open: some frames of player 2's view have large stretched triangles near the camera (looks like the partner's body model; the old "long skinned triangles"),
 player 2's 2D is still off (`exp11no2d`), and none of this is checked on the native D3D11 renderer, in other levels, or for sound/FOV/effects per player.
+
+### The shards: the players' bodies skinned under the render thread (2026-11-15, fixed: `exp11rtwait=1`)
+
+- What the shards were (checked, not guessed): with the second entity pass skipped in player 2's context (`[native] p2skip=1`, QA) his view had none, so they were player 1's
+  body; player 2's body in player 1's view broke the same way (the "row of soldiers"). Both bodies were placed right (sampled over a whole run: `p2hooklog=1`, entity 0 at
+  player 1's pose); only the first frames after the split start placed him at player 2's spawn point. Not the view model (`cg_drawGun 0` changed nothing), not `exp11lc`.
+- With the back end on the main thread (`r_smp_backend 0`) both bodies were right: a race. The render thread draws player 1's frame while the main thread already builds
+  player 2's, and the back end reads the scene's model records too (`0x46cc0`), which player 2's frame clears (`0x7b60`, `exp11clear`) right after the hand-over.
+- Fix: before that clear, wait until the render thread has finished: the engine's count of frames handed over and not done (rva `0x1429b5c`, raised by `0x204230`; the
+  begin-frame waits for <= 1 through `0x2039f0`) must be 0, waited for with the engine's own wait that runs worker jobs meanwhile (`0x301e0(cond)`).
+- Result (Trainer, D3D9, two runs of 70 s, threaded back end): no shards in 8 frames, both bodies whole, no crash, 214-230 fps.
