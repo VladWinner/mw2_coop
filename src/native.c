@@ -3942,6 +3942,12 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 					   (double)vrect[3], cvr[0], cvr[1], cvr[2], cvr[3], sw_px, sh_px);
 		}
 		cg_draw_original(local_client, a, b);
+		if (CFG_ONCE("camlog", 0)) { // QA: player 1's camera (the refdef origin, rva 0x42d310) and his own entity's lerp origin, sampled
+			static unsigned k1;
+			const float *v = (const float *)(base + XR(0x42d310)), *e0 = (const float *)(base + RVA_CENT + 0x18), *e1 = (const float *)(base + RVA_CENT + CENT_SIZE + 0x18);
+			if (++k1 % 120 == 0 && k1 < 20000)
+				log_printf("native: camlog p1 cam %.1f %.1f %.1f | ctx0 slot0 %.1f %.1f | slot1 %.1f %.1f", (double)v[0], (double)v[1], (double)v[2], (double)e0[0], (double)e0[1], (double)e1[0], (double)e1[1]);
+		}
 		if (CFG_ONCE("scenekeep", 0)) { // the scene's culling and light lists are finished by the front end's workers after the draw returns: wait for them, then keep its frame data
 			ctx_wait_workers();
 			fd_scene_save(*(uint8_t **)(base + XR(0x410fd00)), 0);
@@ -4043,9 +4049,24 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			const int was2d = no2d ? draw2d->current.enabled : 0;
 			if (no2d)
 				draw2d->current.enabled = 0;
+			static dvar_t *gun11;
+			if (!gun11)
+				gun11 = game_find_dvar("cg_drawGun");
+			const int nogun11 = gun11 && CFG_ONCE("exp11nogun", 0); // QA: player 2's draw without his view model
+			const int wasgun = nogun11 ? gun11->current.enabled : 0;
+			if (nogun11)
+				gun11->current.enabled = 0;
 			second_pass = frames ? 0 : 1;
 			cg_draw_original(0, a, b);
 			second_pass = 0;
+			if (nogun11)
+				gun11->current.enabled = (uint8_t)wasgun;
+			if (CFG_ONCE("camlog", 0)) {
+				static unsigned k2;
+				const float *v = (const float *)(base + XR(0x42d310)), *e0 = (const float *)(base + RVA_CENT + 0x18), *e1 = (const float *)(base + RVA_CENT + CENT_SIZE + 0x18);
+				if (++k2 % 120 == 0 && k2 < 20000)
+					log_printf("native: camlog p2 cam %.1f %.1f %.1f | ctx1 slot0 %.1f %.1f | slot1 %.1f %.1f", (double)v[0], (double)v[1], (double)v[2], (double)e0[0], (double)e0[1], (double)e1[0], (double)e1[1]);
+			}
 			if (frames)
 				end_frame_flags = frames == 1 ? 2 : 3; // the screen update's own end-frame (0xd5aaf, 3) ends player 2's frame: show it (exp11frames=1: do not begin again)
 			if (CFG_ONCE("scenekeep", 0)) {
@@ -7909,6 +7930,40 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			p0cnt_draw_org_b[i] = pp ? pp[6 + i] : 0; // the pose's origin sits at +0x18 of what rdx points to (see jumplog)
 		}
 	}
+	if (CFG_ONCE("nearlog", 0) == 2 && ctx_current == 1 && (c & 0xffff) == 0 && e) { // QA: entity 0's adds in context 1, how many sit on player 2's camera, every 2 s
+		static unsigned near_n, all_n;
+		static DWORD t0;
+		const float *v = (const float *)(base + XR(0x42d310)), *o = (const float *)e;
+		const float dx = o[0] - v[0], dy = o[1] - v[1];
+		all_n++;
+		if (dx * dx + dy * dy < 900.0f)
+			near_n++;
+		const DWORD now = GetTickCount();
+		if (!t0)
+			t0 = now;
+		if (now - t0 >= 2000) {
+			log_printf("native: nearcount ent0 in ctx1: %u of %u adds on player 2's camera (last at %.1f %.1f, cam %.1f %.1f)", near_n, all_n, (double)o[0], (double)o[1], (double)v[0], (double)v[1]);
+			near_n = all_n = 0, t0 = now;
+		}
+	}
+	if (CFG_ONCE("nearlog", 0) == 1 && ctx_current == 1 && a && !IsBadReadPtr(a, 0xb0) && e) { // QA: every model player 2's scene adds within 60 units of his camera
+		const float *v = (const float *)(base + XR(0x42d310)), *o = (const float *)e;
+		const float dx = o[0] - v[0], dy = o[1] - v[1], dz = o[2] - v[2];
+		static unsigned kn;
+		if (dx * dx + dy * dy + dz * dz < 3600.0f && GetTickCount() - split_tick > 5000 && ++kn < 400 && kn % 4 == 0) {
+			const uint8_t *dj = (const uint8_t *)a;
+			const uint8_t *const *mm = *(const uint8_t *const **)(dj + DOBJ_MODELS);
+			char names[200] = "";
+			for (int mi = 0; mi < dj[DOBJ_NUMMODELS] && mi < 6 && mm && !IsBadReadPtr(mm + mi, 8); mi++) {
+				const uint8_t *xm = mm[mi];
+				const char *nm = xm && !IsBadReadPtr(xm, 8) ? *(const char *const *)xm : NULL;
+				if (nm && !IsBadReadPtr(nm, 4))
+					snprintf(names + strlen(names), sizeof(names) - strlen(names), "%s ", nm);
+			}
+			log_printf("native: nearlog ctx1 ent %u dobj %p at %.1f %.1f %.1f (cam %.1f %.1f %.1f) models %s from rva %llx", c & 0xffff, a, (double)o[0], (double)o[1], (double)o[2], (double)v[0], (double)v[1],
+				   (double)v[2], names, (unsigned long long)((uint8_t *)__builtin_return_address(0) - base));
+		}
+	}
 	if (CFG_ONCE("bodyaddlog", 0) == 2 && a && !IsBadReadPtr(a, 0xb0)) { // QA: every add of a coop body model, any entity, both contexts
 		const uint8_t *dj = (const uint8_t *)a;
 		const uint8_t *const *mm = *(const uint8_t *const **)(dj + DOBJ_MODELS);
@@ -8010,6 +8065,44 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 // gives (inline at 0xb28d2, the same rule as 0xa5ec0: lc itself without the coop table). Context 1 runs with lc 0, so player 2's position went into slot 0 every frame and
 // player 1's body was drawn in player 2's camera (dobjlog). In context 1 the write is moved to slot 1 and slot 0 keeps what it had ([native] ownpos=0 off).
 static void (*own_write_original)(unsigned);
+static unsigned local_slot_hook(unsigned lc);
+// The 360's rule for "which entity is me" (2026-11-15): the own-entity write takes the client slot of its local player (360: 0x820d81a8; PC: 0xa5ec0, answered by
+// local_slot_hook, slot 1 in context 1). The PC's 0xb28b0 has its own inline copy of the old rule at 0xb28f3..0xb292d (no co-op table: the slot is the local player
+// number, 0 in both contexts). Those 58 bytes become a call of local_slot_hook, so player 2's own state is written into his own slot 1 and slot 0 keeps player 1's
+// entity, as on the 360 ([native] ownslot360=0: the old write into slot 0 and the moves after it).
+static int own_slot_patched;
+#ifdef _WIN64
+static void own_slot_install(void)
+{
+	static const uint8_t want[] = {0x75, 0x04, 0x8b, 0xd1, 0xeb, 0x34, 0x8b, 0xd5, 0x48, 0x8d, 0x0d};
+	uint8_t *p = base + XR(0xb28f3);
+	if (own_slot_patched || !CFG_ONCE("ownslot360", 1))
+		return;
+	if (memcmp(p, want, sizeof(want))) {
+		log_printf("native: ownslot360: unexpected code at rva 0xb28f3, the old slot rule stays");
+		return;
+	}
+	uint8_t put[58];
+	memset(put, 0x90, sizeof(put));
+	const uint64_t fn = (uint64_t)(uintptr_t)local_slot_hook;
+	int i = 0;
+	put[i++] = 0x89, put[i++] = 0xd9;                 // mov ecx, ebx (the local player number)
+	put[i++] = 0x48, put[i++] = 0xb8;                 // mov rax, local_slot_hook
+	memcpy(put + i, &fn, 8), i += 8;
+	put[i++] = 0xff, put[i++] = 0xd0;                 // call rax (rsp is 16-aligned here; rsp+0..0x2f is the outgoing argument area)
+	put[i++] = 0x89, put[i++] = 0xc2;                 // mov edx, eax (the slot)
+	put[i++] = 0x89, put[i++] = 0xd9;                 // mov ecx, ebx
+	const int next = i + 2;
+	put[i++] = 0xeb, put[i++] = (uint8_t)(0x3a - next); // jmp short 0xb292d
+	DWORD old;
+	VirtualProtect(p, sizeof(put), PAGE_EXECUTE_READWRITE, &old);
+	memcpy(p, put, sizeof(put));
+	VirtualProtect(p, sizeof(put), old, &old);
+	FlushInstructionCache(GetCurrentProcess(), p, sizeof(put));
+	own_slot_patched = 1;
+	log_printf("native: ownslot360: the own-entity write takes the client slot (as on the 360)");
+}
+#endif
 static const uint8_t own_write_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x10, 0x48, 0x89, 0x70, 0x18};
 static void own_write_hook(unsigned lc)
 {
@@ -8071,12 +8164,16 @@ static void own_write_hook(unsigned lc)
 	if (on && ctx_current == 1 && lc == 0) {
 		uint8_t *s0 = base + RVA_CENT;
 #ifdef _WIN64
-		uint8_t *s1 = s0 + CENT_SIZE;
-		uint8_t keep0[0x18];
-		memcpy(keep0, s0 + 0x18, sizeof(keep0));
-		own_write_original(lc);
-		memcpy(s1 + 0x18, s0 + 0x18, sizeof(keep0));
-		memcpy(s0 + 0x18, keep0, sizeof(keep0));
+		if (own_slot_patched) // the write itself goes to player 2's slot (the 360's rule, own_slot_install): nothing to move
+			own_write_original(lc);
+		else {
+			uint8_t *s1 = s0 + CENT_SIZE;
+			uint8_t keep0[0x18];
+			memcpy(keep0, s0 + 0x18, sizeof(keep0));
+			own_write_original(lc);
+			memcpy(s1 + 0x18, s0 + 0x18, sizeof(keep0));
+			memcpy(s0 + 0x18, keep0, sizeof(keep0));
+		}
 #else
 		own_write_original(lc); // (the 32-bit function asks local_slot_hook for its slot: it writes slot 1 itself)
 #endif
@@ -9288,6 +9385,7 @@ static int activate(int players)
 	native_active = 1;
 #ifdef _WIN64
 	fov_scale_install(); // (the dvars exist once the cgame is up: the session starts in a level)
+	own_slot_install();
 #endif
 	log_printf("native: split screen session on (%d local players, mode %d%s)", players, mode, from_menu ? ", from the menu" : "");
 	return 1;

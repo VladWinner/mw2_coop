@@ -422,3 +422,17 @@ The game's scripts give each player his own FOV scale: `maps/_ac130.gsc` sets `c
 (Vlad's report) and player 2's own scale was never read. Fix: the 20 bytes of that choice load the dvar pointer from `fov_scale_sel`, which every context swap sets (context 1 ->
 `cg_playerFovScale1`); installed at the first swap once the dvars exist (64-bit only). Checked (Trainer, mode 11): `set cg_playerFovScale0 0.5` zooms only the top half,
 `set cg_playerFovScale1 0.5` only the bottom one.
+
+### "Which entity is me" per player, as on the 360 (2026-11-15 night, owner: "port this, do not make your version")
+
+The 360 gives each local player his own entity table and his own "me": the cgame of local player 1 has `clientNum` 1 and never draws entity 1 in its own view, and every
+"my slot" lookup goes through the client slot (`0x820d81a8`, PC `0xa5ec0`). The PC's own-entity write `0xb28b0` has an inline copy of the old rule (slot = local player number,
+`0xb28f3..0xb292d`), so player 2's state went into slot 0 in his context and the mod moved it afterwards. Ported (`ownslot360=1`, 64-bit): those 58 bytes call the slot function
+(`local_slot_hook`, slot 1 in context 1), so the write lands in player 2's own slot; `own_write_hook` no longer moves data when the patch is in.
+
+Measured after it (Trainer, mode 11): player 2's context has `clientNum` 1 and, at the write, slot 0 = player 1 from its own snapshots (-2515, 5190), slot 1 = player 2.
+Still open, and the cause of the "other player's texture on my camera" (owner's screenshot): (1) something after the snapshot puts player 2's server position into the pose of
+slot 0 (with `p0copy=0;p0frame=0;skipent=0` player 1's body is drawn at player 2's spot on every frame, so the old copies stay on for now); (2) player 2's **own** body is drawn at
+his own camera in every frame, through an add function other than `0x2bb0` (none of `0x2bb0`'s adds sit near his camera after the first 2 s, `nearlog=1/2`): the PC's first-pass
+adders `0x2eb0` / `0x30d0` are the candidates, where the 360's cgame skips its own `clientNum`. QA switches added: camlog, nearlog (1: models near player 2's camera, 2: entity 0's
+placements counted every 2 s), exp11nogun.
