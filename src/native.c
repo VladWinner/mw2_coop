@@ -4517,6 +4517,59 @@ static void swap_copy(void *dst, const void *src, size_t n)
 	else
 		memcpy(dst, src, n);
 }
+// The player's own field-of-view scale (2026-11-15, from the 360). Scripts set one per player: maps/_ac130.gsc and _cobrapilot.gsc write cg_playerFovScale0 for
+// level.player and cg_playerFovScale1 for player 2. The 360's FOV function (0x8210fcd8) takes the one of the client slot of its local player (0x820d81a8, the PC's
+// 0xa5ec0); the PC's (0xbc1e0, at 0xbc2de) takes it by the local player number, which is 0 for both players of the split screen: player 1 in the AC-130 zoomed
+// player 2's view too, and player 2's own scale was never read. The 20 bytes of that choice are replaced by a load from fov_scale_sel, which follows the context:
+// context 1 (player 2) reads cg_playerFovScale1 ([native] fovsplit=0 off).
+#ifdef _WIN64
+static void *volatile fov_scale_sel;
+static void fov_scale_install(void);
+static void fov_scale_follow(int to)
+{
+	if (!fov_scale_sel) { // the dvars are registered by the cgame: installed at the first swap that finds them
+		static int tries;
+		if (tries < 1000 && native_active) {
+			tries++;
+			fov_scale_install();
+		}
+		if (!fov_scale_sel)
+			return;
+	}
+	fov_scale_sel = *(void **)(base + XR(to == 1 ? 0x51e1c8 : 0x51e1c0));
+}
+static void fov_scale_install(void)
+{
+	static const uint8_t want[20] = {0x8b, 0xd3, 0x48, 0x8b, 0x05, 0xe1, 0x1e, 0x46, 0x00, 0x85, 0xd2, 0x75, 0x07, 0x48, 0x8b, 0x05, 0xce, 0x1e, 0x46, 0x00};
+	uint8_t *p = base + XR(0xbc2de);
+	if (fov_scale_sel || !CFG_ONCE("fovsplit", 1))
+		return;
+	if (!*(void **)(base + XR(0x51e1c0)) || !*(void **)(base + XR(0x51e1c8)))
+		return;
+	if (memcmp(p, want, sizeof(want))) {
+		static int said;
+		if (!said++)
+			log_printf("native: fovsplit: unexpected code at rva 0xbc2de, the FOV scale stays the game's");
+		return;
+	}
+	fov_scale_sel = *(void **)(base + XR(0x51e1c0));
+	uint8_t put[20];
+	const uint64_t at = (uint64_t)(uintptr_t)&fov_scale_sel;
+	put[0] = 0x48, put[1] = 0xb8; // mov rax, &fov_scale_sel
+	memcpy(put + 2, &at, 8);
+	put[10] = 0x48, put[11] = 0x8b, put[12] = 0x00; // mov rax, [rax]
+	memset(put + 13, 0x90, 7);
+	DWORD old;
+	VirtualProtect(p, sizeof(put), PAGE_EXECUTE_READWRITE, &old);
+	memcpy(p, put, sizeof(put));
+	VirtualProtect(p, sizeof(put), old, &old);
+	FlushInstructionCache(GetCurrentProcess(), p, sizeof(put));
+	log_printf("native: fovsplit: each player's view takes his own cg_playerFovScale (as on the 360)");
+	fov_scale_sel = *(void **)(base + XR(ctx_current == 1 ? 0x51e1c8 : 0x51e1c0));
+}
+#else
+static void fov_scale_follow(int to) { (void)to; }
+#endif
 static void ctx_swap_mask(int to, unsigned mask)
 {
 	if (CFG_ONCE("swapsites", 0))
@@ -4528,6 +4581,7 @@ static void ctx_swap_mask(int to, unsigned mask)
 			need |= 1u << i;
 	if (!need) {
 		ctx_current = to;
+		fov_scale_follow(to);
 		return;
 	}
 	ctx_wait_workers();
@@ -4594,6 +4648,7 @@ static void ctx_swap_mask(int to, unsigned mask)
 		InterlockedIncrement(&perf_swaps);
 	}
 	ctx_current = to;
+	fov_scale_follow(to);
 }
 
 static void ctx_swap(int to)
@@ -9231,6 +9286,9 @@ static int activate(int players)
 	ctx_on = 1;
 	InterlockedExchange(&coopdvar_on, cfg("coopdvar", 1));
 	native_active = 1;
+#ifdef _WIN64
+	fov_scale_install(); // (the dvars exist once the cgame is up: the session starts in a level)
+#endif
 	log_printf("native: split screen session on (%d local players, mode %d%s)", players, mode, from_menu ? ", from the menu" : "");
 	return 1;
 }

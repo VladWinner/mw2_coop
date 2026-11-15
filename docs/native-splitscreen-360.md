@@ -413,3 +413,12 @@ Fix (`exp11clip=1`, extended): in the device's `Clear` hook a rectangle-less cle
 drawing (frame data `0x4358f58` == player 2's -> bottom, else top), with the whole picture as viewport for the call. Checked on the reproduction view
 (`setviewpos -2580 5212 -56 270 0`) and on a normal 70 s run: both halves crisp, bodies whole (faces, goggles), no crash, 130 fps. (The reproduction view puts player 1 on
 player 2's spot, so player 2's camera is inside player 1's body there: that is not a bug.)
+
+### Each player's own FOV scale (2026-11-15, from the 360; `fovsplit=1`)
+
+The game's scripts give each player his own FOV scale: `maps/_ac130.gsc` sets `cg_playerFovScale0` when the gunner is `level.player` and `cg_playerFovScale1` when it is player 2
+(`_cobrapilot.gsc` the same). The 360's FOV function (`0x8210fcd8`) multiplies by the scale of the **client slot** of its local player (`0x820d81a8`, the PC's `0xa5ec0`); the PC's
+(`0xbc1e0`, the choice at `0xbc2de`) takes it by the local player number, 0 for both players of the split screen (modes 10 and 11): player 1 in the AC-130 zoomed player 2's view too
+(Vlad's report) and player 2's own scale was never read. Fix: the 20 bytes of that choice load the dvar pointer from `fov_scale_sel`, which every context swap sets (context 1 ->
+`cg_playerFovScale1`); installed at the first swap once the dvars exist (64-bit only). Checked (Trainer, mode 11): `set cg_playerFovScale0 0.5` zooms only the top half,
+`set cg_playerFovScale1 0.5` only the bottom one.
