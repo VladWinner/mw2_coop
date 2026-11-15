@@ -2964,6 +2964,8 @@ static void rs_log(const char *when)
 }
 static void render_scene_hook(void *refdef, uintptr_t scene, uintptr_t c, uintptr_t d)
 {
+	if (mode == 11 && p2_frame && CFG_ONCE("exp11noscene", 0)) // QA: player 2's cgame runs, his scene is not built
+		return;
 	if (mode != 11 || !(second_pass || p2_frame) || !CFG_ONCE("exp11lc", 1)) {
 		render_scene_original(refdef, scene, c, d);
 		rs_log("after p1");
