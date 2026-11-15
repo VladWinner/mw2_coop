@@ -443,3 +443,30 @@ placements counted every 2 s), exp11nogun.
   context's entity 0 is filled with player 2's data. On the 360 the client of local player 2 gets player 1 as entity 0 from its own snapshots. **Next: how player 2's context gets
   its snapshot entities** (the mod's snapshot path for local client 1: `0xc99c0 -> 0xb8000(lc)`, the per-context entity ring `entring`), compared with the 360's
   `CL_ParseSnapshot` per local client; then `p0copy`, `p0frame` and the moves in `own_write_hook` can go.
+- 2026-11-15 late evening, **correction and the port** (uncommitted when written).
+  - **The 360's split:** a `cg_t` per local player, but ONE shared `cg_entities` (`0x824ae9c0`, 0x194 each, indexed by entity number only).
+    - The own-entity write `0x82102f28` writes the slot of its client (`0x820d81a8`).
+    - The pass over the other players' bodies `0x82100ff8` draws the other slots.
+    - So each player's body in the other view is what his own cgame step wrote.
+  - **On the PC:** the server's snapshot build (`0x234540`) leaves the client entities (below 2) out of the snapshot list.
+    - Player 2's context never got player 1's entity from snapshots: its slot 0 stayed where it was at the split's start for the whole run (measured: player 1 moved from -2515 to -2555, player 2's slot 0 stayed at -2515).
+    - The statement above ("slot 0 = player 1 from its own snapshots") was wrong.
+  - **Ported:**
+    1. `centshare=1` (mode 11): the context swap keeps cg_entities slots 0 and 1 in place, and `p0copy` defaults to 0 with it.
+       - Checked (D3D9, Trainer): player 2's slot 0 follows player 1, no entity 0 add near player 2's camera, frames normal.
+    2. `p2step=1`: the 360's screen update (`0x82135818`) runs `0x821127a0` (snapshots, own-entity write) for every local player before the draw loop. The PC's `0xbc170`, called at `0xd58e3`, ran for player 1 only.
+       - Player 2's step now runs after player 1's, in his context.
+       - Built, not yet checked in a run.
+
+### `p2step` checked in the game (2026-11-15, after the evening's other work)
+
+First run with the hook in (`[native] p2step=1`, mode 11, D3D9, Trainer, the smear's reproduction view, `camlog=1`): **no crash**, and the log shows what the port was for:
+
+```
+native: p2step #1:   ps origin -2588.0 5212.0 | slot1 -2588.0 5212.0 | slot0 -2515.2 5190.2
+native: p2step #121: ps origin -2588.0 5212.0 | slot1 -2588.0 5212.0 | slot0 -2515.2 5190.2
+```
+
+Player 2's own entity is written from his own snapshot (`slot1` == his `ps origin`) on every sample, and player 1's slot is left alone. Before the hook his step never ran in mode 11, so his slot was never his own. `[native] p2step=0` turns it off.
+
+Captures from the same run (`shots/m11-1500.bmp`, `scratch/p2step.png`): both halves complete and lit, the world does not drop out on this view, the partner's body is whole. Still open and visible in the owner's own screenshots: the shared effects (smoke, muzzle flash) show on the wrong player, and in some views the environment disappears under player 2 — the effects system and the remaining shared cgame state, which is the phase-D list.

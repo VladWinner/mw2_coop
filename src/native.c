@@ -4597,6 +4597,20 @@ static void fov_scale_install(void)
 #else
 static void fov_scale_follow(int to) { (void)to; }
 #endif
+// The players' entities are ONE table for both local players, as on the 360 (2026-11-15). The 360 keeps a cg_t per local player but one cg_entities
+// (0x824ae9c0, 0x194 each, indexed by entity number only): its own-entity write (0x82102f28) puts each local player's state into the slot of his client
+// (0x820d81a8) and the pass over the other players' bodies (0x82100ff8) draws every slot but that one, so each player's body in the other view is what his own
+// frame wrote. The PC's context swap carried a copy of slots 0 and 1 per context, and the server's snapshot list leaves the clients out (0x234540: the
+// entities below 2 that are clients are skipped), so player 1's slot in player 2's context stayed where it was at the start and the mod copied player 1's
+// entity in for each draw (p0copy, p0frame). Here the two slots stay in place through a swap of the cgame range ([native] centshare=0: the copies as before).
+static int cent_share_on(void)
+{
+	return mode == 11 && CFG_ONCE("centshare", 1);
+}
+static int p0copy_on(void)
+{
+	return CFG_ONCE("p0copy", cent_share_on() ? 0 : 1);
+}
 static void ctx_swap_mask(int to, unsigned mask)
 {
 	if (CFG_ONCE("swapsites", 0))
@@ -4622,6 +4636,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 		render_wait_idle();
 	}
 #endif
+	uint8_t cent_keep[2 * CENT_SIZE]; // the players' slots, shared by the contexts (cent_share_on)
+	const int cent_keep_on = (need & 1u) && cent_share_on();
+	if (cent_keep_on)
+		memcpy(cent_keep, base + RVA_CENT, sizeof(cent_keep));
 	for (size_t i = 0; i < NRANGES; i++) {
 		if (!(need & (1u << i)))
 			continue;
@@ -4648,6 +4666,8 @@ static void ctx_swap_mask(int to, unsigned mask)
 		swap_copy(live, ctx_store[to][i], ranges[i].size);
 		range_owner[i] = to;
 	}
+	if (cent_keep_on)
+		memcpy(base + RVA_CENT, cent_keep, sizeof(cent_keep));
 #ifdef _WIN64
 	if (mask == CTX_ALL)
 		for (int i = 0; i < 3; i++)
@@ -7770,7 +7790,7 @@ static void pass2_hook(unsigned lc)
 	}
 	static int on = -1;
 	if (on < 0)
-		on = cfg("p0copy", 1) && cfg("ownfix", 1);
+		on = p0copy_on() && cfg("ownfix", 1);
 	if (on && ctx_current == 1 && p0_ent_ok) {
 		uint8_t saved[CENT_SIZE];
 		memcpy(saved, base + RVA_CENT, sizeof(saved));
@@ -8194,8 +8214,15 @@ static void own_write_hook(unsigned lc)
 	if (on && ctx_current == 1 && lc == 0) {
 		uint8_t *s0 = base + RVA_CENT;
 #ifdef _WIN64
-		if (own_slot_patched) // the write itself goes to player 2's slot (the 360's rule, own_slot_install): nothing to move
+		if (own_slot_patched) { // the write itself goes to player 2's slot (the 360's rule, own_slot_install): nothing to move
 			own_write_original(lc);
+			if (CFG_ONCE("p2hooklog", 0)) {
+				static unsigned kw;
+				if (++kw % 60 == 0 && kw < 6000)
+					log_printf("native: p2hook after own write: slot0 pose %.1f %.1f | slot1 pose %.1f %.1f", (double)((const float *)(s0 + 0x18))[0], (double)((const float *)(s0 + 0x18))[1],
+						   (double)((const float *)(s0 + CENT_SIZE + 0x18))[0], (double)((const float *)(s0 + CENT_SIZE + 0x18))[1]);
+			}
+		}
 		else {
 			uint8_t *s1 = s0 + CENT_SIZE;
 			uint8_t keep0[0x18];
@@ -8212,7 +8239,7 @@ static void own_write_hook(unsigned lc)
 		static int whole = -1;
 		if (whole < 0)
 			whole = cfg("p0frame", 1);
-		if (whole && p0_ent_ok && CFG_ONCE("p0copy", 1))
+		if (whole && p0_ent_ok && p0copy_on())
 			p0_put(s0);
 		return;
 	}
@@ -8298,7 +8325,7 @@ static void add_entity_hook(int n)
 			float sv[LAG_SAVED];
 			int ap;
 			uint8_t slot1_saved[CENT_SIZE];
-			int p0copy = n == 0 && p0_ent_ok && CFG_ONCE("p0copy", 1);
+			int p0copy = n == 0 && p0_ent_ok && p0copy_on();
 			if (p0copy) {
 				memcpy(slot1_saved, base + RVA_CENT, sizeof(slot1_saved));
 				p0_put(base + RVA_CENT);
@@ -9247,6 +9274,32 @@ static int hooks_apply32(void)
 }
 #endif
 
+#ifdef _WIN64
+// Each player's cgame step before the views are drawn, as on the 360 (2026-11-15). The 360's screen update (0x82135818) first runs, for every local player,
+// 0x821127a0 (0x82102e60, the snapshots 0x8210d1c0, 0x820e67e0, and the own-entity write 0x82102f28), and only then the loop that draws each player's view.
+// The PC's screen update (0xd5890) has the same step, 0xbc170 (0xb2860, the snapshots 0xb8c50, 0x97ea0, the own-entity write 0xb28b0), called at 0xd58e3
+// for player 1 only: in mode 11 player 2's client runs under the screen update's busy flag and his view is drawn inside player 1's screen update, so his
+// step never ran: his snapshots were not processed there and his own entity (slot 1 with centshare) was not written ([native] p2step=0 off).
+static void (*cg_step_original)(unsigned lc);
+static void cg_step_hook(unsigned lc)
+{
+	cg_step_original(lc);
+	if (mode == 11 && split_on && ctx1_ready && ctx_current == 0 && lc == 0 && CFG_ONCE("p2step", 1)) {
+		ctx_swap(1);
+		cg_step_original(0);
+		if (CFG_ONCE("camlog", 0)) { // QA: player 2's slot after his step, next to his snapshot's player state origin (cg.nextSnap ps, rva 0x40cad8, origin +0x1c)
+			static unsigned ks;
+			const uint8_t *nps = *(const uint8_t *const *)(base + XR(0x40cad8));
+			const float *e1 = (const float *)(base + RVA_CENT + CENT_SIZE + 0x18), *e0 = (const float *)(base + RVA_CENT + 0x18);
+			if (++ks % 120 == 1 && ks < 20000 && nps)
+				log_printf("native: p2step #%u: ps origin %.1f %.1f | slot1 %.1f %.1f | slot0 %.1f %.1f", ks, (double)((const float *)(nps + 0x1c))[0], (double)((const float *)(nps + 0x1c))[1],
+					   (double)e1[0], (double)e1[1], (double)e0[0], (double)e0[1]);
+		}
+		ctx_swap(0);
+	}
+}
+#endif
+
 static int hooks_apply(void)
 {
 #ifndef _WIN64
@@ -9312,6 +9365,11 @@ static int hooks_apply(void)
 	}
 	if (mode == 11 && (*(base + XR(0xd5aaf)) != 0xe8 || !jhook_call(base + XR(0xd5aaf), (void *)end_frame_hook, (void **)&end_frame_original)))
 		log_printf("native: unexpected code at the screen update's end-frame call (0xd5aaf): exp11frames cannot end player 2's frame");
+#ifdef _WIN64
+	if (mode == 11 && (*(base + XR(0xd58e3)) != 0xe8 || *(int32_t *)(base + XR(0xd58e4)) + (intptr_t)(base + XR(0xd58e8)) != (intptr_t)(base + XR(0xbc170)) ||
+			   !jhook_call(base + XR(0xd58e3), (void *)cg_step_hook, (void **)&cg_step_original)))
+		log_printf("native: unexpected code at the screen update's cgame step call (0xd58e3): player 2's step does not run (p2step)");
+#endif
 	if (*(base + XR(0xca523)) != 0xe8 || *(base + XR(0x82dd)) != 0xe8 || *(base + XR(0x6356)) != 0xe8 ||
 	    !jhook_call(base + XR(0xca523), (void *)render_scene_hook, (void **)&render_scene_original) ||
 	    !jhook_call(base + XR(0x82dd), (void *)rs_shock_hook, (void **)&rs_shock_original) ||
