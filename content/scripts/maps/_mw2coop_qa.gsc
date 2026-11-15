@@ -135,6 +135,9 @@ main()
 		case "frags":
 			frags();
 			break;
+		case "fxhalf":
+			fxhalf();
+			break;
 		case "hidep2":
 			wait 5;
 			level.player2 Hide();
@@ -5198,6 +5201,28 @@ frags()
 }
 
 // Native split screen: one player fires at the other, who looks at him; the composed frames (both halves) every 0.4 s: the shooter's muzzle flash must show in the other half too
+// A single effect at a fixed spot in front of both players, so its age in each half can be compared (the effects clock advanced twice a frame in mode 11:
+// smoke and flashes lived one step ahead of the view that drew them). Two captures a second apart from the split.
+fxhalf()
+{
+	wait_intro();
+	wait 5;
+	spot = level.player.origin + ( AnglesToForward( level.player.angles ) * 250 );
+	spot = ( spot[0], spot[1], spot[2] + 40 );
+	maps\_mw2coop::state( "fxhalf: effect at " + vec_int( spot ) );
+	// The effect table is the level's and the trainer's zone has no explosion effect registered, so use the engine's own: a scripted explosion at a fixed spot
+	// (the same call the game uses for a grenade) makes the effect the game itself spawns for it, in both halves.
+	report( "fxhalf: explosion at " + vec_int( spot ) );
+	RadiusDamage( spot, 200, 200, 50, level.player );
+
+	wait 0.35;
+	SetDvar( "mw2coop_qa_frame", "fxhalf-a" );
+	wait 1;
+	SetDvar( "mw2coop_qa_frame", "fxhalf-b" );
+	wait 1;
+	report( "fxhalf done at " + vec_int( spot ) );
+}
+
 firecheck()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );

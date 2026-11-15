@@ -482,3 +482,14 @@ the renderer's player does not touch it.
 Fix: hook `0xbccf0` and skip the step while player 2's renderer frame is under way (`fxclock=1`, default; `fxclock=0` off). Measured (D3D9, Trainer, the smear's
 view): no crash, both halves complete and lit with the effects drawn where they belong (`scratch/fxclock.png`). Not yet checked: a run with an effect actually
 firing in both views at once (a grenade or a weapon at a fixed spot), and the same on the native Direct3D 11 renderer.
+
+### `fxhalf`: one explosion, both halves, checked in the game (2026-11-15 night)
+
+QA scenario `mw2coop_qa=fxhalf` (in `content/scripts/maps/_mw2coop_qa.gsc`): skips the briefing, waits 5 s, computes a spot 250 units in front of player 1, calls
+`RadiusDamage(spot, 200, 200, 50, level.player)` so the engine spawns its own explosion effect there, then reports the spot. The trainer's zone registers no
+explosion effect by name (`level._effect` has none of the names the packed zones carry), so the engine's own damage effects are the only reliable trigger in it.
+
+Result (D3D9, mode 11, 1280x720, the smear's camera, `shot11=1500;shot11step=40`): captures `m11-1500` and `m11-1580` show **the same explosion in both halves at the
+same stage** — same plume shape, same size, no age offset between the views, HUD scaling applied equally. With the effects clock advancing once per engine frame
+(`fxclock=1`) the particle system no longer runs a step ahead on one side. Not checked yet: an effect that keeps emitting for longer than one screen update (a smoke
+grenade over several seconds), and the same on the native Direct3D 11 renderer.
