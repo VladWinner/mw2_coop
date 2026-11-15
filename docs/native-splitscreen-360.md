@@ -436,3 +436,10 @@ slot 0 (with `p0copy=0;p0frame=0;skipent=0` player 1's body is drawn at player 2
 his own camera in every frame, through an add function other than `0x2bb0` (none of `0x2bb0`'s adds sit near his camera after the first 2 s, `nearlog=1/2`): the PC's first-pass
 adders `0x2eb0` / `0x30d0` are the candidates, where the 360's cgame skips its own `clientNum`. QA switches added: camlog, nearlog (1: models near player 2's camera, 2: entity 0's
 placements counted every 2 s), exp11nogun.
+- 2026-11-15 night, more of the 360's "me" ported: CG_DrawActiveFrame's own inline copy of the old rule (`0xbcc07..0xbcc3e`, the client slot handed to `0x30d0`, which
+  replays the second model record list and keeps the records of that slot: flag `0x800000`) now asks the slot function too (`ownslot360`). Measured: player 2's context has
+  slot 0 = player 1 and slot 1 = player 2 before and after his draw, his camera at his own slot. The shards on his camera are still there; with the mod's copy of player 1
+  (`p0copy=0`) off, player 1's body in his view sits at player 2's own position on every frame (`nearlog=2`: 100 % of the adds), so during player 2's own cgame frame his
+  context's entity 0 is filled with player 2's data. On the 360 the client of local player 2 gets player 1 as entity 0 from its own snapshots. **Next: how player 2's context gets
+  its snapshot entities** (the mod's snapshot path for local client 1: `0xc99c0 -> 0xb8000(lc)`, the per-context entity ring `entring`), compared with the 360's
+  `CL_ParseSnapshot` per local client; then `p0copy`, `p0frame` and the moves in `own_write_hook` can go.

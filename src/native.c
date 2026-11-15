@@ -4049,6 +4049,12 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			const int was2d = no2d ? draw2d->current.enabled : 0;
 			if (no2d)
 				draw2d->current.enabled = 0;
+			if (CFG_ONCE("camlog", 0)) { // QA: context 1's slots right after the swap, before player 2's draw
+				static unsigned k3;
+				const float *e0 = (const float *)(base + RVA_CENT + 0x18), *e1 = (const float *)(base + RVA_CENT + CENT_SIZE + 0x18);
+				if (++k3 % 120 == 0 && k3 < 20000)
+					log_printf("native: camlog p2 pre | ctx1 slot0 %.1f %.1f | slot1 %.1f %.1f", (double)e0[0], (double)e0[1], (double)e1[0], (double)e1[1]);
+			}
 			static dvar_t *gun11;
 			if (!gun11)
 				gun11 = game_find_dvar("cg_drawGun");
@@ -8101,6 +8107,30 @@ static void own_slot_install(void)
 	FlushInstructionCache(GetCurrentProcess(), p, sizeof(put));
 	own_slot_patched = 1;
 	log_printf("native: ownslot360: the own-entity write takes the client slot (as on the 360)");
+	// The same old rule, inline in CG_DrawActiveFrame (0xbcc07..0xbcc3e, lc in esi): the slot given to 0x30d0, which replays the second model record list (count
+	// 0x1440dd758) and keeps the records of that client slot (flag 0x800000 on a record = the other slot's). With slot 0 in context 1, player 2's frame replayed
+	// player 1's records. The 360 asks the client slot here too.
+	static const uint8_t want2[] = {0x75, 0x04, 0x8b, 0xd6, 0xeb, 0x31, 0x41, 0x8b, 0xd7, 0x48, 0x8d, 0x0d};
+	uint8_t *q = base + XR(0xbcc07);
+	if (memcmp(q, want2, sizeof(want2))) {
+		log_printf("native: ownslot360: unexpected code at rva 0xbcc07, the replayed records keep the old slot rule");
+		return;
+	}
+	uint8_t put2[55];
+	memset(put2, 0x90, sizeof(put2));
+	int j = 0;
+	put2[j++] = 0x89, put2[j++] = 0xf1;               // mov ecx, esi (the local player number)
+	put2[j++] = 0x48, put2[j++] = 0xb8;               // mov rax, local_slot_hook
+	memcpy(put2 + j, &fn, 8), j += 8;
+	put2[j++] = 0xff, put2[j++] = 0xd0;               // call rax
+	put2[j++] = 0x89, put2[j++] = 0xc2;               // mov edx, eax
+	const int next2 = j + 2;
+	put2[j++] = 0xeb, put2[j++] = (uint8_t)(0x37 - next2); // jmp short 0xbcc3e
+	VirtualProtect(q, sizeof(put2), PAGE_EXECUTE_READWRITE, &old);
+	memcpy(q, put2, sizeof(put2));
+	VirtualProtect(q, sizeof(put2), old, &old);
+	FlushInstructionCache(GetCurrentProcess(), q, sizeof(put2));
+	log_printf("native: ownslot360: the replayed model records take the client slot too");
 }
 #endif
 static const uint8_t own_write_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x10, 0x48, 0x89, 0x70, 0x18};
