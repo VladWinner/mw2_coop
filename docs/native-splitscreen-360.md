@@ -247,3 +247,40 @@ whole picture — so the pass's clear does not carve out a half, and whatever ma
 `0x61020`, the index-0 write through NULL), so the deferral is not enough on its own. Until this is settled, treat every instrument on the frame path in mode 11 as suspect, and
 check a claim with the trace off before writing it down. The next owner should either make the trace write nothing at all on the frame path (a raw int array, flushed by the
 client thread once a second) or read the same facts from the game's own command list.
+
+## The 360's back end, read, and one renderer frame per player (2026-11-15, `exp11frames`, off by default)
+
+**How the 360 does it (read from the 360 image):**
+- Render thread `0x823b0568`; per frame `0x823aede0` (frame begin when bit 0 of the frame's flags at frame data `+0x1740`), `0x823b0468`, `0x823ad698` (on bit 1 = show:
+  the command list, executor `0x823ad5d0`, handler table `0x8205b640`, 23 commands: viewport, 2D, debug lines). The 3D passes are recorded by worker job `0x1a`
+  (`0x823d9150`, a switch on the pass: 6/7 sun shadow cascades `0x823ddcc0`, 9-12 spot shadows `0x823dae58`), queued by the scene set-up per pass (`0x82388b48`), into
+  per-pass buffers of the frame data (`+0x1620 + pass * 0x10`): **one 3D scene per frame data**.
+- **The screen update `0x82135818` gives each local player his own renderer frame:** for each player `CG_DrawActiveFrame(lc)` (`0x82113110`), his UI, the view's close
+  (`0x823912a8`), and after the first of two views the end-frame `0x82390e20(1)` (begin, not shown); the last view ends with 2 or 3 (shown). So the sun cascades, light
+  lists and model chunks are never shared between the two players: each has a whole frame data set. That is why copying parts of one frame per scene (`scenekeep`) never fixed
+  the top view.
+
+**The PC kept all of it:**
+- end-frame `0xc4c0(flags)`, flags at frame data `+0x41a60`; bit 0 = frame begin in the back end (`0x44d00`: BeginScene, upload of the frame's dynamic data), bit 1 =
+  Present (`0x45060`). The screen update `0xd5890` ends with `0xc4c0(3)` at `0xd5aaf`.
+- the frame's command list is closed by `0xc800` (end marker `0x40000`, after the view), `0xc7e0` (the final 2D section's start kept at frame data `+0x41a40`), `0xe900`
+  (its first command `0x80017`) and `0xe440` (close: end marker, list fields at `+0x41a28`, command buffer index flip, scene counter `0x41136f0` = 0).
+
+**`[native] exp11frames=2` (mode 11):** after player 1's draw: wait for the front end's workers, `0xc800`, `0xc7e0`, `0xe900`, `0xe440`, `0xc4c0(1)`; player 2's draw then
+begins its own frame (no `second_pass`), and the screen update's own end-frame is hooked to end it with 3 (on the PC bit 0 is needed in every frame: the dynamic data upload;
+with 2 the frame's 2D drew without vertices). `exp11frames=1`: player 2's frame with 2, as on the 360.
+
+**Results (Trainer, D3D9, 1280x720):**
+- Without `0xe440`: "scenes 2 views 1" in player 2's frame (the scene counter was not reset) and a crash in the model surface loop (`0x645bd`). Without `0xc800`/`0xc7e0`/
+  `0xe900`: the same crash. With the whole close: **player 1's frame completes** (logged inline with `r_smp_backend 0`).
+- **Player 2's frame crashes in its 3D pass** (`0x62c70` -> `0x3fee0` -> `0x3fe20` -> `0x462e0` -> dispatcher `0x5e620` -> model surfaces `0x642e0`, at `0x645bd` / `0x64650`):
+  a model surface record in *its own* frame data (`fd + 0x474d4`, `+0x4c718`, `+0x4cb58` in three runs) has a garbage vertex pointer (`+0x20`). The same with player 1 drawn
+  twice (`exp11same=1`, no context swap), with `exp11lc=0`, with `r_smc_enable 0`, with the back end on the main thread. So **any second renderer frame in the same cgame frame**
+  breaks, whoever is drawn.
+- With the per-entity cull byte left per player (`exp11pin=0`: `cpose + 3 + lc`, as on the 360, where the PC has one byte and lc 1 writes the next field) player 2's first
+  frames complete, and a later one crashes the same way. So per-model state of the cgame frame is the lead: the scene's model records (`0x12d30`: state at `+0x28`, 2 -> 3
+  while skinning, offset + 4 when skinned; job 4 via `0x12aa0` from the cgame's entity pass `0x9e540`) carry "already done this cgame frame" from player 1's frame into player 2's.
+- Default mode 11 (`exp11frames=0`) runs as before: 60 s, no crash.
+
+Next: find how the 360 makes the second frame re-add and re-skin every model (its per-player cpose bytes and whatever resets the model records per renderer frame), and give the
+PC a per-player copy of that state instead of the one byte.

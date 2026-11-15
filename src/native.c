@@ -2780,14 +2780,14 @@ static void fd_scene_save(uint8_t *fd, unsigned scene)
 }
 // what a scene's 3D pass reads of its own lighting: +0x41940..+0x41a30 (with the sun shadow flag, +0x41958, the shadow bits +0x41970), the sun +0x41a48..+0x41a58, the light
 // list +0x421e0..; the scene list, counters and flags in between (+0x41a30..+0x41a48, +0x41a58..+0x421e0) are the frame's and stay as they are
-static const uint32_t fd_scene_parts[][2] = {{0x41940, 0x41a30}, {0x41a48, 0x41a58}, {0x421e0, FD_SCENE_HI}};
+static const uint32_t fd_scene_parts[][2] = {{0x41940, 0x41a30}, {0x41a48, 0x41a58}, {0x421e0, FD_SCENE_HI}, {0x41f20, 0x421e0}}; // bit 3: the sun shadow cascades (2 x 0x160, read by the cascade pass 0x659a0)
 static int fd_scene_load(uint8_t *fd, unsigned scene)
 {
 	if (!fd || scene >= 4 || !CFG_ONCE("scenekeep", 0))
 		return 0;
 	for (int k = 0; k < 2; k++)
 		if (fd_scene_owner[k] == fd && fd_scene_copy[k][scene]) {
-			if ((CFG_ONCE("scenekeepparts", 7) & 8) && fd_scene_glob[k][scene])
+			if ((CFG_ONCE("scenekeepparts", 7) & 16) && fd_scene_glob[k][scene])
 				memcpy(base + XR(0x4113400), fd_scene_glob[k][scene], 0x400);
 			for (size_t p = 0; p < sizeof(fd_scene_parts) / sizeof(fd_scene_parts[0]); p++)
 				if (CFG_ONCE("scenekeepparts", 7) & (1 << p))
@@ -2869,6 +2869,26 @@ static void (*render_scene_original)(void *refdef, uintptr_t scene, uintptr_t c,
 static void (*rs_shock_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d);
 static void (*rs_cgents_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d);
 static int rs_player1; // inside player 2's R_RenderScene with the renderer's local player at 1
+static int p2_frame; // exp11frames: player 2's draw is under way in its own renderer frame
+static unsigned end_frame_flags; // exp11frames: the flags the screen update's end-frame call (0xd5aaf) uses instead of 3, once
+static void (*end_frame_original)(unsigned flags);
+static void end_frame_hook(unsigned flags)
+{
+	if (end_frame_flags) {
+		flags = end_frame_flags;
+		end_frame_flags = 0;
+		p2_frame = 0;
+		static int nlog2;
+		if (nlog2 < 4) {
+			nlog2++;
+			log_printf("native: exp11frames: p2 end-frame %u (fd %p) ...", flags, *(void **)(base + XR(0x410fd00)));
+			end_frame_original(flags);
+			log_printf("native: exp11frames: p2 end-frame done");
+			return;
+		}
+	}
+	end_frame_original(flags);
+}
 static void ctx_wait_workers(void);
 static void rs_log(const char *when)
 {
@@ -2886,7 +2906,7 @@ static void rs_log(const char *when)
 }
 static void render_scene_hook(void *refdef, uintptr_t scene, uintptr_t c, uintptr_t d)
 {
-	if (mode != 11 || !second_pass || !CFG_ONCE("exp11lc", 1)) {
+	if (mode != 11 || !(second_pass || p2_frame) || !CFG_ONCE("exp11lc", 1)) {
 		render_scene_original(refdef, scene, c, d);
 		rs_log("after p1");
 		return;
@@ -3862,12 +3882,42 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 					shot_save_now(*(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE), raw_name);
 			}
 		}
-		if (ctx1_ready) {
+		const int frames = CFG_ONCE("exp11frames", 0); // (off: player 2's frame still crashes, docs/native-splitscreen-360.md) the 360's way: each player's view is its own renderer frame (docs/native-splitscreen-360.md)
+		if (ctx1_ready && frames) {
+			// 360 (screen update 0x82135818): CG_DrawActiveFrame(lc) for each player, and after the first of two views the end-frame 0x82390e20(1): the frame
+			// goes to the back end with "begin" (bit 0) but without "show" (bit 1); the last view ends with 2 (show). The PC kept that end-frame (0xc4c0(flags):
+			// flags at frame data +0x41a60, frame begin 0x44d00 on bit 0, Present in 0x45060 on bit 1). So each view has its own frame data: its own scene,
+			// sun cascades, light lists and model chunks, and the second draw begins its own frame (0xc840 inside 0xbca00).
+			// First the frame's command list is closed, as the screen update does before its own end-frame (0xd5aa5) and as the 360 does after every view
+			// (0x823912a8 in its loop): 0xe440 writes the end-of-list command (0x40000), clears the frame's list fields (+0x41a28), flips the command buffer
+			// index and resets the scene counter (0x41136f0). Without it the back end read past player 1's list (crash in the 2D loop at 0x645bd) and player 2's
+			// frame numbered its scene 1 ("scenes 2 views 1").
+			if (CFG_ONCE("exp11wait", 1))
+				ctx_wait_workers(); // player 1's front-end jobs (skinning, surface lists) read the frame data pointer 0x410fd00, which the end-frame clears and player 2's begin moves
+			// The list's shape, as the screen update 0xd5890 builds it: the views' commands, end marker (0xc800, 0x40000; the 360's 0x823912a8 after each view),
+			// the final 2D section's start kept at frame data +0x41a40 (0xc7e0), its first command 0x80017 (0xe900), then the close (0xe440).
+			((void (*)(void))(base + XR(0xc800)))();
+			((void (*)(void))(base + XR(0xc7e0)))();
+			((void (*)(void))(base + XR(0xe900)))();
+			((void (*)(void))(base + XR(0xe440)))();
+			// The PC's frame begin (0x44d00 on bit 0) is more than the 360's: BeginScene and the upload of the frame's dynamic data, so player 2's frame needs
+			// bit 0 too (exp11frames=2: flags 1 then 3).
+			static int nlog1;
+			if (nlog1 < 4)
+				log_printf("native: exp11frames: p1 end-frame (fd %p) ...", *(void **)(base + XR(0x410fd00)));
+			((void (*)(unsigned))(base + XR(0xc4c0)))(1);
+			if (nlog1 < 4)
+				nlog1++, log_printf("native: exp11frames: p1 end-frame done");
+			p2_frame = 1;
+		} else if (ctx1_ready) {
 			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
 			if (fd)
 				split_smc_redirect(fd);
+		}
+		if (ctx1_ready) {
 			vrect[1] = 0.5f;
-			ctx_swap(1);
+			if (!CFG_ONCE("exp11same", 0)) // QA: exp11same=1 draws player 1 again in the second frame (no context swap)
+				ctx_swap(1);
 			if (sw_px > 0 && sh_px > 0)
 				cvr[0] = 0, cvr[1] = sh_px / 2, cvr[2] = sw_px, cvr[3] = sh_px - sh_px / 2;
 			static dvar_t *draw2d;
@@ -3877,16 +3927,19 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			const int was2d = no2d ? draw2d->current.enabled : 0;
 			if (no2d)
 				draw2d->current.enabled = 0;
-			second_pass = 1;
+			second_pass = frames ? 0 : 1;
 			cg_draw_original(0, a, b);
 			second_pass = 0;
+			if (frames)
+				end_frame_flags = frames == 1 ? 2 : 3; // the screen update's own end-frame (0xd5aaf, 3) ends player 2's frame: show it (exp11frames=1: do not begin again)
 			if (CFG_ONCE("scenekeep", 0)) {
 				ctx_wait_workers();
 				fd_scene_save(*(uint8_t **)(base + XR(0x410fd00)), 1);
 			}
 			if (no2d)
 				draw2d->current.enabled = (uint8_t)was2d;
-			ctx_swap(0);
+			if (!CFG_ONCE("exp11same", 0))
+				ctx_swap(0);
 		}
 		{
 			static unsigned n11b;
@@ -8879,7 +8932,7 @@ static int hooks_apply(void)
 			{ 0xb20e0, { 0x48, 0x63, 0x15, 0xd1, 0xbd, 0x46, 0x00 }, { 0x31, 0xd2, 0x90, 0x90, 0x90, 0x90, 0x90 } }, // movsxd rdx,[lc] -> xor edx,edx
 			{ 0x9e547, { 0x48, 0x63, 0x05, 0x6a, 0xf9, 0x47, 0x00 }, { 0x31, 0xc0, 0x90, 0x90, 0x90, 0x90, 0x90 } },
 		};
-		for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); i++) {
+		for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]) && CFG_ONCE("exp11pin", 1); i++) { // QA: exp11pin=0 leaves the cull byte per player (+3 + lc, as on the 360)
 			uint8_t *p = base + XR(pins[i].rva);
 			if (memcmp(p, pins[i].want, 7)) {
 				log_printf("native: exp11lc: unexpected code at rva 0x%x, not pinned", pins[i].rva);
@@ -8908,6 +8961,8 @@ static int hooks_apply(void)
 			FlushInstructionCache(GetCurrentProcess(), q, 6);
 		}
 	}
+	if (mode == 11 && (*(base + XR(0xd5aaf)) != 0xe8 || !jhook_call(base + XR(0xd5aaf), (void *)end_frame_hook, (void **)&end_frame_original)))
+		log_printf("native: unexpected code at the screen update's end-frame call (0xd5aaf): exp11frames cannot end player 2's frame");
 	if (*(base + XR(0xca523)) != 0xe8 || *(base + XR(0x82dd)) != 0xe8 || *(base + XR(0x6356)) != 0xe8 ||
 	    !jhook_call(base + XR(0xca523), (void *)render_scene_hook, (void **)&render_scene_original) ||
 	    !jhook_call(base + XR(0x82dd), (void *)rs_shock_hook, (void **)&rs_shock_original) ||
