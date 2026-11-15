@@ -324,3 +324,9 @@ Candidates, not checked: the body's skeleton and animation, which the cgame now 
 begin: `0xb0860` comes before `0xc840` inside `0xbca00`), against a skeleton memory ring of 4 slots advanced per renderer frame (`0xc840`, `0x14488a2e0`), and the
 transplanted body model (`src/transplant.c`). Next: the 360's skeleton and skinning path for two views (owner, 2026-11-15: port it from the 360 and the recompilation),
 and a D3D trace that picks out the body's draws.
+- 2026-11-15, more checks on the smear: the PC's 4-slot ring advanced by the begin-frame (`0x14488a2e0`) is the per-model lighting cache (`0x29820`, a light-grid
+  sample per entity origin kept 3 frames), not skeleton memory; the counter `0x411344c` it also bumps feeds texture/probe caches (`0x27290`, `0x28aa0`). In IW4 a model's
+  skeleton memory belongs to the client (reset per local client by the cgame draw), which the 360 keeps per local client and the PC swaps per context: the next thing to read.
+  With the mod's body adjustments off (`lagfix=0;yawkeep=0;pitchkeep=0`) player 1's body lands on player 2's camera again, so they stay on. A one-frame trace with every
+  indexed draw's geometry (`[native] traceprims=1` with `d3dtrace`) shows every skinned mesh drawn several times from the skinned vertex buffer at different offsets, which the
+  rangers (one model, many instances) explain as well: the body's own draws still have to be told apart (by its model, through the scene record).

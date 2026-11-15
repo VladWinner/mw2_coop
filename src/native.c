@@ -2108,6 +2108,18 @@ static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t
 		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
+	if (trace_on && CFG_ONCE("traceprims", 0)) { // QA: every indexed draw with its geometry (is a mesh drawn twice with two skins?)
+		IDirect3DVertexBuffer9 *vb = NULL;
+		UINT off = 0, stride = 0;
+		IDirect3DVertexShader9 *vs = NULL;
+		IDirect3DDevice9_GetStreamSource(dev, 0, &vb, &off, &stride);
+		IDirect3DDevice9_GetVertexShader(dev, &vs);
+		trace_event("dip pc %u si %u bv %d nv %u vb %p off %u stride %u vs %p", pc, si, bv, nv, (void *)vb, off, stride, (void *)vs);
+		if (vb)
+			IDirect3DVertexBuffer9_Release(vb);
+		if (vs)
+			IDirect3DVertexShader9_Release(vs);
+	}
 	int movie_quad = bink_is_movie_quad(dev, (UINT)t, pc, "DrawIndexedPrimitive");
 #ifndef _WIN64
 	if (game_is_iw4x() && watermark_draw(dev, nv, pc)) {
