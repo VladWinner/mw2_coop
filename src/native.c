@@ -5879,8 +5879,16 @@ static void pad_action(const char *name)
 #endif
 static void pad_binding(const char *name, int down)
 {
-	char full[48];
+	char full[64];
+#ifndef _WIN64
+	// 32 bits: run it as a key binding runs it, "+name <arguments> <key> <time>". The client's notify for a script's NotifyOnPlayerCommand (VA 0x4a2950, called for every
+	// command) sends the command's index with its arguments EXCEPT THE LAST TWO (a binding's key number and time): the pad's bare "+actionslot 4" reached the server as
+	// "+actionslot", so a level waiting for "+actionslot 4" never heard it (Exodus: the laser designator did not come on from the d-pad, 32-bit only; QA laserpad), while
+	// "+attack" (no arguments) worked. The key is 0x1ff, one no keyboard sends (as the 64-bit action call), the time the one the pad's key events use.
+	snprintf(full, sizeof(full), "%c%s %d %u", down ? '+' : '-', name, 0x1ff, (unsigned)GetTickCount());
+#else
 	snprintf(full, sizeof(full), "%c%s", down ? '+' : '-', name);
+#endif
 	pad_action(full);
 }
 
