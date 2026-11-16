@@ -3089,6 +3089,19 @@ static void campaign_loading_begin(void)
 	dvar_t *d = game_find_dvar("specialops");
 	if (!d)
 		return;
+	// Not for a Special Ops op: the client calls this when the host's start packet comes, whatever the mission. With the dvar at 0 the client's scripts took the campaign's path
+	// (_loadout's is_specialop() false: no listing for an so_ level, the default loadout with weapons its zone lacks: no weapon and "no viewmodel set ... hand", the engine's
+	// error a player reported for 1.0.1 as "a bad hand" in Spec Ops), while the host's took Spec Ops' (traced in a pair on so_killspree_trainer).
+	{
+		char map[64] = "";
+		game_dvar_raw("coop_mapName", map, sizeof(map));
+		if (!map[0])
+			game_dvar_raw("mapname", map, sizeof(map));
+		if (so_name(map)) {
+			log_printf("menus: loading screen: '%s' is a Special Ops op, specialops stays as it is", map);
+			return;
+		}
+	}
 	InterlockedExchange(&specialops_forced, 1);
 	InterlockedExchange(&campaign_session, 1);
 	if (!specialops_read(d))
