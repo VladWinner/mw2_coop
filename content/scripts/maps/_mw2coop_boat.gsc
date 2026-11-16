@@ -112,6 +112,15 @@ passenger_ride( boat )
 	self AllowStand( false );
 	self AllowProne( false );
 	self EnableWeapons();
+	// Stronger for the ride (owner, 2026-11-16: "give the second player more health in the finale: he goes down, nobody can revive him in the boat and the boat
+	// flips"): four times his health, and the random bullets of the enemies' boats pass him as they pass the driver (the level gives the driver
+	// baseIgnoreRandomBulletDamage once the caves are behind, af_chase_zodiac). Given back at the waterfall (passenger_over_edge).
+	self.mw2coop_boat_maxhealth = self.maxhealth;
+	self.maxhealth = int( self.maxhealth * 4 );
+	self.health = self.maxhealth;
+	self.mw2coop_boat_ignore_random = isdefined( self.baseIgnoreRandomBulletDamage ) && self.baseIgnoreRandomBulletDamage;
+	self.baseIgnoreRandomBulletDamage = true;
+	self.IgnoreRandomBulletDamage = true;
 	self thread passenger_weapon();
 	// he starts looking ahead over the bow, as Price does when he has nobody to shoot at
 	self SetPlayerAngles( ( 0, boat.angles[ 1 ], 0 ) );
@@ -385,6 +394,15 @@ passenger_over_edge()
 		return;
 	level.mw2coop_boat_over_edge = true;
 	p DisableWeapons();
+	if ( isdefined( p.mw2coop_boat_maxhealth ) ) // his own health again after the ride
+	{
+		p.maxhealth = p.mw2coop_boat_maxhealth;
+		if ( p.health > p.maxhealth )
+			p.health = p.maxhealth;
+		p.baseIgnoreRandomBulletDamage = p.mw2coop_boat_ignore_random;
+		p.IgnoreRandomBulletDamage = p.mw2coop_boat_ignore_random;
+		p.mw2coop_boat_maxhealth = undefined;
+	}
 	maps\_mw2coop::state( "boat: over the waterfall" );
 }
 

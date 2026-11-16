@@ -722,7 +722,25 @@ sync_weapons()
 		now1 = level.player GetWeaponsListAll();
 		now2 = level.player2 GetWeaponsListAll();
 		// the revive system takes and returns weapons of a downed player: leave it alone
-		if ( level.mw2coop_weapon_sync != "own" && !is_downed( level.player ) && !is_downed( level.player2 ) )
+		// Each player's own inventory (owner, 2026-11-16: "the players' inventories must be separate"): a weapon player 1 picks up from the ground (one weapon in
+		// his hands goes, another comes, in the same moment) is his alone, and the one he left there is not taken from player 2. What a level gives or takes
+		// (a weapon that comes or goes alone, a whole loadout) still goes to both.
+		swapped = false;
+		if ( !isdefined( level.mw2coop_shared_inventory ) )
+		{
+			gained = 0;
+			lost = 0;
+			foreach ( weapon in now1 )
+				if ( !is_in_array( prev1, weapon ) )
+					gained++;
+			foreach ( weapon in prev1 )
+				if ( !is_in_array( now1, weapon ) )
+					lost++;
+			swapped = gained == 1 && lost == 1;
+			if ( swapped )
+				state( "player 1 swapped a weapon on the ground: his own (player 2 keeps his)" );
+		}
+		if ( level.mw2coop_weapon_sync != "own" && !swapped && !is_downed( level.player ) && !is_downed( level.player2 ) )
 		{
 			foreach ( weapon in now1 )
 				if ( !is_in_array( prev1, weapon ) && !level.player2 HasWeapon( weapon ) && !own_weapon_busy( weapon ) )
@@ -1844,4 +1862,29 @@ sound_player( caller )
 	if ( isdefined( caller ) && isplayer( caller ) )
 		return caller;
 	return level.player;
+}
+
+// maps\_slowmo_breach patch: right after a breach lets the players go. A player who cannot take a step (spot_stuck: inside the door, the charge, a wall) is put next
+// to the other one; checked for 3 s (the breach's slow motion and the door's pieces still move).
+breach_unstick()
+{
+	level endon( "mw2coop_level_end" );
+	for ( t = 0; t < 3; t += 0.25 )
+	{
+		wait 0.25;
+		foreach ( player in level.players )
+		{
+			if ( !IsAlive( player ) || player IsLinked() || is_downed( player ) || !spot_stuck( player.origin ) )
+				continue;
+			other = other_player( player );
+			if ( !isdefined( other ) || spot_stuck( other.origin ) )
+				continue;
+			who = "player 2";
+			if ( player == level.player )
+				who = "player 1";
+			state( "breach: " + who + " stuck after the breach at " + player.origin + ", put next to the other player" );
+			player thread teleport_to_partner_when_safe( other, 5 );
+			return;
+		}
+	}
 }

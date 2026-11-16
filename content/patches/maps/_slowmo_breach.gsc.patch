@@ -12,3 +12,25 @@ mw2coop patch for maps/_slowmo_breach.gsc (Modern Warfare 2, 64-bit Steam build)
 	if ( issplitscreen() || GetDvarInt( "mw2coop_native_split" ) )
 		hint_offset = -23;
 @@@ end
+
+2. After the breach a player let go inside the door's or the charge's collision cannot move (owner, 2026-11-16, Just Like Old Times: "one of the players stays
+   stuck at the door after the breach"): a player who cannot take a step is put next to the other one once that one stands on free ground.
+@@@ replace
+		else
+		{
+			player Unlink();
+		}
+
+		player Show();
+	}
+@@@ with
+		else
+		{
+			player Unlink();
+		}
+
+		player Show();
+	}
+	if ( maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) )
+		level thread maps\_mw2coop::breach_unstick();
+@@@ end
