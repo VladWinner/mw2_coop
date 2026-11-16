@@ -8105,9 +8105,14 @@ static void pass2_hook(unsigned lc)
 	// The other player's body in player 2's view (centshare: slot 0, written by context 0): its yaw and pitch (the torso's and head's aim) come from the entity state, which the
 	// cgame refreshes only when a snapshot arrives (20 a second), so the partner's aim moved in steps. Player 1's playerState (his client block, in the context-0 store) is
 	// current every frame: his yaw and pitch go into the slot's three yaws and pitches for the pass, as the earlier copy did ([native] p0aim=0 off).
-	if (ctx_current == 1 && mode == 11 && cent_share_on() && ctx_store[0][5] && CFG_ONCE("p0aim", 1)) {
+	// The source is player 1's cgame playerState (cg.predictedPlayerState, rva 0x422440, context 0's copy in the store): the cgame builds it every frame. The client block's playerState
+	// (CL_BLOCK_PS) is the last snapshot's, 20 a second: with it his body in the bottom half turned in steps of 6-8 draws (owner: "the other player's model runs at 10-15 fps";
+	// measured with animlog: the pose yaw changed in 1 of 7 draws). The 360 does the same per frame: its own-entity write (0x82102f28) takes each local player's interpolated state.
+	// ([native] p0aimsrc=0: the snapshot's, as before)
+	if (ctx_current == 1 && mode == 11 && cent_share_on() && ctx_store[0][0] && ctx_store[0][5] && CFG_ONCE("p0aim", 1)) {
 		float *f = (float *)(base + RVA_CENT);
-		const float y = *(const float *)(ctx_store[0][5] + CL_BLOCK_PS + 0x10c), pt = *(const float *)(ctx_store[0][5] + CL_BLOCK_PS + 0x108);
+		const uint8_t *src = CFG_ONCE("p0aimsrc", 1) ? ctx_store[0][0] + (XR(0x422440) - RANGE_RVA(0)) : ctx_store[0][5] + CL_BLOCK_PS;
+		const float y = *(const float *)(src + 0x10c), pt = *(const float *)(src + 0x108);
 		f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = y;
 		f[CF_YAW0 - 1] = f[CF_YAW1 - 1] = f[CF_YAW2 - 1] = pt;
 	}
@@ -8285,7 +8290,9 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			int idx = tree && !IsBadReadPtr(tree, 16) ? *(const short *)(tree + 8) : 0;
 			char line[900];
 			const float *org = (const float *)e;
-			int len = snprintf(line, sizeof(line), "native: anim ctx %d t=%.1f cg.time %d idx %d pos %.1f %.1f:", ctx_current, lag_now() * 1000.0, *(int *)(base + XR64(0x422434)), idx, e ? org[0] : 0.0f, e ? org[1] : 0.0f);
+			const float *pz = b && !IsBadReadPtr(b, 0x30) ? (const float *)b : NULL; // the pose (cpose: origin at +0x18, angles at +0x24)
+			int len = snprintf(line, sizeof(line), "native: anim ctx %d t=%.1f cg.time %d idx %d pos %.1f %.1f pose %.2f %.2f yaw %.3f pitch %.3f:", ctx_current, lag_now() * 1000.0, *(int *)(base + XR64(0x422434)), idx, e ? org[0] : 0.0f, e ? org[1] : 0.0f,
+					   pz ? pz[6] : 0.0f, pz ? pz[7] : 0.0f, pz ? pz[10] : 0.0f, pz ? pz[9] : 0.0f);
 			for (int k = 0; idx > 0 && k < 3 && len < (int)sizeof(line) - 160; k++) {
 				const uint8_t *node = base + XR64(0x1bc0a30) + (size_t)idx * 0x40;
 				const float *f = (const float *)node;
