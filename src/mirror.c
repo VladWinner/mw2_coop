@@ -9,6 +9,9 @@
 //   givemaxammo, givestartammo  ammo refills (they skip a weapon the player does not have)
 //   setthreatbiasgroup        the group enemies' threat biases are set against ("player" in 12
 //                             levels): the partner is in the same group
+//   enableweapons, disableweapons  a level turns the weapons off and on for "the player" (the Gulag fly-in: off for the
+//                             ride, on for the sniper run from the helicopter); the partner's go with them (owner, 2026-11-16:
+//                             player 2 had empty hands, and when he was handed the weapon he got it before player 1)
 // Mirrored one way, player 1 to player 2, as the weapon sync. Both lockstep machines run the
 // same scripts, so both mirror the same calls.
 //
@@ -47,12 +50,16 @@ static const struct {
 	{0x339110, "givemaxammo"},
 	{0x3390f8, "givestartammo"},
 	{0x348c50, "setthreatbiasgroup"}, // in the AI (sentient) method table
+	{0, "enableweapons"}, // (found by name)
+	{0, "disableweapons"},
 #else
 	{0x2e8ec4, "setactionslot"},
 	{0x2e8d14, "setoffhandsecondaryclass"},
 	{0x2e8c18, "givemaxammo"},
 	{0x2e8c0c, "givestartammo"},
 	{0x2eb140, "setthreatbiasgroup"}, // in the AI (sentient) method table
+	{0, "enableweapons"},
+	{0, "disableweapons"},
 #endif
 };
 #define MIRRORED (sizeof(mirrored) / sizeof(mirrored[0]))
@@ -88,7 +95,9 @@ WRAP(1)
 WRAP(2)
 WRAP(3)
 WRAP(4)
-static const method_t wrappers[MIRRORED] = {wrap0, wrap1, wrap2, wrap3, wrap4};
+WRAP(5)
+WRAP(6)
+static const method_t wrappers[MIRRORED] = {wrap0, wrap1, wrap2, wrap3, wrap4, wrap5, wrap6};
 
 void mirror_install(void)
 {

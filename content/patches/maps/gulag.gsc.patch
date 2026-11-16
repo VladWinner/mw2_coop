@@ -8,7 +8,7 @@ Co-op logic lives in mw2coop/scripts/maps/_mw2coop_gulag.gsc.
 @@@ with
 	level.player_view_controller Delete();
 	ent Delete();
-	maps\_mw2coop_gulag::partner_leaves_heli();
+	level thread maps\_mw2coop_gulag::partner_leaves_heli(); // (its 0.2 s step out of the door runs beside player 1's)
 @@@ end
 
 2. Enemies cannot hit "the player" in the bathroom and rescue scenes: both players

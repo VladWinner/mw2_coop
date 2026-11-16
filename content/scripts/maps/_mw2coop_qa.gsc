@@ -4434,7 +4434,10 @@ short_start()
 loadout()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
-	wait 5;
+	w = GetDvarInt( "mw2coop_qa_wait" ); // mw2coop_qa_wait <s>: check later (after a landing, a scene)
+	if ( w <= 0 )
+		w = 5;
+	wait w;
 	kit_checks();
 	report( "done" );
 }

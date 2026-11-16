@@ -65,8 +65,23 @@ partner_leaves_heli()
 	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
 		return;
 	p2 = level.player2;
-	if ( isdefined( level.mw2coop_view_controller2 ) )
-		level.mw2coop_view_controller2 Delete();
+	// Out of the door the way player 1 is (gulag_perimeter: his view controller is moved 32 units out along its aim, then deleted): player 2 was unlinked at his door, inside the
+	// helicopter's collision, and could not move (Nexus report, 1.0.1: "my friend couldn't get off the helicopter in the Gulag"); the teleport next to player 1 below found no free spot
+	// beside a player still standing at the cabin door.
+	controller = level.mw2coop_view_controller2;
+	if ( isdefined( controller ) )
+	{
+		angles = controller GetTagAngles( "tag_aim" );
+		forward = AnglesToForward( ( 0, angles[ 1 ], 0 ) ) * 32;
+		ent = spawn_tag_origin();
+		ent.origin = controller.origin;
+		ent.angles = controller.angles;
+		controller LinkTo( ent );
+		ent MoveTo( ent.origin + forward + ( 0, 0, 4.5 ), 0.2, 0.1, 0.1 );
+		wait( 0.2 );
+		controller Delete();
+		ent Delete();
+	}
 	if ( p2 IsLinked() )
 		p2 Unlink();
 	p2 PlayerSetGroundReferenceEnt( undefined );
@@ -74,7 +89,8 @@ partner_leaves_heli()
 	p2 AllowCrouch( true );
 	p2 AllowSprint( true );
 	p2 AllowJump( true );
-	p2 thread maps\_mw2coop::teleport_to_partner_when_safe( level.player, 10 );
+	if ( maps\_mw2coop::spot_stuck( p2.origin ) ) // still wedged in the cabin: next to player 1 once he stands on free ground (up to 30 s)
+		p2 thread maps\_mw2coop::teleport_to_partner_when_safe( level.player, 30 );
 	maps\_mw2coop::state( "gulag: player 2 off the helicopter" );
 }
 

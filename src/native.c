@@ -8100,6 +8100,21 @@ static void pass2_original(unsigned lc)
 }
 #endif
 static const uint8_t pass2_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x68, 0x18, 0x56, 0x57, 0x41, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00};
+// The world yaw a context's camera looks along: its refdef's view axis (forward vector right after the view origin, rva 0x42d310), from the store when that context is not live.
+// The playerState's view yaw is relative to what the player is linked to (a helicopter's seat, an elevator): as a body's yaw it turned the body round (owner, Gulag fly-in:
+// Alpha's body faced the back of the helicopter).
+static float ctx_camera_yaw(int ctx, int *ok)
+{
+	const uint8_t *blk = ctx == ctx_current ? base + RANGE_RVA(0) : ctx_store[ctx][0];
+	*ok = 0;
+	if (!blk)
+		return 0.0f;
+	const float *fwd = (const float *)(blk + (XR(0x42d310) - RANGE_RVA(0)) + 0xc);
+	if (fabsf(fwd[0]) < 1e-4f && fabsf(fwd[1]) < 1e-4f)
+		return 0.0f;
+	*ok = 1;
+	return atan2f(fwd[1], fwd[0]) * (180.0f / 3.14159265f);
+}
 static void pass2_hook(unsigned lc)
 {
 	if (ctx_current == 1 && CFG_ONCE("p2skip", 0)) // QA: context 1 draws no other-player body (is a stray mesh player 1's body?)
@@ -8114,13 +8129,102 @@ static void pass2_hook(unsigned lc)
 	if (ctx_current == 1 && mode == 11 && cent_share_on() && ctx_store[0][0] && ctx_store[0][5] && CFG_ONCE("p0aim", 1)) {
 		float *f = (float *)(base + RVA_CENT);
 		const uint8_t *src = CFG_ONCE("p0aimsrc", 1) ? ctx_store[0][0] + (XR(0x422440) - RANGE_RVA(0)) : ctx_store[0][5] + CL_BLOCK_PS;
-		const float y = *(const float *)(src + 0x10c), pt = *(const float *)(src + 0x108);
+		float y = *(const float *)(src + 0x10c);
+		const float pt = *(const float *)(src + 0x108);
+		int cam_ok = 0;
+		const float cy = ctx_camera_yaw(0, &cam_ok);
+		if (cam_ok && CFG_ONCE("bodycamyaw", 1)) // the world direction of his camera ([native] bodycamyaw=0: the playerState's view yaw)
+			y = cy;
 		f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = y;
 		// Only the yaw: these angles turn the whole model, and with the view's pitch in them the body leaned over as far as the player looked up or down (owner's screenshots:
 		// Alpha folded to the floor, thrown back with the gun up, Airport). The 360's own-entity write also sets yaw only (pitch and roll 0, 0x82102f28); the torso's aim comes from
 		// the entity state as the game draws it. [native] p0aimpitch=1 writes the pitch as before.
 		if (CFG_ONCE("p0aimpitch", 0))
 			f[CF_YAW0 - 1] = f[CF_YAW1 - 1] = f[CF_YAW2 - 1] = pt;
+	}
+	// The other player's body rides a moving vehicle in steps (owner: "only when the helicopter is moving", the Gulag fly-in; the Airport elevator): his slot's position is his
+	// context's own-entity write, which takes the last snapshot's playerState (20 a second): measured on the Gulag, his body's pose stood still for 6-7 draws, then moved 80 units,
+	// while both cameras moved 11-13 units every draw. The 360's own-entity write (0x82102f28) puts each local player's position interpolated between the snapshots, every frame.
+	// The pass now gets the other player's cgame playerState origin (cg.predictedPlayerState +0x1c, built every frame, the one his camera stands on) in the pose and in both states
+	// of the slot, in both views ([native] bodylerp=0 off).
+	if (mode == 11 && cent_share_on() && CFG_ONCE("bodylerp", 1) && (ctx_current == 0 || ctx_current == 1) && ctx_store[1 - ctx_current][0]) {
+		const int other = 1 - ctx_current;
+		uint8_t *slot = base + RVA_CENT + (size_t)other * CENT_SIZE;
+		// The game's position of his body (his own-entity write, the snapshot's while he rides something) is carried on between two snapshots at the speed of the last two:
+		// no lag behind what he rides and no tie to his camera (the camera's own sway shook both bodies, owner 2026-11-16). On foot the position changes every frame and this
+		// leaves it as it is. A jump of more than 300 units (a teleport) starts over; past 150 ms without a new position it holds.
+		static float last_go[2][3], vel[2][3], written[2][3], err[2][3];
+		const float *slot_o = (const float *)(slot + 0x18);
+		// (what is there may be our own write of the last frame, when nothing wrote the slot since: then the game's position is the one we had)
+		const float *go = memcmp(slot_o, written[other], 12) == 0 ? last_go[other] : slot_o;
+		static double last_t[2];
+		LARGE_INTEGER qc, qf;
+		QueryPerformanceCounter(&qc);
+		QueryPerformanceFrequency(&qf);
+		const double now = (double)qc.QuadPart / (double)qf.QuadPart;
+		if (go[0] != last_go[other][0] || go[1] != last_go[other][1] || go[2] != last_go[other][2]) {
+			const double dt = now - last_t[other];
+			const float d0 = go[0] - last_go[other][0], d1 = go[1] - last_go[other][1], d2 = go[2] - last_go[other][2];
+			if (last_t[other] > 0 && dt > 0.003 && dt < 0.2 && d0 * d0 + d1 * d1 + d2 * d2 < 300.0f * 300.0f) {
+				// the speed averaged over the last changes (each change's own time is uneven), and what we drew against the new position kept as an error that fades over a few
+				// draws: no jump of the body when a snapshot comes in
+				// (measured over at least 40 ms back to an anchor: the game's position moves by one big step and a couple of small ones per snapshot)
+				static float anchor[2][3];
+				static double anchor_t[2];
+				const double span = now - anchor_t[other];
+				if (anchor_t[other] > 0 && span >= 0.04 && span < 0.3) {
+					const float a = 0.5f;
+					for (int k = 0; k < 3; k++)
+						vel[other][k] += a * ((go[k] - anchor[other][k]) / (float)span - vel[other][k]);
+				}
+				if (anchor_t[other] <= 0 || span >= 0.04) {
+					memcpy(anchor[other], go, 12);
+					anchor_t[other] = now;
+				}
+				for (int k = 0; k < 3; k++)
+					err[other][k] = written[other][k] - go[k];
+				if (err[other][0] * err[other][0] + err[other][1] * err[other][1] + err[other][2] * err[other][2] > 64.0f * 64.0f)
+					err[other][0] = err[other][1] = err[other][2] = 0.0f;
+			} else {
+				vel[other][0] = vel[other][1] = vel[other][2] = 0.0f;
+				err[other][0] = err[other][1] = err[other][2] = 0.0f;
+			}
+			memcpy(last_go[other], go, 12);
+			last_t[other] = now;
+		}
+		double ahead = now - last_t[other];
+		if (ahead > 0.15)
+			ahead = 0.15;
+		for (int k = 0; k < 3; k++)
+			err[other][k] *= 0.6f; // (per draw of this view)
+		const float po[3] = {go[0] + vel[other][0] * (float)ahead + err[other][0], go[1] + vel[other][1] * (float)ahead + err[other][1], go[2] + vel[other][2] * (float)ahead + err[other][2]};
+		if (ahead > 0.0) {
+			static const int offs[3] = {0x18, 0x80, 0xfc}; // the pose's origin, the current and the next state's origin
+			for (int k = 0; k < 3; k++)
+				memcpy(slot + offs[k], po, 12);
+			memcpy(written[other], po, 12);
+		}
+		if (CFG_ONCE("bodylog", 0) == 2 && split_tick && GetTickCount() - split_tick > (DWORD)CFG_ONCE("bodylogat", 40) * 1000) { // QA: the body's position in each view, every draw (60 per view)
+			static unsigned bn[2];
+			if (bn[ctx_current] < 60) {
+				bn[ctx_current]++;
+				const float *q = (const float *)(slot + 0x18);
+				log_printf("native: bodypos ctx %d %.2f %.2f %.2f (game %.2f %.2f, ahead %.0f ms)", ctx_current, (double)q[0], (double)q[1], (double)q[2], (double)go[0], (double)go[1], ahead * 1000.0);
+			}
+		}
+		if (CFG_ONCE("bodylog", 0)) { // QA: the other player's view yaw against his camera's world yaw, and the position put in
+			static unsigned bl;
+			int okc = 0;
+			const float cyw = ctx_camera_yaw(other, &okc);
+			if (++bl % 150 == 0 && bl < 6000)
+				log_printf("native: bodylog ctx %d: other's ps yaw %.1f, camera yaw %.1f (%d), origin %.1f %.1f %.1f", ctx_current, (double)*(const float *)(ctx_store[other][0] + (XR(0x422440) - RANGE_RVA(0)) + 0x10c), (double)cyw, okc, (double)po[0], (double)po[1], (double)po[2]);
+		}
+		if (ctx_current == 0 && CFG_ONCE("p0aim", 1)) { // and his yaw, as p0aim does for player 1's body in context 1
+			float *f = (float *)slot;
+			int cam_ok = 0;
+			const float cy = ctx_camera_yaw(1, &cam_ok);
+			f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = cam_ok && CFG_ONCE("bodycamyaw", 1) ? cy : *(const float *)(ctx_store[1][0] + (XR(0x422440) - RANGE_RVA(0)) + 0x10c);
+		}
 	}
 	if (CFG_ONCE("p2hooklog", 0)) { // QA: what the second entity pass sees in both slots
 		static unsigned k;

@@ -738,7 +738,9 @@ sync_weapons()
 		// Player 2 does not stand with empty hands while player 1 holds a weapon (airport: after the elevator player 1 holds the saw and the machine gun, player 2 held nothing until he pressed
 		// 1 or Y himself; testers, 2026-11-06). His client keeps its own weapon choice and undoes a script's SwitchToWeapon, so the DLL presses his pad's weapon key (the dvar
 		// mw2coop_p2_weapnext, native.c), then the switch to player 1's weapon follows. Only while he is free (not in a scene, not downed).
-		if ( level.player2 GetCurrentWeapon() == "none" && !level.player2 IsLinked() && !is_downed( level.player2 ) && !is_downed( level.player ) && level.player GetCurrentWeapon() != "none" && level.player2 GetWeaponsListPrimaries().size > 0 )
+		// (also when both ride something and player 1 has his weapon there: the Gulag fly-in gives player 1 the scoped M14 to shoot from the helicopter, player 2 sat beside him with
+		// empty hands; owner, 2026-11-16: "the bottom player should get a weapon", "not only this level")
+		if ( level.player2 GetCurrentWeapon() == "none" && ( !level.player2 IsLinked() || level.player IsLinked() ) && !is_downed( level.player2 ) && !is_downed( level.player ) && level.player GetCurrentWeapon() != "none" && level.player2 GetWeaponsListPrimaries().size > 0 )
 		{
 			if ( !isdefined( level.mw2coop_empty_hands ) )
 				level.mw2coop_empty_hands = 0;
