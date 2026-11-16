@@ -1293,6 +1293,15 @@ static void open_url_f(void)
 	ShellExecuteA(NULL, "open", urls[k - 1], NULL, NULL, SW_SHOWNORMAL);
 }
 
+// the split screen lobby's difficulty popups, one for each player (rows: the game's Recruit, Regular, Hardened, Veteran)
+static void add_skill_menus(void)
+{
+	if (ui_find_menu("mw2coop_skill_p1"))
+		return;
+	if (table_popup("mw2coop_skill_p1") && table_popup("mw2coop_skill_p2"))
+		log_printf("menus: split screen difficulty popups added");
+}
+
 static void add_lobbies_menu(void)
 {
 	if (ui_find_menu("mw2coop_lobbies"))
@@ -1976,6 +1985,41 @@ static void patch_split_lobby(uint8_t *menu, int spec_split)
 			*(void **)(ff + ITEM_DISABLED_EXP) = split && !spec_split ? NULL : ff_disabled_exp;
 		}
 	}
+	// the two difficulty rows of the console's split screen lobby (its menu_splitscreen_setup has a difficulty button for each player, each opening its own popup): under the friendly fire
+	// row, shown only in a split screen lobby that holds a campaign mission (a Special Ops one keeps the game's own difficulty row)
+	{
+		uint8_t *ff = NULL;
+		for (int i = 0; i < count; i++) {
+			const char *name = *(const char **)items[i];
+			if (name && !strcmp(name, "mw2coop_ff")) {
+				ff = items[i];
+				break;
+			}
+		}
+		for (int pl = 0; pl < 2; pl++) {
+			uint8_t *row = NULL;
+			char want[24];
+			snprintf(want, sizeof(want), "mw2coop_skill%d", pl + 1);
+			for (int i = 0; i < count && !row; i++) {
+				const char *name = *(const char **)items[i];
+				if (name && !strcmp(name, want))
+					row = items[i];
+			}
+			if (!row)
+				continue;
+			uint32_t *flags = (uint32_t *)(row + ITEM_DYNAMIC_FLAGS);
+			const int show = split && !spec_split;
+			if (show && ff) {
+				const float y = *(float *)(ff + ITEM_RECT_Y) + (float)(pl + 1) * BUTTON_HEIGHT, cy = *(float *)(ff + ITEM_RECT_CLIENT_Y) + (float)(pl + 1) * BUTTON_HEIGHT;
+				*(float *)(row + ITEM_RECT_Y) = y;
+				*(float *)(row + ITEM_RECT_CLIENT_Y) = cy;
+				*(void **)(row + ITEM_FLOAT_EXPS) = NULL; // (a copy of the invite row, which is greyed out offline: this one is always on)
+				*(void **)(row + ITEM_DISABLED_EXP) = NULL;
+				*flags |= WINDOW_VISIBLE;
+			} else
+				*flags &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
+		}
+	}
 	split_was = split;
 }
 
@@ -2395,9 +2439,56 @@ static int split_devices_chosen(void)
 	return devices_get(0) != DEVICE_NONE && devices_get(1) != DEVICE_NONE;
 }
 
+// The split screen lobby's difficulty of each player (the console game has one popup for each: popmenu_specialops_splitscreen_difficulty_p1 / _p2, g_gameskill_player_1 / _2):
+// 0 Recruit .. 3 Veteran, -1 until the lobby sets it from the profile's. The level scripts take it from the flagged dvars mw2coop_skill_p1 / p2 (maps\_mw2coop::player_gameskill).
+static volatile LONG split_skill[2] = {-1, -1};
+
+// mw2coop_split_skill <player 1|2> <0-3>: a popup row
+static void split_skill_f(void)
+{
+	const int pl = game_cmd_argc() > 1 ? atoi(game_cmd_argv(1)) : 0, v = game_cmd_argc() > 2 ? atoi(game_cmd_argv(2)) : -1;
+	if (pl < 1 || pl > 2 || v < 0 || v > 3 || !split_mode)
+		return;
+	InterlockedExchange(&split_skill[pl - 1], v);
+	char cmd[48];
+	snprintf(cmd, sizeof(cmd), "set mw2coop_skill_p%d %d\n", pl, v);
+	game_cbuf_addtext(cmd);
+	log_printf("menus: split screen difficulty of player %d: %d", pl, v);
+}
+
+// The rows' texts ("Difficulty, Alpha: Regular") and the dvars the scripts read; the defaults are the profile's difficulty
+static void split_skill_texts(void)
+{
+	static const char *const names[4] = {"MENU_RECRUIT", "MENU_REGULAR", "MENU_HARDENED", "MENU_VETERAN"};
+	if (!split_mode) {
+		for (int pl = 0; pl < 2; pl++)
+			if (split_skill[pl] >= 0) {
+				InterlockedExchange(&split_skill[pl], -1);
+				game_cbuf_addtext(pl ? "set mw2coop_skill_p2 \"\"\n" : "set mw2coop_skill_p1 \"\"\n"); // an online or a later session: the host's difficulty again
+			}
+		return;
+	}
+	const char *label = localize_text("MW2COOP_SKILL_LABEL");
+	for (int pl = 0; pl < 2; pl++) {
+		if (split_skill[pl] < 0) {
+			dvar_t *g = game_find_dvar("g_gameskill");
+			int v = g && g->type == DVAR_TYPE_INT && g->current.integer >= 0 && g->current.integer <= 3 ? g->current.integer : 1;
+			InterlockedExchange(&split_skill[pl], v);
+			char cmd[48];
+			snprintf(cmd, sizeof(cmd), "set mw2coop_skill_p%d %d\n", pl + 1, v);
+			game_cbuf_addtext(cmd);
+		}
+		const char *sign = localize_text(pl ? "MW2COOP_CALLSIGN_B" : "MW2COOP_CALLSIGN_A"), *lv = localize_text(names[split_skill[pl]]);
+		char line[128];
+		snprintf(line, sizeof(line), "%s, %s: %s", label ? label : "Difficulty", sign ? sign : pl ? "Bravo" : "Alpha", lv ? lv : "");
+		localize_set_text(pl ? "MW2COOP_SKILL2" : "MW2COOP_SKILL1", line);
+	}
+}
+
 static void update_texts(void)
 {
 	int host = base[RVA_PARTY_IS_HOST];
+	split_skill_texts();
 	// a split screen lobby has no Ready button: the second player is on this PC, his device is all that is needed
 	if (split_mode)
 		localize_set_text("MW2COOP_READY", "");
@@ -2929,6 +3020,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_menu", NULL, NULL, split_menu_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_split_skill", NULL, NULL, split_skill_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_open_url", NULL, NULL, open_url_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_specops", NULL, NULL, split_specops_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f CMD_NODE_FLAG},
@@ -3399,6 +3491,7 @@ static void tick_f(void)
 	patch_act1_menu();
 	patch_specops_menu();
 	add_lobbies_menu();
+	add_skill_menus();
 	add_host_menu();
 	add_saves_menu();
 	add_partner_popups();

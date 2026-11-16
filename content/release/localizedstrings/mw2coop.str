@@ -272,6 +272,22 @@ REFERENCE           MW2COOP_ENH_FALLDMG
 LANG_ENGLISH        "Fall damage in co-op"
 LANG_RUSSIAN        "Урон от падения в кооперативе"
 
+REFERENCE           MW2COOP_ENH_BOXVIEW
+LANG_ENGLISH        "Console-style view boxes (split screen)"
+LANG_RUSSIAN        "Виды как на консоли (со сдвигом)"
+
+REFERENCE           MW2COOP_SKILL_P1_TITLE
+LANG_ENGLISH        "Alpha: difficulty"
+LANG_RUSSIAN        "Альфа: сложность"
+
+REFERENCE           MW2COOP_SKILL_P2_TITLE
+LANG_ENGLISH        "Bravo: difficulty"
+LANG_RUSSIAN        "Браво: сложность"
+
+REFERENCE           MW2COOP_SKILL_LABEL
+LANG_ENGLISH        "Difficulty"
+LANG_RUSSIAN        "Сложность"
+
 REFERENCE           MW2COOP_ENH_BORDERLESS
 LANG_ENGLISH        "Borderless full screen"
 LANG_RUSSIAN        "На весь экран без рамки"

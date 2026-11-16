@@ -1415,6 +1415,13 @@ watch_failure()
 // play different ones and the level the higher. Elsewhere, or without a pick, the profile's.
 player_gameskill()
 {
+	// the split screen lobby's own pick for each player (the console game's two difficulty popups; src/menus.c sets mw2coop_skill_p1 / p2, empty otherwise)
+	pick = "mw2coop_skill_p1";
+	if ( isdefined( level.player2 ) && self == level.player2 )
+		pick = "mw2coop_skill_p2";
+	own = GetDvar( pick );
+	if ( is_campaign_coop() && ( own == "0" || own == "1" || own == "2" || own == "3" ) )
+		return int( own );
 	skill = GetDvar( "mw2coop_skill" );
 	if ( is_campaign_coop() && ( skill == "0" || skill == "1" || skill == "2" || skill == "3" ) )
 		return int( skill );

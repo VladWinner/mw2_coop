@@ -88,6 +88,7 @@ static const opt_t opts[] = {
     {"mw2coop_opt_rawmouse", "@MW2COOP_ENH_RAWMOUSE", K_YESNO, 0, 1, 1, "input", "rawmouse", 1, LIVE_NONE, 1, "Enhanced: raw mouse input for the view (next start)", GROUP_CONTROLS},
 #endif
     {"mw2coop_opt_falldmg", "@MW2COOP_ENH_FALLDMG", K_YESNO, 0, 1, 0, "gameplay", "fall_damage", 1, LIVE_FALL, 0, "Enhanced: fall damage in a co-op session", GROUP_COOP},
+    {"mw2coop_opt_boxview", "@MW2COOP_ENH_BOXVIEW", K_YESNO, 0, 1, 0, "native", "viewlayout", 1, LIVE_NONE, 0, "Enhanced: split screen views as the console draws them: two staggered boxes, top left and bottom right (from the next split screen start)", GROUP_COOP},
 #ifdef _WIN64
     {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 3, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 9Ex ([display] d3d9ex), 2 = 11 and 3 = 12 (the mod's own Direct3D 11 / 12 renderers, experimental: [display] directx11 / directx12; MSAA, anisotropy, HDR, low frame delay and FSR 3 / DLSS need 11 or 12) (next start)", GROUP_WINDOW},
 #endif

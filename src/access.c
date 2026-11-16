@@ -270,7 +270,8 @@ static uint8_t *lobby_row(uint8_t *from, uint8_t *menu, const char *name, const 
 
 // The Access and Friendly fire rows: inserted into coop_lobby's items while it holds a campaign
 // mission.
-#define LOBBY_ROWS 3
+#define LOBBY_ROWS 5 // access, friendly fire, password, and the split screen lobby's two difficulty rows (shown by menus.c)
+#define LOBBY_SHIFT_ROWS 3 // the lines the rows below move down (the first three rows; the difficulty rows only exist in the split screen lobby, which lays them out itself)
 static uint8_t *lobby_menu, **native_items, **campaign_items, *password_row;
 static int native_count;
 
@@ -295,12 +296,18 @@ static void patch_lobby_row(int campaign)
 					"\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_ff\" ; ", y + BUTTON_HEIGHT);
 		password_row = lobby_row(items[at], menu, "mw2coop_password", "@MW2COOP_PW",
 					 "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_password\" ; ", y + 2 * BUTTON_HEIGHT);
+		uint8_t *skill1 = lobby_row(items[at], menu, "mw2coop_skill1", "@MW2COOP_SKILL1",
+					    "\"play\" \"mouse_click\" ; \"open\" \"mw2coop_skill_p1\" ; ", y + 3 * BUTTON_HEIGHT);
+		uint8_t *skill2 = lobby_row(items[at], menu, "mw2coop_skill2", "@MW2COOP_SKILL2",
+					    "\"play\" \"mouse_click\" ; \"open\" \"mw2coop_skill_p2\" ; ", y + 4 * BUTTON_HEIGHT);
 		campaign_items = HeapAlloc(GetProcessHeap(), 0, (native_count + LOBBY_ROWS) * sizeof(*campaign_items));
 		memcpy(campaign_items, native_items, (at + 1) * sizeof(*campaign_items));
 		campaign_items[at + 1] = access;
 		campaign_items[at + 2] = ff;
 		campaign_items[at + 3] = password_row;
-		memcpy(campaign_items + at + 4, native_items + at + 1, (native_count - at - 1) * sizeof(*campaign_items));
+		campaign_items[at + 4] = skill1;
+		campaign_items[at + 5] = skill2;
+		memcpy(campaign_items + at + 6, native_items + at + 1, (native_count - at - 1) * sizeof(*campaign_items));
 		// the Friendly fire and Password rows take the line of the lobby's NAT type text
 		// ("nattype", y 126) and the next: the left column's items from that line down (aligned
 		// top-left like the buttons) move two lines lower, and so do the focused button's hint
@@ -314,8 +321,8 @@ static void patch_lobby_row(int campaign)
 			if (it[ITEM_RECT_ALIGN_H] != 1 || !(below || hint))
 				continue;
 			uint8_t *moved = ui_clone_item(campaign_items[i], menu);
-			*(float *)(moved + ITEM_RECT_Y) += (LOBBY_ROWS - 1) * BUTTON_HEIGHT;
-			*(float *)(moved + ITEM_RECT_CLIENT_Y) += (LOBBY_ROWS - 1) * BUTTON_HEIGHT;
+			*(float *)(moved + ITEM_RECT_Y) += (LOBBY_SHIFT_ROWS - 1) * BUTTON_HEIGHT;
+			*(float *)(moved + ITEM_RECT_CLIENT_Y) += (LOBBY_SHIFT_ROWS - 1) * BUTTON_HEIGHT;
 			campaign_items[i] = moved;
 		}
 	}

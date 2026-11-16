@@ -12,7 +12,7 @@
 
 #include "menus_gen.h"
 
-#define MAX_ITEMS 48
+#define MAX_ITEMS 64
 #define MAX_MENUS 16
 
 static MenuItem items[MAX_ITEMS];

@@ -3283,6 +3283,33 @@ static unsigned p1_frame_flags(void)
 	return 1u;
 }
 #endif
+// The two views of mode 11 as fractions of the picture (x, y, w, h). Default: the top and the bottom half, full width. [native] viewlayout=1 (or 360; the menu row Enhanced > console-style view boxes; read at each split screen start): the console's own boxes, read from its code
+// (0x82110a70 registers cg_coopSplitscreenView0X 0, View1X 0.2, ViewWidth 0.8, ViewHeight 0.49; 0x82111cf8 builds view 0 = (0, 0, 0.8, 0.49) and view 1 = (0.2, 1 - 0.49, 0.8, 0.49), the
+// pixels fraction * size + 0.5 truncated, the view's aspect (w / h) * the display's): two staggered boxes, top left and bottom right, with black between and around them.
+static void exp11_view(int idx, float r[4])
+{
+	if (CFG_ONCE("viewlayout", 0) != 0) {
+		r[0] = idx ? 0.2f : 0.0f, r[1] = idx ? 0.51f : 0.0f, r[2] = 0.8f, r[3] = 0.49f;
+	} else {
+		r[0] = 0.0f, r[1] = idx ? 0.5f : 0.0f, r[2] = 1.0f, r[3] = 0.5f;
+	}
+}
+static float exp11_aspect(int idx, int sw, int sh)
+{
+	float r[4];
+	exp11_view(idx, r);
+	return r[2] / r[3] * (float)sw / (float)sh;
+}
+static void exp11_pixels(int idx, int sw, int sh, int *cvr)
+{
+	float r[4];
+	exp11_view(idx, r);
+	if (CFG_ONCE("viewlayout", 0) != 0) {
+		cvr[0] = (int)(r[0] * (float)sw + 0.5f), cvr[1] = (int)(r[1] * (float)sh + 0.5f), cvr[2] = (int)(r[2] * (float)sw + 0.5f), cvr[3] = (int)(r[3] * (float)sh + 0.5f);
+	} else {
+		cvr[0] = 0, cvr[1] = idx ? sh / 2 : 0, cvr[2] = sw, cvr[3] = idx ? sh - sh / 2 : sh / 2;
+	}
+}
 #ifdef _WIN64
 // Each player's 2D in his own half, the engine's way (2026-11-16, from the 360 and the PC's own placement code; [native] exp11place=0 off). The cgame's 2D code takes its
 // screen placement from rva 0xdaf10(lc): while CG_DrawActiveFrame has switched the placements to "per client" (0xdad10, called at 0xbca35) that is the one at rva
@@ -3302,8 +3329,9 @@ static void place_client_set(int bottom, int whole)
 	const int sw = *(const int *)(base + XR(0x548bfc)), sh = *(const int *)(base + XR(0x548c00));
 	if (sw <= 0 || sh <= 0)
 		return;
-	const int top_h = sh / 2;
-	const float x = 0.0f, y = whole || !bottom ? 0.0f : (float)top_h, w = (float)sw, h = whole ? (float)sh : bottom ? (float)(sh - top_h) : (float)top_h;
+	int vp[4];
+	exp11_pixels(bottom ? 1 : 0, sw, sh, vp);
+	const float x = whole ? 0.0f : (float)vp[0], y = whole ? 0.0f : (float)vp[1], w = whole ? (float)sw : (float)vp[2], h = whole ? (float)sh : (float)vp[3];
 	static unsigned logged;
 	if (logged < 6)
 		logged++, log_printf("native: exp11place: the 2D placement of the %s is (%g, %g, %g, %g) of a %dx%d screen", whole ? "whole screen" : bottom ? "bottom half" : "top half", (double)x, (double)y, (double)w, (double)h, sw, sh);
@@ -4128,11 +4156,11 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		const float aspect_was = *aspect;
 		const int sw_px = *(int *)(base + XR(0x4113728)), sh_px = *(int *)(base + XR(0x411372c)); // the picture's size (the renderer's display globals)
 		if (sw_px > 0 && sh_px > 0 && CFG_ONCE("exp11aspect", 1))
-			*aspect = (float)sw_px / ((float)sh_px * 0.5f); // a half's shape: the cgame builds the field of view for it (as mode 10 does)
+			*aspect = exp11_aspect(0, sw_px, sh_px); // a half's shape: the cgame builds the field of view for it (as mode 10 does)
 		int *cvr = (int *)(base + XR(0x43c630)); // the cgame's view rectangle in pixels (x, y, w, h; the refdef's, copied by 0xbe710; set at the level start by 0xa6680): one per context
-		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 0.5f;
+		exp11_view(0, vrect);
 		if (sw_px > 0 && sh_px > 0)
-			cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px / 2;
+			exp11_pixels(0, sw_px, sh_px, cvr);
 #ifdef _WIN64 // (the native renderers are 64-bit only)
 		{ extern int nd_clear_trace; static int nc = -1; if (nc < 0) nc = CFG_ONCE("ndclearlog", 0); nd_clear_trace = nc; } // QA: colours clears of the native device, written once per frame end
 #endif
@@ -4242,7 +4270,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				split_smc_redirect(fd);
 		}
 		if (p2draw) {
-			vrect[1] = 0.5f;
+			exp11_view(1, vrect);
 			if (!CFG_ONCE("exp11same", 0)) // QA: exp11same=1 draws player 1 again in the second frame (no context swap)
 				ctx_swap(1);
 			// The cgame's aspect (RVA_CG_ASPECT, read by CG_CalcFov) is part of each context's cgame block: the value set above for player 1's draw went into context 0's copy, and
@@ -4251,11 +4279,11 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			if (sw_px > 0 && sh_px > 0 && CFG_ONCE("exp11aspect", 1)) {
 				static unsigned said_a;
 				if (said_a++ < 3)
-					log_printf("native: exp11aspect: player 2's cgame aspect was %.4f, player 1's draw used %.4f", (double)*(float *)(base + RVA_CG_ASPECT), (double)(float)sw_px / ((float)sh_px * 0.5f));
-				*(float *)(base + RVA_CG_ASPECT) = (float)sw_px / ((float)sh_px * 0.5f);
+					log_printf("native: exp11aspect: player 2's cgame aspect was %.4f, player 1's draw used %.4f", (double)*(float *)(base + RVA_CG_ASPECT), (double)exp11_aspect(1, sw_px, sh_px));
+				*(float *)(base + RVA_CG_ASPECT) = exp11_aspect(1, sw_px, sh_px);
 			}
 			if (sw_px > 0 && sh_px > 0)
-				cvr[0] = 0, cvr[1] = sh_px / 2, cvr[2] = sw_px, cvr[3] = sh_px - sh_px / 2;
+				exp11_pixels(1, sw_px, sh_px, cvr);
 			static dvar_t *draw2d;
 			if (!draw2d)
 				draw2d = game_find_dvar("cg_draw2D");
@@ -7928,8 +7956,14 @@ static void hudelem_hook(int lc, void *e)
 		// (240 virtual units, whatever the resolution: half the height over a scale of height / 480). One copy across the boundary ([native] exp11titles=0: each half's own title).
 		uint8_t tmp[TITLE_BYTES];
 		memcpy(tmp, e, sizeof(tmp));
-		if (ctx_current == 1)
-			*(float *)(tmp + 8) -= 240.0f;
+		if (ctx_current == 1) {
+			float vr[4];
+			exp11_view(1, vr);
+			const int sw_t = *(const int *)(base + XR(0x548bfc)), sh_t = *(const int *)(base + XR(0x548c00));
+			*(float *)(tmp + 8) -= vr[1] * 480.0f; // the virtual height of the screen is 480: the half's origin in it
+			if (sw_t > 0 && sh_t > 0 && vr[0] > 0.0f)
+				*(float *)(tmp + 4) -= vr[0] * (float)sw_t * 480.0f / (float)sh_t; // (the boxes' layout: his view also starts to the right)
+		}
 		static unsigned tc;
 		if (CFG_ONCE("titleshot", 0) && ctx_current == 0 && ++tc % 80 == 5)
 			title_shot_req = (int)tc; // QA: a capture of every 80th frame with title lines

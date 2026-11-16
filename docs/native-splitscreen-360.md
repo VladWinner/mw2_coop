@@ -716,3 +716,19 @@ plays only if some listener is active (`0x82363920`). The PC engine has the same
 the cause of the reported delay of player 2's sounds; the next suspect is when the sound is started (the cgame's own frame for player 2 starts world sounds one engine frame later than player 1's), not read yet.
 
 Not found: users of `r_scaleViewport` (no code reference in the image; probably a table entry), per-client rumble (`stopControllerRumble` is called from the `resetViewport` command handlers, `0x82134728` / `0x8213ba44`).
+
+### The console's split screen menu flow, and what the mod takes from it (2026-11-16)
+
+Read from the 360's `ui.zone` (names and actions only; the item layout is a binary menu asset, not parsed): Spec Ops -> "Two Player Split Screen" (`@MENU_SP_TWO_PLAYER_SPLIT_SCREEN`) runs
+`setdvar splitscreen 1; exec startsplitscreensignin` and opens `menu_splitscreensignin` (two player cards: slot 0 and 1, each with "Join split screen game" / "Leave split screen game",
+"Sign in profile" / "Change profile", "Waiting for more players", "Start game"; Back runs `nosplitscreen`, `endsplitscreensignin`, and returns to `main_specops`); then
+`menu_splitscreen_setup` (onOpen: `focusFirst; setdvar specialops 1; setdvar g_gameskill_player_1 1; setdvar g_gameskill_player_2 1`; Back opens `leave_lobby_warning_splitscreen`): the Spec Ops lobby
+with **one difficulty button for each player**, `popmenu_specialops_splitscreen_difficulty_p1` and `_p2`.
+The mod already has the cards (Alpha / Bravo with the picture of each device, "press a button on your device to join") in its split screen lobby. What it lacked in the left column (Start, Select
+operation, Friendly fire) were the two difficulty buttons: the whole co-op campaign used the host's single pick.
+Done: two rows "Difficulty, Alpha: <level>" / "Difficulty, Bravo: <level>" under Friendly fire in a split screen campaign lobby (access.c makes them, menus.c lays them out and shows them only there; a Special Ops
+split lobby keeps the game's own difficulty row), each opening a popup of the four levels (`mw2coop_skill_p1` / `_p2` in `menus.menu`), the pick is `mw2coop_split_skill <player> <0-3>`; the defaults are the profile's
+difficulty; the pick reaches the scripts as the flagged dvars `mw2coop_skill_p1` / `_p2` and `maps\_mw2coop::player_gameskill` returns it for that player (so each player has his own damage and
+aim assist rules, and the level plays the higher, as the game does); an online session clears them. Checked in the game (1920x1080, lobby by the QA path): the rows show with the right levels, the popup opens with the four names and title "Alpha: difficulty"; Alpha Recruit and Bravo Veteran reached the level scripts as `players 0 3` (QA scenario `skill`). The leave warning (`leave_lobby_warning_splitscreen`) and the 360's separate sign-in screen are not rebuilt (the cards with the devices are the mod's).
+
+**The console's view boxes in the mod (2026-11-16):** `[native] viewlayout=1` (Settings > Enhanced > "Console-style view boxes", read at each split screen start) makes mode 11 draw the 360's two boxes (view 0: x 0, y 0, 80 % x 49 %; view 1: x 20 %, y 51 %): the engine's view rectangle, the pixel rectangle of the cgame view, each cgame's aspect (2.90 on 16:9), the per-half 2D placement and the intro title shift all follow `exp11_view()`. Checked on Trainer at 1280x720: both boxes render, the name tags and the subtitle are placed in their box. Not checked: the intro titles across the boxes, the AC-130 HUD, 4:3 / 21:9 screens, the native DirectX 11 renderer (mode 11 is D3D9 only for now).
