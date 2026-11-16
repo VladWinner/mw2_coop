@@ -128,3 +128,28 @@ player_leaves_humvee()
 		off_screen_dot = 0.65;
 	}
 @@@ end
+
+7. A hint a level shows "the player" (display_hint, display_hint_timeout: "Press ... to ...") is shown to the partner too, in his own half or on his own screen,
+   with the same text; each player's hint goes away by its own break test (owner, 2026-11-16: hints for player 2).
+@@@ replace
+display_hint( hint, parm1, parm2, parm3 )
+{
+	player = get_player_from_self();
+@@@ with
+display_hint( hint, parm1, parm2, parm3 )
+{
+	player = get_player_from_self();
+	if ( player == level.player && isdefined( level.player2 ) && maps\_mw2coop::is_campaign_coop() )
+		level.player2 thread display_hint( hint, parm1, parm2, parm3 );
+@@@ end
+@@@ replace
+display_hint_timeout( hint, timeout, parm1, parm2, parm3 )
+{
+	player = get_player_from_self();
+@@@ with
+display_hint_timeout( hint, timeout, parm1, parm2, parm3 )
+{
+	player = get_player_from_self();
+	if ( player == level.player && isdefined( level.player2 ) && maps\_mw2coop::is_campaign_coop() )
+		level.player2 thread display_hint_timeout( hint, timeout, parm1, parm2, parm3 );
+@@@ end

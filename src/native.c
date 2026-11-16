@@ -3932,6 +3932,42 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	if (CFG_ONCE("smoothlog", 0))
 		smooth_sample(ctx_current == 1 ? 1 : 0);
 }
+// Per-player visibility (hideOnClient / showOnClient): the server keeps it in each entity's flags, 0x10 = hidden from local client 0, 0x20 = from local client 1 (rva 0x1928f0,
+// the method's bit chosen by the client's number), and the cgame tests the bit of the local client it draws for. Player 2's draw runs as local client 0, so his half showed what
+// player 1 may see and hid what player 1 may not: on the Cliffhanger climb his own climbing arms were hidden from him and the stand-in body meant for his partner was in front of
+// his eyes (owner's screenshot, 2026-11-16); the same for every scene a script hides from one player (the boat, the snowmobile, Estate). For his draw the two bits trade places in
+// the current and the next state of every entity, and are put back after it ([native] visswap=0 off).
+static void vis_swap(void)
+{
+#ifndef _WIN64
+	return; // (the 32-bit entity layout's state offsets are not mapped yet)
+#endif
+	static const int offs[2] = {0x70, 0xec}; // the current state's flags, the next state's (the lerp states' eFlags, in front of their position trajectories at 0x74 / 0xf0)
+	for (int n = 0; n < 2048; n++) {
+		uint8_t *c = base + RVA_CENT + (size_t)n * CENT_SIZE;
+		for (int k = 0; k < 2; k++) {
+			uint32_t *f = (uint32_t *)(c + offs[k]);
+			const uint32_t v = *f, b0 = v & 0x10u, b1 = v & 0x20u;
+			if (b0 != (b1 >> 1)) {
+				*f = (v & ~0x30u) | (b0 << 1) | (b1 >> 1);
+				if (k == 0 && CFG_ONCE("vislog", 0)) {
+					static unsigned vl;
+					if (vl++ % 2000 == 0)
+						log_printf("native: visswap: entity %d (type %u) flags %08x: hidden from %s", n, (unsigned)c[CENT_TYPE], v, b0 ? "player 1" : "player 2");
+				}
+			}
+		}
+	}
+}
+static void cg_draw_vis(unsigned local_client, int a, int b)
+{
+	const int swap = ctx_current == 1 && split_on && CFG_ONCE("visswap", 1);
+	if (swap)
+		vis_swap();
+	cg_draw_original(local_client, a, b);
+	if (swap && ctx_current == 1)
+		vis_swap();
+}
 static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 {
 	cg_draw_count++;
@@ -4320,7 +4356,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			place_client_set(1, 0); // player 2's 2D goes to the bottom half
 			viewjit_log(1);
 #endif
-			cg_draw_original(0, a, b);
+			cg_draw_vis(0, a, b);
 			if (CFG_ONCE("npclog", 0) && ctx_current == 1) // QA: the actors as player 2's draw placed them (the frame hook logs context 0 only in mode 11)
 				npc_log();
 #ifdef _WIN64
@@ -4434,10 +4470,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		if (mode == 4 && bottom && ctx1_ready) { // mode 4: the odd frames run the cgame in context 1 (the client statics swapped), as local client 0
 			ctx_swap(1);
-			cg_draw_original(0, a, b);
+			cg_draw_vis(0, a, b);
 			ctx_swap(0);
 		} else {
-			cg_draw_original(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
+			cg_draw_vis(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
 		}
 		half_note(*(int *)(base + RVA_CG_TIME), bottom);
 		if (CFG_ONCE("perflog", 0)) { // the step of the game time between two draws of the same view
