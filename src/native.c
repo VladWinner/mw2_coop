@@ -8229,6 +8229,14 @@ static void pass2_hook(unsigned lc)
 				}
 			}
 		}
+		// [native] bodysrc=1 (default; owner, 2026-11-16: "put the players' seating back as it was"): his cgame playerState origin (cg.predictedPlayerState +0x1c, every frame: in a
+		// helicopter the point of his seat); 2: the game's position carried on as above
+		if (CFG_ONCE("bodysrc", 1) == 1) {
+			const float *pso = (const float *)(ctx_store[other][0] + (XR(0x422440) - RANGE_RVA(0)) + 0x1c);
+			if (pso[0] != 0.0f || pso[1] != 0.0f)
+				po[0] = pso[0], po[1] = pso[1], po[2] = pso[2];
+			ahead = 1.0; // (written)
+		}
 		if (ahead > 0.0) {
 			static const int offs[3] = {0x18, 0x80, 0xfc}; // the pose's origin, the current and the next state's origin
 			for (int k = 0; k < 3; k++)
