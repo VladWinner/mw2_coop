@@ -3633,6 +3633,8 @@ static long entring_hits, entring_misses, entring_reads_late, entring_snap_reads
 static void entring_build_hook(void)
 {
 	entring_build_orig();
+	if (!native_active) // (the hooks stay after a split session: no copies outside one; night audit A7)
+		return;
 	const int t = *(const int *)(base + ENTRING_TIME);
 	static int last_t = -1;
 	if (t < last_t) // the server time started over (a new level, a loaded game): the old copies are of another timeline
@@ -3647,6 +3649,8 @@ static void entring_build_hook(void)
 }
 static uint8_t *entring_get_hook(int n)
 {
+	if (!native_active)
+		return entring_get_orig(n);
 	const uintptr_t ns = *(const uintptr_t *)(base + ENTRING_NEXTSNAP); // the snapshot being read: cg.nextSnap (context-private)
 	if (ns && n >= 0 && n < (int)ENTRING_COUNT) {
 		const int t = *(const int *)(ns + 4);
@@ -5231,7 +5235,7 @@ static void hang_dump_thread(const char *why, DWORD only) // only: one thread's 
 					unsigned idx = ((unsigned)ctx.Eax - 0x168f380u) / 8;
 					char chain[600] = "";
 					int cn = 0;
-					for (int k = 0; k < 24; k++) {
+					for (int k = 0; k < 24 && cn < (int)sizeof(chain) - 40 && idx < 0x80000; k++) { // (bounded: the buffer, and the table's 0x80000 entries; night audit A5)
 						unsigned nxt = *(const uint16_t *)(tbl + idx * 8);
 						unsigned val = *(const uint32_t *)(tbl + idx * 8 + 4);
 						cn += snprintf(chain + cn, sizeof(chain) - cn, " %x(next %x val %x)", idx, nxt, val);
@@ -6392,6 +6396,30 @@ static void aim_assist(int pl, float dt, float *yaw, float *pitch, float move, f
 	}
 }
 
+// the pad's buttons: a held button runs its binding "+name" / "-name", a pressed one an action
+typedef struct {
+	WORD mask;
+	const char *hold;  // a held button (+/-)
+	const char *press; // an action on the press
+} pad_map_t;
+static const pad_map_t pad_map[] = {
+    {0x1000, "gostand", NULL},       // A
+    {0x2000, "stance", NULL},        // B (held: prone)
+    {0x4000, "usereload", NULL},     // X (held: use)
+    {0x8000, NULL, "weapnext"},      // Y
+    {0x0100, "smoke", NULL},         // left bumper
+    {0x0200, "frag", NULL},          // right bumper
+    {0x0040, "breath_sprint", NULL}, // left stick
+    {0x0080, "melee", NULL},         // right stick
+    {0x0020, "scores", NULL},        // Back: the objectives
+    {0x0010, NULL, "togglemenu"},    // Start: pause
+    {0x0001, "actionslot 1", NULL},  // d-pad up
+    {0x0002, "actionslot 2", NULL},  // d-pad down
+    {0x0004, "actionslot 3", NULL},  // d-pad left
+    {0x0008, "actionslot 4", NULL},  // d-pad right
+};
+#define PAD_MAP_N (sizeof(pad_map) / sizeof(pad_map[0]))
+
 // one player's pad, his context live; play=0 reads it for the menus only (his context is not drawn: one picture)
 static void pad_frame_player(int pl, int play)
 {
@@ -6418,6 +6446,17 @@ static void pad_frame_player(int pl, int play)
 		}
 		p->forward = p->right = 0;
 		p->active = 0;
+		// what it held is let go (night audit A3: a wireless pad that dropped with the trigger, aim, sprint or stance held kept that player firing / aiming / crouched
+		// until it came back and the button was pressed and released again); his context is the live one here
+		for (size_t i = 0; i < PAD_MAP_N && p->held; i++)
+			if ((p->held & pad_map[i].mask) && pad_map[i].hold)
+				pad_binding(pad_map[i].hold, 0);
+		if (p->rt)
+			pad_binding("attack", 0);
+		if (p->lt)
+			pad_binding("speed_throw", 0);
+		p->held = 0;
+		p->rt = p->lt = 0;
 		return;
 	}
 	p->active = 1;
@@ -6510,30 +6549,11 @@ static void pad_frame_player(int pl, int play)
 			log_printf("native: player 2's hands were empty: weapnext pressed for him (%s)", v);
 		}
 	}
-	static const struct {
-		WORD mask;
-		const char *hold;  // a held button (+/-)
-		const char *press; // an action on the press
-	} map[] = {
-	    {0x1000, "gostand", NULL},       // A
-	    {0x2000, "stance", NULL},        // B (held: prone)
-	    {0x4000, "usereload", NULL},     // X (held: use)
-	    {0x8000, NULL, "weapnext"},      // Y
-	    {0x0100, "smoke", NULL},         // left bumper
-	    {0x0200, "frag", NULL},          // right bumper
-	    {0x0040, "breath_sprint", NULL}, // left stick
-	    {0x0080, "melee", NULL},         // right stick
-	    {0x0020, "scores", NULL},        // Back: the objectives
-	    {0x0010, NULL, "togglemenu"},    // Start: pause
-	    {0x0001, "actionslot 1", NULL},  // d-pad up
-	    {0x0002, "actionslot 2", NULL},  // d-pad down
-	    {0x0004, "actionslot 3", NULL},  // d-pad left
-	    {0x0008, "actionslot 4", NULL},  // d-pad right
-	};
+	const pad_map_t *map = pad_map;
 	WORD buttons = st.pad.buttons;
 	if (o.tactical && ((buttons & 0x2000) != 0) != ((buttons & 0x0080) != 0)) // the tactical layout: B and the right stick click change places
 		buttons ^= 0x2000 | 0x0080;
-	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+	for (size_t i = 0; i < PAD_MAP_N; i++) {
 		int was = (p->held & map[i].mask) != 0, is = (buttons & map[i].mask) != 0;
 		if (was == is)
 			continue;
@@ -10328,7 +10348,7 @@ static int activate(int players)
 {
 	if (native_active)
 		return 1;
-	if (players < 2 || players > 4)
+	if (players != 2) // (every per-player table of this file holds two players; night audit A9)
 		return 0;
 	if (!split_addresses_ok())
 		return 0;
