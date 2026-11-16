@@ -677,3 +677,20 @@ precache `&"..."` forms, `triggerer` instead of `level.player` in the grenade pi
   counters) all sit inside +-240 of the 640x480 HUD space, so they fit a half at the half's own scale (see `hudelem_hook`); nothing to move statically. Which of them are drawn in both halves or in one still needs a
   tour in the game (`hudelemlog`).
 - Tools: `local/xbox360-ref/camp-work/{360,pc}/<level>/` hold the unpacked scripts (local only, never shipped).
+
+### Where else the 360 divides into two players: string survey of its single player executable (2026-11-16)
+
+Method: every printable string of `default_sp.pe` (the 360 SP/Spec Ops executable) and `common.zone` that mentions split screen, co-op, a local client or a controller, compared with the PC `iw4sp.exe` and with the mod's sources
+(names only; no Ghidra run yet, the game was running). Observations, not yet read in code.
+- **Not in the PC executable at all** (the console's split screen layer): `cg_coopSplitscreenView0X`, `View1X`, `ViewWidth`, `ViewHeight` ("2 player split screen coop view 0 x / 1 x / width / height": the console's own view rectangles,
+  defaults not read yet: an X and a shared width/height, no Y), `cg_hudSplitscreenCompassScale`, `...CompassElementScale`, `...StanceScale`, `...ScoreboardScale`, `...BannerScoreboardScale`, `cg_hudSplitscreenOffsetsUseScale`,
+  `cg_splitscreenSpectatorScaleIncrease`, `con_MiniConSplitscreenScale` (the mod keeps `cg_hudLegacySplitscreenScale` as its `hudsplitscale`), the controller layer (`CL_EnableSplitscreenControls` / `CL_DisableSplitscreenControls`
+  with `cl_multi_gamepads_enabled`, "mapping controller %i to localClientNum %i", "Discarding input from controller %i since the mapped client (%i) isn't active", `controllerremoved_ss`), `stopControllerRumble`, the per-player
+  UI (`coopPlayer( clientNum, field )` expression is in the PC build too; `coop_player_location*`, the `eog_notify_*_coop1/2` end-of-game menus, `ui_diff` / `ui_diff2`, `mpopmenu_specialops_splitscreen_difficulty_p1/p2`).
+- **In both** (so the PC engine already has the layer): `waypointSplitscreenScale`, `con_gameMsgWindow%dSplitscreenScale`, `friendlyNameFontSizeSplitscreen`, `coopNameFontSizeSplitscreen`, `r_scaleViewport`, `resetViewport`,
+  `splitscreencontrols`, `splitscreenplayercount`, `IsSplitScreen`, `IsCoop`, and the whole network co-op layer (`coop_start`, `coop_maxFramesClientCanBeBehind`, `setNetCoOpDifficulty`, "exponential moving average smoothing factor for
+  anims in network coop", `so_character_select_coop`).
+- **Per-player rules the console keeps that the mod handles in its own way:** the difficulty of each player (`g_gameskill_player_1` / `_2`, saved per controller profile; the mod's scripts use the same dvars), profile updates only for local
+  client 0 ("UpdateGamerProfile ... not localClient-0"), input from a controller whose client is not active is dropped (the mod's `p2pad` path), "Weaponview linked entity is not in local client #%i's snapshot" (a per-client snapshot check).
+- **To read in the 360 code next (Ghidra, when no copy runs):** the defaults and users of `cg_coopSplitscreenView*` (the console's exact view rectangles: they may give the half sizes and the order top / bottom without the
+  letterbox guesses), `r_scaleViewport` / `resetViewport`, the sound listener per local client (the "player 2's sound is half a second late" report), per-client rumble, and the controller to client map.
