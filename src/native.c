@@ -299,6 +299,7 @@ void *snd_ctx_ptr, *snd_count_orig; // (the sound counter's stub, see snd_count_
 volatile LONG snd_counts[2];
 struct snd_name { const char *name; LONG n[2]; };
 static struct snd_name snd_names[512];
+static struct { uint32_t rva; LONG n[2]; } snd_callers[64]; // ([native] sndcount=3: the callers' return addresses too)
 #endif
 static int from_menu;
 static int menu_pad = -1, menu_pad0 = -1; // the lobby's devices of player 2 and player 1 (-1: the keyboard and mouse)
@@ -1106,6 +1107,11 @@ static void perf_report(void)
 			if (snd_names[i].n[0] + snd_names[i].n[1] > 0 && !IsBadReadPtr(snd_names[i].name, 4))
 				log_printf("native:   sound %s: context 0 %ld, context 1 %ld", snd_names[i].name, (long)snd_names[i].n[0], (long)snd_names[i].n[1]);
 			snd_names[i].n[0] = snd_names[i].n[1] = 0;
+		}
+		for (int i = 0; i < 64 && snd_callers[i].rva; i++) {
+			if (snd_callers[i].n[0] + snd_callers[i].n[1] > 0)
+				log_printf("native:   sound caller rva 0x%x: context 0 %ld, context 1 %ld", snd_callers[i].rva, (long)snd_callers[i].n[0], (long)snd_callers[i].n[1]);
+			snd_callers[i].n[0] = snd_callers[i].n[1] = 0;
 		}
 	}
 #else
@@ -9129,10 +9135,17 @@ HUD_X(1, 0x20)  // 0xbd0fb 11f0c0 (4 arguments)
 HUD_X(2, 0x40)  // 0xbd102 1214e0
 HUD_X(3, 0x80)  // 0xbd109 fd010
 #ifdef _WIN64
-// Diagnostics ([native] sndcount=1, with sndlog=1 in the report): how often each context starts a world sound (rva 0x23a9b0); a stub that counts and jumps on
+// Diagnostics ([native] sndcount=1, with sndlog=1 in the report): how often each context starts a world sound (rva 0x23a9b0); a stub that counts and jumps on.
+// The same stub mutes the starts while snd_mute is set ([native] evsnd1, below): it returns "no sound" (-1, and -1 in the handle the 8th argument points to, as the
+// function itself does when sound is off).
 extern char snd_count_stub[];
-void snd_note(const char **alias); // (below: counts per alias name)
+volatile uint8_t snd_mute, snd_count_on;
+void snd_note(const char **alias, uintptr_t ret); // (below: counts per alias name)
 __asm__(".text\n.globl snd_count_stub\nsnd_count_stub:\n"
+	"\tcmpb $0, snd_mute(%rip)\n"
+	"\tjne 2f\n"
+	"\tcmpb $0, snd_count_on(%rip)\n"
+	"\tje 1f\n"
 	"\tpush %rax\n"
 	"\tpush %rcx\n"
 	"\tpush %rdx\n"
@@ -9145,6 +9158,7 @@ __asm__(".text\n.globl snd_count_stub\nsnd_count_stub:\n"
 	"\tmovdqu %xmm1, 0x30(%rsp)\n"
 	"\tmovdqu %xmm2, 0x40(%rsp)\n"
 	"\tmovdqu %xmm3, 0x50(%rsp)\n"
+	"\tmov 0x98(%rsp), %rdx\n" // (the caller's return address: 7 pushes and 0x60 above it)
 	"\tcall snd_note\n"
 	"\tmovdqu 0x20(%rsp), %xmm0\n"
 	"\tmovdqu 0x30(%rsp), %xmm1\n"
@@ -9158,13 +9172,75 @@ __asm__(".text\n.globl snd_count_stub\nsnd_count_stub:\n"
 	"\tpop %rdx\n"
 	"\tpop %rcx\n"
 	"\tpop %rax\n"
-	"\tjmp *snd_count_orig(%rip)\n"
+	"1:\tjmp *snd_count_orig(%rip)\n"
+	"2:\tmov 0x40(%rsp), %rax\n"
+	"\ttest %rax, %rax\n"
+	"\tjz 3f\n"
+	"\tmovl $-1, (%rax)\n"
+	"3:\tmov $-1, %eax\n"
+	"\tret\n"
 	);
+// The entity events of the shared snapshot ran in both contexts (each context keeps its own "last event" mark, cent+0x194, while both see the same entities), so every
+// event sound of the world (shots, explosions, impacts, the AI's footsteps, the scripted one-shot sounds) started twice in the one mixer: measured on Wolverines! with
+// sndcount=2, every alias as often in context 1 as in context 0 (e.g. aagun_fire_skyburst 13 / 13 a second). In mode 10 context 1 reaches the events on its own frames, a
+// moment later: an echo of the world (Vlad, Spec Ops snowmobiles: "player 2's sound overlaps with a half-second delay"). The Xbox 360 runs each event once (its last-event
+// mark is in its one shared entity table, 0x820f1658) and plays it to the listeners of both players. Context 1's event checks (rva 0x9f840 and 0x9f940, called at
+// 0x9c924 / 0x9c954) now start no sound; their effects still run in his view. His own gun and steps come from his playerstate's events (other calls), untouched.
+// [native] evsnd1=0 off.
+static void (*ev_check_original[2])(int, uint8_t *);
+static void ev_check_run(int k, int lc, uint8_t *cent)
+{
+	const int mute = ctx_current == 1 && native_active;
+	if (mute)
+		snd_mute = 1;
+	ev_check_original[k](lc, cent);
+	if (mute)
+		snd_mute = 0;
+}
+static void ev_check_hook0(int lc, uint8_t *cent)
+{
+	ev_check_run(0, lc, cent);
+}
+static void ev_check_hook1(int lc, uint8_t *cent)
+{
+	ev_check_run(1, lc, cent);
+}
+// The sounds of effects (an explosion's debris, fire, sparks: the effects system's sound elements, 0x11be20 -> 0xa6280) go into the engine's queue of pending sounds
+// (rva 0x237a70: up to 32 entries of alias, entity, origin at 0x1a2d270, count 0x1a2cf58), played and emptied by each draw (0x23a1f0 from 0xbca00). In mode 10 each
+// context runs its own effects system, so every effect's sound was queued twice (measured: the queue played 33 / 36 sounds a second in the two contexts). Context 1's are
+// not queued (evsnd1). The function is replaced whole (its first instruction is rip-relative): the same ten lines otherwise.
+static void fx_sound_queue_hook(void *alias, int ent, const uint8_t *origin)
+{
+	if (ctx_current == 1 && native_active)
+		return;
+	uint32_t *count = (uint32_t *)(base + XR(0x1a2cf58));
+	if (*count == 0x20)
+		return;
+	uint8_t *e = base + XR(0x1a2d270) + (size_t)*count * 0x18;
+	(*count)++;
+	*(void **)e = alias;
+	*(int *)(e + 8) = ent;
+	memcpy(e + 0xc, origin, 12);
+}
 // the aliases' start counts of the last second, per context ([native] sndcount=1: totals, 2: names too)
-void snd_note(const char **alias)
+void snd_note(const char **alias, uintptr_t ret)
 {
 	int c = ctx_current & 1;
 	InterlockedIncrement(&snd_counts[c]);
+	if (CFG_ONCE("sndcount", 0) >= 3) {
+		const uint32_t r = (uint32_t)(ret - (uintptr_t)base);
+		for (int i = 0; i < 64; i++) {
+			if (snd_callers[i].rva == r) {
+				snd_callers[i].n[c]++;
+				break;
+			}
+			if (!snd_callers[i].rva) {
+				snd_callers[i].rva = r;
+				snd_callers[i].n[c] = 1;
+				break;
+			}
+		}
+	}
 	const char *name = alias ? *alias : NULL;
 	if (!name || CFG_ONCE("sndcount", 0) < 2)
 		return;
@@ -9845,13 +9921,29 @@ static void contexts_install(void)
 	p2cmd_filter_install();
 #endif
 	{
-		if (cfg("sndcount", 0)) {
+		if (cfg("sndcount", 0) || cfg("evsnd1", 1)) {
 			static const uint8_t snd_play_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x18, 0x48, 0x89, 0x70, 0x20};
-			snd_ctx_ptr = &ctx_current;
+			snd_count_on = cfg("sndcount", 0) != 0;
+			if (snd_count_on)
+				snd_ctx_ptr = &ctx_current;
 			if (!jhook_function(base + XR(0x23a9b0), snd_play_bytes, sizeof(snd_play_bytes), snd_count_stub, &snd_count_orig))
 				{
 				const uint8_t *t = base + XR(0x23a9b0);
 				log_printf("native: sound play bytes differ: %02x %02x %02x %02x %02x %02x %02x %02x", t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7]);
+			} else if (cfg("evsnd1", 1)) {
+				uint8_t *s0 = base + XR(0x9c924), *s1 = base + XR(0x9c954);
+				if (s0[0] == 0xe8 && s0 + 5 + *(int32_t *)(s0 + 1) == base + XR(0x9f840) && s1[0] == 0xe8 && s1 + 5 + *(int32_t *)(s1 + 1) == base + XR(0x9f940) &&
+				    jhook_call(s0, (void *)ev_check_hook0, (void **)&ev_check_original[0]) && jhook_call(s1, (void *)ev_check_hook1, (void **)&ev_check_original[1]))
+					log_printf("native: the world's event sounds start once (context 0); context 1's copies are muted");
+				else
+					log_printf("native: the entity event calls at 0x9c924 / 0x9c954 are not as expected: event sounds start in both contexts");
+				static const uint8_t fxq_head[] = {0x44, 0x8b, 0x15}; // mov r10d, [rip+count]; then cmp r10d, 0x20; jz
+				uint8_t *fxq = base + XR(0x237a70);
+				if (!memcmp(fxq, fxq_head, sizeof(fxq_head)) && fxq[7] == 0x41 && fxq[8] == 0x83 && fxq[9] == 0xfa && fxq[10] == 0x20 && fxq + 7 + *(int32_t *)(fxq + 3) == base + XR(0x1a2cf58)) {
+					jhook_jump(fxq, 14, (const void *)fx_sound_queue_hook, 0xcc);
+					log_printf("native: effects' sounds are queued once (context 0)");
+				} else
+					log_printf("native: the pending sound queue at 0x237a70 is not as expected: effects' sounds play in both contexts");
 			}
 		}
 		if (!jhook_function(base + XR(0x9c960), add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
