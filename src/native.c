@@ -4891,8 +4891,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 	int perf_on = CFG_ONCE("perflog", 0);
 	LONGLONG t0 = perf_on ? perf_now() : 0;
 	static int fx_on = -1;
-	if (fx_on < 0)
-		fx_on = cfg("fxsplit", 1);
+	if (fx_on < 0) // mode 11: one effects system for both views, as the 360 has (it steps the effects of player 0 only, 0x82141e70): with a copy for player 2 the effects a level's
+		       // scripts start (PlayFX: a temporary entity whose event only context 0 handles; the exploders' smoke) were in player 1's half only (owner, Gulag fly-in: "when the
+		       // first player sees the smoke, the other doesn't"; checked: with the copy the smoke column in one half only, without it in both). [native] fxsplit=1 the copy again
+		fx_on = cfg("fxsplit", mode == 11 ? 0 : 1);
 #if defined(RANGE_SUN)
 	if ((need & (1u << RANGE_SUN)) && CFG_ONCE("sunwait", 1) && CFG_ONCE("sunsplit", SUNSPLIT_DEFAULT)) { // the sun state is written by the frame the renderer draws, after the client went on: without this wait each context's state got the other view's value (QA 2026-11-02: player 1 turning moved player 2's state); [native] sunwait=0 off
 		render_wait_idle();
@@ -9083,7 +9085,7 @@ static void ent_clean_hook(void)
 	// The cleanup also carries the effects attached to an entity over to its new DObj (a weapon change makes a new one) or kills them: rva 0x115110 saves the old DObj's models and tags
 	// before the old one is freed, rva 0x1151d0 re-attaches (or kills) afterwards, in the live effects system, which is context 0's. Context 1 has a system of its own (fxsplit) that
 	// never got this: the muzzle flash of a body whose weapon was changed stayed on it for ever in the other half. The same two calls are made for context 1's system.
-	if (native_active && ctx1_ready && ctx_store[1][RANGE_FX] && CFG_ONCE("fxsplit", 1) && CFG_ONCE("fxentfix", 1)) {
+	if (native_active && ctx1_ready && ctx_store[1][RANGE_FX] && CFG_ONCE("fxsplit", mode == 11 ? 0 : 1) && CFG_ONCE("fxentfix", 1)) {
 		struct {
 			uint8_t buf[528];
 			int ent, flag;

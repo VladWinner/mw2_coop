@@ -135,6 +135,9 @@ main()
 		case "frags":
 			frags();
 			break;
+		case "fxplay":
+			fxplay();
+			break;
 		case "fxhalf":
 			fxhalf();
 			break;
@@ -6096,4 +6099,42 @@ climbsolo()
 	}
 	check( !alive || GetDvar( "ui_deadquote" ) != "", "the fall killed the player or failed the mission" );
 	report( "done" );
+}
+
+// fxplay: (split screen) an effect a SCRIPT plays (PlayFX, as the levels' exploders and ambient smoke do), in front of both players: player 2 stands beside player 1 and looks
+// the same way, the level's first smoke effect (else its first effect) is played 300 units ahead every second for 8 s, with frames asked for (owner: "when the first player
+// sees fog, the other one doesn't").
+fxplay()
+{
+	wait_intro();
+	wait 4;
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	name = undefined;
+	foreach ( n, fx in level._effect )
+	{
+		if ( !isdefined( name ) )
+			name = n;
+		if ( IsSubStr( n, "smoke" ) )
+		{
+			name = n;
+			break;
+		}
+	}
+	if ( !isdefined( name ) )
+	{
+		report( "fxplay: the level has no effects" );
+		return;
+	}
+	yaw = level.player GetPlayerAngles()[ 1 ];
+	level.player2 SetOrigin( level.player.origin + AnglesToRight( ( 0, yaw, 0 ) ) * 40 );
+	level.player2 SetPlayerAngles( ( 0, yaw, 0 ) );
+	spot = level.player.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 300 + ( 0, 0, 30 );
+	report( "fxplay: '" + name + "' at " + vec_int( spot ) );
+	for ( i = 0; i < 8; i++ )
+	{
+		PlayFX( level._effect[ name ], spot );
+		wait 1;
+	}
+	report( "fxplay done" );
 }
