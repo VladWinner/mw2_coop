@@ -4321,6 +4321,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			viewjit_log(1);
 #endif
 			cg_draw_original(0, a, b);
+			if (CFG_ONCE("npclog", 0) && ctx_current == 1) // QA: the actors as player 2's draw placed them (the frame hook logs context 0 only in mode 11)
+				npc_log();
 #ifdef _WIN64
 			place_client_set(0, 1); // the whole screen again, as at the video start
 #endif
