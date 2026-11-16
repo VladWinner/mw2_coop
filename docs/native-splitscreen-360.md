@@ -694,3 +694,25 @@ Method: every printable string of `default_sp.pe` (the 360 SP/Spec Ops executabl
   client 0 ("UpdateGamerProfile ... not localClient-0"), input from a controller whose client is not active is dropped (the mod's `p2pad` path), "Weaponview linked entity is not in local client #%i's snapshot" (a per-client snapshot check).
 - **To read in the 360 code next (Ghidra, when no copy runs):** the defaults and users of `cg_coopSplitscreenView*` (the console's exact view rectangles: they may give the half sizes and the order top / bottom without the
   letterbox guesses), `r_scaleViewport` / `resetViewport`, the sound listener per local client (the "player 2's sound is half a second late" report), per-client rumble, and the controller to client map.
+
+### Read in the 360 code: the console's two view rectangles, the controller map, the sound listeners (2026-11-16)
+
+(`default_sp` image, flat: address = 0x82000000 + file offset; `local/scratch/x360/strrefs.py` finds the code that loads a string, `DecompAt.java` decompiles.)
+
+**The view rectangles are not full-width halves.** `0x82110a70` registers four float dvars; defaults read from the image: `cg_coopSplitscreenView0X` 0.0, `cg_coopSplitscreenView1X` 0.2, `cg_coopSplitscreenViewWidth` 0.8, `cg_coopSplitscreenViewHeight` 0.49
+(minimum 0, maximums 1.0 / 1.0 / 1.0 / 0.5). `0x82111cf8(lc, view, count)` turns them into the cgame view: with two views, view 0 = x 0, y 0, w 0.8, h 0.49 of the screen, view 1 = x 0.2, **y 1.0 - 0.49 = 0.51**,
+w 0.8, h 0.49 (fractions of the display, pixel = fraction * size + 0.5, truncated), and the view's aspect is `(w / h) * display aspect` (16:9 -> 2.90, not the 3.55 of a full-width half). With one view it uses the whole-screen rectangle.
+Nothing in the scripts or zones overrides the dvars (none of the 360 zones mention them), so the console's picture is two staggered 80 % wide boxes: top left and bottom right, a 2 % gap between them. `0x82120800` loops over the two local
+clients, skips inactive ones, and numbers the views in order (so a single active client gets the whole screen).
+What it means for the mod: the mod's halves are 100 % wide and 50 % high (aspect 3.55 at 16:9), i.e. a flatter vertical field of view than the console's 2.90 and no staggering. Not changed yet: it is a look the owner has to choose (see below);
+the cgame view rectangle (`0x43c630`) and `exp11aspect` are where the PC side would take it.
+
+**The controller to client map** (`0x82141280`): with the split screen controls on (`DAT_82411250`, set by `CL_EnableSplitscreenControls`, `0x82141608`; both controllers' "ready" flags `DAT_82648ab8`) the table `DAT_8266be70[controller]`
+gives the local client; otherwise only the active controller maps, to client 0. A controller whose client is not active has its input dropped ("Discarding input from controller", `0x82128e28`). The mod's pad routing (`p1pad`, `p2pad`)
+is the PC counterpart; nothing to port.
+
+**Sound listeners:** the console keeps one listener per local client (struct 0x3c bytes at `0x83bf1f0c`, active flag at +0x38, a function that clears a client's listener at the end of its frame, `0x8236a4a0`) and a spatialised sound
+plays only if some listener is active (`0x82363920`). The PC engine has the same two listeners (`SND_SetListener`) and the mod already feeds listener 1 from context 1 (see the `sndlog` notes above), so the listener count is not
+the cause of the reported delay of player 2's sounds; the next suspect is when the sound is started (the cgame's own frame for player 2 starts world sounds one engine frame later than player 1's), not read yet.
+
+Not found: users of `r_scaleViewport` (no code reference in the image; probably a table entry), per-client rumble (`stopControllerRumble` is called from the `resetViewport` command handlers, `0x82134728` / `0x8213ba44`).
