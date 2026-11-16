@@ -30,6 +30,7 @@ climb_setup()
 {
 	level.mw2coop_qa_climb = maps\_mw2coop_climb_qa::climb;
 	level.mw2coop_qa_climbview = maps\_mw2coop_climb_qa::climbview;
+	level.mw2coop_qa_climblb = maps\_mw2coop_climb_qa::climblb;
 	if ( !climb_coop() )
 	{
 		level.player thread maps\_climb::player_slides_off_cliff();

@@ -282,3 +282,48 @@ climb_bot_walk( target, speed )
 	self SetVelocity( to * speed + ( 0, 0, vel[ 2 ] ) );
 	return true;
 }
+
+// Scenario "climblb" (start "climb"): the Nexus report on 1.0.1 (couch co-op, pads): "in Cliffhanger, as soon as you start to climb the ice it crashes, in the exact
+// moment I press LB". Each player walks to his lane, holds the pad's right trigger (the left pick: the climb starts), and presses LB (the special grenade) the moment
+// he is on the wall; player 1 first, then player 2. A crash ends the run (the log's CRASH line); otherwise the state is reported.
+climblb()
+{
+	maps\_mw2coop_qa::check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	if ( !flag( "price_begins_climbing" ) )
+		flag_set( "price_begins_climbing" );
+	flag_wait( "player_gets_on_wall" );
+	yaw_check = GetEnt( "player_climb_yaw_check", "targetname" );
+	wall = maps\_climb::get_forward_from_ent( yaw_check );
+	foreach ( n, player in level.players )
+	{
+		pad = "mw2coop_qa_pad" + ( n + 1 );
+		for ( t = 0; t < 20 && !player ent_flag( "player_in_position_to_climb" ); t += 0.05 )
+		{
+			player climb_bot_walk( player.mw2coop_climb_start, 120 );
+			wait 0.05;
+		}
+		player SetPlayerAngles( VectorToAngles( wall ) );
+		maps\_mw2coop_qa::report( "climblb: " + maps\_mw2coop_climb::player_name( player ) + " in position " + player ent_flag( "player_in_position_to_climb" ) + ", weapon " + player GetCurrentWeapon() );
+		if ( GetDvar( "mw2coop_qa_lbfirst" ) == "1" ) // (LB first, as if it were the left pick; then LB held with the trigger)
+		{
+			SetDvar( pad, "0 0 0 0 256 0 0 0" );
+			wait 0.6;
+			SetDvar( pad, "0 0 0 0 0 0 0 0" );
+			wait 0.3;
+			SetDvar( pad, "0 0 0 0 256 0 255 0" );
+			wait 0.6;
+		}
+		SetDvar( pad, "0 0 0 0 0 0 255 0" );	// the right trigger held: the left pick
+		for ( t = 0; t < 8 && !player IsLinked(); t += 0.05 )
+			wait 0.05;
+		maps\_mw2coop_qa::report( "climblb: " + maps\_mw2coop_climb::player_name( player ) + " linked " + player IsLinked() + " after " + t + " s, weapon " + player GetCurrentWeapon() );
+		SetDvar( pad, "0 0 0 0 256 0 255 0" );	// + LB
+		wait 0.3;
+		SetDvar( pad, "0 0 0 0 0 0 255 0" );
+		wait 3;
+		maps\_mw2coop_qa::report( "climblb: " + maps\_mw2coop_climb::player_name( player ) + " 3 s after LB: alive " + IsAlive( player ) + ", linked " + player IsLinked() + ", weapon " + player GetCurrentWeapon() );
+		SetDvar( pad, "0 0 0 0 0 0 0 0" );
+		wait 2;
+	}
+	maps\_mw2coop_qa::report( "done" );
+}

@@ -475,6 +475,40 @@ void guards_install(void)
 	}
 #endif
 #ifndef _WIN64
+	{ // 32-bit: the cgame's draw of a thrown grenade or a missile with a model (rva 0x169ba0; ESI = the entity) fetches the entity's DObj (0x4f3c70) and sets its flag (0x38110)
+	  // without a test. Split screen: player 2's draw runs as local client 0 on the shared DObj table, and the DObj of a grenade player 1 had just thrown was not there: the
+	  // flag write faulted at rva 0x3811b (write of 0xb). Reproduced: Cliffhanger, the ice climb, a pad's LB (special grenade) the moment the climb starts (Nexus report on
+	  // 1.0.1, QA climblb, 32-bit only; the 64-bit build has the null test in its flag setter, 0x299ee0, and did not crash). Without a DObj the entity is skipped in that draw.
+		static const uint8_t site_bytes[5] = {0x8b, 0xf8, 0x6a, 0x01, 0x57}; // mov edi,eax; push 1; push edi; then call 0x438110
+		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);
+		// (the iw4x-sp client: the same function at rva 0x16a550, its flag setter at 0xde840, from its crash at 0xde84b called from 0x16a577; its address map has no entry)
+		const uint32_t rsite = game_is_iw4x() ? 0x16a56d : XR(0x169bbd), rflag = game_is_iw4x() ? 0xde840 : XR(0x38110);
+		static const uint8_t exit_bytes[5] = {0x5f, 0x83, 0xc4, 0x2c, 0xc3}; // pop edi; add esp,0x2c; ret
+		uint8_t *site = b32 + rsite;
+		uint8_t *flag = b32 + rflag, *back = site + 10, *out = site + 0xc0;
+		if (!rsite || !rflag || memcmp(site, site_bytes, sizeof(site_bytes)) || site[5] != 0xe8 || site + 10 + *(int32_t *)(site + 6) != flag || memcmp(out, exit_bytes, sizeof(exit_bytes))) {
+			log_printf("guards: the grenade/missile draw at rva 0x169bbd is not as expected, not guarded");
+		} else {
+			uint8_t code[31] = {0x85, 0xc0, 0x74, 0x12,       // 0: test eax,eax; jz skip (22)
+					    0x8b, 0xf8, 0x6a, 0x01, 0x57,     // 4: mov edi,eax; push 1; push edi
+					    0xb9, 0, 0, 0, 0, 0xff, 0xd1,     // 9: mov ecx, <flag setter>; call ecx
+					    0x68, 0, 0, 0, 0, 0xc3,           // 16: push <back>; ret
+					    0x83, 0xc4, 0x08,                 // 22 skip: add esp,8 (the DObj fetch's two arguments)
+					    0x68, 0, 0, 0, 0, 0xc3};          // 25: push <the function's exit: pop edi; add esp,0x2c; ret>; ret
+			uint32_t a = (uint32_t)(uintptr_t)flag, b = (uint32_t)(uintptr_t)back, c = (uint32_t)(uintptr_t)out;
+			memcpy(code + 10, &a, 4);
+			memcpy(code + 17, &b, 4);
+			memcpy(code + 26, &c, 4);
+			uint8_t *cave = hook_code(code, sizeof(code));
+			if (cave) {
+				hook_jump(site, 10, cave, 0x90);
+				log_printf("guards: the grenade/missile draw at rva 0x169bbd is guarded (an entity without a DObj is skipped)");
+			} else
+				log_printf("guards: the grenade/missile draw at rva 0x169bbd NOT guarded (no hook page)");
+		}
+	}
+#endif
+#ifndef _WIN64
 	if (game_is_iw4x() && settings_unlinkguard()) {
 		static const uint8_t unlink_bytes[7] = {0x51, 0x53, 0x55, 0x8b, 0x6c, 0x24, 0x10}; // push ecx; push ebx; push ebp; mov ebp, [esp+0x10]
 		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);

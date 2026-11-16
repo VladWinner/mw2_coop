@@ -540,6 +540,12 @@ main()
 			else
 				report( "climbview: not on Cliffhanger" );
 			break;
+		case "climblb":
+			if ( isdefined( level.mw2coop_qa_climblb ) )
+				[[ level.mw2coop_qa_climblb ]]();
+			else
+				report( "climblb: not on Cliffhanger" );
+			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
 			// other maps' zones do not have)
