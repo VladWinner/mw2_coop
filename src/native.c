@@ -4584,11 +4584,24 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 // G_InitGame stores the number of local players (rva 0x3c3eb0) as the immediate 1 of `mov dword [rip+x], 1` (c7 05 <rel32> 01 00 00 00 at rva 0x1714a6) when the co-op byte is 0.
 // settings.ini [native] players=2 makes it 2: the server then makes two clients and two player entities, with no network and no co-op session. The client side has one
 // element of each array, so this only shows what the server side does alone.
+// Player 2's server commands in the split screen (64-bit, [native] p2cmds=0 off): the server queues them for client 1 and they reach context 1's cgame, which runs the ones that
+// belong to a player (p2cmd_allowed). Without them every per-player command a script sent player 2 was lost: VisionSetNakedForPlayer and the night / thermal / missile camera / pain
+// vision sets (the Predator's and the AC-130's views when he is the operator), SetBlurForPlayer, the screen fade, water drops, PlayLocalSound, the lock-on reticle, Show/HideViewModel.
+// The Xbox 360 hands every local client its own commands (its CG_ServerCommand 0x82108618 runs per client and keeps only "s" and "checksound" for client 0).
+static int p2cmd_filter_ok; // (only with the filter in place: unfiltered, context 1 would run the whole game's commands a second time)
+static int p2cmds_on(void)
+{
+#ifdef _WIN64
+	return native_active && ctx_on && ctx1_ready && p2cmd_filter_ok && CFG_ONCE("p2cmds", 1);
+#else
+	return 0; // (the 32-bit addresses of the command filter are not mapped yet)
+#endif
+}
 static void sv_add_command(uint8_t *cl, const char *text)
 {
 	int idx = (int)((cl - (base + RVA_SV_CLIENTS)) / SV_CLIENT_STRIDE);
 	int in_use = *(base + RVA_COOP_BYTE) ? *(int *)(base + RVA_COOP_SLOTS + idx * SLOT_STRIDE) == 2 : idx < *(int *)(base + RVA_LOCAL_PLAYERS);
-	if (!in_use || (idx == 1 && !*(base + RVA_COOP_BYTE)))
+	if (!in_use || (idx == 1 && !*(base + RVA_COOP_BYTE) && !p2cmds_on()))
 		return;
 	void (*com_error)(int, const char *, ...) = (void (*)(int, const char *, ...))(base + RVA_COM_ERROR);
 	int *p = (int *)cl;
@@ -5666,8 +5679,17 @@ static void ps_publish_hook(unsigned lc, const void *ps)
 static void server_cmds_hook(uintptr_t lc, int *msg)
 {
 	hook_counts[5]++;
+	if ((int)lc == 1 && p2cmds_on()) { // player 2's commands into context 1's client connection (its cgame takes them in its own frame, filtered by p2cmd_allowed)
+		int was1 = ctx_current;
+		if (was1 != 1)
+			ctx_swap_hand(1);
+		server_cmds_original(0, msg);
+		if (was1 != 1)
+			ctx_swap_hand(was1);
+		return;
+	}
 	if ((int)lc != 0)
-		return; // client 1 gets no server commands yet
+		return; // (p2cmds off: client 1 gets no server commands)
 	int was = ctx_current;
 	if (was)
 		ctx_swap_hand(0);
@@ -5708,7 +5730,7 @@ static void vision_global_wrap(void)
 static uint64_t vision_apply_hook(uintptr_t lc, int type, int state, const char *name, int time)
 {
 	uint64_t r = vision_apply_original(lc, type, state, name, time);
-	if (ctx_on && ctx1_ready && ctx_current == 0 && !vision_forwarding && name && name[0]) {
+	if (ctx_on && ctx1_ready && ctx_current == 0 && !vision_forwarding && name && name[0] && !p2cmds_on()) { // (with p2cmds context 1 gets the command itself)
 		for (int i = 0; i < 16; i++) {
 			if (!vision_global[i].used || strcmp(vision_global[i].name, name) != 0)
 				continue;
@@ -5730,6 +5752,68 @@ static uint64_t vision_apply_hook(uintptr_t lc, int type, int state, const char 
 	}
 	return r;
 }
+
+// Context 1's cgame runs only the server commands that belong to a player. The rest (music, sound mixes, slow motion, objectives, prints, menus, saves, achievements,
+// client dvars: on the PC these are one state for the whole game) context 0 already runs; "s" and "checksound" the engine itself keeps for local client 0, which context 1
+// pretends to be. CG_ServerCommand is rva 0xb4890 (the command in the client's tokenizer), called at 0xb5ed7.
+static int p2cmd_allowed(const char *c)
+{
+	static const char *const ok[] = {"visionset_naked", "visionset_night", "visionset_missilecam", "visionset_thermal", "visionset_pain", "scr_blur", "clear_blur", "scr_fade",
+					 "watersheeting", "ls", "ls_stop", "offhand", "ret_lock_on", "showViewModel", "hideViewModel", "hud_drawHUD"};
+	for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
+		if (!strcmp(c, ok[i]))
+			return 1;
+	return 0;
+}
+#ifdef _WIN64
+static void (*cg_scmd_original)(int);
+static void cg_scmd_hook(int lc)
+{
+	if (ctx_current == 1 && p2cmds_on()) {
+		const char *c = game_cmd_argv(0);
+		const int run = c && p2cmd_allowed(c);
+		static unsigned n;
+		if (CFG_ONCE("p2cmdlog", 0) && n++ < 300)
+			log_printf("native: p2cmds: player 2's server command '%.60s' %s", c ? c : "", run ? "run" : "left to player 1's context");
+		if (!run)
+			return;
+	}
+	cg_scmd_original(lc);
+}
+// The cgame runs the server commands up to the number the snapshot names (rva 0xb5ea0(lc, latest), called at 0xb8a7d with cgs+4, rva 0x40cab4). Both contexts parse the
+// same snapshot, client 0's, so context 1 asked its own connection for client 0's command numbers and ran nothing. In context 1 the latest is its own connection's newest
+// command (clc +0x547850), and its counter of executed commands (0x40cab0, copied from context 0 when context 1 was made) is kept inside the last delivery's window
+// (clc's acknowledged number +0x547854 .. the newest): older numbers point into a buffer the next delivery overwrote.
+static void (*cg_exec_original)(int, int);
+static void cg_exec_hook(int lc, int latest)
+{
+	if (ctx_current == 1 && p2cmds_on()) {
+		int *done = (int *)(base + XR64(0x40cab0));
+		const int newest = *(int *)(base + XR64(0x547850)), ack = *(int *)(base + XR64(0x547854));
+		if (*done < ack || *done > newest)
+			*done = ack;
+		latest = newest;
+	}
+	cg_exec_original(lc, latest);
+}
+static void p2cmd_filter_install(void)
+{
+	if (!CFG_ONCE("p2cmds", 1))
+		return;
+	uint8_t *site = base + XR64(0xb5ed7);
+	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + XR64(0xb4890) || !jhook_call(site, (void *)cg_scmd_hook, (void **)&cg_scmd_original)) {
+		log_printf("native: p2cmds: the server command call at 0xb5ed7 is not as expected: player 2 gets no server commands");
+		return;
+	}
+	uint8_t *exec_site = base + XR64(0xb8a7d);
+	if (exec_site[0] != 0xe8 || exec_site + 5 + *(int32_t *)(exec_site + 1) != base + XR64(0xb5ea0) || !jhook_call(exec_site, (void *)cg_exec_hook, (void **)&cg_exec_original)) {
+		log_printf("native: p2cmds: the command run call at 0xb8a7d is not as expected: player 2 gets no server commands");
+		return;
+	}
+	p2cmd_filter_ok = 1;
+	log_printf("native: p2cmds: player 2's own server commands (vision sets, blur, local sounds ...) reach his view");
+}
+#endif
 
 // QA ([native] cmdlog=1, 64-bit): every client command the engine hands to the server for local client 0 (rva 0xd02a0, its ClientCommand call at 0xd0306), with the
 // live context: which player's "n <action>" texts reach which client
@@ -9758,6 +9842,7 @@ static void contexts_install(void)
 	vision_forward_install();
 #ifdef _WIN64
 	cmd_deliver_install();
+	p2cmd_filter_install();
 #endif
 	{
 		if (cfg("sndcount", 0)) {

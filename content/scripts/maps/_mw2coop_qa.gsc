@@ -138,6 +138,9 @@ main()
 		case "hintown":
 			hintown();
 			break;
+		case "p2cmds":
+			p2cmds();
+			break;
 		case "laserpad":
 			laserpad();
 			break;
@@ -6291,5 +6294,19 @@ hintown()
 	level.player thread display_hint( "mw2coop_qa_shared" );
 	wait 2;
 	report( "shared hint: player 1 " + isdefined( level.player.current_global_hint ) + ", player 2 " + isdefined( level.player2.current_global_hint ) );
+	report( "done" );
+}
+
+// Player 2's own server commands in the split screen ([native] p2cmds): a vision set and a blur for player 2 only must darken and blur the bottom half and leave the top
+// half as it is; the effects stay on to the end of the run (the composed frame). Contingency (its "black_bw" vision).
+p2cmds()
+{
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 3;
+	level.player2 VisionSetNakedForPlayer( "black_bw", 0.5 );
+	level.player2 SetBlurForPlayer( 6, 0.5 );
+	report( "player 2: vision black_bw and blur 6 set for him only" );
+	wait 2;
 	report( "done" );
 }
