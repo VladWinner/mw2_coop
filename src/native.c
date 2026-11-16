@@ -8197,7 +8197,38 @@ static void pass2_hook(unsigned lc)
 			ahead = 0.15;
 		for (int k = 0; k < 3; k++)
 			err[other][k] *= 0.6f; // (per draw of this view)
-		const float po[3] = {go[0] + vel[other][0] * (float)ahead + err[other][0], go[1] + vel[other][1] * (float)ahead + err[other][1], go[2] + vel[other][2] * (float)ahead + err[other][2]};
+		float po[3] = {go[0] + vel[other][0] * (float)ahead + err[other][0], go[1] + vel[other][1] * (float)ahead + err[other][1], go[2] + vel[other][2] * (float)ahead + err[other][2]};
+		// Riding a vehicle the scripts name (dvar mw2coop_ride: its entity number, set while the players sit in it): the body is held to it as the level's men are (owner: "the
+		// way he is fixed to the helicopter", MacTavish beside the players): the game's position of the body moved by what the vehicle has moved since the same snapshot, i.e. the
+		// vehicle's drawn position minus its current state's (both of the snapshot the body's position is of). No extrapolation then.
+		{
+			char rv[16] = "";
+			const int ride = game_dvar_raw("mw2coop_ride", rv, sizeof(rv)) && rv[0] ? atoi(rv) : -1;
+			if (ride >= 2 && ride < 2048 && CFG_ONCE("ridefix", 0)) { // (off: measured worse than the carrying-on above, sd 11.5 against 3.4 units a draw; the vehicle state's yaw read is not right yet)
+				// He sits still in it, so his place in the vehicle's own frame hardly changes: that place (from the game's position against the vehicle's state of the same
+				// snapshot, turned by the state's yaw) is averaged, and the body is drawn there from the vehicle's drawn pose (origin +0x18, yaw +0x28), every draw: rigid with it.
+				const uint8_t *v = base + RVA_CENT + (size_t)ride * CENT_SIZE;
+				const float *vp = (const float *)(v + 0x18), *vs = (const float *)(v + 0x80);
+				const float pyaw = *(const float *)(v + 0x28) * (3.14159265f / 180.0f), syaw = *(const float *)(v + 0xa8) * (3.14159265f / 180.0f);
+				const float wx = go[0] - vs[0], wy = go[1] - vs[1], wz = go[2] - vs[2];
+				static float loc[2][3];
+				static int have_loc[2], loc_ride[2];
+				if (wx * wx + wy * wy + wz * wz < 400.0f * 400.0f) {
+					const float lx = cosf(syaw) * wx + sinf(syaw) * wy, ly = -sinf(syaw) * wx + cosf(syaw) * wy; // into the vehicle's frame
+					if (!have_loc[other] || loc_ride[other] != ride) {
+						loc[other][0] = lx, loc[other][1] = ly, loc[other][2] = wz;
+						have_loc[other] = 1, loc_ride[other] = ride;
+					} else {
+						const float a = 0.08f;
+						loc[other][0] += a * (lx - loc[other][0]), loc[other][1] += a * (ly - loc[other][1]), loc[other][2] += a * (wz - loc[other][2]);
+					}
+					po[0] = vp[0] + cosf(pyaw) * loc[other][0] - sinf(pyaw) * loc[other][1];
+					po[1] = vp[1] + sinf(pyaw) * loc[other][0] + cosf(pyaw) * loc[other][1];
+					po[2] = vp[2] + loc[other][2];
+					err[other][0] = err[other][1] = err[other][2] = 0.0f;
+				}
+			}
+		}
 		if (ahead > 0.0) {
 			static const int offs[3] = {0x18, 0x80, 0xfc}; // the pose's origin, the current and the next state's origin
 			for (int k = 0; k < 3; k++)

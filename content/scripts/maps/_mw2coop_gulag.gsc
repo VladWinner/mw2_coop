@@ -44,6 +44,7 @@ partner_rides_heli()
 	// the same view limits as player 1 (spawn_player_heli)
 	p2 PlayerLinkToDelta( controller, "TAG_aim", 1, -35, 40, -35, 40, true );
 	maps\_mw2coop::state( "gulag: player 2 rides the helicopter at player 1's door" );
+	SetDvar( "mw2coop_ride", heli GetEntityNumber() ); // (the DLL holds both bodies to it, as the level's men: src/native.c, pass2_hook)
 	level thread partner_view_follows_landing( controller );
 }
 
@@ -65,6 +66,7 @@ partner_leaves_heli()
 	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
 		return;
 	p2 = level.player2;
+	SetDvar( "mw2coop_ride", "" );
 	// Out of the door the way player 1 is (gulag_perimeter: his view controller is moved 32 units out along its aim, then deleted): player 2 was unlinked at his door, inside the
 	// helicopter's collision, and could not move (Nexus report, 1.0.1: "my friend couldn't get off the helicopter in the Gulag"); the teleport next to player 1 below found no free spot
 	// beside a player still standing at the cabin door.
