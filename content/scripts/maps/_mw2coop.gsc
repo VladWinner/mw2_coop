@@ -91,6 +91,12 @@ main()
 	// a scene hid the partner's name (maps\_mw2coop_knife::lead_decided()): show it again
 	SetDvar( "mw2coop_hide_names", "" );
 
+	// The objectives' markers and distances on screen ("objectiveHide": a saved dvar, so it outlives the level). A slow-motion breach hides them for its slow motion and
+	// shows them again only at the very end of its own thread; in co-op that thread can end early, and the markers stayed hidden for the rest of the level and the
+	// next one (owner, 2026-11-16: no distance markers in Endgame after Just Like Old Times). Every level starts with them shown.
+	if ( is_campaign_coop() )
+		SetSavedDvar( "objectiveHide", false );
+
 	// native split screen (src/native.c): both views are shown only once the mission's intro is over; before that (briefing, title card) there is one picture
 	SetDvar( "mw2coop_split_view", "0" );
 	thread split_view_gate();
@@ -1869,12 +1875,13 @@ sound_player( caller )
 breach_unstick()
 {
 	level endon( "mw2coop_level_end" );
-	for ( t = 0; t < 3; t += 0.25 )
+	moved = false;
+	for ( t = 0; t < 3 && !moved; t += 0.25 )
 	{
 		wait 0.25;
 		foreach ( player in level.players )
 		{
-			if ( !IsAlive( player ) || player IsLinked() || is_downed( player ) || !spot_stuck( player.origin ) )
+			if ( moved || !IsAlive( player ) || player IsLinked() || is_downed( player ) || !spot_stuck( player.origin ) )
 				continue;
 			other = other_player( player );
 			if ( !isdefined( other ) || spot_stuck( other.origin ) )
@@ -1884,7 +1891,19 @@ breach_unstick()
 				who = "player 1";
 			state( "breach: " + who + " stuck after the breach at " + player.origin + ", put next to the other player" );
 			player thread teleport_to_partner_when_safe( other, 5 );
-			return;
+			moved = true;
 		}
 	}
+	breach_objectives_back();
+}
+
+// After a breach: the objectives' markers come back once its slow motion is over, whether or not its own thread got that far (see main()).
+breach_objectives_back()
+{
+	level endon( "mw2coop_level_end" );
+	for ( t = 0; t < 20 && isdefined( level.breaching ) && level.breaching; t += 0.5 )
+		wait 0.5;
+	wait 1;
+	if ( !isdefined( level.breaching ) || !level.breaching )
+		SetSavedDvar( "objectiveHide", false );
 }
