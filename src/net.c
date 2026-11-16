@@ -63,6 +63,13 @@ static void log_packet(const char *dir, const struct sockaddr *sa, const char *b
 	log_printf("net: %s %s len %d: %s", dir, addr, len, text);
 }
 
+// a co-op connect frame: "ÿÿÿÿ" 'R' 0 <sequence byte> "coopConnect" (the command at its start, as netguard.c reads co-op frames)
+static int is_coop_connect(const char *buf, int len)
+{
+	static const char word[] = "coopConnect";
+	return len >= 7 + (int)sizeof(word) - 1 && *(const unsigned int *)buf == 0xffffffffu && buf[4] == 'R' && buf[5] == 0 && memcmp(buf + 7, word, sizeof(word) - 1) == 0;
+}
+
 static int contains(const char *buf, int len, const char *word)
 {
 	int wl = (int)strlen(word);
@@ -314,9 +321,9 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 	}
 	if (r > 0) {
 		log_packet("recv", from, buf, r);
-		if (r > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) &&
-		    contains(buf, r, "coopConnect"))
-			remember_peer(s, from);
+		// The partner is learnt from his connect only once access.c has let it through (night audit 2026-11-17, NET-1: any packet with the text "coopConnect" anywhere, a
+		// refused connect included, made its sender the partner, and the real partner's start / ready packets were then ignored as a stranger's).
+		const int connect = game_peek(RVA_PARTY_IS_HOST, 1) && is_coop_connect(buf, r);
 		char reply[128];
 		int reply_len = 0, lobby = 0;
 		if (r > 4 && *(const unsigned int *)buf == 0xffffffffu && from && from->sa_family == AF_INET) {
@@ -329,6 +336,8 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 			if (reply_len > 0 && reply_len < (int)sizeof(reply))
 				send_to(s, reply, reply_len, 0, from, sizeof(struct sockaddr_in));
 		}
+		if (connect && !lobby) // (a refused connect is answered by access.c and consumed: lobby != 0)
+			remember_peer(s, from);
 		int ours = lobby;
 		if (!ours && is_session_packet(buf, r)) {
 			// consumed either way: the game has nothing to do with it

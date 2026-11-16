@@ -60,7 +60,7 @@ static void *networking(void)
 
 #define VT(obj, i) ((*(void ***)(obj))[i])
 
-static int steam_friend(uint64_t id)
+int steam_friend(uint64_t id) // (also access.c's "Steam friends only": one helper with the right DLL and calling convention for both builds)
 {
 	static void *(*get)(void);
 	if (!get) {

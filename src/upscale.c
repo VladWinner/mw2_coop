@@ -341,8 +341,14 @@ static void release_resources(void)
 	if (rcas_ps) { IDirect3DPixelShader9_Release(rcas_ps); rcas_ps = NULL; }
 	if (quad_vs) { IDirect3DVertexShader9_Release(quad_vs); quad_vs = NULL; }
 	if (quad_decl) { IDirect3DVertexDeclaration9_Release(quad_decl); quad_decl = NULL; }
-	if (state_sb) { IDirect3DStateBlock9_Release(state_sb); state_sb = NULL; }
 	res_dev = NULL;
+}
+// The state block lives apart from the passes' resources (night audit 2026-11-17, GFX-2): make_resources() runs inside the capture/apply pair of upscale_present() and used
+// to release it there, so the first frame and every frame after a Reset left the passes' state on the device. It goes only before a Reset (D3D9 wants every state block
+// released then).
+static void release_state_block(void)
+{
+	if (state_sb) { IDirect3DStateBlock9_Release(state_sb); state_sb = NULL; }
 }
 
 // The device's Reset needs every default pool resource released: hooked once, our resources go before it
@@ -354,6 +360,7 @@ static reset_ex_t reset_ex_orig;
 static HRESULT STDMETHODCALLTYPE reset_hook(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *pp)
 {
 	release_resources();
+	release_state_block();
 	if (pp && out_w > 0 && in_w > 0 && (int)pp->BackBufferWidth == in_w && (int)pp->BackBufferHeight == in_h) {
 		pp->BackBufferWidth = (UINT)out_w;
 		pp->BackBufferHeight = (UINT)out_h;
@@ -364,6 +371,7 @@ static HRESULT STDMETHODCALLTYPE reset_hook(IDirect3DDevice9 *dev, D3DPRESENT_PA
 static HRESULT STDMETHODCALLTYPE reset_ex_hook(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *pp, D3DDISPLAYMODEEX *mode)
 {
 	release_resources();
+	release_state_block();
 	if (pp && out_w > 0 && in_w > 0 && (int)pp->BackBufferWidth == in_w && (int)pp->BackBufferHeight == in_h) {
 		pp->BackBufferWidth = (UINT)out_w;
 		pp->BackBufferHeight = (UINT)out_h;
@@ -398,16 +406,17 @@ static void *compile_shader(compile_t compile, const char *src, const char *targ
 	void *code = NULL, *err = NULL;
 	HRESULT hr = compile(src, strlen(src), NULL, NULL, NULL, "main", target, 0, 0, &code, &err);
 	if (FAILED(hr) || !code) {
-		const char *msg = err ? (const char *)((void *(*)(void *))(*(void ***)err)[3])(err) : "";
+		// (ID3DBlob's methods are COM: stdcall in the 32-bit build; a plain call left the stack 4 bytes off and crashed the first upscaled frame, night audit GFX-1)
+		const char *msg = err ? (const char *)((void *(STDMETHODCALLTYPE *)(void *))(*(void ***)err)[3])(err) : "";
 		log_printf("upscale: shader %s did not compile (hr %lx): %.300s", target, (unsigned long)hr, msg);
 		if (err)
-			((ULONG(*)(void *))(*(void ***)err)[2])(err);
+			((ULONG(STDMETHODCALLTYPE *)(void *))(*(void ***)err)[2])(err);
 		return NULL;
 	}
-	const DWORD *bytes = (const DWORD *)((void *(*)(void *))(*(void ***)code)[3])(code);
+	const DWORD *bytes = (const DWORD *)((void *(STDMETHODCALLTYPE *)(void *))(*(void ***)code)[3])(code);
 	void *shader = NULL;
 	hr = is_vs ? IDirect3DDevice9_CreateVertexShader(dev, bytes, (IDirect3DVertexShader9 **)&shader) : IDirect3DDevice9_CreatePixelShader(dev, bytes, (IDirect3DPixelShader9 **)&shader);
-	((ULONG(*)(void *))(*(void ***)code)[2])(code);
+	((ULONG(STDMETHODCALLTYPE *)(void *))(*(void ***)code)[2])(code);
 	if (FAILED(hr))
 		log_printf("upscale: shader %s could not be made (hr %lx)", target, (unsigned long)hr);
 	return SUCCEEDED(hr) ? shader : NULL;
@@ -541,7 +550,7 @@ static void present_body(IDirect3DDevice9 *dev)
 // made its next frames render wrong (black). The whole state, the render target and the depth surface are put back after the passes.
 void upscale_present(IDirect3DDevice9 *dev)
 {
-	if (!dev || !settings_upscale() || out_w <= 0 || in_w <= 0)
+	if (!dev || !settings_upscale() || out_w <= 0 || in_w <= 0 || shaders_failed) // (no shaders: no passes, nothing to save)
 		return;
 	if (!state_sb && FAILED(IDirect3DDevice9_CreateStateBlock(dev, D3DSBT_ALL, &state_sb)))
 		return;

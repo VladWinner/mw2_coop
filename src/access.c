@@ -32,6 +32,7 @@
 #include "localize.h"
 #include "log.h"
 #include "settings.h"
+#include "steamnet.h"
 #include "menus.h"
 #include "menus_ui.h"
 #include "net.h"
@@ -60,22 +61,8 @@ static CRITICAL_SECTION auth_lock;
 
 // ---------------------------------------------------------------- Steam
 
-static int steam_friend(uint64_t steam_id)
-{
-	static void *(*steam_friends)(void);
-	if (!steam_friends) {
-		HMODULE h = GetModuleHandleA("steam_api64.dll");
-		steam_friends = h ? (void *(*)(void))GetProcAddress(h, "SteamFriends") : NULL;
-		if (!steam_friends)
-			return 0;
-	}
-	void *friends = steam_friends();
-	if (!friends)
-		return 0;
-	typedef int (*relationship_t)(void *self, uint64_t steam_id);
-	relationship_t relationship = (*(relationship_t **)friends)[5];
-	return relationship(friends, steam_id) == 3; // k_EFriendRelationshipFriend
-}
+// steam_friend(): steamnet.c (night audit 2026-11-17, NET-2: this file had its own copy that looked for steam_api64.dll only and called the method without the 32-bit
+// thiscall convention, so in the 32-bit build "Steam friends only" refused every friend)
 
 // ---------------------------------------------------------------- the text popup
 
