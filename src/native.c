@@ -5440,7 +5440,7 @@ static void npc_log(void)
 		int np = -1;
 		int want_type = CFG_ONCE("npctype", 0); // [native] npctype=13: only AI actors (the furthest traveller is often a scriptmover otherwise)
 		for (int i = 2; i < 1024; i++) {
-			if (moved[i] > best && (!want_type || base[RVA_CENT + (size_t)i * CENT_SIZE + CENT_TYPE] == want_type))
+			if (moved[i] > best && (!want_type || base[RVA_CENT + (size_t)i * CENT_SIZE + CENT_TYPE] == want_type) && (!CFG_ONCE("npcmax", 0) || i <= CFG_ONCE("npcmax", 0))) // [native] npcmax=134: only the entities each context keeps for itself
 				best = moved[i], np = i;
 			moved[i] = 0;
 		}
@@ -8116,7 +8116,11 @@ static void pass2_hook(unsigned lc)
 		const uint8_t *src = CFG_ONCE("p0aimsrc", 1) ? ctx_store[0][0] + (XR(0x422440) - RANGE_RVA(0)) : ctx_store[0][5] + CL_BLOCK_PS;
 		const float y = *(const float *)(src + 0x10c), pt = *(const float *)(src + 0x108);
 		f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = y;
-		f[CF_YAW0 - 1] = f[CF_YAW1 - 1] = f[CF_YAW2 - 1] = pt;
+		// Only the yaw: these angles turn the whole model, and with the view's pitch in them the body leaned over as far as the player looked up or down (owner's screenshots:
+		// Alpha folded to the floor, thrown back with the gun up, Airport). The 360's own-entity write also sets yaw only (pitch and roll 0, 0x82102f28); the torso's aim comes from
+		// the entity state as the game draws it. [native] p0aimpitch=1 writes the pitch as before.
+		if (CFG_ONCE("p0aimpitch", 0))
+			f[CF_YAW0 - 1] = f[CF_YAW1 - 1] = f[CF_YAW2 - 1] = pt;
 	}
 	if (CFG_ONCE("p2hooklog", 0)) { // QA: what the second entity pass sees in both slots
 		static unsigned k;
