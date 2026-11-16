@@ -3959,14 +3959,16 @@ static void vis_swap(void)
 		}
 	}
 }
+static int vis_swapped; // vis_swap has given player 2's draw his own marks: add_entity_hook's older per-entity swap (swapbits) must not undo them at +0xec
 static void cg_draw_vis(unsigned local_client, int a, int b)
 {
 	const int swap = ctx_current == 1 && split_on && CFG_ONCE("visswap", 1);
 	if (swap)
-		vis_swap();
+		vis_swap(), vis_swapped = 1;
 	cg_draw_original(local_client, a, b);
 	if (swap && ctx_current == 1)
 		vis_swap();
+	vis_swapped = 0;
 }
 static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 {
@@ -5729,6 +5731,25 @@ static uint64_t vision_apply_hook(uintptr_t lc, int type, int state, const char 
 	return r;
 }
 
+// QA ([native] cmdlog=1, 64-bit): every client command the engine hands to the server for local client 0 (rva 0xd02a0, its ClientCommand call at 0xd0306), with the
+// live context: which player's "n <action>" texts reach which client
+#ifdef _WIN64
+static void (*cmd_deliver_original)(int, const char *);
+static void cmd_deliver_hook(int client, const char *text)
+{
+	static unsigned n;
+	if (n++ < 200)
+		log_printf("native: cmdlog: engine delivers '%.40s' for client %d (context %d live, frame bottom %d)", text, client, ctx_current, frame_bottom);
+	cmd_deliver_original(client, text);
+}
+static void cmd_deliver_install(void)
+{
+	if (!CFG_ONCE("cmdlog", 0) || *(base + XR64(0xd0306)) != 0xe8)
+		return;
+	if (jhook_call(base + XR64(0xd0306), (void *)cmd_deliver_hook, (void **)&cmd_deliver_original))
+		log_printf("native: cmdlog on");
+}
+#endif
 static void vision_forward_install(void)
 {
 	if (!cfg("visionfwd", 1))
@@ -5808,7 +5829,8 @@ typedef struct {
 	int rt, lt;
 	LONGLONG last_count; // the performance counter at the last frame (the turn is per second)
 	WORD menu_held;
-	DWORD menu_repeat; // when a held direction in a menu sends its key again
+	DWORD menu_repeat;   // when a held direction in a menu sends its key again
+	int rc_pitch, rc_yaw; // -127..127: the right stick for a remote-controlled missile (usercmd +0x3c / +0x3d, see make_cmd_hook)
 } pad_player_t;
 static pad_player_t pads[2];
 // the player whose context gets the keyboard and the mouse: player 2 only when player 1 plays on a pad and player 2 on none
@@ -5846,7 +5868,13 @@ static void pad_action(const char *name)
 		log_printf("native: pad: no action '%s'", name);
 		return;
 	}
+	const int seq0 = *(int *)(base + XR64(0x545844));
 	((void (*)(int, int, int))(base + XR(0xce450)))(0, index, 0x1ff);
+	if (CFG_ONCE("cmdlog", 0)) { // QA: did the action queue its "n <index>" in the live context's reliable command ring (rva 0xd21a0)?
+		static unsigned n;
+		if (n++ < 200)
+			log_printf("native: cmdlog: pad action '%s' index %d, context %d live, ring %d -> %d", name, index, ctx_current, seq0, *(int *)(base + XR64(0x545844)));
+	}
 }
 #endif
 static void pad_binding(const char *name, int down)
@@ -6336,8 +6364,25 @@ static void pad_frame_player(int pl, int play)
 	// two ends as the angle went round: the camera turned back and forth by itself, or, when the scene ended, jumped to wherever the angle had got to. [native] padlock=0 off.
 	if ((*(unsigned *)(base + RVA_PM_FLAGS) & 0x800) && CFG_ONCE("padlock", 1))
 		yaw = pitch = 0;
+	// A remote-controlled missile (the Predator of Contingency and Wolverines!; ControlsLinkTo sets the playerstate flag 0x80000): the usercmd maker (rva 0xd03a0; 32-bit VA
+	// 0x579a80) then skips the look and the movement and calls 0xcff70 (VA 0x579960), which steers with the MOUSE's movement only: its delta times m_yaw / m_pitch, held to
+	// -1..1, times 127, into the usercmd's two remote control bytes (+0x3c pitch, +0x3d yaw). The view angles do not steer it. So a pad could not steer the missile at all (Nexus
+	// report, 2026-11-16: "when you try to move it to aim at the enemy tank, it won't"; QA predsteer: the missile's angles stayed 25 157 0 with the right stick held), and its
+	// stick wound the view angle up meanwhile (-241 degrees in 2.4 s). The stick now goes into those two bytes as the mouse does (make_cmd_hook), and the view angle is left
+	// alone, as the mouse leaves it. [native] padremote=0 off.
+	p->rc_pitch = p->rc_yaw = 0;
+	const int remote = (*(unsigned *)(base + RVA_PM_FLAGS) & 0x80000) && CFG_ONCE("padremote", 1);
+	if (remote) {
+		const float k = o.sens / 3.0f > 1.0f ? o.sens / 3.0f : 1.0f; // a higher sensitivity reaches the full turn rate with less stick
+		float ry_rc = ((CFG_ONCE("padinvert", 0) != 0) != o.invert ? 1.0f : -1.0f) * ry * k, rx_rc = -rx * k; // pitch: down is positive; yaw: left is positive
+		ry_rc = ry_rc > 1.0f ? 1.0f : ry_rc < -1.0f ? -1.0f : ry_rc;
+		rx_rc = rx_rc > 1.0f ? 1.0f : rx_rc < -1.0f ? -1.0f : rx_rc;
+		p->rc_pitch = (int)floorf(ry_rc * 127.0f + 0.5f);
+		p->rc_yaw = (int)floorf(rx_rc * 127.0f + 0.5f);
+		yaw = pitch = 0;
+	}
 	const float yaw_in = yaw, pitch_in = pitch;
-	if (o.assist && !qa_noassist[pl])
+	if (o.assist && !qa_noassist[pl] && !remote) // (the aim assist turns the view, which a remote-controlled missile does not follow)
 		aim_assist(pl, dt, &yaw, &pitch, sqrtf(lx * lx + ly * ly), sqrtf(rx * rx + ry * ry), lt);
 	else
 		aa_state[pl].lock_ent = aa_state[pl].snap_ent = -1, aa_state[pl].ads_was = lt;
@@ -7361,13 +7406,20 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 			*(int *)(cmd + 4) = 0;
 			cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0;
 		}
+		// a remote-controlled missile (flag 0x80000, see pad_frame_player): the pad's right stick steers it through the usercmd's remote control bytes, as the mouse does
+		// in 0xcff70 (+0x3c pitch, +0x3d yaw, -127..127); the mouse's value stays when the stick is still and this player also has the keyboard and mouse
+		if ((*(unsigned *)(base + RVA_PM_FLAGS) & 0x80000) && pad_dev[pl] >= 0 && p->active && (p->rc_pitch || p->rc_yaw || kb_player() != pl) && CFG_ONCE("padremote", 1)) {
+			cmd[0x3c] = (uint8_t)(int8_t)p->rc_pitch;
+			cmd[0x3d] = (uint8_t)(int8_t)p->rc_yaw;
+		}
 	}
 	if (inputlog_on() && cmd && native_active && (ctx_current == 0 || ctx_current == 1)) { // the usercmd as it leaves the maker (about 20 a second per context)
 		static DWORD cmd_at[2];
 		DWORD now_ms = GetTickCount();
 		if (now_ms - cmd_at[ctx_current] >= 50) {
 			cmd_at[ctx_current] = now_ms;
-			inputlog("CMD,%d,%d,%d,%d,%d,%d,%d,%d,%d", ctx_current, *(int *)cmd, *(int *)(cmd + 4), *(int *)(cmd + 8), *(int *)(cmd + 12), (int)(int8_t)cmd[0x1a], (int)(int8_t)cmd[0x1b], (int)(int8_t)cmd[0x1c], (int)(int8_t)cmd[0x1d]);
+			inputlog("CMD,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", ctx_current, *(int *)cmd, *(int *)(cmd + 4), *(int *)(cmd + 8), *(int *)(cmd + 12), (int)(int8_t)cmd[0x1a], (int)(int8_t)cmd[0x1b], (int)(int8_t)cmd[0x1c], (int)(int8_t)cmd[0x1d],
+				 (int)(int8_t)cmd[0x3c], (int)(int8_t)cmd[0x3d]);
 		}
 	}
 	return cmd;
@@ -8912,7 +8964,7 @@ static void add_entity_hook(int n)
 			swapbits = cfg("swapbits", 1);
 		unsigned *flags = (unsigned *)(base + RVA_CENT + (size_t)n * CENT_SIZE + CENT_FLAGS);
 		unsigned saved = *flags;
-		if (swapbits) {
+		if (swapbits && !vis_swapped) { // (not when vis_swap already swapped them for the whole draw: a second swap gave +0xec back player 1's marks)
 			unsigned b0 = saved & 0x10, b1 = saved & 0x20;
 			*flags = (saved & ~0x30u) | (b0 ? 0x20 : 0) | (b1 ? 0x10 : 0);
 		}
@@ -9696,6 +9748,9 @@ static void contexts_install(void)
 	skip_entity = cfg("skipent", 1); // context 1's own entity (player 2) is never drawn by the first pass either
 	log_entities = cfg("entdraw", 0);
 	vision_forward_install();
+#ifdef _WIN64
+	cmd_deliver_install();
+#endif
 	{
 		if (cfg("sndcount", 0)) {
 			static const uint8_t snd_play_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x18, 0x48, 0x89, 0x70, 0x20};
@@ -10131,7 +10186,7 @@ static int activate(int players)
 	return 1;
 }
 
-// Console commands for the QA bots and for the lobby: mw2coop_native_start [pad], mw2coop_native_stop, mw2coop_native_launch <map> [pad] [start] (session on, then the map)
+// Console commands for the QA bots and for the lobby: mw2coop_native_start [pad], mw2coop_native_stop, mw2coop_native_launch <map> [pad] [start] [player 1 device] (session on, then the map)
 static void native_start_f(void)
 {
 	const char *a = game_cmd_argv(1);
@@ -10145,10 +10200,10 @@ static void native_launch_f(void)
 {
 	char map[64];
 	lstrcpynA(map, game_cmd_argv(1), sizeof(map));
-	const char *a = game_cmd_argv(2);
+	const char *a = game_cmd_argv(2), *a0 = game_cmd_argv(4); // (QA: a fourth argument is player 1's device, as the lobby gives it; default the keyboard)
 	if (!map[0] || strpbrk(map, " \t;\"\n"))
 		return;
-	if (!native_split_start(a[0] ? atoi(a) : -1))
+	if (!native_split_start2(a0[0] ? atoi(a0) : -1, a[0] ? atoi(a) : -1))
 		return;
 	char text[200], start[64];
 	lstrcpynA(start, game_cmd_argv(3), sizeof(start));

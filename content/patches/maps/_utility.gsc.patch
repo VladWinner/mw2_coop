@@ -130,7 +130,8 @@ player_leaves_humvee()
 @@@ end
 
 7. A hint a level shows "the player" (display_hint, display_hint_timeout: "Press ... to ...") is shown to the partner too, in his own half or on his own screen,
-   with the same text; each player's hint goes away by its own break test (owner, 2026-11-16: hints for player 2).
+   with the same text (owner, 2026-11-16: hints for player 2). Not a hint that belongs to one player (the laser holder, a driver, a climber, the lead of a
+   scene: maps\_mw2coop::hint_is_own). Most break tests read level.player, so player 2's copy closes when player 1 acts or after its time.
 @@@ replace
 display_hint( hint, parm1, parm2, parm3 )
 {
@@ -139,7 +140,7 @@ display_hint( hint, parm1, parm2, parm3 )
 display_hint( hint, parm1, parm2, parm3 )
 {
 	player = get_player_from_self();
-	if ( player == level.player && isdefined( level.player2 ) && maps\_mw2coop::is_campaign_coop() )
+	if ( player == level.player && isdefined( level.player2 ) && maps\_mw2coop::is_campaign_coop() && !maps\_mw2coop::hint_is_own( hint ) )
 		level.player2 thread display_hint( hint, parm1, parm2, parm3 );
 @@@ end
 @@@ replace
@@ -150,6 +151,6 @@ display_hint_timeout( hint, timeout, parm1, parm2, parm3 )
 display_hint_timeout( hint, timeout, parm1, parm2, parm3 )
 {
 	player = get_player_from_self();
-	if ( player == level.player && isdefined( level.player2 ) && maps\_mw2coop::is_campaign_coop() )
+	if ( player == level.player && isdefined( level.player2 ) && maps\_mw2coop::is_campaign_coop() && !maps\_mw2coop::hint_is_own( hint ) )
 		level.player2 thread display_hint_timeout( hint, timeout, parm1, parm2, parm3 );
 @@@ end

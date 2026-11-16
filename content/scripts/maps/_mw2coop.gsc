@@ -764,7 +764,9 @@ sync_weapons()
 		// mw2coop_p2_weapnext, native.c), then the switch to player 1's weapon follows. Only while he is free (not in a scene, not downed).
 		// (also when both ride something and player 1 has his weapon there: the Gulag fly-in gives player 1 the scoped M14 to shoot from the helicopter, player 2 sat beside him with
 		// empty hands; owner, 2026-11-16: "the bottom player should get a weapon", "not only this level")
-		if ( level.player2 GetCurrentWeapon() == "none" && ( !level.player2 IsLinked() || level.player IsLinked() ) && !is_downed( level.player2 ) && !is_downed( level.player ) && level.player GetCurrentWeapon() != "none" && level.player2 GetWeaponsListPrimaries().size > 0 )
+		// (not while he flies the Predator: maps\_remotemissile unlinks him and turns his weapons off for the missile's flight, and gives his weapon back itself)
+		if ( level.player2 GetCurrentWeapon() == "none" && ( !level.player2 IsLinked() || level.player IsLinked() ) && !is_downed( level.player2 ) && !is_downed( level.player ) && level.player GetCurrentWeapon() != "none" && level.player2 GetWeaponsListPrimaries().size > 0
+			&& !isdefined( level.player2.is_flying_missile ) && !( isdefined( level.player2.is_controlling_UAV ) && level.player2.is_controlling_UAV ) )
 		{
 			if ( !isdefined( level.mw2coop_empty_hands ) )
 				level.mw2coop_empty_hands = 0;
@@ -1906,4 +1908,24 @@ breach_objectives_back()
 	wait 1;
 	if ( !isdefined( level.breaching ) || !level.breaching )
 		SetSavedDvar( "objectiveHide", false );
+}
+
+// Hints that belong to one player: the holder of an item (the Exodus laser, a Predator laptop: each holder gets his own copy), the driver of a vehicle, a climber,
+// a rappeller, the lead of a scene (boat, knife fight), the player a mine threw, the shooter of an armoured vehicle. maps\_utility's display_hint is not mirrored
+// to player 2 for these (_utility.gsc.patch hunk 7): with player 1 holding the laser, player 2 was told to press the d-pad for a designator he does not have.
+// From the night audit of 2026-11-17 (every display_hint call site of the campaign read).
+hint_is_own( hint )
+{
+	if ( !isdefined( hint ) )
+		return true;
+	if ( !isdefined( level.mw2coop_hint_own ) )
+	{
+		level.mw2coop_hint_own = [];
+		names = StrTok( "use_laser use_laser_golf invulerable_bullets invulerable_frags zodiac_drive zodiac_attack zodiac_reverse hint_crawl_left hint_crawl_right hint_melee left_icepick right_icepick how_to_climb rappel_melee begin_descent barrett how_to_pop_flare hint_predator_drone_1 hint_predator_drone_2 hint_predator_drone_3 hint_predator_drone_4 hint_dont_leave_price", " " );
+		foreach ( name in names )
+			level.mw2coop_hint_own[ name ] = true;
+	}
+	if ( isdefined( level.mw2coop_hint_own[ hint ] ) )
+		return true;
+	return IsSubStr( hint, "_player1" ) || IsSubStr( hint, "_player2" ) || IsSubStr( hint, "mineavoid_hint" );
 }

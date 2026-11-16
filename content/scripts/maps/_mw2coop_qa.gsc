@@ -135,6 +135,12 @@ main()
 		case "frags":
 			frags();
 			break;
+		case "hintown":
+			hintown();
+			break;
+		case "laserpad":
+			laserpad();
+			break;
 		case "predsteer":
 			predsteer();
 			break;
@@ -6152,8 +6158,17 @@ predsteer()
 	foreach ( ai in GetAISpeciesArray( "axis", "all" ) )
 		if ( IsAlive( ai ) )
 			ai Kill();
-	if ( flag_exist( "price_on_ridge" ) )
-		flag_set( "price_on_ridge" );
+	// (handle_ridge waits for approaching_ridge, first_uav_sequence for player_on_ridge then price_on_ridge: triggers the players would walk into; start ridge)
+	flags = [];
+	flags[ 0 ] = "approaching_ridge";
+	flags[ 1 ] = "player_on_ridge";
+	flags[ 2 ] = "price_on_ridge";
+	foreach ( f in flags )
+	{
+		if ( flag_exist( f ) )
+			flag_set( f );
+		wait 1;
+	}
 	t = 0;
 	pl = undefined;
 	while ( !isdefined( pl ) && t < 240 )
@@ -6161,6 +6176,8 @@ predsteer()
 		foreach ( player in level.players )
 			if ( player HasWeapon( "remote_missile_detonator" ) )
 				pl = player;
+		if ( GetDvar( "mw2coop_qa_who" ) == "1" && level.player HasWeapon( "remote_missile_detonator" ) ) // (the laptop's holder: the last one, or player 1 with mw2coop_qa_who 1)
+			pl = level.player;
 		wait 1;
 		t++;
 	}
@@ -6200,5 +6217,73 @@ predsteer()
 			report( "stick right " + i + ": missile angles " + vec_int( m.angles ) );
 	}
 	SetDvar( pad, "0 0 0 0 0 0 0 0" );
+	report( "done" );
+}
+
+// Exodus (arcadia): the laser designator with a pad (Nexus report, 2026-11-16: "it says to press the right pad button, but when I press it nothing happens"). The holder's pad
+// presses d-pad right (laser on), then the right trigger (designate), then d-pad right again (off); the level's NotifyOnPlayerCommand notifies are reported. Both pads.
+laserpad()
+{
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 4;
+	pl = maps\_mw2coop_arcadia::laser_player();
+	other = level.player;
+	pad = "mw2coop_qa_pad1";
+	if ( pl == level.player2 )
+		pad = "mw2coop_qa_pad2";
+	else
+		other = level.player2;
+	report( "laser holder " + player_name( pl ) + " (" + pad + "), laserForceOn " + pl.laserForceOn );
+	pl thread laserpad_watch( "holder" );
+	if ( isdefined( other ) )
+		other thread laserpad_watch( "other" );
+	SetDvar( pad, "0 0 0 0 8 0 0 0" );
+	wait 0.4;
+	SetDvar( pad, "0 0 0 0 0 0 0 0" );
+	wait 1.5;
+	report( "after d-pad right: laserForceOn " + pl.laserForceOn + ", weapon " + pl GetCurrentWeapon() );
+	SetDvar( pad, "0 0 0 0 0 0 255 0" );
+	wait 0.4;
+	SetDvar( pad, "0 0 0 0 0 0 0 0" );
+	wait 1.5;
+	report( "after the trigger: laserForceOn " + pl.laserForceOn );
+	SetDvar( pad, "0 0 0 0 8 0 0 0" );
+	wait 0.4;
+	SetDvar( pad, "0 0 0 0 0 0 0 0" );
+	wait 1.5;
+	report( "after d-pad right again: laserForceOn " + pl.laserForceOn );
+	report( "done" );
+}
+
+laserpad_watch( who )
+{
+	self endon( "death" );
+	for ( ;; )
+	{
+		msg = self waittill_any_return( "use_laser", "fired_laser" );
+		report( "notify " + msg + " on the " + who );
+	}
+}
+
+// display_hint mirrored to player 2 (_utility.gsc.patch hunk 7) except for a hint that belongs to one player (maps\_mw2coop::hint_is_own). Exodus: player 1 gets
+// "use_laser" (own: player 2 must not get it), then the same text under a name that is not in the list (shared: player 2 must get it).
+hintown()
+{
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 3;
+	level.player thread display_hint( "use_laser" );
+	wait 2;
+	report( "own hint: player 1 " + isdefined( level.player.current_global_hint ) + ", player 2 " + isdefined( level.player2.current_global_hint ) );
+	level.trigger_hint_string[ "mw2coop_qa_shared" ] = level.trigger_hint_string[ "use_laser" ];
+	level.trigger_hint_func[ "mw2coop_qa_shared" ] = level.trigger_hint_func[ "use_laser" ];
+	flag_set( "used_laser" ); // (the laser hint's break test: both go)
+	wait 3;
+	flag_clear( "used_laser" );
+	report( "after the break: player 1 " + isdefined( level.player.current_global_hint ) + ", player 2 " + isdefined( level.player2.current_global_hint ) );
+	level.player thread display_hint( "mw2coop_qa_shared" );
+	wait 2;
+	report( "shared hint: player 1 " + isdefined( level.player.current_global_hint ) + ", player 2 " + isdefined( level.player2.current_global_hint ) );
 	report( "done" );
 }
