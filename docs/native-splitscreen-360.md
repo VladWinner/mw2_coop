@@ -665,3 +665,15 @@ Done:
 - **Snowrace jitter at a standstill (`viewjit=4`, so_snowrace2_cliffhanger, during the start countdown, 1280x720, 210 fps):** for 150 draws of each context the player state's origin, pitch and yaw do not change at all
   (step sd 0.001 units / 0.000 degrees; frame time 4.69 ms, sd 0.6): the view is built from steady data, so Vlad's jitter at the spot is not reproduced in mode 11 (it can be the old compositor's alternate frames, or the sled after
   the start, which this test does not cover).
+
+### Campaign scripts against the 360 (2026-11-16)
+
+The console game has no campaign split screen (only Spec Ops), so the campaign scripts are the stock ones. Compared all 20 campaign level fastfiles (360 against PC, RawFile assets, line ends ignored) and the shared
+`common` scripts: 48 level files and 14 common files differ, and **none of the differences is a split screen change** (PC: prone-key hints `is_command_bound`, `forceXPos` of `get_countdown_hud` / `get_download_state_hud`,
+precache `&"..."` forms, `triggerer` instead of `level.player` in the grenade pickup, achievements, the credits, the dog move).
+- `IsSplitscreen()` is used in the campaign by `_slowmo_breach` (6 levels) and `oilrig/_underwater` only, and by `_coop.gsc` (`level.revive_hud_base_offset` 75 in a split screen, 120 otherwise). All three are already covered
+  (`_slowmo_breach.gsc.patch`, `_underwater.gsc.patch` with `mw2coop_native_split`; `_mw2coop.gsc` sets the revive offset 75).
+- Scripted HUD elements of the campaign (trainer hints at TOP +105..175, dcburning percentages TOP +30, minigun hints TOPLEFT/TOPRIGHT +50, Cliffhanger icons TOP +175, Predator text CENTER -175 / -120, Estate download
+  counters) all sit inside +-240 of the 640x480 HUD space, so they fit a half at the half's own scale (see `hudelem_hook`); nothing to move statically. Which of them are drawn in both halves or in one still needs a
+  tour in the game (`hudelemlog`).
+- Tools: `local/xbox360-ref/camp-work/{360,pc}/<level>/` hold the unpacked scripts (local only, never shipped).
