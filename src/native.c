@@ -8299,8 +8299,36 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			log_printf("%s", line);
 		}
 	}
+	if (CFG_ONCE("animrate", 0) && a && !IsBadReadPtr(a, 0xb0) && ((ctx_current == 1 && (c & 0xffff) == 0) || (ctx_current == 0 && (c & 0xffff) == 1))) {
+		// QA ([native] animrate=1): how often the other player's body animation changes between two of its draws: a hash of the first nodes of the animation tree (every dword, so
+		// time and weight fields count), compared with the same body's previous draw; the rates are logged every 300 draws with the origin step, to tell a body that is updated every
+		// frame from one that steps (the owner's "10-15 fps" body in the bottom half).
+		static uint32_t last_h[2];
+		static unsigned total[2], changed[2], moved[2];
+		static float last_o[2][2];
+		const uint8_t *tree = *(const uint8_t *const *)a;
+		int idx = tree && !IsBadReadPtr(tree, 16) ? *(const short *)(tree + 8) : 0;
+		uint32_t h = 2166136261u;
+		for (int k = 0; idx > 0 && k < 8; k++) {
+			const uint8_t *node = base + XR64(0x1bc0a30) + (size_t)idx * 0x40;
+			for (int j = 0; j < 16; j++)
+				h = (h ^ ((const uint32_t *)node)[j]) * 16777619u;
+			idx = *(const uint16_t *)(node + 0xc);
+		}
+		const int x = ctx_current;
+		const float *org = (const float *)e;
+		total[x]++;
+		changed[x] += h != last_h[x];
+		moved[x] += org && (org[0] != last_o[x][0] || org[1] != last_o[x][1]);
+		last_h[x] = h;
+		if (org)
+			last_o[x][0] = org[0], last_o[x][1] = org[1];
+		if (total[x] % 300 == 0)
+			log_printf("native: animrate ctx %d: the body's animation changed in %u of %u draws, its origin in %u (cg.time %d)", x, changed[x], total[x], moved[x], *(int *)(base + XR64(0x422434)));
+	}
 	if (ctx_current == 0 && (c & 0xffff) == 1)
 		p0cnt_flags0 = d;
+
 	if (CFG_ONCE("p0cnt", 0) >= 2 && ((ctx_current == 0 && (c & 0xffff) == 1) || (ctx_current == 1 && (c & 0xffff) == 0))) {
 		int k = ctx_current;
 		memcpy(p0dump_slot[k], base + RVA_CENT + (size_t)(c & 0xffff) * CENT_SIZE, sizeof(p0dump_slot[k]));

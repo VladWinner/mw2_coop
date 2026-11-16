@@ -943,10 +943,14 @@ p2away()
 		{
 			// player 1 walks toward player 2 on the pad dvar for 6 s (his body runs in player 2's view: does its animation move as smoothly as the other actors'?)
 			wait 3;
-			press( level.player, "forward", 5000 ); // the game's own binding, as padwalk does (the pad dvar did not move him)
+			if ( GetDvarInt( "mw2coop_qa_p1circle" ) )
+				SetDvar( "mw2coop_qa_pad1", "0 32767 12000 0 0 0 0 0" ); // player 1 walks a circle on his pad dvar (forward, turning): the stepping of his leg animation is easier to see than in a straight walk
+			else
+				press( level.player, "forward", 5000 ); // the game's own binding, as padwalk does (the pad dvar did not move him)
 			wait 0.7;
 			SetDvar( "mw2coop_qa_burst", "1" ); // the native side saves a burst of consecutive frames when this is set ([native] burst11=-2)
 			wait 4.5;
+			SetDvar( "mw2coop_qa_pad1", "0 0 0 0 0 0 0 0" );
 		}
 		if ( GetDvarInt( "mw2coop_qa_p2walk" ) )
 		{
