@@ -135,6 +135,9 @@ main()
 		case "frags":
 			frags();
 			break;
+		case "predsteer":
+			predsteer();
+			break;
 		case "fxplay":
 			fxplay();
 			break;
@@ -6137,4 +6140,65 @@ fxplay()
 		wait 1;
 	}
 	report( "fxplay done" );
+}
+
+// predsteer: (contingency, start "ridge", split screen with player 2 on a pad: "p1pad=0") player 2 raises the Predator laptop (d-pad right), fires (right trigger) and holds the
+// right stick to one side for 3 s: does the missile turn? (Nexus report: "you can't move the Predator to aim with a pad, it reads the mouse only")
+predsteer()
+{
+	level.mw2coop_no_follow = true;
+	// (Contingency: the laptop comes when Price is on the ridge and the stealth enemies are gone: both are made so)
+	wait 8;
+	foreach ( ai in GetAISpeciesArray( "axis", "all" ) )
+		if ( IsAlive( ai ) )
+			ai Kill();
+	if ( flag_exist( "price_on_ridge" ) )
+		flag_set( "price_on_ridge" );
+	t = 0;
+	pl = undefined;
+	while ( !isdefined( pl ) && t < 240 )
+	{
+		foreach ( player in level.players )
+			if ( player HasWeapon( "remote_missile_detonator" ) )
+				pl = player;
+		wait 1;
+		t++;
+	}
+	if ( !isdefined( pl ) )
+	{
+		report( "nobody has the laptop after " + t + " s" );
+		return;
+	}
+	pad = "mw2coop_qa_pad1";
+	if ( pl == level.player2 )
+		pad = "mw2coop_qa_pad2";
+	report( "the laptop: " + pad + " after " + t + " s" );
+	wait 4;
+	SetDvar( pad, "0 0 0 0 8 0 0 0" );
+	wait 0.4;
+	SetDvar( pad, "0 0 0 0 0 0 0 0" );
+	wait 3;
+	report( "weapon " + pl GetCurrentWeapon() );
+	SetDvar( pad, "0 0 0 0 0 0 255 0" );
+	wait 0.4;
+	SetDvar( pad, "0 0 0 0 0 0 0 0" );
+	for ( i = 0; i < 30 && !isdefined( level.remoteMissile ); i++ )
+		wait 0.1;
+	if ( !isdefined( level.remoteMissile ) )
+	{
+		report( "no missile in flight" );
+		return;
+	}
+	wait 1.2;
+	m = level.remoteMissile;
+	report( "missile " + vec_int( m.origin ) + " angles " + vec_int( m.angles ) );
+	SetDvar( pad, "0 0 25000 0 0 0 0 0" );
+	for ( i = 0; i < 6 && isdefined( m ); i++ )
+	{
+		wait 0.5;
+		if ( isdefined( m ) )
+			report( "stick right " + i + ": missile angles " + vec_int( m.angles ) );
+	}
+	SetDvar( pad, "0 0 0 0 0 0 0 0" );
+	report( "done" );
 }
