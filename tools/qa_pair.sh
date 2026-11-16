@@ -96,7 +96,7 @@ set solo_play 0'
 	printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\n%s\nset start "%s"\n!sleep 14000\n!xuid_add 1\n!sleep 6000\nmw2coop_join %s\n!sleep %d\n' "$COMMON" "$PRE" "$START" "$OWN_IP" $LONG > $B/mw2coop/commands.txt
 else
 printf '# host\n%s\nset start "%s"\nset mw2coop_god "%s"\n!sleep 35000\n%s\nlisten\n!sleep 2000\n%s\ncoopLaunch\n%s\n!sleep %d\n' "$COMMON" "$HOST_START" "$GOD" "$LAUNCH" "$HOSTCMDS" "$LATE" $LONG > $A/mw2coop/commands.txt
-printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\nset start "%s"\n!sleep 20000\n!xuid_add 1\n!sleep 19000\nmw2coop_join 127.0.0.1\n!sleep %d\n' "$COMMON" "$START" $LONG > $B/mw2coop/commands.txt
+printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\nset start "%s"\n!sleep 20000\n!xuid_add 1\n!sleep 19000\nmw2coop_join %s\n!sleep %d\n' "$COMMON" "$START" "${MW2COOP_JOIN_IP:-127.0.0.1}" $LONG > $B/mw2coop/commands.txt
 fi
 rm -f $A/mw2coop/mw2coop.log $B/mw2coop/mw2coop.log
 # A hang watchdog: when both logs stand still for 25 s (the games run in lockstep, so a hung copy stops the other too), ask
