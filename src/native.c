@@ -3487,6 +3487,9 @@ static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the
 static int frame_bottom; // mode 5: this client frame is context 1's (the bottom half)
 static int ctx1_clc_synced; // ctx1_deliver_commands: the ring of context 1 has been made equal (nothing pending) since its init
 static void ctx_swap(int to);
+#ifdef _WIN64
+static void flip_watch(int ending); // (QA, see below)
+#endif
 void native_unswap_entities(void);
 static void ctx_after_draw(void);
 static void ctx_wait_workers(void);
@@ -4661,6 +4664,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		if (p2draw) {
 			exp11_view(1, vrect);
+#ifdef _WIN64
+			if (CFG_ONCE("flipwatch", 0))
+				flip_watch(0);
+#endif
 			if (!CFG_ONCE("exp11same", 0)) // QA: exp11same=1 draws player 1 again in the second frame (no context swap)
 				ctx_swap(1);
 			// The cgame's aspect (RVA_CG_ASPECT, read by CG_CalcFov) is part of each context's cgame block: the value set above for player 1's draw went into context 0's copy, and
@@ -4732,6 +4739,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			}
 			if (no2d)
 				draw2d->current.enabled = (uint8_t)was2d;
+#ifdef _WIN64
+			if (CFG_ONCE("flipwatch", 0))
+				flip_watch(1);
+#endif
 			if (!CFG_ONCE("exp11same", 0))
 				ctx_swap(0);
 		}
@@ -5549,6 +5560,57 @@ static void ctx_swap_mask(int to, unsigned mask)
 	fov_scale_follow(to);
 }
 
+// QA ([native] flipwatch=1, 64 bits, mode 11): global state that the two views hold at different values. Right before and right after player 2's draw the dwords of a
+// block are read (the sound system's by default, rva 0x1a10000, 256 KB; [native] fliprva=<decimal rva> another); a dword counts when player 1's draw and player 2's each
+// left it at its own value, the same values as in the frame before (written by both views, each its own: whoever reads it in between sees it flip every frame). The 20
+// most frequent are logged every 5 s.
+#ifdef _WIN64
+#define FLIP_RVA 0x1a10000u
+#define FLIP_N 0x10000u
+static uint32_t flip_cur[2][FLIP_N], flip_prev[2][FLIP_N];
+static uint16_t flip_cnt[FLIP_N];
+static void flip_watch(int ending)
+{
+	const uint32_t *live = (const uint32_t *)(base + XR((uint32_t)CFG_ONCE("fliprva", (int)FLIP_RVA)));
+	memcpy(flip_cur[ending], live, sizeof(flip_cur[0]));
+	if (ending != 1)
+		return;
+	static unsigned frames;
+	static DWORD at;
+	frames++;
+	for (uint32_t i = 0; i < FLIP_N; i++)
+		if (flip_cur[0][i] != flip_cur[1][i] && flip_cur[0][i] == flip_prev[0][i] && flip_cur[1][i] == flip_prev[1][i] && flip_cnt[i] < 0xffff)
+			flip_cnt[i]++;
+	memcpy(flip_prev, flip_cur, sizeof(flip_prev));
+	if (!at)
+		at = GetTickCount();
+	if (GetTickCount() - at < 5000)
+		return;
+	at = GetTickCount();
+	log_printf("native: flipwatch 5 s (%u frames):", frames);
+	for (int k = 0; k < 20; k++) {
+		uint32_t best = 0;
+		for (uint32_t i = 1; i < FLIP_N; i++)
+			if (flip_cnt[i] > flip_cnt[best])
+				best = i;
+		if (flip_cnt[best] < frames / 4)
+			break;
+		float f0, f1;
+		memcpy(&f0, &flip_cur[0][best], 4), memcpy(&f1, &flip_cur[1][best], 4);
+		char name[64] = "";
+		if (!(best & 1) && best + 1 < FLIP_N) { // a pointer in view 1 to something that starts with a name pointer (a sound alias): its name
+			const uint64_t q = (uint64_t)flip_cur[0][best] | (uint64_t)flip_cur[0][best + 1] << 32;
+			const char *const *obj = (const char *const *)(uintptr_t)q;
+			if (q > 0x10000 && !IsBadReadPtr(obj, 8) && *obj && !IsBadReadPtr(*obj, 1))
+				snprintf(name, sizeof(name), " -> \"%.40s\"", *obj);
+		}
+		log_printf("native:   rva 0x%x: %u frames, view 1 %08x (%g), view 2 %08x (%g)%s", (uint32_t)CFG_ONCE("fliprva", (int)FLIP_RVA) + best * 4, flip_cnt[best], flip_cur[0][best], (double)f0, flip_cur[1][best], (double)f1, name);
+		flip_cnt[best] = 0;
+	}
+	memset(flip_cnt, 0, sizeof(flip_cnt));
+	frames = 0;
+}
+#endif
 static void ctx_swap(int to)
 {
 	ctx_swap_mask(to, CTX_ALL);
@@ -10310,6 +10372,116 @@ static void vol_off_hook(int prio, int fade)
 		vol_off_original(prio, fade);
 }
 #ifdef _WIN64
+// The entities' looping sounds in 64 bits (the 32-bit loopsnd1 below; owner 2026-11-17: on the 64-bit split screen a sound "like an ADSL connection" in Second Sun, not on
+// 32 bits). The entity pass rva 0x9c960 calls the entity loop sound 0xa6f90 (entity, origin, alias name) for every emitter in every frame, and the entity type draw 0x9ea20
+// the blended loops (0x23a060 at 0x9ee46), and the vehicles' engine sound 0x27eae0 their blended engine loops (0x23a060 at 0x27ebcd: idle and engine aliases, the
+// lerp and pitch from the vehicle's speed), in both contexts: sndcount=3 on Second Sun counted 11500 calls a second of the play helper 0x23a880 and 2900 of the blend from
+// each view, the same numbers in both (the falling helicopters of the opening: mi17_idle_low / mi17_engine_low 800 a second from each). One voice updated by both views
+// in every frame, each with its own lerp and pitch, warbles at the frame rate (the "ADSL" sound; muting the emitters alone did not end it, owner). Context 1's calls return
+// "no sound": the engine has a listener for each player and plays every sound to the nearer one, and in mode 11 the views share the entities. [native] loopsnd1=0 off.
+static int (*ent_loop64_original)(int, const float *, const char *);
+static int ent_loop64_hook(int ent, const float *origin, const char *alias)
+{
+	if (ctx_current == 1 && native_active && CFG_ONCE("loopsnd1", 1))
+		return -1;
+	return ent_loop64_original(ent, origin, alias);
+}
+static int (*blend64_original)(const void *, const void *, float, float, int, const float *, int, int);
+static int blend64_hook(const void *alias0, const void *alias1, float lerp, float volume, int ent, const float *origin, int timeshift, int system)
+{
+	if (ctx_current == 1 && native_active && CFG_ONCE("loopsnd1", 1))
+		return -1;
+	return blend64_original(alias0, alias1, lerp, volume, ent, origin, timeshift, system);
+}
+// QA ([native] stoplog=1): who stops sound channels while player 2's view runs (the channel stop functions rva 0x2afd70 and 0x2ad1b0): the call stacks, as rvas, every 5 s.
+static uintptr_t (*chan_stop_original[2])(uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+static struct {
+	uint32_t rva[4];
+	unsigned n;
+} stop_stacks[24];
+static void stop_note(int k)
+{
+	void *frames[6] = {0};
+	const USHORT got = RtlCaptureStackBackTrace(2, 6, frames, NULL);
+	uint32_t r[4] = {0};
+	for (int i = 0; i < 4 && i < got; i++)
+		r[i] = (uintptr_t)frames[i] >= (uintptr_t)base && (uintptr_t)frames[i] < (uintptr_t)base + 0x5000000 ? (uint32_t)((uint8_t *)frames[i] - base) : 0xffffffffu;
+	r[3] = (r[3] & 0x0fffffffu) | (uint32_t)k << 28;
+	for (int i = 0; i < 24; i++) {
+		if (stop_stacks[i].n && !memcmp(stop_stacks[i].rva, r, sizeof(r))) {
+			stop_stacks[i].n++;
+			break;
+		}
+		if (!stop_stacks[i].n) {
+			memcpy(stop_stacks[i].rva, r, sizeof(r));
+			stop_stacks[i].n = 1;
+			break;
+		}
+	}
+	static DWORD at;
+	if (!at)
+		at = GetTickCount();
+	if (GetTickCount() - at < 5000)
+		return;
+	at = GetTickCount();
+	for (int i = 0; i < 24 && stop_stacks[i].n; i++)
+		log_printf("native: stoplog 5 s: ctx1 stop%d x%u from 0x%x <- 0x%x <- 0x%x", (int)(stop_stacks[i].rva[3] >> 28), stop_stacks[i].n, stop_stacks[i].rva[0], stop_stacks[i].rva[1],
+			   stop_stacks[i].rva[2]);
+	memset(stop_stacks, 0, sizeof(stop_stacks));
+}
+static uintptr_t chan_stop0_hook(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d)
+{
+	if (ctx_current == 1 && native_active)
+		stop_note(0);
+	return chan_stop_original[0](a, b, c, d);
+}
+static uintptr_t chan_stop1_hook(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d)
+{
+	if (ctx_current == 1 && native_active)
+		stop_note(1);
+	return chan_stop_original[1](a, b, c, d);
+}
+// The sound frame (rva 0xd5190: the stop pass 0x23f4c0, then SND_Update 0x23ed90) stops every looping voice that nobody refreshed since the last sound frame (each refresh
+// stamps the voice with the frame mark 0x1a28fc4) and runs once in each client frame. Player 2's client frame ran it too, so there were two sound frames in every engine
+// frame, and a loop that player 1's view refreshes (fire, the dazed player's shellshock_loop, a plane's flyby) died in player 2's and started again in player 1's: a voice
+// restarted about 100 times a second, the "ADSL" warble on the 64-bit split screen (owner 2026-11-17, Second Sun; stronger as a plane flew over). flipwatch saw the voice
+// slot taken after player 1's draw and free after player 2's in every frame; stoplog saw player 2's view stop it from 0xd5190. Player 2's client frame skips it now: one
+// sound frame per engine frame, as in single player. [native] sndframe1=0 off.
+static void (*snd_frame_original)(void);
+static void snd_frame_hook(void)
+{
+	if (ctx_current == 1 && native_active && CFG_ONCE("sndframe1", 1))
+		return;
+	snd_frame_original();
+}
+static void snd_frame_install64(void)
+{
+	const uint32_t calls[4] = {XR(0x634b), XR(0x11a8e), XR(0x11b89), XR(0xd5920)};
+	int n = 0;
+	for (int i = 0; i < 4; i++) {
+		uint8_t *at = base + calls[i];
+		if (calls[i] && at[0] == 0xe8 && at + 5 + *(const int32_t *)(at + 1) == base + XR(0xd5190) && jhook_call(at, (void *)snd_frame_hook, (void **)&snd_frame_original))
+			n++;
+	}
+	log_printf("native: the sound frame runs once per engine frame (player 1's client frame): %d of 4 calls", n);
+}
+static void ent_loops_install64(void)
+{
+	uint8_t *a = base + XR(0x9cc2f), *b = base + XR(0x9ee46), *v = base + XR(0x27ebcd);
+	const int ok_a = a[0] == 0xe8 && a + 5 + *(const int32_t *)(a + 1) == base + XR(0xa6f90) && jhook_call(a, (void *)ent_loop64_hook, (void **)&ent_loop64_original);
+	const int ok_b = b[0] == 0xe8 && b + 5 + *(const int32_t *)(b + 1) == base + XR(0x23a060) && jhook_call(b, (void *)blend64_hook, (void **)&blend64_original);
+	const int ok_v = v[0] == 0xe8 && v + 5 + *(const int32_t *)(v + 1) == base + XR(0x23a060) && jhook_call(v, (void *)blend64_hook, (void **)&blend64_original);
+	if (cfg("stoplog", 0)) {
+		static const uint8_t b0[15] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x40};
+		static const uint8_t b1[15] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xec, 0x40};
+		log_printf("native: stoplog: %d %d", jhook_function(base + XR(0x2afd70), b0, sizeof(b0), (void *)chan_stop0_hook, (void **)&chan_stop_original[0]),
+			   jhook_function(base + XR(0x2ad1b0), b1, sizeof(b1), (void *)chan_stop1_hook, (void **)&chan_stop_original[1]));
+	}
+	log_printf("native: the entities' looping sounds %s, their blended loops %s, the vehicles' engine loops %s", ok_a ? "start once (context 0)" : "are not hooked (rva 0x9cc2f)",
+		   ok_b ? "once" : "not hooked (rva 0x9ee46)", ok_v ? "once" : "not hooked (rva 0x27ebcd)");
+}
+#endif
+#ifdef _WIN64
 // the 64-bit mixer functions (the shell shock sound state rva 0xb7de0 calls all four; environment set 0x23d140, channel volumes set 0x23d050, environment deactivate
 // 0x2381a0). The channel volumes' deactivation 0x2380b0 starts with a rip-relative test, so its six callers (the cgame's sound states) are hooked instead.
 static void mix_install64(void)
@@ -10983,6 +11155,8 @@ static void contexts_install(void)
 			}
 		}
 		mix_install64();
+		ent_loops_install64();
+		snd_frame_install64();
 		if (!jhook_function(base + XR(0x9c960), add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
 		if (!jhook_function(base + XR(0xb0680), pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
