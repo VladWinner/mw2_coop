@@ -3190,6 +3190,7 @@ static void rs_shock_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
 // frame runs the same cgame step, so 0xbccdf called the step a second time for the same effects system: smoke and muzzle flashes lived one frame ahead
 // in the other half (owner's report, 2026-11-15). [native] fxclock=0 off.
 static int ctx1_ready; // the second context is live (set when its statics are initialised)
+static volatile int p2_cmd_hold; // a new level is loading: context 1 still holds the previous level's state, its commands are not given to the server (native_level_load)
 #ifdef _WIN64
 static void (*fx_step_original)(int *ctx, int time);
 static void fx_step_hook(int *ctx, int time)
@@ -5982,6 +5983,11 @@ static void ctx_after_draw(void)
 	*(int *)(ctx_store[1][0] + ((RVA_CG_CLIENTNUM + 4) - RANGE_RVA(0))) = cfg("ctx1lc", 1);
 	ctx1_ready = 1;
 	ctx1_clc_synced = 0;
+	if (p2_cmd_hold && ctx_store[1][5]) { // the commands context 1 made before this level's init are not his: none of them goes to the server
+		*(int *)(ctx_store[1][5] + CL_SENT) = *(const int *)(ctx_store[1][5] + CL_CMDNUM);
+		p2_cmd_hold = 0;
+		log_printf("native: player 2's commands go to the server again (this level's context 1)");
+	}
 	log_printf("native: context 1 initialised");
 	ctx_dump("after init");
 }
@@ -8126,7 +8132,7 @@ static void usercmd_step_inner(int lc)
 				   ctx_store[1][4] ? *(float *)(ctx_store[1][4] + ACC_IN_CLS) : -1.0f);
 		}
 	}
-	if (ctx1_ready && ctx_current == 0 && ctx_store[1][5]) {
+	if (ctx1_ready && !p2_cmd_hold && ctx_current == 0 && ctx_store[1][5]) {
 		// context 1's own client frame makes its usercmds in its cl block (ring of 128 x 0x40 at +0, cmdNumber at +0x2000, the number sent at +0x2004): player 1 gets them
 		// through the engine's SV_ClientThink analogue, as player 0 gets his through rva 0xd02a0
 		uint8_t *cl = ctx_store[1][5];
@@ -10928,6 +10934,63 @@ static int text_pad_player(int *tactical)
 	*tactical = o.tactical;
 	return ctx_current;
 }
+
+// A new level's zones are loading (zones.c). Player 2's commands of the previous level must not reach the new level's first moves: their weapon index names a weapon
+// of that level. Endgame (af_chase) loads few weapons; after Just Like Old Times the index (52) had no definition there and player 2's first move crashed
+// (BG_GetWeaponDef NULL: 32-bit read of 0x66f at rva 0x2c6d, 64-bit read of 0x877 at rva 0x86f1b; split screen level chains, 2026-11-17). Three places held them:
+// context 1's own new commands (held back until this level's context 1 is up), the server's last command of client 1 and the client's two session commands
+// (cleared here; the engine clears client 0's itself). Checked: Just Like Old Times -> Endgame -> the Museum in the 64-bit, 32-bit and iw4x-sp split screen and in a
+// 64-bit network pair. [native] p2cmdclear=0 turns it all off.
+static uint8_t *volatile p2_gclient; // player 2's gclient as native_poll_players last saw it
+void native_level_load(void)
+{
+#ifdef _WIN64
+	const unsigned ref_clients = 0x19ada98;
+#else
+	const unsigned ref_clients = 0x1723988;
+#endif
+	if (!base || !cfg("p2cmdclear", 1))
+		return;
+	// Context 1 still runs on the previous level's state until this level's cgame is up and it is seeded again ("context 1 initialised"); the commands it makes
+	// meanwhile carry that level's weapon and time, and usercmd_step_inner gave them to the server as player 2's: the crash below came from one of them
+	// (time 14800, older than the cleared ones; WINMM -> SV_ClientThink rva 0xe7750 -> ClientThink_real -> Pmove). They wait for the new context.
+	if (ctx1_ready) {
+		p2_cmd_hold = 1;
+		log_printf("native: a new level: player 2's commands wait for this level's context 1");
+	}
+	if (!addr_resolved(ref_clients))
+		return;
+	uint8_t *cmd = base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE + 0x1630;
+	const int t = *(const int *)cmd, weapon = *(const uint16_t *)(cmd + 0x14);
+	memset(cmd, 0, 0x40);
+	log_printf("native: client 1's last server command of the previous level cleared (time %d, weapon %d)", t, weapon);
+	// The game's own copies are the ones the move reads: ClientThink_real (64-bit rva 0x15be30, 32-bit VA 0x457390, the same in the iw4x-sp exe) builds player 2's
+	// move from his session command (gclient + 0xaca8, the previous one at + 0xace8), and the level spawn keeps these too (the crash with the clear above alone: time
+	// 14628, weapon 52, offhand 9; the 64-bit build crashed the same way, read of 0x877 at rva 0x86f1b). At the level load the entity has no client any more: the
+	// client (a static array of the game) is the one native_poll_players saw while the previous level ran.
+	uint8_t *gc = p2_gclient;
+	if (gc && !IsBadWritePtr(gc + 0xaca8, 0x80)) {
+		log_printf("native: client 1's session commands of the previous level cleared (time %d weapon %d offhand %d, previous time %d weapon %d)", *(const int *)(gc + 0xaca8),
+			   *(const uint16_t *)(gc + 0xaca8 + 0x14), *(const uint16_t *)(gc + 0xaca8 + 0x18), *(const int *)(gc + 0xace8), *(const uint16_t *)(gc + 0xace8 + 0x14));
+		memset(gc + 0xaca8, 0, 0x80);
+	}
+}
+
+// Every 250 ms (menus_poll, control thread): player 2's client, g_entities[1].client, while a level runs.
+void native_poll_players(void)
+{
+#ifdef _WIN64
+	const unsigned ref_entities = 0xd9e070;
+#else
+	const unsigned ref_entities = 0xaa76b8;
+#endif
+	if (!base || !addr_resolved(ref_entities))
+		return;
+	uint8_t *gc = *(uint8_t *volatile *)(base + RVA_GENTITIES + GENT_SIZE + 0x108);
+	if (gc)
+		p2_gclient = gc;
+}
+
 
 void native_install(void)
 {

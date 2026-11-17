@@ -36,6 +36,10 @@ https://github.com/stxlvn/mw2_enhanced
 хост откроет лобби (Windows один раз спросит права администратора). Через интернет без общей
 сети: роутер хоста сам откроет порт, если на нём включён UPnP; иначе нужен проброс UDP-порта
 28960 или Radmin VPN. Порт меняется в mw2coop\settings.ini (у обоих одинаковый). Этот файл мод создаёт сам при первом запуске игры и при каждом запуске дополняет новыми настройками, не трогая ваши значения (прежний файл сохраняется как settings.ini.bak).
+Если провайдер не даёт пробросить порт (в лобби тип NAT «Строгий», CGNAT, DS-Lite), а подключение
+висит на «Присоединение к игре» и кончается ошибкой про 12 секунд без сигнала: поставьте
+steam_relay=1 в [network] файла mw2coop\settings.ini на обоих ПК и подключайтесь по приглашению
+Steam. Через VPN подключайтесь через ПРИСОЕДИНИТЬСЯ К ИГРЕ, а не консольной командой connect.
 
 Удаление: удалите из папки игры winmm.dll и папку mw2coop.
 (Правило брандмауэра, если его добавлял мод: "Call of Duty MW2 co-op (mw2coop)".)
@@ -85,6 +89,10 @@ If Windows Firewall would keep the partner out, the game offers to fix it when t
 the lobby (Windows asks for administrator rights once). Over the internet without a shared
 network: the host's router opens the port itself if UPnP is on; otherwise forward UDP port
 28960, or use Radmin VPN. The port can be changed in mw2coop\settings.ini (the same on both PCs). The mod makes this file itself at the first start of the game and brings it up to date at every start, keeping the values you changed (the old file is saved as settings.ini.bak).
+If the provider allows no port forward (the lobby says NAT type Strict, CGNAT, DS-Lite) and joining
+stays at "Joining game" and ends with an error about 12 seconds without a signal: set
+steam_relay=1 under [network] in mw2coop\settings.ini on both PCs and join by Steam invite.
+Over a VPN join through JOIN A GAME, not with the console command connect.
 
 Uninstall: delete winmm.dll and the mw2coop folder from the game folder. Problems: attach mw2coop\mw2coop.log from both players.
 

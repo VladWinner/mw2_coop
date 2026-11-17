@@ -4,6 +4,10 @@
 //   settings.ini [native] players=2 experiment=10 ...   QA: the session starts with the game
 //   native_split_start() / native_split_stop()          the menu's split screen lobby: the session starts with its Start and ends when the game is back in the menus
 void native_install(void);
+// a new level's zones are loading: client 1's last server command of the previous level is cleared
+void native_level_load(void);
+// menus_poll: notes player 2's client while a level runs (for native_level_load)
+void native_poll_players(void);
 // 1 while a session runs
 int native_split_active(void);
 // Where context ctx (0 player 1, 1 player 2) keeps the bytes the game has at a reference rva of the client statics that a split screen keeps per context; NULL outside a session

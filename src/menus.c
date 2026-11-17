@@ -3529,6 +3529,7 @@ void menus_poll(void)
 			InterlockedExchange(&campaign_mission_seen, 0);
 	}
 	upnp_want(base[RVA_PARTY_IS_HOST] && (base[RVA_PARTY_ACTIVE] || (v[0] == '1' && coop[0] == '1')));
+	native_poll_players();
 	{ // the loading screen's look: the campaign's while a campaign co-op or split screen game is being set up or played (Spec Ops' lobby and levels keep theirs)
 		static int sticky;
 		char mapn[64] = "";
@@ -3587,9 +3588,6 @@ static void tick_f(void)
 	add_partner_popups();
 	padopts_tick();
 	fonts_retry_tick(); // (the fonts' late retry: here, at the top of the main thread, not inside an asset lookup)
-#ifndef _WIN64
-	scrdebug_string_census_tick();
-#endif
 	gfxopts_tick();
 	enhopts_tick();
 	picking_tick();

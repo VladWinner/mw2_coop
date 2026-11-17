@@ -20,6 +20,7 @@
 #include "zones.h"
 #include "guards.h"
 #include "scrdebug.h"
+#include "native.h"
 #ifdef _WIN64
 #include "game.h"
 #include "transplant.h"
@@ -113,10 +114,8 @@ void zones_pools_reset(void)
 
 static void load_level_zones(const char *map, int flag)
 {
-#ifndef _WIN64
-	scrdebug_string_census(map ? map : "level load");
-#endif
 	guards_invalidate_caches();
+	native_level_load();
 	transplant_new_level();
 	char coop[8] = "";
 	game_dvar_string("coop", coop, sizeof(coop)); // a bool: "0" / "1"
