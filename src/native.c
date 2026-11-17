@@ -8145,6 +8145,8 @@ static void mouse_read_hook(intptr_t state, float *x, float *y)
 		return;
 	}
 	mouse_read_original(state, x, y);
+	if (ctx_current == 1 && CFG_ONCE("qa_mouse1dx", 0)) // QA: a steady mouse move for player 2 (no real cursor is moved): does his view turn? (Big Brother's gunner)
+		*x += (float)CFG_ONCE("qa_mouse1dx", 0);
 	if (inputlog_on() && (*x != 0 || *y != 0))
 		inputlog("MOUSE,%d,%d,%d,%.3f,%.3f", ctx_current, 1, native_active ? kb_player() : 0, *x, *y);
 }
@@ -8254,8 +8256,8 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 		static DWORD at;
 		if (GetTickCount() - at >= 250) {
 			at = GetTickCount();
-			log_printf("native: cmdlog1 time %d buttons %08x angles %d %d %d (short units) kb_player %d", *(int *)cmd, *(int *)(cmd + 4), *(int *)(cmd + 8), *(int *)(cmd + 12),
-				   *(int *)(cmd + 16), kb_player());
+			log_printf("native: cmdlog1 time %d buttons %08x angles %d %d %d (short units) remote %d %d pm_flags %08x kb_player %d", *(int *)cmd, *(int *)(cmd + 4), *(int *)(cmd + 8), *(int *)(cmd + 12),
+				   *(int *)(cmd + 16), (int)(int8_t)cmd[0x3c], (int)(int8_t)cmd[0x3d], *(unsigned *)(base + RVA_PM_FLAGS), kb_player());
 		}
 	}
 	if (inputlog_on() && cmd && native_active && (ctx_current == 0 || ctx_current == 1)) { // the usercmd as it leaves the maker (about 20 a second per context)

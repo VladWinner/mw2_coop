@@ -88,9 +88,32 @@ def level_reach(bad):
                     todo.append(r)
 
 
+def qa_stub(bad):
+    """A session without a QA scenario gets a stub of maps/_mw2coop_qa.gsc that has only its entry points (src/scripts.c): a call from another script to a
+    function the stub lacks is a compile error ("unknown function") on every level of every normal session (2026-11-18: maps\\_mw2coop_qa::bbcheck from
+    _mw2coop.gsc, caught by a QA run before it was pushed)."""
+    src = open(os.path.join(ROOT, "src", "scripts.c"), encoding="utf-8", errors="replace").read()
+    m = re.search(r"static const char stub\[\] = (.*?);\n", src, re.S)
+    if not m:
+        bad.append("src/scripts.c: the QA stub text was not found")
+        return
+    text = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))).replace("\\n", "\n").replace("\\t", "\t")
+    have = set(re.findall(r"^(\w+)\s*\(", text, re.M))
+    paths = glob.glob(os.path.join(ROOT, "content", "scripts", "**", "*.gsc"), recursive=True) + glob.glob(os.path.join(ROOT, "content", "patches", "**", "*.patch"), recursive=True)
+    for path in paths:
+        if os.path.basename(path).lower() == "_mw2coop_qa.gsc":
+            continue
+        code = code_only(open(path, encoding="utf-8", errors="replace").read())
+        for fn in sorted(set(re.findall(r"\bmaps\\_mw2coop_qa::(\w+)", code, re.I))):
+            if fn not in have:
+                bad.append("%s calls maps\\_mw2coop_qa::%s, which the QA stub of src/scripts.c lacks (every level without a QA scenario would fail to compile)"
+                           % (os.path.relpath(path, ROOT).replace(os.sep, "/"), fn))
+
+
 def main():
     bad = []
     level_reach(bad)
+    qa_stub(bad)
     for path in sorted(glob.glob(os.path.join(ROOT, "content", "scripts", "**", "*.gsc"), recursive=True)):
         check_text(os.path.relpath(path, ROOT).replace(os.sep, "/"), open(path, encoding="utf-8", errors="replace").read(), bad)
     for path in sorted(glob.glob(os.path.join(ROOT, "content", "patches", "**", "*.patch"), recursive=True)):
