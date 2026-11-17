@@ -265,7 +265,8 @@ static void press_poll(void)
 	char name[32];
 	if (sscanf(v, "%d %31s %d", &player, name, &ms) != 3)
 		return;
-	if (player != (game_peek(RVA_PARTY_IS_HOST, 1) ? 1 : 2))
+	// (split screen: both players are here and the party is reset; player 1's presses are the keyboard's, player 2's go through his pad's QA file)
+	if (native_split_active() ? player != 1 : player != (game_peek(RVA_PARTY_IS_HOST, 1) ? 1 : 2))
 		return;
 	int slot = 0;
 	while (slot < MAX_HELD - 1 && held_name[slot][0] && strcmp(held_name[slot], name) != 0)

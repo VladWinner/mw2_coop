@@ -65,9 +65,13 @@ transplant_request( level_name )
 // level's AI driving animations are made for, wearing the co-op body's mesh. The DLL makes it on
 // the first lookup of the name, from the pair in the dvar of that name (src/transplant.c
 // transplant_clone).
-rider_model( body )
+// skeleton: the AI model whose skeleton the animations are made for (default Soap's, Cliffhanger); Just Like Old Times' rope uses Price's
+// (body_desert_tf141_assault_a, maps\_mw2coop_cave::partner_view). One pair per level: the dvar names it.
+rider_model( body, skeleton )
 {
-	SetDvar( "mw2coop_rider", "body_hero_soap_arctic " + body );
+	if ( !isdefined( skeleton ) )
+		skeleton = "body_hero_soap_arctic";
+	SetDvar( "mw2coop_rider", skeleton + " " + body );
 	return "mw2coop_rider";
 }
 

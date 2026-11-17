@@ -255,3 +255,137 @@ collapse_partner_blackout( view )
 		level.mw2coop_collapse_tag Delete();
 	maps\_mw2coop::state( "cave exit collapse: player 2 held at the cave mouth for the blackout" );
 }
+
+// --------------------------------------------------------------------------------------------
+// The rope as the other player sees it (owner, 2026-11-17: "on the way down the players see second hands on each other"). The level's rigs are
+// first-person hands (viewhands_player_tf141) at the rappeller's eye: shown during the hook-up and the knife kill, they hung beside the rappeller's
+// own body, which went down the rope upright in its standing pose (QA rappelview frames). Now the rigs and the knife are hidden from the other
+// player, the rappeller's own body is off for the scene, and the other player sees a stand-in: the rappeller's body mesh on Price's skeleton
+// (maps\_mw2coop_bodies::rider_model: the owner's rule for a player in an AI animation) with his head, playing Price's animations of the same scene
+// at the rig's moment (the hook-up, the jump down the rope, the knife kill), its eyes kept where the rappeller's camera is.
+#using_animtree( "generic_human" );
+
+rope_skeleton()
+{
+	return "body_desert_tf141_assault_a";	// Price's body in this level (character_hero_desert_price)
+}
+
+// af_caves_rappel_behavior(), once the rigs and the rope exist. who: the rappeller.
+partner_view( who, rig, ending_rig )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) || !isdefined( who.mw2coop_body ) || !isdefined( who.mw2coop_head ) )
+		return;
+	other = maps\_mw2coop::other_player( who );
+	if ( !isdefined( other ) )
+		return;
+	rig hideOnClient( other );
+	ending_rig hideOnClient( other );
+
+	body = Spawn( "script_model", who.origin );
+	body SetModel( maps\_mw2coop_bodies::rider_model( who.mw2coop_body, rope_skeleton() ) );
+	body Attach( who.mw2coop_head, "", true );
+	body hideOnClient( who );
+	body DontCastShadows();
+	body UseAnimTree( #animtree );
+	level.mw2coop_rope_body = body;	// QA rappelview
+	who maps\_utility::SetModelFunc( undefined );
+	maps\_mw2coop::state( "af_caves: the rappeller seen by the other player as his body on Price's skeleton" );
+
+	hookup = rig maps\_utility::getanim( "rappel_hookup" );
+	far = rig maps\_utility::getanim( "rappel_far" );
+	kill = ending_rig maps\_utility::getanim( "rappel_kill" );
+	p_setup = level.scr_anim[ "price" ][ "pri_rappel_setup" ];
+	p_jump = level.scr_anim[ "price" ][ "pri_rappel_jump" ];
+	p_kill = level.scr_anim[ "price" ][ "pri_rappel_kill" ];
+	phase = "";
+	knife = undefined;
+	for ( ;; )
+	{
+		if ( !isdefined( rig ) || !isdefined( ending_rig ) || !isalive( who ) )
+			break;
+		// again every frame: the level shows the rigs later (Show, which clears the per-player hide marks)
+		rig hideOnClient( other );
+		ending_rig hideOnClient( other );
+		k = ending_rig GetAnimTime( kill );
+		f = rig GetAnimTime( far );
+		if ( k > 0.001 )
+		{
+			if ( phase != "kill" )
+			{
+				body ClearAnim( %root, 0 );
+				body SetAnim( p_kill, 1, 0, 0 );
+				knife = Spawn( "script_model", body.origin );
+				knife SetModel( "weapon_parabolic_knife" );
+				knife LinkTo( body, "tag_inhand", ( 0, 0, 0 ), ( 0, 0, 0 ) );
+				knife hideOnClient( who );
+				phase = "kill";
+			}
+			body SetAnimTime( p_kill, min( k, 0.999 ) );
+			pace( body, who GetEye(), ending_rig GetTagAngles( "tag_player" )[ 1 ] );
+		}
+		else if ( f > 0.001 )
+		{
+			if ( phase != "down" )
+			{
+				body ClearAnim( %root, 0 );
+				body SetAnim( p_jump, 1, 0, 0 );
+				phase = "down";
+			}
+			// the descent's part of Price's jump: off the ledge at the start, the last of it his landing on the guard
+			body SetAnimTime( p_jump, rope_jump_from() + ( rope_jump_to() - rope_jump_from() ) * min( f / 0.94, 1 ) );
+			pace( body, who GetEye(), rig GetTagAngles( "tag_player" )[ 1 ] );
+		}
+		else
+		{
+			if ( phase != "hook" )
+			{
+				body ClearAnim( %root, 0 );
+				body SetAnim( p_setup, 1, 0, 0 );
+				phase = "hook";
+			}
+			body SetAnimTime( p_setup, min( rig GetAnimTime( hookup ), 0.999 ) );
+			pace( body, who GetEye(), rig GetTagAngles( "tag_player" )[ 1 ] );
+		}
+		wait 0.05;
+		if ( phase == "kill" && !who IsLinked() )
+			break;
+	}
+	if ( isdefined( knife ) )
+		knife Delete();
+	body Delete();
+	level.mw2coop_rope_body = undefined;
+	if ( isdefined( who ) && IsAlive( who ) )
+		who maps\_mw2coop_bodies::give_body( maps\_mw2coop::body_model );
+}
+
+// where Price's jump anim is at the top and at the bottom of the player's descent (fractions of the anim)
+rope_jump_from()
+{
+	return 0.2;
+}
+
+rope_jump_to()
+{
+	return 0.85;
+}
+
+// self-less: the stand-in turned to yaw with its eyes at eye
+pace( body, eye, yaw )
+{
+	body.angles = ( 0, yaw, 0 );
+	tag = "tag_eye";
+	at = body GetTagOrigin( tag );
+	if ( !isdefined( at ) )
+		at = body GetTagOrigin( "j_head" );
+	body.origin = body.origin + ( eye - at );
+}
+
+// af_caves_rappel_behavior(), right after the knife of the kill is shown: a first-person prop like the rigs
+hide_from_partner( ent, who )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) )
+		return;
+	other = maps\_mw2coop::other_player( who );
+	if ( isdefined( other ) )
+		ent hideOnClient( other );
+}

@@ -196,6 +196,8 @@ set_bodies()
 			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ] ) );
 			PrecacheModel( "mw2coop_pick_up" );
 		}
+		if ( level.script == "af_caves" )	// the stand-in on the rope (maps\_mw2coop_cave::partner_view)
+			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ], maps\_mw2coop_cave::rope_skeleton() ) );
 		player.mw2coop_body = models[ 0 ];
 		player.mw2coop_head = models[ 1 ];
 		player maps\_mw2coop_bodies::give_body( ::body_model );

@@ -44,6 +44,15 @@ af_caves_rappel_behavior( who )
 @@@ with
 	player_rope = spawn_anim_model( "rope" );
 	maps\_mw2coop_cave::rope_made( player_rope );
+	thread maps\_mw2coop_cave::partner_view( who, player_rig, ending_player_rig );
+@@@ end
+@@@ replace
+		ending_player_rig Show();
+		knife Show();
+@@@ with
+		ending_player_rig Show();
+		knife Show();
+		maps\_mw2coop_cave::hide_from_partner( knife, who );
 @@@ end
 @@@ replace
 	array_spawn( rappel_baddie_spawners );

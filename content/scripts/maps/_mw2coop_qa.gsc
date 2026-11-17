@@ -545,6 +545,9 @@ main()
 		case "cptour":
 			cptour();
 			break;
+		case "rappelview":
+			rappelview();
+			break;
 		case "rappel":
 			rappel();
 			break;
@@ -2350,6 +2353,106 @@ cave_rappel()
 	report( "at the bottom: " + int( Distance( level.player.origin, level.player2.origin ) ) + " units apart" );
 	report( "player 1 holds " + level.player GetCurrentWeapon() + ", player 2 holds " + level.player2 GetCurrentWeapon() );
 	report( "done" );
+}
+
+// Just Like Old Times (start "rappel"), the rope as the partner sees it: the one who waits rides a camera beside and behind the one on the rope
+// (linked to a point that follows him, looking at him); frames of both screens every second from the hook-up to the end of each descent.
+rappelview()
+{
+	check( level.script == "af_caves" && level.players.size == 2, "af_caves with two players" );
+	t = 0;
+	while ( !flag( "price_hooksup" ) && t < 60 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	wait 2;
+	trigger = GetEnt( "player_rappel_trigger", "targetname" );
+	top = level.player.origin;
+	level.player2 SetOrigin( top + ( 40, 0, 0 ) );
+	wait 1;
+	trigger notify( "trigger", level.player );
+	level.player2 thread qa_side_camera( level.player );
+	level thread qa_shots_every( "p1-", 1.0, 40 );
+	t = 0;
+	while ( !flag( "end_of_rappel_scene" ) && t < 90 )
+	{
+		if ( flag( "rappel_end" ) && !flag( "player_killing_guard" ) )
+			press( level.player, "melee", 500 );
+		wait 0.5;
+		t += 0.5;
+	}
+	level notify( "qa_shots_stop" );
+	level.player2 notify( "qa_look_stop" );
+	check( flag( "end_of_rappel_scene" ), "player 1's scene ended (" + t + " s)" );
+	wait 4;
+	if ( isdefined( level.flag[ "barracks_stealthbreak_survived" ] ) )
+		flag_set( "barracks_stealthbreak_survived" );
+	level.player2 SetOrigin( top + ( 40, 0, 0 ) );
+	wait 1;
+	trigger notify( "trigger", level.player2 );
+	level.player thread qa_side_camera( level.player2 );
+	level thread qa_shots_every( "p2-", 1.0, 30 );
+	t = 0;
+	while ( !level.player2 IsLinked() && t < 5 )
+	{
+		wait 0.25;
+		t += 0.25;
+	}
+	check( level.player2 IsLinked(), "player 2 is on the rope" );
+	t = 0;
+	while ( level.player2 IsLinked() && t < 90 )
+	{
+		wait 0.5;
+		t += 0.5;
+	}
+	level notify( "qa_shots_stop" );
+	level.player notify( "qa_look_stop" );
+	report( "done" );
+}
+
+// frames of both screens every <step> seconds until "qa_shots_stop" (at most max of them)
+qa_shots_every( prefix, step, max )
+{
+	level endon( "qa_shots_stop" );
+	for ( n = 0; n < max; n++ )
+	{
+		qa_shot( prefix + n );
+		wait step;
+	}
+}
+
+qa_look_done_on_stop()
+{
+	self waittill( "qa_look_stop" );
+	self.qa_look_done = true;
+}
+
+// self: a player who rides a camera point beside and behind target (away from what target faces), looking at target's eye, until "qa_look_stop";
+// then he is let go where he was.
+qa_side_camera( target )
+{
+	cam = Spawn( "script_origin", self.origin );
+	self PlayerLinkToDelta( cam, undefined, 1, 180, 180, 90, 90 );
+	self endon( "death" );
+	self.qa_look_done = false;
+	self thread qa_look_done_on_stop();
+	for ( ;; )
+	{
+		if ( !isdefined( target ) )
+			break;
+		yaw = target GetPlayerAngles()[ 1 ];
+		f = AnglesToForward( ( 0, yaw, 0 ) );
+		r = AnglesToRight( ( 0, yaw, 0 ) );
+		eye = target GetEye();
+		cam.origin = eye - f * 110 + r * 70 + ( 0, 0, 10 );
+		self SetPlayerAngles( VectorToAngles( eye - ( cam.origin + ( 0, 0, 60 ) ) ) );
+		wait 0.05;
+		if ( isdefined( self.qa_look_done ) && self.qa_look_done )
+			break;
+	}
+	self Unlink();
+	cam Delete();
 }
 
 // Escape from Favela (start point "solorun_chopper": the level's code calls that part "chopperjump", but a start

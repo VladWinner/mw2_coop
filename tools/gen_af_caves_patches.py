@@ -36,7 +36,11 @@ fns = (('2', 'rappel_guard2_patrol'), ('2', 'rappel_guard2_kill_player'), ('2', 
 lines = ''.join('\tarray_spawn_function_noteworthy( "rappel_guard_%s", ::%s );\n' % f for f in fns)
 p.replace(lines, '\tif ( !second )\n\t{\n' + ''.join('\t' + l + '\n' for l in lines.split('\n')[:-1]) + '\t}\n')
 p.replace('\tplayer_rope = spawn_anim_model( "rope" );\n',
-          '\tplayer_rope = spawn_anim_model( "rope" );\n\tmaps\\_mw2coop_cave::rope_made( player_rope );\n')
+          '\tplayer_rope = spawn_anim_model( "rope" );\n\tmaps\\_mw2coop_cave::rope_made( player_rope );\n'
+          '\tthread maps\\_mw2coop_cave::partner_view( who, player_rig, ending_player_rig );\n')
+# the other player sees the rappeller as his body on Price's skeleton, not the first-person rigs and knife (owner 2026-11-17: "second hands")
+p.replace('\t\tending_player_rig Show();\n\t\tknife Show();\n',
+          '\t\tending_player_rig Show();\n\t\tknife Show();\n\t\tmaps\\_mw2coop_cave::hide_from_partner( knife, who );\n')  # (Show clears the per-player hide marks: after it)
 p.replace('\tarray_spawn( rappel_baddie_spawners );\n',
           '\tif ( !second )\n\t\tarray_spawn( rappel_baddie_spawners );\n')
 p.replace('\telse\n\t{\n\n\t\tfor ( ;; )\n\t\t{\n\t\t\tif ( !isalive( level.player ) )\n',
