@@ -43,7 +43,8 @@
 #define RVA_COOP_FLAG           0x52fb5c // the co-op session byte
 #define RVA_SV_CMD_MAP          0x1904f10 // the server command node of "map" (handler 0x22cb70)
 #define RVA_MAP_FN              0x22cb70
-#define RVA_LOAD_NAME_SET       0x1819e0 // sets the saved game G_InitGame loads (0xf4e140)
+#define RVA_LOAD_NAME           0xf4e140 // the saved game G_InitGame loads (0x40 characters; 0x1819e0 sets it, 0x1807f0 reads it)
+#define SITE_LOAD_CALL          0x17f3f3 // the call of G_LoadGame in 0x17f3b0
 #define RVA_LEVEL_TIME          0xd96ec8
 #else
 // 32 bits (VA = rva + 0x400000): Cmd_AddServerCommand 0x45f330 in 0x493340, loadgame_continue 0x659c50, the commit check 0x4af8d0, G_SaveGame 0x5c6530,
@@ -59,7 +60,18 @@
 #define REF_RING_CALL           0x9d061
 #define REF_SEQ_CALL            0xa97f8
 #define REF_COOP_FLAG           0x48897c
+#define REF_SV_CMD_MAP          0x166abc8 // the server command node of "map" (0x493340 registers it, handler 0x659780)
+#define REF_MAP_FN              0x259780
+#define REF_LOAD_NAME           0xcb87f0  // the saved game G_InitGame loads (0x424d00 reads it)
+#define REF_LEVEL_TIME          0xca3c44
+#define REF_LOAD_CALL           0x885d    // the call of G_LoadGame 0x5c6d20 in 0x408820
+#define REF_COMMIT_BODY         0xfac9c   // the disk write 0x4fac90 (cdecl, the slot; its state at +0x4a4) past its first 12 bytes (call 0x490020, test, jz, ret)
 #define RVA_COOP_FLAG           REF_COOP_FLAG
+#define RVA_SV_CMD_MAP          REF_SV_CMD_MAP
+#define RVA_MAP_FN              REF_MAP_FN
+#define RVA_LOAD_NAME           REF_LOAD_NAME
+#define RVA_LEVEL_TIME          REF_LEVEL_TIME
+#define SITE_LOAD_CALL          REF_LOAD_CALL
 #define RVA_SV_CMD_FAST_RESTART REF_SV_CMD_FAST_RESTART
 #define RVA_FAST_RESTART_FN     REF_FAST_RESTART_FN
 #define RVA_LOADGAME_MF_FN      REF_LOADGAME_MF_FN
@@ -213,10 +225,8 @@ static void fast_restart_cmd(void)
 	((void (*)(void))(base + XR(RVA_LOADGAME_MF_FN)))();
 }
 
-#ifdef _WIN64
 static void map_cmd(void);
 static void (*map_orig)(void);
-#endif
 
 static DWORD WINAPI fast_restart_wait(LPVOID unused)
 {
@@ -227,7 +237,6 @@ static DWORD WINAPI fast_restart_wait(LPVOID unused)
 			fast_restart_orig = node->function;
 			node->function = fast_restart_cmd;
 			log_printf("saves: fast_restart goes back to the last checkpoint after a failed mission");
-#ifdef _WIN64
 			cmd_function_t *map = (cmd_function_t *)(base + XR(RVA_SV_CMD_MAP)); // (registered by the same function, 0x22bef0)
 			if (map->function == (void (*)(void))(base + XR(RVA_MAP_FN))) {
 				map_orig = map->function;
@@ -235,7 +244,6 @@ static DWORD WINAPI fast_restart_wait(LPVOID unused)
 				log_printf("saves: the map command starts a continued session from its checkpoint");
 			} else
 				log_printf("saves: the server's map command was not found (%p): Continue starts at the start point", (void *)map->function);
-#endif
 			return 0;
 		}
 		if (node->function == fast_restart_cmd)
@@ -246,15 +254,18 @@ static DWORD WINAPI fast_restart_wait(LPVOID unused)
 	return 0;
 }
 
-#ifdef _WIN64
 // ---- a co-op checkpoint stays in memory
 // A committed save also goes to disk (0x1af150 -> 0x1adce0: players\save\<map>.svg, save\autosave\<map>-<name>.svg), unless 0x233d90 says not to: arcade mode,
 // Spec Ops, or a running server with sv_saveOnStartMap 0, which is how the co-op session had it while the mod turned the game's saves off. With them on, a
 // co-op campaign wrote its checkpoints over the player's single player saves of that level (the 32-bit split screen's console log 2026-11-17: "Writing
 // savegame ... to file save\estate.svg"). In a co-op session the write is left out; the checkpoint is loaded from memory. The game's own temporary save of a
 // vid_restart / snd_restart (internal/...) is still written: the restart loads it back from the disk.
+#ifdef _WIN64
 static const uint32_t commit_write_sites[] = {0x1809b8, 0x180a04, 0x17f337, 0x22cd75}; // the calls of 0x1af150
-static uint64_t (*commit_write_orig)(void *);
+#endif
+// (32 bits: the function itself, from its 13th byte: the iw4x-sp exe reached it from another place than the two calls of the official one, and the level's autosaves
+// went to players\saveutosave there; QA 2026-11-17)
+static uintptr_t (*commit_write_orig)(void *); // (32 bits: cdecl, the slot pushed)
 
 // ---- snapshots: the co-op checkpoint on disk, for "Continue" in a later session
 // At each co-op checkpoint both PCs write their own copy to players\save\mw2coop_<key>.svg (the key: the session dvar mw2coop_snapkey, the host's playthrough,
@@ -322,7 +333,7 @@ static void snapshot_write(const uint8_t *slot)
 	log_printf("saves: checkpoint %s kept for Continue (players\\save\\mw2coop_%s.svg, %d bytes)", tag, key, size + SLOT_HEADER);
 }
 
-static uint64_t commit_write_hook(void *slot)
+static uintptr_t commit_write_hook(void *slot)
 {
 	const char *name = (const char *)slot + 0x3e0;
 	if ((native_split_active() || *(base + XR(RVA_COOP_FLAG))) && !strstr(name, "internal")) {
@@ -353,7 +364,7 @@ static void map_cmd(void)
 		if (ml && tl > ml + strlen(want) && strncmp(tag, map, ml) == 0 && tag[ml] == '_' && strcmp(tag + tl - strlen(want), want) == 0) {
 			static char file[96];
 			snprintf(file, sizeof(file), "save/mw2coop_%s.svg", key);
-			((void (*)(const char *))(base + XR(RVA_LOAD_NAME_SET)))(file);
+			lstrcpynA((char *)(base + XR(RVA_LOAD_NAME)), file, 0x40);
 			const char *old = game_sv_cmd_set_argv(1, file);
 			progress_snapshot_extra(key, kept, sizeof(kept)); // (set again when the load is done: g_load_hook)
 			log_printf("saves: the session goes on from the checkpoint %s (%s)", tag, file);
@@ -367,6 +378,37 @@ static void map_cmd(void)
 	map_orig();
 }
 
+// ---- after a load the mod's dvars of the checkpoint are set again (keep_dvars); on 64 bits the trace counts the bytes too
+#ifdef _WIN64
+#define LOAD_CC
+#else
+#define LOAD_CC __attribute__((fastcall)) // (32 bits: G_LoadGame 0x5c6d20 takes its save in ECX)
+#endif
+static void(LOAD_CC *g_load_orig)(void *);
+#ifdef _WIN64
+static int trace_on(void);
+static void trace_begin(int op, const char *what);
+static void trace_end_load(void);
+#endif
+static void LOAD_CC g_load_hook(void *f)
+{
+#ifdef _WIN64
+	int on = trace_on();
+	if (on)
+		trace_begin('r', "G_LoadGame");
+#endif
+	g_load_orig(f);
+#ifdef _WIN64
+	if (on)
+		trace_end_load();
+#endif
+	if (kept[0] && (native_split_active() || *(base + XR(RVA_COOP_FLAG)))) { // the scripts' dvars for this DLL as they were at the checkpoint (keep_dvars)
+		game_cbuf_addtext(kept);
+		log_printf("saves: the mod's dvars of the checkpoint set again after the load");
+	}
+}
+
+#ifdef _WIN64
 // ---- trace (dvar mw2coop_saves 1, 64 bits): the bytes G_SaveGame writes and G_LoadGame reads, by the place in either function that asked for them. For each
 // place, the first time it is reached the bytes so far are logged; a save and the load of it must list the same numbers in the same order (the place in the
 // per local client part 0xc95f0 is logged by itself). Only the main thread saves.
@@ -377,12 +419,10 @@ static void map_cmd(void)
 #define RVA_G_LOADGAME  0x17f8e0
 #define RVA_G_LOAD_END  0x180930
 #define SITE_SAVE_CALL  0x181b45 // the call of G_SaveGame in 0x181a00
-#define SITE_LOAD_CALL  0x17f3f3 // the call of G_LoadGame in 0x17f3b0
 
 static void (*mem_write_orig)(void *, int, const void *);
 static void (*mem_read_orig)(void *, int, void *);
 static void (*g_save_orig)(int, void *);
-static void (*g_load_orig)(void *);
 
 #define MAX_SITES 400
 static struct {
@@ -460,20 +500,10 @@ static void g_save_hook(int a, void *f)
 	}
 }
 
-static void g_load_hook(void *f)
+static void trace_end_load(void)
 {
-	int on = trace_on();
-	if (on)
-		trace_begin('r', "G_LoadGame");
-	g_load_orig(f);
-	if (on) {
-		log_printf("saves: G_LoadGame read %u bytes from %u places", tr.total, tr.n);
-		tr.op = 0;
-	}
-	if (kept[0] && (native_split_active() || *(base + XR(RVA_COOP_FLAG)))) { // the scripts' dvars for this DLL as they were at the checkpoint (keep_dvars)
-		game_cbuf_addtext(kept);
-		log_printf("saves: the mod's dvars of the checkpoint set again after the load");
-	}
+	log_printf("saves: G_LoadGame read %u bytes from %u places", tr.total, tr.n);
+	tr.op = 0;
 }
 
 static int trace_install(void)
@@ -483,7 +513,6 @@ static int trace_install(void)
 	int ok = hook_function(base + XR(RVA_MEM_WRITE), write_bytes, sizeof(write_bytes), (void *)mem_write_hook, (void **)&mem_write_orig);
 	ok += hook_function(base + XR(RVA_MEM_READ), read_bytes, sizeof(read_bytes), (void *)mem_read_hook, (void **)&mem_read_orig);
 	ok += hook_call(base + XR(SITE_SAVE_CALL), (void *)g_save_hook, (void **)&g_save_orig);
-	ok += hook_call(base + XR(SITE_LOAD_CALL), (void *)g_load_hook, (void **)&g_load_orig);
 	return ok;
 }
 #endif
@@ -503,7 +532,8 @@ void saves_install(void)
 	// nativesave in split screen and network co-op, and loadgame_continue in plain single player on mw2-32-b, all quit right after G_LoadGame restored the saved
 	// dvars; MW2COOP_HASHDIFF found no differing byte in the four known hashed ranges). Until that is understood the 32-bit builds keep the game's saves off and
 	// restart a failed mission at its start point; the hooks below stay for when it is (env MW2COOP_SAVES32 turns them on for a test).
-	if (!GetEnvironmentVariableA("MW2COOP_SAVES32", NULL, 0))
+	// The iw4x-sp client's exe has no such check: there the game's saves work (QA nativesave on mw2-iw4x-b, split screen, 2026-11-17).
+	if (!game_is_iw4x() && !GetEnvironmentVariableA("MW2COOP_SAVES32", NULL, 0))
 		game_cbuf_addtext("set mw2coop_saves 0\n");
 	else
 		supported = 1;
@@ -524,16 +554,26 @@ void saves_install(void)
 		fixes += hook_call(base + XR(SITE_SEQ_CALL), (void *)cgs_seq_hook, (void **)&cgs_seq_orig);
 	}
 	log_printf("saves: split screen client blocks of a save, %d of 2 calls", fixes);
+	if (supported) { // (the official 32-bit exe, whose saves stay off, keeps these code bytes as they are)
+		int writes = 0, nsites = 1;
 #ifdef _WIN64
-	int writes = 0;
-	for (size_t i = 0; i < sizeof(commit_write_sites) / sizeof(commit_write_sites[0]); i++) {
-		void *orig = NULL;
-		if (hook_call(base + XR(commit_write_sites[i]), (void *)commit_write_hook, &orig)) {
-			commit_write_orig = (uint64_t (*)(void *))orig; // (the same callee at every site)
-			writes++;
+		nsites = (int)(sizeof(commit_write_sites) / sizeof(commit_write_sites[0]));
+		for (int i = 0; i < nsites; i++) {
+			void *orig = NULL;
+			if (hook_call(base + XR(commit_write_sites[i]), (void *)commit_write_hook, &orig)) {
+				commit_write_orig = (uintptr_t (*)(void *))orig; // (the same callee at every site)
+				writes++;
+			}
 		}
+#else
+		static const uint8_t body[11] = {0x56, 0x8b, 0x74, 0x24, 0x08, 0x8b, 0x86, 0xa4, 0x04, 0x00, 0x00}; // push esi; mov esi, [esp+8]; mov eax, [esi+0x4a4]
+		writes = hook_function(base + XR(REF_COMMIT_BODY), body, sizeof(body), (void *)commit_write_hook, (void **)&commit_write_orig);
+#endif
+		log_printf("saves: co-op checkpoints kept off the disk at %d of %d places", writes, nsites);
+		log_printf("saves: the checkpoint's dvars after a load: %s",
+			   hook_call(base + XR(SITE_LOAD_CALL), (void *)g_load_hook, (void **)&g_load_orig) ? "hooked" : "NOT hooked");
 	}
-	log_printf("saves: co-op checkpoints kept off the disk at %d of 4 calls", writes);
-	log_printf("saves: save trace hooks %d of 4 (on with dvar mw2coop_saves 1)", trace_install());
+#ifdef _WIN64
+	log_printf("saves: save trace hooks %d of 3 (on with dvar mw2coop_saves 1)", trace_install());
 #endif
 }

@@ -88,3 +88,4 @@
 0xaf600 -> 0x0    # svlog (scrdebug32.c): ClientBegin (official only)
 0xcf5d0 -> 0x0    # svlog (scrdebug32.c): the per-client init (official only)
 0x60f60 -> 0x0    # svlog (scrdebug32.c): the level spawn's server client connect (official only)
+0xfac9c -> 0x1857c    # the save disk write 0x4fac90 + 0xc (past its call / test / jz / ret; 159 function at 0x18570: same 24 bytes, found by its bytes), saves.c

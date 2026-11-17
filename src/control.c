@@ -442,6 +442,7 @@ static void watch_poll(void)
 #include <tlhelp32.h>
 static volatile uintptr_t watchw_addrs[4];
 static volatile int watchw_count;
+static volatile int watchw_exec; // "!watchx": the slots are execute breakpoints (the hit logs the caller and the first arguments)
 static int (*watchw_probe)(void); // set by native.c: a number the hit lines carry (the live client context)
 void control_set_probe(int (*fn)(void))
 {
@@ -460,6 +461,12 @@ static LONG CALLBACK watchw_veh(EXCEPTION_POINTERS *ep)
 	for (int w = 0; w < 4; w++) {
 		if (!(ep->ContextRecord->Dr6 & (1u << w)))
 			continue;
+		if (watchw_exec) { // an execute breakpoint at a function's entry: its return address and its first stack arguments (32 bits: cdecl / stdcall)
+			const uintptr_t *st = (const uintptr_t *)sp;
+			log_printf("watchx: rva 0x%x executed (thread %lu), called from rva 0x%x, args %08lx %08lx %08lx", (unsigned)(ip - (uintptr_t)base), GetCurrentThreadId(),
+				   (unsigned)(st[0] - (uintptr_t)base), (unsigned long)st[1], (unsigned long)st[2], (unsigned long)st[3]);
+			continue;
+		}
 		char line[1500];
 		const uintptr_t a = watchw_addrs[w];
 		int n = snprintf(line, sizeof(line), "watchw: written at %p by rva 0x%x (thread %lu), slot %d value %.2f ctx %d, stack rvas:", (void *)a, (unsigned)(ip - (uintptr_t)base), GetCurrentThreadId(), w,
@@ -473,6 +480,8 @@ static LONG CALLBACK watchw_veh(EXCEPTION_POINTERS *ep)
 		log_printf("%s", line);
 	}
 	ep->ContextRecord->Dr6 = 0;
+	if (watchw_exec)
+		ep->ContextRecord->EFlags |= 0x10000; // RF: the instruction runs once without hitting the breakpoint again
 	return EXCEPTION_CONTINUE_EXECUTION;
 }
 
@@ -511,7 +520,8 @@ static void watchw_set_multi(const uintptr_t *rvas, int count)
 				ctx.Dr3 = count > 3 ? (DWORD_PTR)watchw_addrs[3] : 0;
 				DWORD_PTR dr7 = 0;
 				for (int i = 0; i < count; i++)
-					dr7 |= (DWORD_PTR)(1u << (2 * i)) | ((DWORD_PTR)1 << (16 + 4 * i)) | ((DWORD_PTR)3 << (18 + 4 * i)); // slot enabled, write, 4 bytes
+					dr7 |= watchw_exec ? (DWORD_PTR)(1u << (2 * i)) // slot enabled, execute (RW 00, LEN 00)
+							   : (DWORD_PTR)(1u << (2 * i)) | ((DWORD_PTR)1 << (16 + 4 * i)) | ((DWORD_PTR)3 << (18 + 4 * i)); // slot enabled, write, 4 bytes
 				ctx.Dr7 = dr7;
 				SetThreadContext(th, &ctx);
 				threads++;
@@ -604,6 +614,17 @@ static void run_line(char *line)
 	}
 	if (strncmp(line, "!trace ", 7) == 0) {
 		scrdebug_trace_method((uintptr_t)strtoull(line + 7, NULL, 16));
+		return;
+	}
+	if (strncmp(line, "!watchx ", 8) == 0) { // QA: "!watchx <rva> [<rva> ..]" (hex, up to 4): execute breakpoints in every thread; each hit logs the caller and the first arguments
+		uintptr_t r[4];
+		int n = 0;
+		for (char *t = strtok(line + 8, " "); t && n < 4; t = strtok(NULL, " "))
+			r[n++] = (uintptr_t)strtoul(t, NULL, 16);
+		if (n) {
+			watchw_exec = 1;
+			control_watch_multi(r, n);
+		}
 		return;
 	}
 	if (strncmp(line, "!watchw ", 8) == 0) {
