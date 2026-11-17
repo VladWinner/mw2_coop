@@ -9578,6 +9578,14 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 				return 0;
 		}
 	}
+	// Mode 11: player 2's frame is the renderer's view of local client 1, and the renderer tests a model's "hidden from" bit (the entity flags & 0x3f0 handed over in r9,
+	// 0x10 << local client) by that view. vis_swap gives the cgame, which draws him as local client 0, his bits in local client 0's place: right for the cgame's own tests,
+	// wrong for the renderer's, so a model the script hid from player 2 alone was drawn in his half and one hidden from player 1 alone was not (Vlad, Spec Ops snowmobile
+	// races 2026-11-17: player 2 saw his own rider body from inside; entity type 13, gone with skiptypes=8192). The two bits go back for the renderer ([native] m11mask=0 off).
+	if (ctx_current == 1 && mode == 11 && vis_swapped && CFG_ONCE("m11mask", 1)) {
+		const unsigned b0 = d & 0x10u, b1 = d & 0x20u;
+		d = (d & ~0x30u) | (b0 << 1) | (b1 >> 1);
+	}
 	return dobj_add_original(a, b, c, d, e, f, g, h);
 }
 
