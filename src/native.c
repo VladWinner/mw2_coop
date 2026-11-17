@@ -6237,7 +6237,7 @@ static void ctx_after_draw(void)
 	static int logged;
 	if (!logged++)
 		log_printf("native: first draw after the hooks: cg_init_done %d ready %d", cg_init_done, ctx1_ready);
-	if (ctx1_ready || !cg_init_done || ++draws_after_init < 5)
+	if (ctx1_ready || !cg_init_done || ++draws_after_init < 5 + CFG_ONCE("ctx1delay", 0)) // (QA: ctx1delay=<draws> starts context 1 that much later)
 		return;
 	log_printf("native: starting context 1");
 	ctx_seed_cgame();
