@@ -398,6 +398,22 @@ const char *game_sv_cmd_argv(int i)
 	return cmd_args_argv(RVA_SV_CMD_ARGS, i);
 }
 
+const char *game_sv_cmd_set_argv(int i, const char *text)
+{
+	if (i < 0 || i >= cmd_args_argc(RVA_SV_CMD_ARGS))
+		return NULL;
+	uint8_t *args = base + RVA_SV_CMD_ARGS;
+	int nesting = *(int *)args;
+#ifdef _WIN64
+	const char **argv = *(const char ***)(args + 0x68 + nesting * 8);
+#else
+	const char **argv = *(const char ***)(args + 0x64 + nesting * 4);
+#endif
+	const char *old = argv[i];
+	argv[i] = text;
+	return old;
+}
+
 void game_add_command(cmd_function_t *node)
 {
 	if (!ready)

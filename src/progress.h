@@ -45,3 +45,11 @@ int progress_chosen(char *map, int map_size, char *start, int start_size);
 
 // the newest save: mission and start point; 0 if none
 int progress_last(char *map, int map_size, char *start, int start_size);
+// Snapshots (the game's own checkpoint of a playthrough, saves.c): each PC notes its copy's tag under the session's key (host: also in the playthrough's save)
+void progress_snapshot_note(const char *key, const char *tag, const char *extra, int host); // extra: lines kept after the tag (saves.c: dvars)
+// The lines after the tag (what progress_snapshot_note was given as extra); their length
+int progress_snapshot_extra(const char *key, char *out, int size);
+// This PC's tag of the snapshot under key; 0 if it has none
+int progress_snapshot_tag(const char *key, char *tag, int size);
+// The key and the tag of the snapshot of the save the host picked; 0 if it has none (a save from before snapshots)
+int progress_chosen_snapshot(char *key, int key_size, char *tag, int tag_size);

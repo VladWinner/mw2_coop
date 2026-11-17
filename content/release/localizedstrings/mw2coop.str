@@ -412,6 +412,10 @@ REFERENCE           MW2COOP_NEWGAME_FMT
 LANG_ENGLISH        "Start a new game with %s\nfrom the very beginning?"
 LANG_RUSSIAN        "Начать новую игру с %s\nс самого начала?"
 
+REFERENCE           MW2COOP_SNAPBLOCK_FMT
+LANG_ENGLISH        "This save goes on from the checkpoint of its\nlast session, and %s did not play in it.\nStart a new game with %s from the beginning?"
+LANG_RUSSIAN        "Это сохранение продолжается с контрольной точки\nпоследней сессии, а %s в ней не играл.\nНачать новую игру с %s с самого начала?"
+
 REFERENCE           MW2COOP_PICK_SAVE
 LANG_ENGLISH        "PICK A SAVE"
 LANG_RUSSIAN        "ВЫБРАТЬ СОХРАНЕНИЕ"

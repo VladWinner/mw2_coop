@@ -18,6 +18,7 @@
 #include "settings.h"
 #include "menus.h"
 #include "progress.h"
+#include "saves.h"
 #include "steamnet.h"
 
 typedef int(WINAPI *sendto_t)(SOCKET, const char *, int, int, const struct sockaddr *, int);
@@ -110,7 +111,7 @@ void net_log_budget(int packets)
 int net_send_mod_to(const uint8_t ip[4], uint16_t port, const char *text)
 {
 	SOCKET s = game_socket;
-	char pkt[128];
+	char pkt[256];
 	int n = snprintf(pkt, sizeof(pkt), "\xff\xff\xff\xff%s", text);
 	if (s == INVALID_SOCKET || !real_sendto || n <= 0 || n >= (int)sizeof(pkt))
 		return 0;
@@ -123,7 +124,7 @@ int net_send_mod_to(const uint8_t ip[4], uint16_t port, const char *text)
 
 int net_send_mod(const char *text)
 {
-	char pkt[128];
+	char pkt[256];
 	int n = snprintf(pkt, sizeof(pkt), "\xff\xff\xff\xff%s", text);
 	if (n <= 0 || n >= (int)sizeof(pkt) || !real_sendto)
 		return 0;
@@ -143,7 +144,7 @@ int net_broadcast_mod(const char *text, uint16_t port)
 	SOCKET s = game_socket;
 	if (s == INVALID_SOCKET || !real_sendto)
 		return 0;
-	char pkt[128];
+	char pkt[256];
 	int n = snprintf(pkt, sizeof(pkt), "\xff\xff\xff\xff%s", text);
 	if (n <= 0 || n >= (int)sizeof(pkt))
 		return 0;
@@ -188,9 +189,12 @@ static int is_session_packet(const char *buf, int len)
 	static const char start[] = "\xff\xff\xff\xffmw2coop_start";
 	static const char ready[] = "\xff\xff\xff\xffmw2coop_ready";
 	static const char brief[] = "\xff\xff\xff\xffmw2coop_briefdone";
+	static const char cp[] = "\xff\xff\xff\xffmw2coop_cp ", retry[] = "\xff\xff\xff\xffmw2coop_retry "; // saves.c: the checkpoint each PC holds
 	return (len >= (int)sizeof(start) - 1 && memcmp(buf, start, sizeof(start) - 1) == 0) ||
 	       (len >= (int)sizeof(ready) - 1 && memcmp(buf, ready, sizeof(ready) - 1) == 0) ||
-	       (len >= (int)sizeof(brief) - 1 && memcmp(buf, brief, sizeof(brief) - 1) == 0);
+	       (len >= (int)sizeof(brief) - 1 && memcmp(buf, brief, sizeof(brief) - 1) == 0) ||
+	       (len >= (int)sizeof(cp) - 1 && memcmp(buf, cp, sizeof(cp) - 1) == 0) ||
+	       (len >= (int)sizeof(retry) - 1 && memcmp(buf, retry, sizeof(retry) - 1) == 0);
 }
 
 static int from_partner(const struct sockaddr *from)
@@ -342,7 +346,7 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 		if (!ours && is_session_packet(buf, r)) {
 			// consumed either way: the game has nothing to do with it
 			if (from_partner(from)) {
-				if (!progress_on_packet(buf, r))
+				if (!progress_on_packet(buf, r) && !saves_on_packet(buf, r))
 					menus_on_packet(buf, r);
 			} else if (InterlockedIncrement(&ignored_packets) <= 5)
 				log_printf("net: a start or ready packet from an address that is not the partner's was ignored");

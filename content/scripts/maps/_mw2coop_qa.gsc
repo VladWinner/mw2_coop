@@ -308,6 +308,9 @@ main()
 		case "nativesave":
 			nativesave();
 			break;
+		case "snapsave":
+			snapsave();
+			break;
 		case "swaphint":
 			swaphint();
 			break;
@@ -1796,6 +1799,47 @@ nativesave()
 	wait 25;
 	report( "nativesave: no load 25 s after the mission failed" );
 	check( false, "the save was loaded" );
+}
+
+// snapsave (two sessions; the host's MW2COOP_HOST_CMDS "set mw2coop_snapkey <key>", and in the second also "set mw2coop_snapload 1", MW2COOP_QA_CMDS
+// "set mw2coop_qa_phase continued"): "Continue" from the game's checkpoint in a later session (src/saves.c snapshot_write / map_cmd). The first session commits
+// a checkpoint (both PCs write their snapshot), then changes the world and ends. The second starts by loading the snapshot: this thread goes on after its wait
+// in the restored state, finds the phase "continued" and checks that the world is the checkpoint's.
+snapsave()
+{
+	common_checks();
+	wait 4;
+	if ( !flag_exist( "mw2coop_qa_sv" ) )
+		flag_init( "mw2coop_qa_sv" );
+	level.mw2coop_qa_marker = "snapshot";
+	spots = [];
+	foreach ( i, player in level.players )
+		spots[ i ] = player.origin;
+	saveId = SaveGameNoCommit( "qasnap", maps\_autosave::getDescription() );
+	wait 0.05;
+	if ( GetDvar( "mw2coop_qa_phase" ) == "continued" )
+	{
+		wait 2;
+		report( "snapsave: continued session, time " + GetTime() + ", marker " + level.mw2coop_qa_marker + ", flag " + flag( "mw2coop_qa_sv" ) + ", players " + level.players.size );
+		check( level.mw2coop_qa_marker == "snapshot", "the level variable has its value from the checkpoint" );
+		check( !flag( "mw2coop_qa_sv" ), "the flag set after the checkpoint is clear" );
+		foreach ( i, player in level.players )
+			check( Distance( player.origin, spots[ i ] ) < 64, "player " + ( i + 1 ) + " stands where he stood at the checkpoint (" + Distance( player.origin, spots[ i ] ) + " units off)" );
+		qa_shot( "continued" );
+		SetDvar( "mw2coop_qa_phase", "done" );
+		report( "done" );
+		return;
+	}
+	CommitSave( saveId );
+	wait 1;
+	if ( flag_exist( "disable_autosaves" ) )
+		flag_set( "disable_autosaves" );	// (the level's own next checkpoint would replace this one)
+	flag_set( "mw2coop_qa_sv" );
+	level.mw2coop_qa_marker = "after";
+	foreach ( player in level.players )
+		player SetOrigin( player.origin + ( 0, 0, 2 ) + AnglesToForward( player.angles ) * 150 );
+	report( "snapsave: checkpoint committed and the world changed; the session can end" );
+	wait 120;
 }
 
 // whbreach (dc_whitehouse, run with MW2COOP_PRE "set start oval_office" for a restart there, or without it): the breach and the countdown. Reports the level's flags every 2 s for 16 s, then

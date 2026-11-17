@@ -218,6 +218,8 @@ unsigned long long game_peek(unsigned long long rva, int width);
 int game_cmd_argc(void);
 const char *game_cmd_argv(int i);
 const char *game_sv_cmd_argv(int i);
+// Points the server command argument i at text for the handler about to run (the game's own string is returned, to put back); NULL when there is no such argument
+const char *game_sv_cmd_set_argv(int i, const char *text);
 
 // The 32-bit native code (native.c, rumble.c, padopts.c, padglyphs.c) is written with the official 32-bit build's addresses. In the iw4x-sp profile (1.0.159) XR() turns an
 // official RVA into the 159 RVA through a table that tools/gen_addr159.py builds from the source (tools/map159.py maps by byte signatures); XV() does the same for a VA.

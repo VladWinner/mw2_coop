@@ -2337,11 +2337,24 @@ static int party_full(void)
 	return members == 2;
 }
 
+// The snapshot of the playthrough the host continues (saves.c, progress.c): the host's ready packets name its key ("snapkey=<key>"), the client's answer with the
+// tag of its own copy under that key ("snaptag=<key>:<tag>", "-" for none). The host starts the snapshot only when the tags are the same.
+static char partner_snapkey[48];     // (client) the key the host's lobby continues
+static char partner_snaptag[120];    // (host) the client's "<key>:<tag>"
+
 static void send_ready(void)
 {
-	char text[96];
-	snprintf(text, sizeof(text), READY_TAG "%ld %s %016llx saves=%d", my_ready, settings_player_id(),
-		 (unsigned long long)*(uint64_t *)(base + RVA_XUID_TABLE), saves_supported());
+	char text[200], snap[128] = "";
+	if (base[RVA_PARTY_IS_HOST]) {
+		char key[48], tag[64];
+		if (continuing && progress_chosen_snapshot(key, sizeof(key), tag, sizeof(tag)))
+			snprintf(snap, sizeof(snap), " snapkey=%s", key);
+	} else if (partner_snapkey[0]) {
+		char tag[64];
+		snprintf(snap, sizeof(snap), " snaptag=%s:%s", partner_snapkey, progress_snapshot_tag(partner_snapkey, tag, sizeof(tag)) ? tag : "-");
+	}
+	snprintf(text, sizeof(text), READY_TAG "%ld %s %016llx saves=%d%s", my_ready, settings_player_id(),
+		 (unsigned long long)*(uint64_t *)(base + RVA_XUID_TABLE), saves_supported(), snap);
 	net_send_mod(text);
 	ready_sent = GetTickCount();
 }
@@ -2422,7 +2435,7 @@ int menus_on_packet(const char *buf, int len)
 	if (len < tl + 1 || memcmp(buf, tag, tl) != 0)
 		return 0;
 	LONG ready = buf[tl] == '1';
-	char rest[96] = "", id[33] = "";
+	char rest[200] = "", id[33] = "";
 	int n = len - tl - 1 < (int)sizeof(rest) - 1 ? len - tl - 1 : (int)sizeof(rest) - 1;
 	if (n > 0)
 		memcpy(rest, buf + tl + 1, n);
@@ -2432,6 +2445,18 @@ int menus_on_packet(const char *buf, int len)
 		partner_xuid = xuid;
 		log_printf("menus: partner id %s, Steam ID %016llx", partner_id, xuid);
 		InterlockedExchange(&partner_new, 1);
+	}
+	// the snapshot the host continues, and the client's copy of it
+	const char *sk = strstr(rest, "snapkey="), *st = strstr(rest, "snaptag=");
+	char word[120] = "";
+	if (sk && sscanf(sk + 8, "%47s", word) == 1 && strcmp(word, partner_snapkey) != 0) {
+		lstrcpynA(partner_snapkey, word, sizeof(partner_snapkey));
+		log_printf("menus: the host continues the playthrough %s", partner_snapkey);
+	} else if (!sk)
+		partner_snapkey[0] = 0;
+	if (st && sscanf(st + 8, "%119s", word) == 1 && strcmp(word, partner_snaptag) != 0) {
+		lstrcpynA(partner_snaptag, word, sizeof(partner_snaptag));
+		log_printf("menus: the partner's checkpoint of this playthrough: %s", partner_snaptag);
 	}
 	// the partner's build loads the game's checkpoints ("saves=1"; an older mod sends nothing): the host turns them on for the session only when both do (progress.c)
 	LONG saves = strstr(rest, "saves=1") != NULL;
@@ -2533,6 +2558,7 @@ static void ready_f(void)
 }
 
 static void partner_questions(void);
+static void snapshot_question(void);
 static void start_launch(void);
 
 // devices.c: a player's device changed
@@ -2559,8 +2585,16 @@ static void native_launch(void)
 		lstrcpyA(map, "trainer");
 	int specops = so_name(map);
 	// the second player is a member of the save like a partner who joins it (a Special Ops op has no save)
-	if (!specops)
+	if (!specops) {
 		progress_begin(continuing, "split-screen", 0x53504c4954ULL, "Player 2", 1);
+		// a playthrough last played in split screen goes on from its checkpoint (saves.c); one played over the network starts at its start point here
+		char key[48], tag[64];
+		const size_t n = continuing && progress_chosen_snapshot(key, sizeof(key), tag, sizeof(tag)) ? strlen(tag) : 0;
+		const int load = n > 6 && strcmp(tag + n - 6, "_split") == 0;
+		if (n)
+			log_printf("menus: Start: the playthrough's checkpoint %s %s", tag, load ? "is loaded" : "was not made in split screen: the start point");
+		game_cbuf_addtext(load ? "set mw2coop_snapload 1\n" : "set mw2coop_snapload 0\n");
+	}
 	int dev0 = devices_get(0), dev1 = devices_get(1);
 	if (!native_split_start2(dev0, dev1)) {
 		log_printf("menus: Start: the split screen could not be started");
@@ -2643,7 +2677,25 @@ static void start_f(void)
 // the launch itself, once everyone is in and ready
 static void start_launch(void)
 {
-	if (continuing && !partner_confirmed && progress_partner_is_new(partner_id, partner_xuid)) {
+	// A save with a snapshot (the game's checkpoint of its last session, saves.c) goes on from that checkpoint, on both PCs, so the partner must hold the same
+	// one: the partner it was played with (owner, 2026-11-17: "then just block the save from starting if the player is not the same"). Anyone else is offered a
+	// new game. A save from before snapshots asks about the members as before.
+	char key[48], tag[64], want[120];
+	int load = 0;
+	if (continuing && progress_chosen_snapshot(key, sizeof(key), tag, sizeof(tag))) {
+		snprintf(want, sizeof(want), "%s:%s", key, tag);
+		const size_t n = strlen(tag);
+		if (n > 4 && strcmp(tag + n - 4, "_net") == 0 && strcmp(partner_snaptag, want) == 0) {
+			load = 1;
+			log_printf("menus: Start: the partner holds this playthrough's checkpoint %s: both go on from it", want);
+		} else if (!partner_confirmed) {
+			log_printf("menus: Start: the partner does not hold this playthrough's checkpoint %s (his: '%s'): the save does not start", want,
+				   partner_snaptag[0] ? partner_snaptag : "none");
+			snapshot_question();
+			game_cbuf_addtext("openmenu mw2coop_newgame\n");
+			return;
+		}
+	} else if (continuing && !partner_confirmed && progress_partner_is_new(partner_id, partner_xuid)) {
 		log_printf("menus: Start: the partner is not a member of this save, asking");
 		partner_questions();
 		game_cbuf_addtext("openmenu mw2coop_partner\n");
@@ -2651,6 +2703,7 @@ static void start_launch(void)
 	}
 	progress_begin(continuing, partner_id, partner_xuid, (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38, // slot 1
 		       add_member);
+	game_cbuf_addtext(load ? "set mw2coop_snapload 1\n" : "set mw2coop_snapload 0\n"); // (a session dvar: the start packet takes it to the client)
 	log_printf("menus: Start: coopLaunch");
 	campaign_loading_begin();
 	game_cbuf_addtext("coopLaunch\n");
@@ -2677,6 +2730,18 @@ static void partner_questions(void)
 	}
 	if ((fmt = localize_text("MW2COOP_NEWGAME_FMT"))) {
 		snprintf(text, sizeof(text), fmt, partner);
+		localize_set_text("MW2COOP_NEWGAME_Q", text);
+	}
+}
+
+// The new game popup's question when the partner does not hold the save's checkpoint
+static void snapshot_question(void)
+{
+	char text[320];
+	const char *partner = (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38; // slot 1
+	const char *fmt = localize_text("MW2COOP_SNAPBLOCK_FMT");
+	if (fmt) {
+		snprintf(text, sizeof(text), fmt, partner, partner);
 		localize_set_text("MW2COOP_NEWGAME_Q", text);
 	}
 }
@@ -2794,7 +2859,7 @@ static void online_f(void)
 	char cmd[320], spot[64] = "";
 	if (continuing)
 		progress_chosen_spot(spot, sizeof(spot));
-	snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\nset mw2coop_cp_start \"%s\"\nset mw2coop_cp_pos \"%s\"\n", map,
+	snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\nset mw2coop_cp_start \"%s\"\nset mw2coop_cp_pos \"%s\"\nset mw2coop_snapload 0\n", map,
 		 start, spot[0] ? start : "", spot);
 	game_cbuf_addtext(cmd);
 }

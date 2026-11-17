@@ -26,6 +26,8 @@
 #include "hook.h"
 #include "log.h"
 #include "native.h"
+#include "net.h"
+#include "progress.h"
 #include "saves.h"
 
 #ifdef _WIN64
@@ -38,6 +40,11 @@
 #define RVA_CGS_SEQUENCE        0x40cab0 // the cgame's last server command sequence (set by 0xa9230 when a save is loaded)
 #define SITE_RING_CALL          0x233b25 // the call of the ring getter in the block writer 0x233aa0
 #define SITE_SEQ_CALL           0x2337b0 // the call of the sequence setter in the block reader 0x2336e0
+#define RVA_COOP_FLAG           0x52fb5c // the co-op session byte
+#define RVA_SV_CMD_MAP          0x1904f10 // the server command node of "map" (handler 0x22cb70)
+#define RVA_MAP_FN              0x22cb70
+#define RVA_LOAD_NAME_SET       0x1819e0 // sets the saved game G_InitGame loads (0xf4e140)
+#define RVA_LEVEL_TIME          0xd96ec8
 #else
 // 32 bits (VA = rva + 0x400000): Cmd_AddServerCommand 0x45f330 in 0x493340, loadgame_continue 0x659c50, the commit check 0x4af8d0, G_SaveGame 0x5c6530,
 // G_LoadGame 0x5c6d20, the block writer 0x49cff0 (ring getter 0x40f9a0) and reader 0x4a9730 (sequence setter 0x41daf0)
@@ -51,6 +58,8 @@
 #define REF_CGS_SEQUENCE        0x35f2b0
 #define REF_RING_CALL           0x9d061
 #define REF_SEQ_CALL            0xa97f8
+#define REF_COOP_FLAG           0x48897c
+#define RVA_COOP_FLAG           REF_COOP_FLAG
 #define RVA_SV_CMD_FAST_RESTART REF_SV_CMD_FAST_RESTART
 #define RVA_FAST_RESTART_FN     REF_FAST_RESTART_FN
 #define RVA_LOADGAME_MF_FN      REF_LOADGAME_MF_FN
@@ -121,6 +130,47 @@ static void hash_ranges_diff(void)
 }
 #endif
 
+// ---- both PCs hold the same checkpoint
+// Each checkpoint's tag (<map>_<level time>_<net|split>, taken when it is committed: the same frame on both lockstep PCs) is kept; a network client sends
+// it to the host ("mw2coop_cp <tag>"). Before a failed mission loads the checkpoint, the host compares the two: when they differ (the client's save failed,
+// or it has none) both restart the level at its start point instead, and the host tells the client which it is ("mw2coop_retry load|restart", sent before its
+// fast_restart, whose coopRestart starts the client's). Owner, 2026-11-17: "what if the host loads its save and the client does not have it?"
+static char own_tag[64], partner_tag[64], host_decision[16];
+static volatile DWORD host_decision_at;
+
+void saves_note_checkpoint(const char *tag)
+{
+	lstrcpynA(own_tag, tag, sizeof(own_tag));
+	if (!native_split_active() && *(base + XR(RVA_COOP_FLAG)) && !game_peek(RVA_PARTY_IS_HOST, 1)) {
+		char text[96];
+		snprintf(text, sizeof(text), "mw2coop_cp %s", GetEnvironmentVariableA("MW2COOP_QA_FAKETAG", NULL, 0) ? "qa_fake_net" : tag); // (QA: a client whose checkpoint differs)
+		net_send_mod(text);
+	}
+}
+
+int saves_on_packet(const char *buf, int len)
+{
+	static const char cp[] = "\xff\xff\xff\xffmw2coop_cp ", retry[] = "\xff\xff\xff\xffmw2coop_retry ";
+	char text[64];
+	if (len > (int)sizeof(cp) - 1 && memcmp(buf, cp, sizeof(cp) - 1) == 0) {
+		int n = len - ((int)sizeof(cp) - 1) < (int)sizeof(text) - 1 ? len - ((int)sizeof(cp) - 1) : (int)sizeof(text) - 1;
+		memcpy(text, buf + sizeof(cp) - 1, n);
+		text[n] = 0;
+		lstrcpynA(partner_tag, text, sizeof(partner_tag));
+		log_printf("saves: the partner's checkpoint %s (this PC's %s)", partner_tag, own_tag[0] ? own_tag : "none");
+		return 1;
+	}
+	if (len > (int)sizeof(retry) - 1 && memcmp(buf, retry, sizeof(retry) - 1) == 0) {
+		int n = len - ((int)sizeof(retry) - 1) < (int)sizeof(host_decision) - 1 ? len - ((int)sizeof(retry) - 1) : (int)sizeof(host_decision) - 1;
+		memcpy(host_decision, buf + sizeof(retry) - 1, n);
+		host_decision[n] = 0;
+		host_decision_at = GetTickCount();
+		log_printf("saves: the host's failed mission: %s", host_decision);
+		return 1;
+	}
+	return 0;
+}
+
 // ---- a failed mission goes back to the last checkpoint
 // maps\_mw2coop::mission_failed() sets mw2coop_retry ("load", or "restart" with mw2coop_saves 0) on both machines, then the host runs fast_restart; the map
 // restart sends the client coopRestart, on which the client runs fast_restart too (0x22f990). The server command's handler is replaced: with "load" it runs
@@ -130,6 +180,25 @@ static void fast_restart_cmd(void)
 {
 	char v[16];
 	if (!game_dvar_raw("mw2coop_retry", v, sizeof(v)) || strcmp(v, "load") != 0) {
+		fast_restart_orig();
+		return;
+	}
+	const int network = *(base + XR(RVA_COOP_FLAG)) && !native_split_active();
+	if (network && game_peek(RVA_PARTY_IS_HOST, 1)) {
+		const int same = !partner_tag[0] || strcmp(partner_tag, own_tag) == 0;
+		net_send_mod(same ? "mw2coop_retry load" : "mw2coop_retry restart");
+		if (!same) {
+			log_printf("saves: the checkpoints differ (host %s, client %s): both restart the level at its start point", own_tag, partner_tag);
+			game_cbuf_addtext("set mw2coop_retry \"\"\n");
+			fast_restart_orig();
+			return;
+		}
+		if (!partner_tag[0])
+			log_printf("saves: the client's checkpoint is not known (no packet): loading this PC's %s", own_tag[0] ? own_tag : "none");
+	} else if (network && host_decision_at && GetTickCount() - host_decision_at < 20000 && strcmp(host_decision, "restart") == 0) {
+		log_printf("saves: the host restarts the level (the checkpoints differ: this PC's %s)", own_tag);
+		host_decision_at = 0;
+		game_cbuf_addtext("set mw2coop_retry \"\"\n");
 		fast_restart_orig();
 		return;
 	}
@@ -144,6 +213,11 @@ static void fast_restart_cmd(void)
 	((void (*)(void))(base + XR(RVA_LOADGAME_MF_FN)))();
 }
 
+#ifdef _WIN64
+static void map_cmd(void);
+static void (*map_orig)(void);
+#endif
+
 static DWORD WINAPI fast_restart_wait(LPVOID unused)
 {
 	(void)unused;
@@ -153,6 +227,15 @@ static DWORD WINAPI fast_restart_wait(LPVOID unused)
 			fast_restart_orig = node->function;
 			node->function = fast_restart_cmd;
 			log_printf("saves: fast_restart goes back to the last checkpoint after a failed mission");
+#ifdef _WIN64
+			cmd_function_t *map = (cmd_function_t *)(base + XR(RVA_SV_CMD_MAP)); // (registered by the same function, 0x22bef0)
+			if (map->function == (void (*)(void))(base + XR(RVA_MAP_FN))) {
+				map_orig = map->function;
+				map->function = map_cmd;
+				log_printf("saves: the map command starts a continued session from its checkpoint");
+			} else
+				log_printf("saves: the server's map command was not found (%p): Continue starts at the start point", (void *)map->function);
+#endif
 			return 0;
 		}
 		if (node->function == fast_restart_cmd)
@@ -170,9 +253,75 @@ static DWORD WINAPI fast_restart_wait(LPVOID unused)
 // co-op campaign wrote its checkpoints over the player's single player saves of that level (the 32-bit split screen's console log 2026-11-17: "Writing
 // savegame ... to file save\estate.svg"). In a co-op session the write is left out; the checkpoint is loaded from memory. The game's own temporary save of a
 // vid_restart / snd_restart (internal/...) is still written: the restart loads it back from the disk.
-#define RVA_COOP_FLAG 0x52fb5c
 static const uint32_t commit_write_sites[] = {0x1809b8, 0x180a04, 0x17f337, 0x22cd75}; // the calls of 0x1af150
 static uint64_t (*commit_write_orig)(void *);
+
+// ---- snapshots: the co-op checkpoint on disk, for "Continue" in a later session
+// At each co-op checkpoint both PCs write their own copy to players\save\mw2coop_<key>.svg (the key: the session dvar mw2coop_snapkey, the host's playthrough,
+// progress.c) in the game's file layout (0x1adce0: the slot's first 0x480 bytes, then its data, *(slot + 0x44c) bytes from *(slot + 0x480)), and its tag
+// <map>_<level time>_<net|split> next to the playthrough (lockstep: the same on both PCs). Not with the game's writer: it ends with 0x233cc0, which makes the
+// file the profile's last save, and single player's "Resume game" would load the co-op checkpoint. The map command (map_cmd) loads it when a session starts.
+#define SLOT_HEADER    0x480
+
+// The dvars the mod's scripts set for this DLL are no part of a save: after a load they kept what they were before it (a load in the same session), or what
+// the level's main() set in its first frames, which the load then threw away (a continued session): the split screen never showed both halves (main() sets
+// mw2coop_split_view 0 and leaves the 1 to a thread of the intro; QA snapsave in split screen, 2026-11-17). Their values at each checkpoint are kept (with
+// the snapshot too) and set again once G_LoadGame is done (g_load_hook). Lockstep: the same values on both PCs.
+static const char *const kept_names[] = {"mw2coop_split_view", "mw2coop_hide_names", "mw2coop_ride", "mw2coop_fov_pilot"};
+static char kept[400]; // "set <name> \"<value>\"\n" for each, ready for the command buffer
+static void keep_dvars(void)
+{
+	int n = 0;
+	kept[0] = 0;
+	for (size_t i = 0; i < sizeof(kept_names) / sizeof(kept_names[0]); i++) {
+		char v[64] = "";
+		game_dvar_raw(kept_names[i], v, sizeof(v));
+		v[strcspn(v, "\"\r\n;")] = 0;
+		n += snprintf(kept + n, sizeof(kept) - (size_t)n, "set %s \"%s\"\n", kept_names[i], v);
+		if (n >= (int)sizeof(kept)) {
+			kept[0] = 0;
+			return;
+		}
+	}
+}
+
+static void snapshot_write(const uint8_t *slot)
+{
+	char map[64] = "", key[48] = "", tag[64];
+	game_dvar_raw("mapname", map, sizeof(map));
+	snprintf(tag, sizeof(tag), "%s_%d_%s", map, *(const int *)(base + XR(RVA_LEVEL_TIME)), native_split_active() ? "split" : "net");
+	saves_note_checkpoint(tag);
+	keep_dvars();
+	if (!game_dvar_raw("mw2coop_snapkey", key, sizeof(key)) || !key[0] || strpbrk(key, "\\/:. "))
+		return;
+	const int size = *(const int *)(slot + 0x44c);
+	const uint8_t *data = *(const uint8_t *const *)(slot + SLOT_HEADER);
+	if (!data || size <= 0 || size > 0x100000)
+		return;
+	static uint8_t header[SLOT_HEADER];
+	memcpy(header, slot, sizeof(header));
+	snprintf((char *)header + 0x3e0, 0x40, "save\\mw2coop_%s.svg", key);
+	char dir[MAX_PATH], tmp[MAX_PATH], file[MAX_PATH];
+	DWORD n = GetModuleFileNameA(NULL, dir, sizeof(dir));
+	while (n && dir[n - 1] != '\\')
+		n--;
+	dir[n] = 0;
+	snprintf(tmp, sizeof(tmp), "%splayers\\save\\mw2coop_%s.tmp", dir, key);
+	snprintf(file, sizeof(file), "%splayers\\save\\mw2coop_%s.svg", dir, key);
+	FILE *f = fopen(tmp, "wb");
+	int ok = f && fwrite(header, 1, sizeof(header), f) == sizeof(header) && fwrite(data, 1, (size_t)size, f) == (size_t)size;
+	if (f)
+		ok = (fclose(f) == 0) && ok;
+	if (!ok || !MoveFileExA(tmp, file, MOVEFILE_REPLACE_EXISTING)) {
+		log_printf("saves: the checkpoint %s could not be written to %s", tag, file);
+		DeleteFileA(tmp);
+		return;
+	}
+	const int host = native_split_active() || (int)game_peek(RVA_PARTY_IS_HOST, 1);
+	progress_snapshot_note(key, tag, kept, host);
+	log_printf("saves: checkpoint %s kept for Continue (players\\save\\mw2coop_%s.svg, %d bytes)", tag, key, size + SLOT_HEADER);
+}
+
 static uint64_t commit_write_hook(void *slot)
 {
 	const char *name = (const char *)slot + 0x3e0;
@@ -180,9 +329,42 @@ static uint64_t commit_write_hook(void *slot)
 		static int told;
 		if (!told++)
 			log_printf("saves: co-op checkpoints stay in memory, not written over the single player saves ('%.60s')", name);
+		snapshot_write((const uint8_t *)slot);
 		return 0;
 	}
 	return commit_write_orig(slot);
+}
+
+// A session that continues a playthrough starts by loading its snapshot on both PCs: the lobby (menus.c) sets mw2coop_snapload 1 only when the partner's copy
+// has the host's tag, and the start packet takes it to the client. Both PCs start the level with the map command (the party's 0x22e1a0: "map <coop_mapName>");
+// with mw2coop_snapload the map command is given the snapshot instead (its handler 0x22cb70 takes a .svg: it reads the map from the file's header and starts
+// the server with a saved game), and the name G_InitGame loads (0xf4e140, set by 0x1819e0) is the file.
+static void (*map_orig)(void);
+static void map_cmd(void)
+{
+	char v[8] = "", key[48] = "";
+	if (game_dvar_raw("mw2coop_snapload", v, sizeof(v)) && strcmp(v, "1") == 0 && game_dvar_raw("mw2coop_snapkey", key, sizeof(key)) && key[0]) {
+		char tag[64] = "", want[80];
+		const char *map = game_sv_cmd_argv(1);
+		const size_t ml = strlen(map);
+		game_cbuf_addtext("set mw2coop_snapload 0\n");
+		snprintf(want, sizeof(want), "_%s", native_split_active() ? "split" : "net");
+		const size_t tl = progress_snapshot_tag(key, tag, sizeof(tag)) ? strlen(tag) : 0;
+		if (ml && tl > ml + strlen(want) && strncmp(tag, map, ml) == 0 && tag[ml] == '_' && strcmp(tag + tl - strlen(want), want) == 0) {
+			static char file[96];
+			snprintf(file, sizeof(file), "save/mw2coop_%s.svg", key);
+			((void (*)(const char *))(base + XR(RVA_LOAD_NAME_SET)))(file);
+			const char *old = game_sv_cmd_set_argv(1, file);
+			progress_snapshot_extra(key, kept, sizeof(kept)); // (set again when the load is done: g_load_hook)
+			log_printf("saves: the session goes on from the checkpoint %s (%s)", tag, file);
+			map_orig();
+			if (old)
+				game_sv_cmd_set_argv(1, old);
+			return;
+		}
+		log_printf("saves: no checkpoint of '%s' under %s on this PC (tag '%s'): the level starts at its start point", map, key, tag);
+	}
+	map_orig();
 }
 
 // ---- trace (dvar mw2coop_saves 1, 64 bits): the bytes G_SaveGame writes and G_LoadGame reads, by the place in either function that asked for them. For each
@@ -287,6 +469,10 @@ static void g_load_hook(void *f)
 	if (on) {
 		log_printf("saves: G_LoadGame read %u bytes from %u places", tr.total, tr.n);
 		tr.op = 0;
+	}
+	if (kept[0] && (native_split_active() || *(base + XR(RVA_COOP_FLAG)))) { // the scripts' dvars for this DLL as they were at the checkpoint (keep_dvars)
+		game_cbuf_addtext(kept);
+		log_printf("saves: the mod's dvars of the checkpoint set again after the load");
 	}
 }
 

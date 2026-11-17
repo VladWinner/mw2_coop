@@ -67,6 +67,7 @@ typedef struct {
 
 typedef struct {
 	char map[64], start[64], spot[64];
+	char snap[64]; // the game's own checkpoint of this playthrough on the host (saves.c): its tag, <map>_<level time>_<net|split>; "" before snapshots
 	int members;
 	member_t member[MAX_MEMBERS];
 } save_t;
@@ -100,6 +101,8 @@ static int read_save(const char *file, save_t *v)
 			lstrcpynA(v->start, line + 6, sizeof(v->start));
 		else if (strncmp(line, "spot ", 5) == 0)
 			lstrcpynA(v->spot, line + 5, sizeof(v->spot));
+		else if (strncmp(line, "snapshot ", 9) == 0)
+			lstrcpynA(v->snap, line + 9, sizeof(v->snap));
 		else if (strncmp(line, "member ", 7) == 0 && v->members < MAX_MEMBERS) {
 			// member <id> <Steam ID, 16 hex> <name>
 			member_t *m = &v->member[v->members];
@@ -130,6 +133,8 @@ static int write_save(const char *file, const save_t *v)
 	fprintf(f, "map %s\nstart %s\n", v->map, v->start);
 	if (v->spot[0] && is_name(v->spot))
 		fprintf(f, "spot %s\n", v->spot);
+	if (v->snap[0] && is_name(v->snap))
+		fprintf(f, "snapshot %s\n", v->snap);
 	for (int i = 0; i < v->members; i++)
 		fprintf(f, "member %s %016llx %s\n", v->member[i].id[0] ? v->member[i].id : "-",
 			(unsigned long long)v->member[i].xuid, v->member[i].name);
@@ -330,6 +335,7 @@ int progress_partner_is_new(const char *id, uint64_t xuid)
 	return !is_member(&v, id, xuid);
 }
 
+static void snapshot_key_of(const char *file, char *key, int size);
 void progress_begin(int continuing, const char *id, uint64_t xuid, const char *name, int add_member)
 {
 	save_t v;
@@ -362,6 +368,101 @@ void progress_begin(int continuing, const char *id, uint64_t xuid, const char *n
 	}
 	log_printf("progress: this session saves to %s (%d member%s)", target_file + strlen(dir), target.members,
 		   target.members == 1 ? "" : "s");
+	char key[48], cmd[96];
+	snapshot_key_of(target_file, key, sizeof(key));
+	snprintf(cmd, sizeof(cmd), "set mw2coop_snapkey %s\n", key); // (queued before the caller's coopLaunch: the start packet carries it)
+	game_cbuf_addtext(cmd);
+}
+
+// ---- snapshots: the game's own checkpoint of a playthrough (saves.c). Each PC of the session keeps its own copy, players\save\mw2coop_<key>.svg, and its tag in
+// mw2coop\progress\snap_<key>.txt; the host also notes the tag in the playthrough's save ("snapshot <tag>"). The key names the playthrough on both PCs: the
+// host's player id (8 characters) and the number of its save file, sent to the client as the session dvar mw2coop_snapkey. "Continue" loads the snapshot when the
+// partner's copy has the same tag (menus.c), on both PCs; with another partner the save does not start (owner, 2026-11-17).
+static void snapshot_key_of(const char *file, char *key, int size)
+{
+	const char *name = strrchr(file, '\\');
+	name = name ? name + 1 : file;
+	char id[9];
+	lstrcpynA(id, settings_player_id(), sizeof(id));
+	for (char *c = id; *c; c++)
+		if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z')))
+			*c = 'x';
+	snprintf(key, size, "%s_%d", id[0] ? id : "host", atoi(name + 5)); // save_<n>.txt
+}
+
+static void snap_file(const char *key, char *out)
+{
+	snprintf(out, MAX_PATH, "%sprogress\\snap_%s.txt", dir, key);
+}
+
+void progress_snapshot_note(const char *key, const char *tag, const char *extra, int host)
+{
+	if (!key[0] || !is_name(key) || !is_name(tag))
+		return;
+	char file[MAX_PATH], sub[MAX_PATH];
+	snprintf(sub, sizeof(sub), "%sprogress", dir);
+	CreateDirectoryA(sub, NULL);
+	snap_file(key, file);
+	FILE *f = fopen(file, "w");
+	if (f) {
+		fprintf(f, "%s\n%s", tag, extra ? extra : "");
+		fclose(f);
+	}
+	if (host && target_file[0]) {
+		lstrcpynA(target.snap, tag, sizeof(target.snap));
+		write_save(target_file, &target);
+	}
+}
+
+int progress_snapshot_tag(const char *key, char *tag, int size)
+{
+	char file[MAX_PATH], line[96] = "";
+	tag[0] = 0;
+	if (!key[0] || !is_name(key))
+		return 0;
+	snap_file(key, file);
+	FILE *f = fopen(file, "r");
+	if (!f)
+		return 0;
+	if (fgets(line, sizeof(line), f))
+		line[strcspn(line, "\r\n")] = 0;
+	fclose(f);
+	if (!line[0] || !is_name(line))
+		return 0;
+	lstrcpynA(tag, line, size);
+	return 1;
+}
+
+int progress_snapshot_extra(const char *key, char *out, int size)
+{
+	char file[MAX_PATH], line[256];
+	int n = 0;
+	out[0] = 0;
+	if (!key[0] || !is_name(key))
+		return 0;
+	snap_file(key, file);
+	FILE *f = fopen(file, "r");
+	if (!f)
+		return 0;
+	for (int i = 0; fgets(line, sizeof(line), f); i++)
+		if (i > 0 && n + (int)strlen(line) < size - 1) { // (the tag is the first line)
+			lstrcpynA(out + n, line, size - n);
+			n += (int)strlen(line);
+		}
+	fclose(f);
+	return n;
+}
+
+int progress_chosen_snapshot(char *key, int key_size, char *tag, int tag_size)
+{
+	save_t v;
+	char file[MAX_PATH] = "";
+	key[0] = tag[0] = 0;
+	if (!chosen_save(&v, file) || !v.snap[0] || is_legacy(file))
+		return 0;
+	snapshot_key_of(file, key, key_size);
+	lstrcpynA(tag, v.snap, tag_size);
+	return 1;
 }
 
 void progress_save(const char *map, const char *start, const char *spot)
@@ -398,7 +499,8 @@ static void continue_f(void)
 
 // Host dvars the client must match before the level loads (level scripts read them).
 static const char *const session_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
-							  "mw2coop_fall_damage", "mw2coop_jump_height", "mw2coop_gravity", "mw2coop_saves"};
+							  "mw2coop_fall_damage", "mw2coop_jump_height", "mw2coop_gravity", "mw2coop_saves", "mw2coop_snapkey",
+							  "mw2coop_snapload"};
 #define SESSION_DVARS (int)(sizeof(session_dvars) / sizeof(session_dvars[0]))
 
 static const char *const skill_dvars[] = {"g_gameskill", "g_gameskill_player_1", "g_gameskill_player_2"};
