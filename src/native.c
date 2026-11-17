@@ -1484,7 +1484,7 @@ static DWORD WINAPI rthitch_thread(LPVOID unused)
 			memset(&c, 0, sizeof(c));
 			c.ContextFlags = CONTEXT_CONTROL;
 			if (GetThreadContext(th, &c)) {
-				char line[700];
+				char line[900];
 				size_t n = (size_t)snprintf(line, sizeof(line), "native: rthitch: render thread %.0f ms into its frame at", ms);
 				rthitch_where("", (uintptr_t)CTX_IP(c), line, sizeof(line), &n);
 				const uintptr_t *sp = (const uintptr_t *)CTX_SP(c);
@@ -1494,6 +1494,15 @@ static DWORD WINAPI rthitch_thread(LPVOID unused)
 					rthitch_where("< ", sp[i], line, sizeof(line), &n);
 					if (n != before)
 						found++;
+				}
+				// the game's code on the stack (below the driver's frames): return addresses into the exe's code (a call right before them)
+				int game = 0;
+				if (n < sizeof(line))
+					n += (size_t)snprintf(line + n, sizeof(line) - n, " | game:");
+				for (int i = 0; i < 3000 && game < 10 && !IsBadReadPtr(sp + i, sizeof(*sp)); i++) {
+					const uintptr_t v = sp[i];
+					if (v > (uintptr_t)base + 0x1005 && v < (uintptr_t)base + 0x294000 && !IsBadReadPtr((void *)(v - 5), 5) && ((const uint8_t *)v)[-5] == 0xe8 && n < sizeof(line)) // raw-ok: QA, the code section's bounds as a plausibility test
+						n += (size_t)snprintf(line + n, sizeof(line) - n, " %lx", (unsigned long)(v - (uintptr_t)base)), game++;
 				}
 				logged++;
 				log_printf("%s", line);
