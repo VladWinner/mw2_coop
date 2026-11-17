@@ -97,3 +97,4 @@
 0x89134 -> 0xcdc64    # mov ecx,[lc] in the cull-byte setter: the function's 16 bytes are the same in both (8b 44 24 04 8b 0d <lc> c6 44 01 03 02 c3)
 0xe7460 -> 0x22670    # the HUD type-13 callback thunk (a1 <lc>; mov [esp+4],eax; jmp): the 159 exe has two such thunks, the other is 0xe6a90 -> 0x97d40
 0x32f3ec -> 0x3323ec    # the renderer's view rectangle: the only reference is its getter "mov eax,x; ret" (official rva 0xa6fd0, 159 rva 0x53980), +0x3000 as the cgame data next to it
+0x12afc0 -> 0x12b6e0    # the engine's wait that runs the workers' jobs (predicate in ESI): 159 takes one stack argument more (its end-frame pushes 1); found through the call in the end-frame (official 0x50d682, 159 0x50ddb8)

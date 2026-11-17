@@ -3193,9 +3193,30 @@ static void m11_rt_wait(int (*pred)(void))
 #ifdef _WIN64
 	((void (*)(int (*)(void)))(base + M11_RT_WAIT))(pred);
 #else
+	// The engine's own wait, as on 64 bits: it runs the workers' jobs on this thread meanwhile, so the render thread's frame ends sooner. Polling the counter instead
+	// (until 2026-11-17) left 13 % of these waits at 8 ms or more and up to 47 ms, the frames up to 60 ms (Second Sun, owner: "the sound lagged at the mission's start").
+	// The official exe's (VA 0x52afc0) takes the predicate in ESI; the iw4x-sp exe's (rva 0x12b6e0) one stack argument more, 1 where its end-frame calls it.
 	const DWORD t0 = GetTickCount();
-	while (!pred() && GetTickCount() - t0 < 200)
-		Sleep(0);
+	void *fn = base + XR(0x12afc0);
+	if (game_is_iw4x())
+		__asm__ volatile("pushl $1\n\tcall *%1\n\taddl $4, %%esp" : "+S"(pred) : "r"(fn) : "eax", "ecx", "edx", "memory", "cc");
+	else
+		__asm__ volatile("call *%1" : "+S"(pred) : "r"(fn) : "eax", "ecx", "edx", "memory", "cc");
+	{ // how long these waits take (the main thread stands meanwhile: the sound and the input wait with it), logged every 10 s
+		static DWORD at, worst;
+		static unsigned n, slow;
+		const DWORD d = GetTickCount() - t0;
+		n++;
+		if (d >= 8)
+			slow++;
+		if (d > worst)
+			worst = d;
+		if (GetTickCount() - at >= 10000) {
+			if (at)
+				log_printf("native: mode 11 waits for the render thread: %u in 10 s, %u of them 8 ms or longer, the longest %lu ms", n, slow, (unsigned long)worst);
+			at = GetTickCount(), n = slow = 0, worst = 0;
+		}
+	}
 #endif
 }
 static int trace_on_now(void);
@@ -9848,6 +9869,11 @@ static void snd_listener_hook(int lc, int a, void *origin, void *axis, void *vel
 	static int calls;
 	if (native_active && ctx_current == 1 && CFG_ONCE("snd2", 1))
 		lc = 1;
+	if (CFG_ONCE("sndlog", 0) >= 2) { // QA: every call for a while (does a listener jump between two places from one frame to the next?)
+		static int every;
+		if (++every >= 3000 && every < 3240)
+			log_printf("native: listener #%d lc %d ctx %d p2frame %d origin %.1f %.1f %.1f", every, lc, ctx_current, p2_frame, (double)((float *)origin)[0], (double)((float *)origin)[1], (double)((float *)origin)[2]);
+	}
 	if (calls < 400 && CFG_ONCE("sndlog", 0) && (calls++ % 50) == 0)
 		log_printf("native: sound listener call %d: local client %d, context %d, origin %.0f %.0f %.0f", calls, lc, ctx_current, (double)((float *)origin)[0], (double)((float *)origin)[1], (double)((float *)origin)[2]);
 	snd_listener_original(lc, a, origin, axis, velocity);
@@ -10331,6 +10357,80 @@ static int hook_calls32(const uint32_t *sites, size_t n, void *hook, void **orig
 	return 1;
 }
 
+// The world's event sounds once, as the 64-bit evsnd1 (2026-11-17, owner: "Second Sun, the sound trembles in split screen"; docs/32bit-native-map/sound-once.md). Both
+// contexts run the shared snapshot's entity events, so each shot, explosion and impact started twice in the one mixer: with both views drawn in every frame (mode 11) the two
+// copies played almost together. The world sound start (VA 0x66d250, cdecl, 13 arguments, the handle pointer 8th: [esp+0x20] at the entry) gets a stub that returns "no
+// sound" while snd_mute32 is set (-1, and -1 in the handle, as the function does with sound off); context 1's two entity event calls (VA 0x4f6321 -> 0x438f80 and
+// 0x4f631a -> 0x4f4d20, cdecl (lc, centity *)) set it; context 1 does not fill the effects' pending sound queue (VA 0x40a3c0, cdecl (alias, entity, origin), its one call
+// at VA 0x44c509). [native] evsnd1=0 off.
+volatile uint8_t snd_mute32;
+volatile LONG snd_muted32; // starts muted so far (logged by native_poll_players)
+void *snd_start_orig32;
+extern char snd_mute_stub32[];
+__asm__(".text\n.globl _snd_mute_stub32\n_snd_mute_stub32:\n"
+	"\tcmpb $0, _snd_mute32\n"
+	"\tjne 1f\n"
+	"\tjmp *_snd_start_orig32\n"
+	"1:\tlock incl _snd_muted32\n"
+	"\tmovl 0x20(%esp), %eax\n"
+	"\ttestl %eax, %eax\n"
+	"\tjz 2f\n"
+	"\tmovl $-1, (%eax)\n"
+	"2:\tmovl $-1, %eax\n"
+	"\tret\n");
+static void (*ev_check_original32[2])(int, uint8_t *);
+static void ev_check32(int k, int lc, uint8_t *cent)
+{
+	const int mute = ctx_current == 1 && native_active;
+	if (mute)
+		snd_mute32 = 1;
+	ev_check_original32[k](lc, cent);
+	if (mute)
+		snd_mute32 = 0;
+}
+static void ev_check32_hook0(int lc, uint8_t *cent)
+{
+	ev_check32(0, lc, cent);
+}
+static void ev_check32_hook1(int lc, uint8_t *cent)
+{
+	ev_check32(1, lc, cent);
+}
+static void (*fxq_original32)(void *, int, const float *);
+static void fxq_hook32(void *alias, int ent, const float *origin)
+{
+	if (ctx_current == 1 && native_active)
+		return;
+	fxq_original32(alias, ent, origin);
+}
+static int call_of32(const uint8_t *site, const uint8_t *target)
+{
+	return site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == target;
+}
+static void sound_once_install32(void)
+{
+	if (!cfg("evsnd1", 1))
+		return;
+	uint8_t want[10] = {0x83, 0xec, 0x40, 0x80, 0x3d, 0, 0, 0, 0, 0x00}; // sub esp,0x40; cmp byte [sound off flag],0
+	const uint32_t flag = XV(0x1bf0b50);
+	memcpy(want + 5, &flag, 4);
+	if (!jhook_function(base + XR(0x26d250), want, sizeof(want), (void *)snd_mute_stub32, &snd_start_orig32)) {
+		log_printf("native: the world sound start (rva 0x26d250) is not as expected: event sounds start in both contexts");
+		return;
+	}
+	uint8_t *s0 = base + XR(0xf6321), *s1 = base + XR(0xf631a);
+	if (call_of32(s0, base + XR(0x38f80)) && call_of32(s1, base + XR(0xf4d20)) && jhook_call(s0, (void *)ev_check32_hook0, (void **)&ev_check_original32[0]) &&
+	    jhook_call(s1, (void *)ev_check32_hook1, (void **)&ev_check_original32[1]))
+		log_printf("native: the world's event sounds start once (context 0); context 1's copies are muted");
+	else
+		log_printf("native: the entity event calls (rva 0xf6321 / 0xf631a) are not as expected: event sounds start in both contexts");
+	uint8_t *q = base + XR(0x4c509);
+	if (call_of32(q, base + XR(0xa3c0)) && jhook_call(q, (void *)fxq_hook32, (void **)&fxq_original32))
+		log_printf("native: effects' sounds are queued once (context 0)");
+	else
+		log_printf("native: the pending sound queue call (rva 0x4c509) is not as expected: effects' sounds play in both contexts");
+}
+
 // the entity side (docs/32bit-native-map/entities.md): none of these places may lie in the engine's checked code (docs/32bit-plan.md)
 static int hooks_apply32_entities(void)
 {
@@ -10411,6 +10511,7 @@ static int hooks_apply32_contexts(void)
 				log_printf("native: no call at the name loop's name lookup");
 		}
 	}
+	sound_once_install32();
 	aim_for_client_fn = base + XR(0x15b040);
 	{ // the aim assist's screen targets of each context's cgame and the server's target list of the client it is (docs/32bit-native-map/aimrumble.md 1.4, 1.5)
 		static const uint32_t screen_site[] = {0x66adc}, list_site[] = {0x88ba8};
@@ -11140,6 +11241,18 @@ void native_poll_players(void)
 	uint8_t *gc = *(uint8_t *volatile *)(base + RVA_GENTITIES + GENT_SIZE + 0x108);
 	if (gc)
 		p2_gclient = gc;
+#ifndef _WIN64
+	{ // how many world sound starts of context 1 were muted (sound_once_install32), every 10 s while it grows
+		extern volatile LONG snd_muted32;
+		static LONG last;
+		static DWORD at;
+		const LONG now_n = snd_muted32;
+		if (now_n != last && GetTickCount() - at >= 10000) {
+			log_printf("native: %ld world sound starts of context 1 muted so far (+%ld)", (long)now_n, (long)(now_n - last));
+			last = now_n, at = GetTickCount();
+		}
+	}
+#endif
 }
 
 
