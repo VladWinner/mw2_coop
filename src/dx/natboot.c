@@ -485,6 +485,14 @@ static void w_45060(unsigned flags)
 	render_tid = GetCurrentThreadId();
 	if (!N.created || !(flags & 2))
 		return;
+	{ // the split screen's mode 11: player 1's renderer frame is drawn whole (its composite and HUD) and shown together with player 2's, one present per engine frame
+		extern int native_nat_frame_hidden(void);
+		if (native_nat_frame_hidden()) {
+			natframe_skip_present = 1;
+			ngfr_present_and_issue(&N.pace);
+			return;
+		}
+	}
 	if (getenv("MW2COOP_TRACEFRAME")) { // QA: the draws of one frame are logged (the frame number counts presents, as the scene dumps do)
 		static int tf, from;
 		if (!from)
@@ -764,6 +772,10 @@ static DWORD WINAPI monitor(LPVOID arg)
 			}
 			if (dr != o_draws || rf != o_refused) {
 				log_printf("native11: draws %u, refused %u, uploads %u, shaders %u, layouts %u, states %u; last refusal: %s", dr, rf, up, sh, ly, st, nd_last_error(N.d));
+				if (rf != o_refused) {
+					extern unsigned nd_refuse_why[8];
+					log_printf("native11: refused by reason: no vs %u, no decl %u, no words %u, variant %u, layout %u, no ib %u, no vb %u, no target %u", nd_refuse_why[0], nd_refuse_why[1], nd_refuse_why[2], nd_refuse_why[3], nd_refuse_why[4], nd_refuse_why[5], nd_refuse_why[6], nd_refuse_why[7]);
+				}
 				o_draws = dr;
 				o_refused = rf;
 			}
@@ -1032,6 +1044,8 @@ static void install_all(void)
 		ng_weapon_k = native_weapon_k; // [native] weaponfov on the native renderer
 		extern void native_nat_scissor(int *, int *, int, int, int);
 		ng_scissor_hook = native_nat_scissor; // the split screen's scope lens
+		extern int native_nat_clear_rect(unsigned, long *);
+		ng_clear_rect_hook = native_nat_clear_rect; // the split screen's mode 11: each player's frame clears its own half
 	}
 
 	AddVectoredExceptionHandler(1, veh);

@@ -6,6 +6,7 @@
 #define COBJMACROS
 #include <windows.h>
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,6 +134,7 @@ float nd_hud_scale[2];
 int nd_atoc = 1;
 int nd_aniso_override; // [display] aniso: 0 = the game's own, 2..16 = forced for mipmapped textures
 float nd_lod_bias;     // the texture LOD bias of the world pass with FSR 3 / DLSS (natfsr3.c sets it: AMD's log2(render / output) - 1); not applied to the 2D passes (they draw while nd_hud_scale is set)
+unsigned nd_refuse_why[8]; // QA: the refused draws by reason (no vs, no declaration, no state words, shader variant, layout, no index buffer, no vertex stream, no render target), logged by natboot
 int nd_clear_trace; // QA ([native] ndclearlog=1): every colour clear of the native device is recorded, written by nd_clear_flush
 typedef struct {
 	unsigned flags;
@@ -211,6 +213,8 @@ struct nd {
 	nat_device *dev;
 	ID3D11Device *d3d;
 	ID3D11DeviceContext *ctx;
+	ID3D11DeviceContext1 *ctx1; // (Direct3D 11.1, for ClearView: asked once, NULL without it)
+	int ctx1_asked;
 	nd_ops ops;
 	ID3D11Buffer *cb_vs, *cb_ps, *cb_ints, *cb_alpha;
 	kc blend, depth, raster, sampler, layout;
@@ -286,6 +290,8 @@ void nd_destroy(nd *d)
 {
 	if (!d)
 		return;
+	if (d->ctx1)
+		ID3D11DeviceContext1_Release(d->ctx1);
 	kc *all[] = {&d->blend, &d->depth, &d->raster, &d->sampler, &d->layout};
 	for (int k = 0; k < 5; k++) {
 		for (size_t i = 0; i < all[k]->cap; i++)
@@ -425,6 +431,28 @@ void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned 
 		ID3D11DeviceContext_ClearDepthStencilView(d->ctx, dsv, ((flags & 2) ? D3D11_CLEAR_DEPTH : 0) | ((flags & 4) ? D3D11_CLEAR_STENCIL : 0), depth, (UINT8)stencil);
 }
 
+void nd_clear_rect(nd *d, unsigned flags, const float rgba[4], float depth, unsigned stencil, const long rect[4])
+{
+	if (nd_trace && nat_log_hook)
+		nat_log_hook("trace: clear flags %u rect %ld %ld %ld %ld", flags, rect[0], rect[1], rect[2], rect[3]);
+	ID3D11RenderTargetView *rtv;
+	ID3D11DepthStencilView *dsv;
+	get_views(d, 0, &rtv, &dsv);
+	if (!d->ctx1_asked) {
+		d->ctx1_asked = 1;
+		if (FAILED(ID3D11DeviceContext_QueryInterface(d->ctx, &IID_ID3D11DeviceContext1, (void **)&d->ctx1)))
+			d->ctx1 = NULL;
+	}
+	if ((flags & 1) && rtv) {
+		const D3D11_RECT r = {rect[0], rect[1], rect[2], rect[3]};
+		if (d->ctx1)
+			ID3D11DeviceContext1_ClearView(d->ctx1, (ID3D11View *)rtv, rgba, &r, 1);
+		// (no Direct3D 11.1: the colour is left as it is rather than cleared whole, which would wipe the other half of the split screen)
+	}
+	if ((flags & 6) && dsv)
+		ID3D11DeviceContext_ClearDepthStencilView(d->ctx, dsv, ((flags & 2) ? D3D11_CLEAR_DEPTH : 0) | ((flags & 4) ? D3D11_CLEAR_STENCIL : 0), depth, (UINT8)stencil);
+}
+
 static DXGI_FORMAT decl_format(int type)
 {
 	switch (type) {
@@ -464,6 +492,13 @@ static nat_shader *variant(nd *d, nd_shader *s, const nd_decl *decl, unsigned sh
 	if (!n) {
 		s->failed = 1;
 		snprintf(d->err, sizeof(d->err), "shader: %.110s", err);
+		{ // QA: each shader that fails is logged once, with the depth sampler set it was asked for (the refusals of the split screen's mode 11, 2026-11-17)
+			static int logged;
+			if (logged < 12 && nat_log_hook) {
+				logged++;
+				nat_log_hook("native11: shader variant failed (%s, %u dwords, depth samplers %04x, %d variants before): %.300s", s->is_vs ? "vs" : "ps", s->dwords, shadow_mask, s->nvar, err);
+			}
+		}
 		return NULL;
 	}
 	s->var[s->nvar].sig = sig;
@@ -745,6 +780,7 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	nd_decl *decl = g->decl ? d->ops.decl(g->decl) : NULL;
 	if (!vsg || !decl || !g->words_valid) {
 		snprintf(d->err, sizeof(d->err), "%s", !vsg ? "no vertex shader" : !decl ? "no vertex declaration" : "no state words");
+		nd_refuse_why[!vsg ? 0 : !decl ? 1 : 2]++;
 		d->n_refused++;
 		return 0;
 	}
@@ -756,6 +792,20 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	}
 	nat_shader *vs = variant(d, vsg, decl, 0), *ps = psg ? variant(d, psg, NULL, shadow_mask) : NULL;
 	if (!vs || (psg && !ps)) {
+		nd_refuse_why[3]++;
+		{ // QA: which depth images are bound where the refused shader samples (mode 11, 2026-11-17: depth images on samplers 4 / 5 that the shader reads with tex2Dlod)
+			static int logged;
+			if (shadow_mask && logged < 16 && nat_log_hook) {
+				logged++;
+				for (int i = 0; i < 16; i++)
+					if (shadow_mask >> i & 1) {
+						nat_image *im = d->ops.image(g->tex[i]);
+						unsigned w = 0, h = 0, smp = 0;
+						nat_image_size(im, &w, &h, &smp);
+						nat_log_hook("native11: refused draw: sampler %d holds depth image %p (game texture %p) %ux%u format %08x; target %p depth %p", i, (void *)im, g->tex[i], w, h, nat_image_d3d9_format(im), (void *)d->rt, (void *)d->ds);
+					}
+			}
+		}
 		d->n_refused++;
 		return 0;
 	}
@@ -763,6 +813,7 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	if (!layout || !d->ib || !d->vb[0]) {
 		if (!d->err[0])
 			snprintf(d->err, sizeof(d->err), "%s", !d->ib ? "no index buffer" : "no vertex stream");
+		nd_refuse_why[!layout ? 4 : !d->ib ? 5 : 6]++;
 		d->n_refused++;
 		return 0;
 	}
@@ -784,6 +835,7 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	get_views(d, st.srgb_write, &rtv, &dsv);
 	if (!rtv && !dsv) {
 		snprintf(d->err, sizeof(d->err), "no render target");
+		nd_refuse_why[7]++;
 		d->n_refused++;
 		return 0;
 	}

@@ -423,6 +423,22 @@ void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned 
 	}
 }
 
+void nd_clear_rect(nd *d, unsigned flags, const float rgba[4], float depth, unsigned stencil, const long rect[4])
+{
+	check_list(d);
+	nat12_note_commands(d->dev);
+	nat_image *rt = rt_image(d), *ds = ds_image(d);
+	const D3D12_RECT r = {rect[0], rect[1], rect[2], rect[3]};
+	if ((flags & 1) && rt && nat12_image_has_rtv(rt)) {
+		nat12_image_transition(d->dev, rt, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		ID3D12GraphicsCommandList_ClearRenderTargetView(d->list, nat12_image_rtv(rt, 0), rgba, 1, &r);
+	}
+	if ((flags & 6) && ds && nat12_image_has_dsv(ds)) {
+		nat12_image_transition(d->dev, ds, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+		ID3D12GraphicsCommandList_ClearDepthStencilView(d->list, nat12_image_dsv(ds), (D3D12_CLEAR_FLAGS)(((flags & 2) ? D3D12_CLEAR_FLAG_DEPTH : 0) | ((flags & 4) ? D3D12_CLEAR_FLAG_STENCIL : 0)), depth, (UINT8)stencil, 1, &r);
+	}
+}
+
 static DXGI_FORMAT decl_format(int type)
 {
 	switch (type) {

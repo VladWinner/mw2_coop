@@ -51,6 +51,9 @@ void nd_set_stencil(nd *d, unsigned ref, unsigned read_mask, unsigned write_mask
 void nd_set_stream(nd *d, unsigned slot, nat_buffer *vb, unsigned offset, unsigned stride);
 void nd_set_indices(nd *d, nat_buffer *ib, int is32);
 void nd_clear(nd *d, unsigned flags /* 1 color, 2 depth, 4 stencil (Direct3D 9's) */, const float rgba[4], float depth, unsigned stencil);
+// the same, limited to a rectangle of the target (left, top, right, bottom in pixels): Direct3D 11.1's ClearView for the colour (a depth view is cleared whole: Direct3D 11 has no
+// rectangles there), Direct3D 12's rectangle lists for both
+void nd_clear_rect(nd *d, unsigned flags, const float rgba[4], float depth, unsigned stencil, const long rect[4]);
 
 // Applies the shadow in `g` (constants dirty since the last call are uploaded and their dirty bits cleared) and draws `prim_count` triangles from the bound indices. Returns 0 when the draw cannot be made
 // (no shader, no layout, no target): the reason is in nd_last_error.

@@ -2550,6 +2550,32 @@ int native_nat_titles_wanted(void)
 	const DWORD now = GetTickCount();
 	return now - title_tick < 500 && now - scope_tick[0] >= 400;
 }
+#ifdef _WIN64
+// Mode 11 on the native renderers. Player 1's renderer frame ends with the show bit for the back end (its post-process composite and its HUD), but it is not presented
+// (be_end_hook, exp11p1show): natboot's frame end (w_45060) leaves out the present and the console / QA work of a shown frame while this says so.
+int native_nat_frame_hidden(void);
+int native_nat_frame_hidden(void)
+{
+	return be_skip_present;
+}
+// A clear of the screen stays in the half of the renderer frame being drawn (t_clear's exp11clip on Direct3D 9): player 2's frame (its frame data, rva 0x4358f58, is p2_fd)
+// clears the bottom half, player 1's the top. Without this player 2's frame start cleared the whole screen: the top half was black on Direct3D 11 / 12 (2026-11-16).
+int native_nat_clear_rect(unsigned flags, long rect[4]);
+int native_nat_clear_rect(unsigned flags, long rect[4])
+{
+	if (mode != 11 || !split_on || !p2_fd || !(flags & 1) || !CFG_ONCE("exp11clip", 1))
+		return 0;
+	const int w = *(int *)(base + XR(0x4113728)), h = *(int *)(base + XR(0x411372c));
+	if (w <= 0 || h <= 0)
+		return 0;
+	const int p2 = *(void **)(base + XR(0x4358f58)) == p2_fd;
+	rect[0] = 0, rect[1] = p2 ? h / 2 : 0, rect[2] = w, rect[3] = p2 ? h : h / 2;
+	static volatile LONG logged[2];
+	if (InterlockedIncrement(&logged[p2]) == 1)
+		log_printf("native: mode 11 on the native renderer: player %d's frame clears the screen in its half only (%ld..%ld of %d)", p2 + 1, rect[1], rect[3], h);
+	return 1;
+}
+#endif
 int native_nat_pair_present(void);
 int native_nat_pair_present(void)
 {
@@ -3032,7 +3058,7 @@ static void (*rs_cgents_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintpt
 static int rs_player1; // inside player 2's R_RenderScene with the renderer's local player at 1
 static int p2_frame; // exp11frames: player 2's draw is under way in its own renderer frame
 #ifdef _WIN64 // (natframe2.c is 64-bit only)
-extern int ngfr_skip_reset_2d; // natframe2.c: the second frame of an engine frame does not reset the 2D state again
+extern int ng_skip_reset_2d; // natgfx.c (one flag for the Direct3D 11 and 12 copies of natframe2.c): the second frame of an engine frame does not reset the 2D state again
 #endif
 static unsigned end_frame_flags; // exp11frames: the flags the screen update's end-frame call (0xd5aaf) uses instead of 3, once
 static void (*end_frame_original)(unsigned flags);
@@ -3043,7 +3069,7 @@ static void end_frame_hook(unsigned flags)
 		end_frame_flags = 0;
 		p2_frame = 0;
 #ifdef _WIN64
-		ngfr_skip_reset_2d = 0;
+		ng_skip_reset_2d = 0;
 #endif
 		p2_fd = *(void **)(base + XR(0x410fd00));
 		static int nlog2;
@@ -4356,7 +4382,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			p2_frame = 1;
 #ifdef _WIN64
 			if (CFG_ONCE("exp11reset", 1)) // the mod's reset_2d runs once per engine frame, as the game's own state reset does (natframe2.c)
-				ngfr_skip_reset_2d = 1;
+				ng_skip_reset_2d = 1;
 #endif
 		} else if (p2draw) {
 			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
@@ -10661,7 +10687,7 @@ static int hooks_apply(void)
 	if (mode == 11 && (*(base + XR(0x93cf0)) != 0xe8 || *(int32_t *)(base + XR(0x93cf1)) + (intptr_t)(base + XR(0x93cf5)) != (intptr_t)(base + XR(0x94e00)) ||
 			   !jhook_call(base + XR(0x93cf0), (void *)friend_hook, (void **)&friend_original)))
 		log_printf("native: unexpected code at the HUD's popup friendly name call (0x93cf0): both halves show player 1's (exp11friend)");
-	if (mode == 11 && !natboot_active() && CFG_ONCE("exp11p1show", 1)) {
+	if (mode == 11 && CFG_ONCE("exp11p1show", 1)) { // (the native renderers too: natboot's frame end skips the present, native_nat_frame_hidden)
 		if (*(base + XR(0x45757)) == 0xe8 && *(int32_t *)(base + XR(0x45758)) + (intptr_t)(base + XR(0x4575c)) == (intptr_t)(base + XR(0x45060)) &&
 		    jhook_call(base + XR(0x45757), (void *)be_end_hook, (void **)&be_end_original))
 			be_end_installed = 1;

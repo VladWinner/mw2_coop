@@ -38,6 +38,15 @@ void ngf_poly_offset(const uint8_t *exe, int mode, float *bias, float *slope)
 
 void ngf_clear(ngf *f, unsigned flags, const float *rgba, float depth, unsigned stencil)
 {
+	if (ng_clear_rect_hook) { // the split screen's mode 11: a clear of the screen (the scene target, as Direct3D 9's back buffer) stays in the half of the frame being drawn
+		nat_image *color, *depth_img;
+		long r[4];
+		nd_get_targets(f->d, &color, &depth_img);
+		if (!color && ng_clear_rect_hook(flags, r)) {
+			nd_clear_rect(f->d, flags, rgba, depth, stencil, r);
+			return;
+		}
+	}
 	nd_clear(f->d, flags, rgba, depth, stencil);
 }
 

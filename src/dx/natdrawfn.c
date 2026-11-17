@@ -139,6 +139,13 @@ void ngf_target_switch(ngf *f, void *input, void *state, int n)
 	const int cur = RD_I32(state, 0xb98);
 	uint8_t *old = cur >= 0 && cur < 12 ? table + (size_t)cur * 32 : NULL;
 	nat_image *color = (nat_image *)RD_PTR(entry, 8), *depth = (nat_image *)RD_PTR(entry, 0x10);
+	{ // QA: each target of the table the first time it is set (which ones have no image of their own: their draws go to the scene)
+		static int seen[12];
+		if (n >= 0 && n < 12 && !seen[n] && nat_log_hook) {
+			seen[n] = 1;
+			nat_log_hook("native: target %d set: color %p depth %p, %dx%d", n, (void *)color, (void *)depth, RD_I32(entry, 0x18), RD_I32(entry, 0x1c));
+		}
+	}
 	if (!(old && RD_PTR(old, 8) == RD_PTR(entry, 8))) {
 		RD_I32(state, 0xb88) = 0;
 		RD_I32(state, 0xb8c) = 0;

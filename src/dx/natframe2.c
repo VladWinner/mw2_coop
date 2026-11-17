@@ -108,12 +108,12 @@ void ngfr_44d00(ngfr_frame *x, uint8_t *scene)
 }
 
 // the common tail of the view loops: the 2D state object is re-initialised and the target switched to the scene
-int ngfr_skip_reset_2d; // mode 11's second frame of an engine frame: the game resets this state once, not once per renderer frame (native.c)
+extern int ng_skip_reset_2d; // natgfx.c: mode 11's second frame of an engine frame: the game resets this state once, not once per renderer frame (native.c)
 
 static void reset_2d(ngfr_frame *x, uint8_t *scene)
 {
 	uint8_t *e = x->f->exe;
-	if (ngfr_skip_reset_2d)
+	if (ng_skip_reset_2d)
 		return;
 	void *ctx[2] = {RD_PTR(e, G_CTX_PTRS), RD_PTR(e, G_CTX_PTRS + 8)};
 	RD_I32(e, 0x4358e90) = RD_I32(e, 0x4359038);
