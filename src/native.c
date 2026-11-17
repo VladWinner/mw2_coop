@@ -1435,15 +1435,124 @@ static void be_end_hook(unsigned flags)
 #define BE_FRAME_DATA XR(0x2134c74)
 #define BE_FD_FLAGS 0x41a38
 static void (*be_frame_original)(void);
+static void rthitch_note(const char *what, LONGLONG t0, int p1);
+static volatile LONGLONG be_t0; // QA (rthitch=2): the back end frame under way since (QPC), 0 between frames
+static volatile DWORD be_tid;
+// QA ([native] rthitch=2): while a back end frame runs longer than 40 ms, the render thread is stopped for a moment (at 40, 90 and 160 ms into the frame) and where it stands
+// is logged: its instruction and the return addresses on its stack, by module (the game, this mod, the graphics driver)
+static void rthitch_where(const char *tag, uintptr_t a, char *out, size_t cap, size_t *n)
+{
+	HMODULE m = NULL;
+	char name[MAX_PATH] = "?";
+	if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)a, &m) && m) {
+		DWORD k = GetModuleFileNameA(m, name, sizeof(name));
+		while (k > 0 && name[k - 1] != 0x5c)
+			k--;
+		memmove(name, name + k, strlen(name + k) + 1);
+	} else
+		return;
+	if (*n < cap)
+		*n += (size_t)snprintf(out + *n, cap - *n, " %s%s+%lx", tag, name, (unsigned long)(a - (uintptr_t)m));
+}
+static DWORD WINAPI rthitch_thread(LPVOID unused)
+{
+	(void)unused;
+	LARGE_INTEGER f;
+	QueryPerformanceFrequency(&f);
+	LONGLONG seen = 0;
+	int stage = 0;
+	unsigned logged = 0;
+	for (;;) {
+		Sleep(2);
+		const LONGLONG t0 = be_t0;
+		if (!t0 || logged >= 60)
+			continue;
+		if (t0 != seen)
+			seen = t0, stage = 0;
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		const double ms = (double)(now.QuadPart - t0) * 1000.0 / (double)f.QuadPart;
+		static const double at[3] = {40.0, 90.0, 160.0};
+		if (stage >= 3 || ms < at[stage])
+			continue;
+		stage++;
+		HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, be_tid);
+		if (!th)
+			continue;
+		if (SuspendThread(th) != (DWORD)-1) {
+			CONTEXT c;
+			memset(&c, 0, sizeof(c));
+			c.ContextFlags = CONTEXT_CONTROL;
+			if (GetThreadContext(th, &c)) {
+				char line[700];
+				size_t n = (size_t)snprintf(line, sizeof(line), "native: rthitch: render thread %.0f ms into its frame at", ms);
+				rthitch_where("", (uintptr_t)CTX_IP(c), line, sizeof(line), &n);
+				const uintptr_t *sp = (const uintptr_t *)CTX_SP(c);
+				int found = 0;
+				for (int i = 0; i < 400 && found < 14 && !IsBadReadPtr(sp + i, sizeof(*sp)); i++) {
+					const size_t before = n;
+					rthitch_where("< ", sp[i], line, sizeof(line), &n);
+					if (n != before)
+						found++;
+				}
+				logged++;
+				log_printf("%s", line);
+			}
+			ResumeThread(th);
+		}
+		CloseHandle(th);
+	}
+	return 0;
+}
 static void be_frame_hook(void)
 {
 	const uint8_t *fd = *(const uint8_t *const *)(base + BE_FRAME_DATA);
-	if (fd && (*(const unsigned *)(fd + BE_FD_FLAGS) & 0x80u))
+	const int p1 = fd && (*(const unsigned *)(fd + BE_FD_FLAGS) & 0x80u);
+	if (p1)
 		be_skip_present = 1;
+	LARGE_INTEGER t0;
+	QueryPerformanceCounter(&t0);
+	if (CFG_ONCE("rthitch", 0) >= 2) {
+		static int started;
+		be_tid = GetCurrentThreadId();
+		if (!started++)
+			CreateThread(NULL, 0, rthitch_thread, NULL, 0, NULL);
+		be_t0 = t0.QuadPart;
+	}
 	be_frame_original();
+	be_t0 = 0;
 	be_skip_present = 0;
+	rthitch_note("render thread frame", t0.QuadPart, p1);
+	if (CFG_ONCE("rthitch", 0)) { // QA: the texture memory Direct3D 9 still has (asked on this, the device's, thread), every 5 s
+		static DWORD at;
+		IDirect3DDevice9 *dev = (IDirect3DDevice9 *)d3dcap_device();
+		if (dev && GetTickCount() - at >= 5000) {
+			at = GetTickCount();
+			log_printf("native: rthitch: available texture memory %u MB", (unsigned)(IDirect3DDevice9_GetAvailableTextureMem(dev) >> 20));
+		}
+	}
 }
 #endif
+// QA ([native] rthitch=1): the render thread's frames and the real Presents that take 30 ms or more, and (32 bits) the process's used address space every 10 s
+static void rthitch_note(const char *what, LONGLONG t0, int p1)
+{
+	static int on = -1;
+	static LONGLONG freq;
+	if (on < 0) {
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		freq = f.QuadPart;
+		on = cfg("rthitch", 0);
+	}
+	if (!on)
+		return;
+	LARGE_INTEGER t1;
+	QueryPerformanceCounter(&t1);
+	const double ms = (double)(t1.QuadPart - t0) * 1000.0 / (double)freq;
+	static unsigned logged;
+	if (ms >= 30.0 && logged < 300)
+		logged++, log_printf("native: rthitch: %s %.1f ms (%s)", what, ms, p1 < 0 ? "-" : p1 ? "player 1's frame" : "player 2's frame");
+}
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
 	skip_this_present = 0;
@@ -1518,7 +1627,10 @@ static HRESULT STDMETHODCALLTYPE sc_present_hook(IDirect3DSwapChain9 *sc, const 
 		present_hook_leave(owner);
 		return D3D_OK;
 	}
+	LARGE_INTEGER pt0;
+	QueryPerformanceCounter(&pt0);
 	HRESULT hr = sc_present_orig ? sc_present_orig(sc, a, b, c, d, e) : D3DERR_INVALIDCALL;
+	rthitch_note("Present", pt0.QuadPart, -1);
 	present_hook_leave(owner);
 	return hr;
 }
@@ -8714,7 +8826,15 @@ static void hudelem_hook(int lc, void *e)
 		if (CFG_ONCE("titleshot", 0) && ctx_current == 0 && ++tc % 80 == 5)
 			title_shot_req = (int)tc; // QA: a capture of every 80th frame with title lines
 		place_client_set(0, 1);
+#ifndef _WIN64
+		extern volatile uint8_t snd_mute32;
+		if (ctx_current == 1) // the lines' typing sound (ui_pulse_text_type) once: player 1's draw makes it (sndcount: 98 / 98 a second in contexts 0 / 1)
+			snd_mute32 = 1;
+#endif
 		hudelem_original(lc, tmp);
+#ifndef _WIN64
+		snd_mute32 = 0;
+#endif
 		place_client_set(ctx_current == 1, 0);
 		return;
 	}
@@ -9867,6 +9987,8 @@ static void (*snd_listener_original)(int, int, void *, void *, void *);
 static void snd_listener_hook(int lc, int a, void *origin, void *axis, void *velocity)
 {
 	static int calls;
+	if (native_active && ctx_current == 1 && CFG_ONCE("snd2", 1) == 2) // QA ([native] snd2=2): player 2 sets no listener, only player 1's place hears (is the second listener what the owner hears tremble?)
+		return;
 	if (native_active && ctx_current == 1 && CFG_ONCE("snd2", 1))
 		lc = 1;
 	if (CFG_ONCE("sndlog", 0) >= 2) { // QA: every call for a while (does a listener jump between two places from one frame to the next?)
@@ -10364,13 +10486,60 @@ static int hook_calls32(const uint32_t *sites, size_t n, void *hook, void **orig
 // 0x4f631a -> 0x4f4d20, cdecl (lc, centity *)) set it; context 1 does not fill the effects' pending sound queue (VA 0x40a3c0, cdecl (alias, entity, origin), its one call
 // at VA 0x44c509). [native] evsnd1=0 off.
 volatile uint8_t snd_mute32;
+volatile uint8_t snd_count32; // QA ([native] sndcount=1): the starts counted by caller and context, logged every 5 s (snd_note32)
 volatile LONG snd_muted32; // starts muted so far (logged by native_poll_players)
+void snd_note32(uintptr_t ret, const void *alias, const uintptr_t *sp);
+void snd_note32(uintptr_t ret, const void *alias, const uintptr_t *sp)
+{
+	if (ret == (uintptr_t)(base + XR(0xd91d3))) { // the sound helper (VA 0x4d9190): its own caller instead (one of its 8 calls), found on the stack
+		static const uint32_t helper_calls[] = {0x2f94c, 0x631b9, 0x662e3, 0x9dab1, 0xe6034, 0x16dea2, 0x16e075, 0x17ba2e};
+		for (int k = 1; k < 48 && !IsBadReadPtr(sp + k, sizeof(*sp)); k++)
+			for (size_t h = 0; h < sizeof(helper_calls) / sizeof(helper_calls[0]); h++)
+				if (sp[k] == (uintptr_t)(base + addr_xr(helper_calls[h]) + 5)) // raw-ok: QA only (sndcount), the official exe's call sites
+					ret = sp[k], k = 48;
+	}
+	static struct {
+		uintptr_t ret;
+		const char *name;
+		unsigned n[2];
+	} t[48];
+	static DWORD at;
+	const int c = ctx_current == 1 ? 1 : 0;
+	const char *name = alias && !IsBadReadPtr(alias, 4) && *(const char *const *)alias && !IsBadReadPtr(*(const char *const *)alias, 8) ? *(const char *const *)alias : "?";
+	int i = 0;
+	for (; i < 48 && t[i].ret && !(t[i].ret == ret && t[i].name == name); i++)
+		;
+	if (i < 48) {
+		t[i].ret = ret, t[i].name = name;
+		t[i].n[c]++;
+	}
+	if (!at)
+		at = GetTickCount();
+	if (GetTickCount() - at >= 5000) {
+		at = GetTickCount();
+		for (int k = 0; k < 48 && t[k].ret; k++) {
+			if (t[k].n[0] + t[k].n[1])
+				log_printf("native: sndcount: caller rva 0x%x %.48s: context 0 %u, context 1 %u", (unsigned)(t[k].ret - (uintptr_t)base), t[k].name, t[k].n[0], t[k].n[1]);
+			t[k].ret = 0, t[k].n[0] = t[k].n[1] = 0;
+		}
+	}
+}
 void *snd_start_orig32;
 extern char snd_mute_stub32[];
 __asm__(".text\n.globl _snd_mute_stub32\n_snd_mute_stub32:\n"
 	"\tcmpb $0, _snd_mute32\n"
 	"\tjne 1f\n"
-	"\tjmp *_snd_start_orig32\n"
+	"\tcmpb $0, _snd_count32\n"
+	"\tje 3f\n"
+	"\tmovl 4(%esp), %eax\n" // (the alias)
+	"\tmovl (%esp), %ecx\n" // (the caller)
+	"\tmovl %esp, %edx\n"
+	"\tpushl %edx\n"
+	"\tpushl %eax\n"
+	"\tpushl %ecx\n"
+	"\tcall _snd_note32\n"
+	"\taddl $12, %esp\n"
+	"3:\tjmp *_snd_start_orig32\n"
 	"1:\tlock incl _snd_muted32\n"
 	"\tmovl 0x20(%esp), %eax\n"
 	"\ttestl %eax, %eax\n"
@@ -10403,14 +10572,50 @@ static void fxq_hook32(void *alias, int ent, const float *origin)
 		return;
 	fxq_original32(alias, ent, origin);
 }
+// The entities' looping sounds (the map's ambient emitters: fire, rain on metal, creaks, flags; VA 0x463190, cdecl (5 arguments), -1 when there is no sound): the cgame's
+// entity pass starts them again in every frame, in both contexts, so each emitter played twice, a little apart: the trembling sound the owner heard in Second Sun on the
+// 32-bit split screen ("as soon as the character lowers his hands everything is normal"; sndcount: fire_dumpster_medium 4557 / 4452 starts in 5 s in contexts 0 / 1).
+// Context 1 starts none: the engine has a listener for each player and plays every sound to the nearer one. [native] loopsnd1=0 off.
+static int (*ent_loop_original)(int, int, int, int, int);
+static int ent_loop_hook(int a, int b, int c, int d, int e)
+{
+	if (ctx_current == 1 && native_active && CFG_ONCE("loopsnd1", 1))
+		return -1;
+	return ent_loop_original(a, b, c, d, e);
+}
+// The vehicles' engine and idle loops (VA 0x4db816: btr80_engine_low, havoc_engine_low...) and the turret spin (VA 0x488796) are started by both contexts too, each a
+// direct call of the world sound start: context 1's calls return "no sound" (cdecl, 13 arguments, the handle pointer 8th).
+typedef int (*snd_start32_t)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, int *, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+static snd_start32_t veh_snd_original[2];
+static int veh_snd(int k, uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6, uintptr_t a7, int *h, uintptr_t a9, uintptr_t a10, uintptr_t a11,
+		   uintptr_t a12, uintptr_t a13)
+{
+	if (ctx_current == 1 && native_active && CFG_ONCE("loopsnd1", 1)) {
+		if (h)
+			*h = -1;
+		return -1;
+	}
+	return veh_snd_original[k](a1, a2, a3, a4, a5, a6, a7, h, a9, a10, a11, a12, a13);
+}
+static int veh_snd0(uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6, uintptr_t a7, int *h, uintptr_t a9, uintptr_t a10, uintptr_t a11, uintptr_t a12,
+		    uintptr_t a13)
+{
+	return veh_snd(0, a1, a2, a3, a4, a5, a6, a7, h, a9, a10, a11, a12, a13);
+}
+static int veh_snd1(uintptr_t a1, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5, uintptr_t a6, uintptr_t a7, int *h, uintptr_t a9, uintptr_t a10, uintptr_t a11, uintptr_t a12,
+		    uintptr_t a13)
+{
+	return veh_snd(1, a1, a2, a3, a4, a5, a6, a7, h, a9, a10, a11, a12, a13);
+}
 static int call_of32(const uint8_t *site, const uint8_t *target)
 {
 	return site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == target;
 }
 static void sound_once_install32(void)
 {
-	if (!cfg("evsnd1", 1))
+	if (!cfg("evsnd1", 1) && !cfg("sndcount", 0))
 		return;
+	snd_count32 = cfg("sndcount", 0) != 0;
 	uint8_t want[10] = {0x83, 0xec, 0x40, 0x80, 0x3d, 0, 0, 0, 0, 0x00}; // sub esp,0x40; cmp byte [sound off flag],0
 	const uint32_t flag = XV(0x1bf0b50);
 	memcpy(want + 5, &flag, 4);
@@ -10429,6 +10634,15 @@ static void sound_once_install32(void)
 		log_printf("native: effects' sounds are queued once (context 0)");
 	else
 		log_printf("native: the pending sound queue call (rva 0x4c509) is not as expected: effects' sounds play in both contexts");
+	{
+		uint8_t *v0 = base + XR(0xdb816), *v1 = base + XR(0x88796);
+		const int ok0 = call_of32(v0, base + XR(0x26d250)) && jhook_call(v0, (void *)veh_snd0, (void **)&veh_snd_original[0]);
+		const int ok1 = call_of32(v1, base + XR(0x26d250)) && jhook_call(v1, (void *)veh_snd1, (void **)&veh_snd_original[1]);
+		log_printf("native: the vehicles' engine loops %s, the turret spin %s", ok0 ? "start once (context 0)" : "are not hooked (rva 0xdb816)", ok1 ? "once" : "not hooked (rva 0x88796)");
+	}
+	static const uint8_t loop_bytes[] = {0x8b, 0x44, 0x24, 0x0c, 0x57, 0x50}; // mov eax,[esp+0xc]; push edi; push eax
+	log_printf("native: the entities' looping sounds %s", jhook_function(base + XR(0x63190), loop_bytes, sizeof(loop_bytes), (void *)ent_loop_hook, (void **)&ent_loop_original)
+		   ? "start once (context 0)" : "(rva 0x63190) are not as expected: they start in both contexts");
 }
 
 // the entity side (docs/32bit-native-map/entities.md): none of these places may lie in the engine's checked code (docs/32bit-plan.md)
@@ -11250,6 +11464,15 @@ void native_poll_players(void)
 		if (now_n != last && GetTickCount() - at >= 10000) {
 			log_printf("native: %ld world sound starts of context 1 muted so far (+%ld)", (long)now_n, (long)(now_n - last));
 			last = now_n, at = GetTickCount();
+		}
+	}
+	if (CFG_ONCE("rthitch", 0)) { // QA: the process's used address space (a 32-bit process has 4 GB at most; the driver's allocations live in it too)
+		static DWORD at2;
+		if (GetTickCount() - at2 >= 10000) {
+			MEMORYSTATUSEX ms = {sizeof(ms)};
+			if (GlobalMemoryStatusEx(&ms))
+				log_printf("native: rthitch: address space used %.0f MB of %.0f MB", (double)(ms.ullTotalVirtual - ms.ullAvailVirtual) / 1048576.0, (double)ms.ullTotalVirtual / 1048576.0);
+			at2 = GetTickCount();
 		}
 	}
 #endif
