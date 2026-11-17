@@ -545,6 +545,9 @@ main()
 		case "cptour":
 			cptour();
 			break;
+		case "bbcheck":
+			bbcheck();
+			break;
 		case "rappelview":
 			rappelview();
 			break;
@@ -2445,6 +2448,36 @@ gulag_rappelview()
 	level notify( "qa_shots_stop" );
 	level.player notify( "qa_look_stop" );
 	report( "done" );
+}
+
+// Big Brother (so_chopper_invasion): the gunner's angles on the server, once a second (Vlad: with player 2 on the keyboard and mouse the turret is gone and the
+// camera does not turn; on the client his view stays level while it should look down the gun)
+bbcheck()
+{
+	for ( n = 0; n < 20; n++ )
+	{
+		wait 1;
+		foreach ( i, player in level.players )
+		{
+			gunner = "";
+			if ( isdefined( level.chopperplayer ) && level.chopperplayer == player )
+				gunner = " (gunner)";
+			maps\_mw2coop::state( "bbcheck " + "t" + n + " player " + ( i + 1 ) + gunner + ": angles " + player GetPlayerAngles() + " linked " + player IsLinked() + " origin " + vec_int( player.origin ) );
+			wait 0.3;	// (state() is a dvar the DLL reads every 250 ms)
+		}
+		if ( isdefined( level.chopper ) )
+		{
+			user = "none";
+			if ( isdefined( level.chopper.minigunUser ) )
+			{
+				user = "player 1";
+				if ( level.chopper.minigunUser == level.player2 )
+					user = "player 2";
+			}
+			maps\_mw2coop::state( "bbcheck " + "t" + n + " chopper minigunUser " + user + " tag_player " + level.chopper GetTagAngles( "tag_player" ) );
+		}
+	}
+	maps\_mw2coop::state( "bbcheck " + "done" );
 }
 
 // frames of both screens every <step> seconds until "qa_shots_stop" (at most max of them)

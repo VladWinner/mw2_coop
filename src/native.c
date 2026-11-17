@@ -8139,7 +8139,7 @@ static void mouse_read2_original(intptr_t state, float *x, float *y);
 #endif
 static void mouse_read_hook(intptr_t state, float *x, float *y)
 {
-	if (ctx_current != (native_active ? kb_player() : 0)) { // not the mouse's player (left unread: it stays for his context)
+	if (ctx_current != (native_active ? kb_player() : 0) || (ctx_current == 1 && CFG_ONCE("mouse1off", 0))) { // not the mouse's player (left unread: it stays for his context); QA mouse1off: player 2 never reads it
 		*x = 0;
 		*y = 0;
 		return;
@@ -8153,7 +8153,7 @@ static void (*mouse_read2_original)(intptr_t, float *, float *);
 #endif
 static void mouse_read2_hook(intptr_t state, float *x, float *y)
 {
-	if (ctx_current != (native_active ? kb_player() : 0)) { // not the mouse's player (left unread: it stays for his context)
+	if (ctx_current != (native_active ? kb_player() : 0) || (ctx_current == 1 && CFG_ONCE("mouse1off", 0))) { // not the mouse's player (left unread: it stays for his context)
 		*x = 0;
 		*y = 0;
 		return;

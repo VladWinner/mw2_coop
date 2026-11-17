@@ -116,6 +116,9 @@ main()
 	// QA of a level in single player (tools/qa_native.sh with MW2COOP_PLAIN=1): the climb scenario runs without a co-op session
 	if ( GetDvar( "mw2coop_qa" ) == "climbsolo" && !is_campaign_coop() )
 		thread maps\_mw2coop_qa::climbsolo();
+	// QA of a Special Ops op in the split screen (Big Brother's gunner)
+	if ( GetDvar( "mw2coop_qa" ) == "bbcheck" && !is_campaign_coop() )
+		thread maps\_mw2coop_qa::bbcheck();
 
 	if ( !is_campaign_coop() )
 		return;
