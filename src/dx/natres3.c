@@ -82,7 +82,10 @@ typedef struct {
 	size_t size;
 } plane_t;
 static plane_t planes[64];
+static unsigned planes_evict;
 
+// (night audit D2: a hit did not check the size, so a later film whose image got the address of an earlier, smaller one was decoded past its buffer; and the 64 slots
+// were never given back, so after about ten films the planes were NULL. A hit now grows the buffer, and a full table gives its oldest slot to the new image.)
 static uint8_t *plane_memory(nat_image *im, unsigned *pitch)
 {
 	unsigned w, h, s;
@@ -90,16 +93,27 @@ static uint8_t *plane_memory(nat_image *im, unsigned *pitch)
 	*pitch = (w + 3) & ~3u;
 	const size_t need = (size_t)*pitch * h;
 	for (int i = 0; i < 64; i++) {
-		if (planes[i].key == im)
+		if (planes[i].key == im) {
+			if (planes[i].size < need) {
+				free(planes[i].mem);
+				planes[i].mem = calloc(1, need);
+				planes[i].size = planes[i].mem ? need : 0;
+			}
 			return planes[i].mem;
+		}
 		if (!planes[i].key) {
 			planes[i].key = im;
 			planes[i].mem = calloc(1, need);
-			planes[i].size = need;
+			planes[i].size = planes[i].mem ? need : 0;
 			return planes[i].mem;
 		}
 	}
-	return NULL;
+	plane_t *p = &planes[planes_evict++ % 64];
+	free(p->mem);
+	p->key = im;
+	p->mem = calloc(1, need);
+	p->size = p->mem ? need : 0;
+	return p->mem;
 }
 
 void ngr_film_lock(ngr *r, uint8_t *film)

@@ -921,6 +921,13 @@ static void patch_sites(void)
 }
 
 static void install_all(void);
+// 1 once install_all has put the renderer in (night audit D1: natboot_active() answered with the setting alone, so when the install refused, another exe, the game ran
+// its own Direct3D 9 while native.c, modtex.c, logo.c and shot.c took the native renderer's paths and lost the split screen's 2D, the mod's textures and the shots)
+static volatile LONG nb_installed;
+int natboot_installed(void)
+{
+	return nb_installed > 0;
+}
 
 // FNV-1a 64 over the functions the renderer replaces (tools/gen_natsites.py made the list and the hash from the reference exe): the first 14 bytes of each, the bytes hook_jump overwrites
 static uint64_t nat_sites_hash(void)
@@ -1137,6 +1144,7 @@ static void install_all(void)
 	install(0x242a0, w_242a0);
 	(void)w_2a0a0_dummy;
 	log_printf("native11: the native renderer is installed (%u functions redirected); the game's Direct3D 9 device is a tripwire", 52u);
+	InterlockedExchange(&nb_installed, 1);
 }
 
 void *natboot_trap_device(void)
@@ -1145,7 +1153,15 @@ void *natboot_trap_device(void)
 }
 int natboot_active(void)
 {
-	return settings_directx11() || settings_directx12();
+	if (!settings_directx11() && !settings_directx12())
+		return 0;
+#ifndef NAT_BACKEND_12
+	if (settings_directx12()) { // (the Direct3D 12 copy of this file installed itself: build.sh, b12_ prefix)
+		extern int b12_natboot_installed(void);
+		return b12_natboot_installed();
+	}
+#endif
+	return natboot_installed();
 }
 #else
 void natboot_install(void) {}
