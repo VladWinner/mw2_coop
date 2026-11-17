@@ -265,11 +265,6 @@ collapse_partner_blackout( view )
 // at the rig's moment (the hook-up, the jump down the rope, the knife kill), its eyes kept where the rappeller's camera is.
 #using_animtree( "generic_human" );
 
-rope_skeleton()
-{
-	return "body_desert_tf141_assault_a";	// Price's body in this level (character_hero_desert_price)
-}
-
 // af_caves_rappel_behavior(), once the rigs and the rope exist. who: the rappeller.
 partner_view( who, rig, ending_rig )
 {
@@ -282,7 +277,7 @@ partner_view( who, rig, ending_rig )
 	ending_rig hideOnClient( other );
 
 	body = Spawn( "script_model", who.origin );
-	body SetModel( maps\_mw2coop_bodies::rider_model( who.mw2coop_body, rope_skeleton() ) );
+	body SetModel( maps\_mw2coop_bodies::rider_model( who.mw2coop_body, maps\_mw2coop_bodies::rope_skeleton() ) );
 	body Attach( who.mw2coop_head, "", true );
 	body hideOnClient( who );
 	body DontCastShadows();

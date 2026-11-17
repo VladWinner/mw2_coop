@@ -23,6 +23,13 @@ if [ -n "$MW2COOP_GSC_DIR" ]; then
 	fi
 	printf '%s\n' "$out" | tail -1
 fi
+# GSC the game will not compile (a ternary, unbalanced brackets, a script every level loads that reaches a level's own script) stops the deploy: the
+# level would not load (2026-11-17: the rope stand-in's reference from _mw2coop.gsc to the cave module failed every level but Just Like Old Times)
+if ! out=$(python -I tools/check_gsc.py); then
+	printf '%s\n' "$out"
+	echo "GSC check failed: nothing deployed"
+	exit 1
+fi
 [ $# -gt 0 ] || set -- "$ROOT/mw2-$BITS" "$ROOT/mw2-$BITS-b"
 # a running copy holds its winmm.dll: close the ones left from an earlier test run first
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/close_test_copies.ps1 -Root "$(cygpath -w "$ROOT")" | tr -d '\r'
