@@ -4984,6 +4984,68 @@ static void fx_spot_check(const char *what, int ctx)
 	log_printf("native: fxspot: context %d %s: spot effects %d elems %d, effect %d (%s), elem %d%s (check %ld)", ctx, what, ecount, lcount, eh, def_live ? "live" : "FREE", lh,
 		   (lcount > 0 && (ecount <= 0 || !def_live)) ? " BROKEN" : "", checks);
 }
+
+// Debris with physics: an effect element of a model with physics (element type 7, definition flag 0x8000000) owns a physics object of the effects' world (world 1), made at
+// rva 0x11c65f (Phys_ObjCreate 0x1e5de0, kept at element +0x18) and destroyed when the element is freed (FX_FreeElem 0x1192c0, the call at 0x119382 to Phys_ObjDestroy 0x1e5f40).
+// The physics pool is one for the process (0x12657a0 bodies, 0x12df1e0 their states). Context 1's effects system starts as a copy of context 0's (ctx_seed_cgame), so each debris
+// element alive at that moment was in both systems with the same physics object, and both freed it: a double free in the pool, whose next allocation read -1 (the Gulag "cafe"
+// start crashed 3 s after the split began, every run: rva 0x2713ee). Now context 1 destroys only the objects its own system made; the copies stay context 0's, which frees them
+// once. Until then both views draw the same debris (the effects only read an object's state, through the step 0x11f0a0 -> 0x1e7ca0). [native] fxbodyown=0 off.
+static void *volatile fxbody_ctx1[512]; // the physics objects context 1's system made (the pool holds 448)
+static volatile LONG fxbody_kept, fxbody_full;
+static void *(*fxbody_create_original)(int, void *, void *, void *, void *);
+static void (*fxbody_destroy_original)(int, void *);
+static void *fxbody_create_hook(int world, void *origin, void *quat, void *velocity, void *preset)
+{
+	void *body = fxbody_create_original(world, origin, quat, velocity, preset);
+	if (body && range_owner[RANGE_FX] == 1) { // runs on the workers too: a slot is taken with a compare-exchange
+		for (int i = 0; i < 512; i++)
+			if (!fxbody_ctx1[i] && !InterlockedCompareExchangePointer((void *volatile *)&fxbody_ctx1[i], body, NULL))
+				return body;
+		InterlockedIncrement(&fxbody_full);
+	}
+	return body;
+}
+static void fxbody_destroy_hook(int world, void *body)
+{
+	if (body && range_owner[RANGE_FX] == 1) {
+		for (int i = 0; i < 512; i++)
+			if (fxbody_ctx1[i] == body && InterlockedCompareExchangePointer((void *volatile *)&fxbody_ctx1[i], NULL, body) == body) {
+				fxbody_destroy_original(world, body);
+				return;
+			}
+		InterlockedIncrement(&fxbody_kept); // a copy of context 0's object: context 0 frees it
+		return;
+	}
+	fxbody_destroy_original(world, body);
+}
+static void fxbody_reset(void) // context 1 starts again as a copy (each level): what it made before went with its old system
+{
+	for (int i = 0; i < 512; i++)
+		fxbody_ctx1[i] = NULL;
+}
+static void fxbody_report(void) // on the main thread (the swap), when the counts changed
+{
+	static LONG kept_logged, full_logged;
+	const LONG kept = fxbody_kept, full = fxbody_full;
+	if (kept != kept_logged || full != full_logged) {
+		if (kept_logged < 20 || full != full_logged)
+			log_printf("native: fxbody: context 1 left %ld copied debris objects to context 0%s", (long)kept, full ? " (its table was full: some of its own objects are never freed)" : "");
+		kept_logged = kept;
+		full_logged = full;
+	}
+}
+static void fxbody_install(void)
+{
+	uint8_t *c = base + XR(0x11c65f), *d = base + XR(0x119382);
+	if (!cfg("fxbodyown", 1) || !cfg("fxsplit", mode == 11 ? 0 : 1))
+		return;
+	if (c[0] == 0xe8 && c + 5 + *(int32_t *)(c + 1) == base + XR(0x1e5de0) && d[0] == 0xe8 && d + 5 + *(int32_t *)(d + 1) == base + XR(0x1e5f40) &&
+	    jhook_call(c, (void *)fxbody_create_hook, (void **)&fxbody_create_original) && jhook_call(d, (void *)fxbody_destroy_hook, (void **)&fxbody_destroy_original))
+		log_printf("native: debris physics objects copied into context 1's effects are freed by context 0 only");
+	else
+		log_printf("native: the effects' physics calls at 0x11c65f / 0x119382 are not as expected: copied debris is freed by both contexts");
+}
 #endif
 static void ctx_swap_mask(int to, unsigned mask)
 {
@@ -5057,8 +5119,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 		swap_copy(live, ctx_store[to][i], ranges[i].size);
 		range_owner[i] = to;
 #if defined(_WIN64) && defined(RANGE_FX)
-		if (i == RANGE_FX)
+		if (i == RANGE_FX) {
 			fx_spot_check("as it comes back", to);
+			fxbody_report();
+		}
 #endif
 	}
 	if (cent_keep_on)
@@ -5126,6 +5190,9 @@ static void ctx_seed_cgame(void)
 			memcpy(ctx_store[1][i], live, ranges[i].size);
 		}
 	}
+#if defined(_WIN64) && defined(RANGE_FX)
+	fxbody_reset();
+#endif
 #ifdef _WIN64
 	// EXPERIMENT, off ([native] fxseed=1 on): context 1's own effects system (fxsplit, mode 10) starts EMPTY, made by the game's FX_InitSystem (rva 0x119a00), instead of as
 	// a copy of context 0's. Why it was tried: the Gulag's start "cafe" crashes 3 s after the split began, every run (rva 0x2713ee, read of -1 taking a node from the shared
@@ -10144,6 +10211,9 @@ static void contexts_install(void)
 #ifdef _WIN64
 	cmd_deliver_install();
 	p2cmd_filter_install();
+#ifdef RANGE_FX
+	fxbody_install();
+#endif
 #endif
 	{
 		if (cfg("sndcount", 0) || cfg("evsnd1", 1)) {
