@@ -219,7 +219,7 @@ static char steam_join(int local_client, uint8_t *host_info, uint8_t *ip_out, ui
 
 static const uint8_t steam_join_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24};
 #else
-#define RVA_STEAM_JOIN 0x90c0
+#define RVA_STEAM_JOIN XR(0x90c0)
 
 static char (*steam_join_original)(int, uint8_t *, uint8_t *, uint16_t *);
 
@@ -229,8 +229,9 @@ static char steam_join(int local_client, uint8_t *host_info, uint8_t *ip_out, ui
 	return steam_join_original(local_client, host_info, ip_out, port_out);
 }
 
-// cmp byte ptr [0x88897c], 0 (the co-op running flag), the first instruction: 7 bytes, no relative operand
-static const uint8_t steam_join_bytes[] = {0x80, 0x3d, 0x7c, 0x89, 0x88, 0x00, 0x00};
+// cmp byte ptr [<the co-op running flag>], 0, the first instruction: 7 bytes, no relative operand. The flag's address is the running build's (official VA 0x88897c),
+// so the bytes match on the iw4x-sp exe and on a build whose addresses moved too (steamnet_install fills it in).
+static uint8_t steam_join_bytes[] = {0x80, 0x3d, 0x7c, 0x89, 0x88, 0x00, 0x00};
 #endif
 
 void steamnet_install(void)
@@ -241,6 +242,12 @@ void steamnet_install(void)
 	InitializeCriticalSection(&peers_lock);
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	uint8_t *at = base + RVA_STEAM_JOIN;
+#ifndef _WIN64
+	{
+		const uint32_t flag_va = (uint32_t)(uintptr_t)(base + XR(0x48897c)); // the co-op running flag of this build
+		memcpy(steam_join_bytes + 2, &flag_va, 4);
+	}
+#endif
 	if (memcmp(at, steam_join_bytes, sizeof(steam_join_bytes)) != 0) {
 		log_printf("steamnet: unexpected code at rva 0x%x, Steam relay off", RVA_STEAM_JOIN);
 		enabled = 0;

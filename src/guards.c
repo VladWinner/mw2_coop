@@ -482,8 +482,8 @@ void guards_install(void)
 	  // 1.0.1, QA climblb, 32-bit only; the 64-bit build has the null test in its flag setter, 0x299ee0, and did not crash). Without a DObj the entity is skipped in that draw.
 		static const uint8_t site_bytes[5] = {0x8b, 0xf8, 0x6a, 0x01, 0x57}; // mov edi,eax; push 1; push edi; then call 0x438110
 		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);
-		// (the iw4x-sp client: the same function at rva 0x16a550, its flag setter at 0xde840, from its crash at 0xde84b called from 0x16a577; its address map has no entry)
-		const uint32_t rsite = game_is_iw4x() ? 0x16a56d : XR(0x169bbd), rflag = game_is_iw4x() ? 0xde840 : XR(0x38110);
+		// (the iw4x-sp client: the same function at rva 0x16a550, its flag setter at 0xde840, from its crash at 0xde84b called from 0x16a577; src/addr159.c maps both since 2026-11-17)
+		const uint32_t rsite = XR(0x169bbd), rflag = XR(0x38110);
 		static const uint8_t exit_bytes[5] = {0x5f, 0x83, 0xc4, 0x2c, 0xc3}; // pop edi; add esp,0x2c; ret
 		uint8_t *site = b32 + rsite;
 		uint8_t *flag = b32 + rflag, *back = site + 10, *out = site + 0xc0;

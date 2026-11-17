@@ -209,32 +209,58 @@ static void install_all(void)
 {
 	game_init();
 	crash_install();
+	addr_scratch_check("after crash_install");
 	log_printf("main32: settings port %u", (unsigned)settings_port());
 	scripts_install();
+	addr_scratch_check("after scripts_install");
 	mirror_install();
+	addr_scratch_check("after mirror_install");
 	transplant_install();
+	addr_scratch_check("after transplant_install");
 	localize_install();
+	addr_scratch_check("after localize_install");
 	zones_install();
+	addr_scratch_check("after zones_install");
 	scrdebug_install();
+	addr_scratch_check("after scrdebug_install");
 	net_install();
+	addr_scratch_check("after net_install");
 	party_install();
+	addr_scratch_check("after party_install");
 	progress_install();
+	addr_scratch_check("after progress_install");
 	saves_install();
+	addr_scratch_check("after saves_install");
 	menus_install();
+	addr_scratch_check("after menus_install");
 	access_install();
+	addr_scratch_check("after access_install");
 	upnp_install();
+	addr_scratch_check("after upnp_install");
 	steamnet_install();
+	addr_scratch_check("after steamnet_install");
 	firewall_install();
+	addr_scratch_check("after firewall_install");
 	shot_install();
+	addr_scratch_check("after shot_install");
 	fov_install();
+	addr_scratch_check("after fov_install");
 	window_install();
+	addr_scratch_check("after window_install");
 	native_install(); // (iw4x-sp: the official addresses go through XR(), src/addr159.c)
+	addr_scratch_check("after native_install");
 	guards_install(); // (iw4x-sp only: see guards.c)
+	addr_scratch_check("after guards_install");
 	climbads_install(); // (not in the iw4x-sp profile)
+	addr_scratch_check("after climbads_install");
 	rumble_install();
+	addr_scratch_check("after rumble_install");
 	devices_install();
+	addr_scratch_check("after devices_install");
 	console_install();
+	addr_scratch_check("after console_install");
 	control_start();
+	addr_scratch_check("after control_start");
 }
 
 static DWORD WINAPI identify(LPVOID unused)

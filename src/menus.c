@@ -3420,6 +3420,12 @@ extern char coop_wait_stub[];
 
 static void brief_install(void)
 {
+	if (!addr_resolved(REF_COOP_WAIT)) {
+		// (a build whose addresses moved: the jump would land in the block that stands in for every function that was not found, and all of them would run this hook;
+		// the iw4x-sp exe through the signature path crashed so, 2026-11-17)
+		log_printf("menus: the co-op briefing wait function was not found in this build: no briefing wait");
+		return;
+	}
 #ifdef _WIN64
 	hook_jump(base + RVA_COOP_WAIT, 16, (void *)coop_wait_hook, 0xcc);
 #else
@@ -3572,6 +3578,7 @@ static void tick_f(void)
 	InterlockedExchange(&tick_queued, 0);
 	if (!base)
 		return;
+	addr_scratch_check("between two menu ticks"); // (a build whose addresses moved: the block for code that was not found must stay `ret`)
 	native_session_tick();
 	patch_main_menu();
 	patch_selection_menu();
@@ -3589,6 +3596,7 @@ static void tick_f(void)
 	picking_tick();
 	unlock_missions_tick();
 	find_tick();
+	addr_scratch_check("in the menu tick's patches");
 	int campaign = campaign_lobby();
 	int spec_split = spec_split_lobby();
 	int split_lobby = campaign || spec_split; // the lobby of a split screen game of ours: the return to it is looked after for a Special Ops op too

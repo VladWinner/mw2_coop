@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "addr.h"
 #include "hook.h"
+#include "log.h"
 
 #ifdef _WIN64
 #define JUMP_SIZE 14
@@ -56,6 +58,10 @@ void hook_jump(uint8_t *target, size_t len, const void *replacement, uint8_t fil
 {
 	if (len < JUMP_SIZE || len > MAX_LEN)
 		return;
+	if (addr_in_scratch(target)) { // an address that was not found in this build: no function there to patch (see addr_scratch_check)
+		log_printf("hook: a jump to %p was not written: its place was not found in this build", replacement);
+		return;
+	}
 	uint8_t patch[MAX_LEN];
 	memset(patch, filler, len);
 	jump_bytes(patch, target, replacement);

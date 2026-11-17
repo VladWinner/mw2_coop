@@ -230,8 +230,30 @@ int game_string_readable(const char *s, size_t max)
 	return 1;
 }
 
+// Whether every page of [p, p + size) is committed and readable. A section of the image is many regions once the game has written to some of its pages (a written copy-on-write page
+// turns read-write, its neighbours stay write-copy), so game_mem_readable(), which looks at one region, refuses a whole .data section.
+static int mem_span_readable(const uint8_t *p, size_t size)
+{
+	const uint8_t *end = p + size;
+	while (p < end) {
+		MEMORY_BASIC_INFORMATION mbi;
+		if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || !mbi.RegionSize)
+			return 0;
+		p = (const uint8_t *)mbi.BaseAddress + mbi.RegionSize;
+	}
+	return 1;
+}
+
+// The part of a section the file gives bytes for (the builtin tables and the strings are initialised data; the rest of a .data section is zeroed memory, 70 MB on the 64-bit exe).
+static size_t section_data_size(const IMAGE_SECTION_HEADER *s)
+{
+	size_t size = s->Misc.VirtualSize;
+	return s->SizeOfRawData && s->SizeOfRawData < size ? s->SizeOfRawData : size;
+}
+
 // The table entry of a script builtin (method or function) found by its name, so what needs one works on a build whose addresses moved: the name is a string in the image, and the entry is the
-// {name, function, developer} record that holds a pointer to it, next to a pointer into the code. NULL if there is none.
+// {name, function, developer} record that holds a pointer to it, next to a pointer into the code. NULL if there is none. (The functions' table is in .data: until 2026-11-17 the readability
+// test of the whole section failed there, and the three rumble functions were not found on the forced unknown-build path.)
 static uint8_t *find_builtin_entry(const char *name)
 {
 	const uint8_t *base = (const uint8_t *)GetModuleHandleW(NULL);
@@ -243,8 +265,8 @@ static uint8_t *find_builtin_entry(const char *name)
 		if (!(sec[i].Characteristics & IMAGE_SCN_MEM_READ) || (sec[i].Characteristics & IMAGE_SCN_MEM_EXECUTE))
 			continue;
 		const uint8_t *s0 = base + sec[i].VirtualAddress;
-		size_t size = sec[i].Misc.VirtualSize;
-		if (size < len + 1 || !game_mem_readable(s0, size))
+		size_t size = section_data_size(&sec[i]);
+		if (size < len + 1 || !mem_span_readable(s0, size))
 			continue;
 		for (size_t k = 1; k + len <= size; k++) {
 			if (s0[k] != (uint8_t)name[0] || s0[k - 1] != 0 || memcmp(s0 + k, name, len) != 0)
@@ -255,8 +277,8 @@ static uint8_t *find_builtin_entry(const char *name)
 				if (!(sec[j].Characteristics & IMAGE_SCN_MEM_READ) || (sec[j].Characteristics & IMAGE_SCN_MEM_EXECUTE))
 					continue;
 				const uint8_t *d0 = base + sec[j].VirtualAddress;
-				size_t dsize = sec[j].Misc.VirtualSize;
-				if (dsize < 3 * sizeof(void *) || !game_mem_readable(d0, dsize))
+				size_t dsize = section_data_size(&sec[j]);
+				if (dsize < 3 * sizeof(void *) || !mem_span_readable(d0, dsize))
 					continue;
 				for (size_t q = 0; q + 3 * sizeof(void *) <= dsize; q += sizeof(void *)) {
 					if (*(const uintptr_t *)(d0 + q) != va)

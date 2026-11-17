@@ -184,7 +184,7 @@ void mt_size_log(unsigned bytes, const uintptr_t *entry_sp)
 		int n = 0;
 		for (int k = 1; k < 80 && n < (int)sizeof(chain) - 12; k++) {
 			const uintptr_t v = entry_sp[k];
-			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && ((const uint8_t *)v)[-5] == 0xe8)
+			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && ((const uint8_t *)v)[-5] == 0xe8) // raw-ok: the image bounds as a plausibility test
 				n += snprintf(chain + n, sizeof(chain) - n, " %x", (unsigned)(v - (uintptr_t)base));
 		}
 		chain[n] = 0;
@@ -254,7 +254,7 @@ int sl_free_check(unsigned handle, const uint8_t *str, int len, const uintptr_t 
 		int n = 0;
 		for (int k = 0; k < 80 && n < (int)sizeof(chain) - 12; k++) {
 			const uintptr_t v = entry_sp[k];
-			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && ((const uint8_t *)v)[-5] == 0xe8)
+			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && ((const uint8_t *)v)[-5] == 0xe8) // raw-ok: the image bounds as a plausibility test
 				n += snprintf(chain + n, sizeof(chain) - n, " %x", (unsigned)(v - (uintptr_t)base));
 		}
 		chain[n] = 0;
@@ -289,7 +289,7 @@ static void xfer_note(const char *what, unsigned a, uintptr_t caller)
 	if (n < 4000) {
 		LONG saves = InterlockedExchange(&xfer_saves, 0);
 		log_printf("xfer #%ld ctx %d: %s from rva %x (queue count %u); %ld saves before it (first from rva %x in ctx %d)", (long)n, ctx, what, (unsigned)(caller - (uintptr_t)base),
-			   *(const unsigned *)(base + 0x1a53de4 - 0x400000), (long)saves, (unsigned)(xfer_save_caller - (uintptr_t)base), (int)xfer_save_ctx);
+			   *(const unsigned *)(base + 0x1a53de4 - 0x400000), (long)saves, (unsigned)(xfer_save_caller - (uintptr_t)base), (int)xfer_save_ctx); // raw-ok: QA diagnostics behind the xferlog file, 159 image
 	}
 }
 static void (*xfer_apply_next)(void);
@@ -334,9 +334,9 @@ static void xfer_install(void)
 	static const uint8_t save_bytes[] = {0xa1, 0xe4, 0x3d, 0xa5, 0x01}; // mov eax, [0x1a53de4]
 	static const uint8_t apply_bytes[] = {0x56, 0x33, 0xf6, 0x39, 0x35, 0xe4, 0x3d, 0xa5, 0x01}; // push esi / xor esi, esi / cmp [0x1a53de4], esi
 	static const uint8_t reset_bytes[] = {0x33, 0xc0, 0xa3, 0xe0, 0x3d, 0xa5, 0x01}; // xor eax, eax / mov [0x1a53de0], eax
-	int ok = hook_function(base + 0x486930 - 0x400000, save_bytes, sizeof(save_bytes), xfer_save_hook, &xfer_save_tramp) &&
-		 hook_function(base + 0x42b260 - 0x400000, apply_bytes, sizeof(apply_bytes), xfer_apply_hook, (void **)&xfer_apply_next) &&
-		 hook_function(base + 0x4dfe40 - 0x400000, reset_bytes, sizeof(reset_bytes), xfer_reset_hook, (void **)&xfer_reset_next);
+	int ok = hook_function(base + 0x486930 - 0x400000, save_bytes, sizeof(save_bytes), xfer_save_hook, &xfer_save_tramp) && // raw-ok: QA diagnostics behind the xferlog file, 159 image (the bytes are checked)
+		 hook_function(base + 0x42b260 - 0x400000, apply_bytes, sizeof(apply_bytes), xfer_apply_hook, (void **)&xfer_apply_next) && // raw-ok: QA diagnostics, 159 image
+		 hook_function(base + 0x4dfe40 - 0x400000, reset_bytes, sizeof(reset_bytes), xfer_reset_hook, (void **)&xfer_reset_next); // raw-ok: QA diagnostics, 159 image
 	log_printf("scrdebug: animation transfer queue events are logged: %s", ok ? "on" : "bytes did not match");
 }
 

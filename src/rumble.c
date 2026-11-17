@@ -14,7 +14,7 @@
 #include "rumble.h"
 
 #ifdef _WIN64
-#define RVA_EMPTY_BUILTIN 0xa650
+#define RVA_EMPTY_BUILTIN XR(0xa650)
 #define RVA_SCR_GET_STRING XR(0x223440) // const char *Scr_GetString(int index)
 #define RVA_SCR_GET_VECTOR XR(0x223540) // void Scr_GetVector(int index, float out[3])
 #define RVA_G_ENTITIES XR(0xd9e070)

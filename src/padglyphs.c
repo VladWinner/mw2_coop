@@ -306,8 +306,8 @@ __attribute__((used)) const char *padglyphs_text(const char *text, float x, floa
 // ---- the sizes. The engine measures a text for centring, right alignment and line breaks before the draw makes the pictures, and sees a marker as two letters; the
 // pictures are wider (the draw's width formula, the same as the line break function's own for a picture it finds).
 #ifdef _WIN64
-#define RVA_TEXT_WIDTH 0x9b30 // int (char *text, int max chars, Font *font): the width of the widest line, in the font's pixels
-#define RVA_TEXT_WRAP 0x9c90 // char *(char *text, int max bytes, int width, Font *font, float scale): where the line ends
+#define RVA_TEXT_WIDTH XR(0x9b30) // int (char *text, int max chars, Font *font): the width of the widest line, in the font's pixels
+#define RVA_TEXT_WRAP XR(0x9c90) // char *(char *text, int max bytes, int width, Font *font, float scale): where the line ends
 #define FONT_HEIGHT 8
 static const uint8_t width_head[17] = {0x48, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x56, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x20};
 static const uint8_t wrap_head[15] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x44, 0x89, 0x44, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54};

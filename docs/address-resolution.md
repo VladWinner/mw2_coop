@@ -95,14 +95,42 @@ routing (it now reads only the lines the 32-bit build compiles, plus the `REF_` 
 * **Hard-coded UI scripts.** The scripts every button repeated (`click`, `click and close`, `hover`, `leave`) are `UI_S_*` constants in `menus_ui.h`; the other `ui_script_set` strings are single-use. The texts, the mission list, the console
   texts, the menu button tables and the settings reference are files (`.str`, `.csv`, `.menu`) since 2026-11-09 and 11-13.
 
+## Third round (2026-11-17): the 32-bit code, and names that hid a raw number
+
+* **The check covers the 32-bit build.** `tools/check_raw_addresses.py` reads, for each build, only the lines that build compiles (by the `#ifdef _WIN64` nesting): `src/*.c` / `src/*.h` for the 64-bit
+  build, the files `build.sh` gives the 32-bit build (with `src/x86`) and the headers for the 32-bit one. Besides `base + 0x....` it finds a cast of a 32-bit VA (`(int *)0x738c6c`) and
+  `base + NAME` where `NAME` is a `#define` of a raw number (the form that hid the last ones: the snapshot entity ring of `native.c`, the text measuring hooks of `padglyphs.c` and the rumble
+  builtin check of `rumble.c` on 64-bit; the 32-bit Steam join hook of `steamnet.c`, whose expected first bytes held the official build's VA of the co-op flag and are now filled in at start).
+  What stays raw carries `raw-ok:` and a reason: image bounds, scan windows, iw4x-sp 1.0.159 addresses in diagnostics that only run on that client.
+* **The iw4x-sp table covers every 32-bit file.** `tools/gen_addr159.py` read six source files; `guards.c` and `steamnet.c` use `XR()` too, so on the iw4x-sp client their addresses had no
+  entry (`addr159()` gave 0) and `guards.c` carried that client's two addresses by hand. 348 addresses, all mapped; the hand-written pair is gone (the table gives the same numbers).
+* **Signature files.** `addresses-x64.txt`: 421 addresses, 409 found on the reference exe (the others are globals no signature reaches; the neighbour rule may place them).
+  `addresses-x86.txt`: 348 addresses, 341 found on the official image; on the iw4x-sp 1.0.159 exe 305 found, 297 equal to the hand-checked table, 7 found where the table has no entry
+  (features that are off on that client) and one global placed 0x80 off by the neighbour rule (`RVA_VM_STACK_TOP`, read for a log line only).
+* **Runs on the unknown-build path** (`MW2COOP_FORCE_UNKNOWN=1 MW2COOP_MOVED=1`, plus `MW2COOP_FORCE_RESOLVED=1` on a build with the reference layout so the tables are used):
+  * 64-bit, network pair, Estate, `nativesave`: 409 of 421 found on both machines, every check passed (the checkpoint loaded after a failed mission, both players back on their places).
+    The split screen refuses on this path, as designed: two of the ranges it swaps (0x4812878, 0x45851b0) have no signature.
+  * 32-bit official exe, split screen, Trainer, `p2walk`: 340 of 348 found, split screen on, player 2 walks with the pad in all four directions.
+  * The iw4x-sp 1.0.159 exe through the signatures instead of its table (a build whose code really moved): 302 of 348 found. It **crashed** 14 s in: `padopts.c` registered its
+    dvars through two functions that were not found (the `ret` block), got no dvar back and read through it. Fixed: the gamepad options check `addr_resolved()` first and stay at
+    their defaults; the block a call to an unresolved function lands in now returns 0 (`xor eax, eax; ret`) instead of whatever `eax` held. Run again: no crash, the split screen
+    refuses itself (the cgame draw's bytes differ), the menus, the console and the rest of the mod run.
+  * The same exe as a network pair crashed both machines when the level loaded: the briefing wait (`menus.c`, `brief_install`) wrote its jump over a function that was not found,
+    that is into the one block every unresolved function shares, so every unresolved function ran the briefing hook and returned 1; the `setdvar` wrapper then read the script
+    argument through Scr_GetString (not found on that exe) and copied a string from address 1. Fixed: `brief_install` checks `addr_resolved()`; `hook_jump()` writes nothing
+    into those blocks (`addr_in_scratch()`), and `addr_scratch_check()` puts the code block back and logs who wrote it, after each install step and in the menu tick.
+    Run again (200 s): both machines load Estate and run to the end of the test time, nothing writes into the block; the scenario's own checks did not report in that time (not verified).
+* **Builtins found by name in `.data`.** `find_builtin_entry()` (the fallback when a script builtin's table entry has no address) tested a whole section with one `VirtualQuery`
+  region; `.data` is many regions once the game writes to it, so the functions' table there was never searched, and the three rumble functions were "not found" on the 64-bit
+  unknown-build path. It walks the regions now and searches only the initialised part of a section; all six rumble builtins are found by name.
+
 ## What is not done
 
-* A 64-bit build whose addresses moved runs only with `movedbuilds=1` and only if 85% of the addresses are found; it has never been run (no such build to try). A 64-bit
-  build with the reference layout runs as before.
-* A 32-bit build whose addresses moved is not run yet either. The native code already goes through `XR()` / `XV()` (the iw4x-sp profile maps them
-  through `addr159()`), but the generic hooks use `RVA_` macros and inline addresses (scrdebug32.c, climbads.c), and every consumer has to survive an
-  address that stays unresolved (`addr_xr()` gives 0). Routing half of them would be worse than none: a moved build runs only when all of them are routed.
-* 6 globals of the 32-bit build (the rumble script function table and three others) are never found: no code reaches them near enough.
+* A 64-bit build whose addresses moved runs only with `movedbuilds=1` and only if 85% of the addresses are found; no such build exists here to run it on. The path is run on the reference
+  exe with the lookups forced (`MW2COOP_FORCE_UNKNOWN=1 MW2COOP_MOVED=1 MW2COOP_FORCE_RESOLVED=1`): every address resolves to itself, so what that proves is that every use goes through the
+  resolver and that the unresolved ones are survived.
+* The renderer (`src/dx`) is still tied to the reference build as a whole (its build hash, above): on any other 64-bit build the game keeps its own Direct3D 9.
+* The official 32-bit exe hashes its code on some loads (exit 0x8000dead); the mod does not get around that check, so the saves stay off there on any build.
 
 ## Regenerating
 

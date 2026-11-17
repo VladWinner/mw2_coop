@@ -463,6 +463,7 @@ static int ref_is_code(unsigned ref)
 	return 0;
 }
 
+static void scratch_fill_code(uint8_t *p);
 static void scratch_make(void)
 {
 	scratch_tried = 1;
@@ -476,10 +477,60 @@ static void scratch_make(void)
 #else
 		p = VirtualAlloc(NULL, SCRATCH_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 #endif
-		if (p && k == 1)
-			memset(p, 0xc3, SCRATCH_SIZE);
 		scratch[k] = p;
 	}
+	if (scratch[1])
+		scratch_fill_code(scratch[1]);
+}
+
+// The block for code that was not found: `ret` everywhere, and at +0x100, where a call to an unresolved function enters (scratch_rva), xor eax, eax; ret. It returns 0 / NULL,
+// which the callers test for, instead of whatever eax held (32-bit and 64-bit alike: the 32-bit xor clears the whole of rax).
+static void scratch_fill_code(uint8_t *p)
+{
+	memset(p, 0xc3, SCRATCH_SIZE);
+	p[0x100] = 0x31;
+	p[0x101] = 0xc0;
+	p[0x102] = 0xc3;
+}
+
+int addr_in_scratch(const void *p)
+{
+	for (int k = 0; k < 2; k++)
+		if (scratch[k] && (const uint8_t *)p >= scratch[k] && (const uint8_t *)p < scratch[k] + SCRATCH_SIZE)
+			return 1;
+	return 0;
+}
+
+int addr_scratch_check(const char *when)
+{
+	uint8_t *p = scratch[1];
+	if (!p)
+		return 0;
+	int changed = 0, first = -1;
+	for (int i = 0; i < SCRATCH_SIZE; i++) {
+		const uint8_t want = i == 0x100 ? 0x31 : i == 0x101 ? 0xc0 : 0xc3;
+		if (p[i] != want) {
+			if (first < 0)
+				first = i;
+			changed++;
+		}
+	}
+	if (!changed)
+		return 0;
+	static int logged;
+	if (logged++ < 20) {
+		const uint8_t *f = p + first;
+		const int room = SCRATCH_SIZE - first;
+		log_printf("addr: %d byte(s) of the block for code that was not found were overwritten (first at +0x%x: %02x %02x %02x %02x %02x %02x), seen %s; put back", changed, (unsigned)first,
+			   f[0], room > 1 ? f[1] : 0, room > 2 ? f[2] : 0, room > 3 ? f[3] : 0, room > 4 ? f[4] : 0, room > 5 ? f[5] : 0, when);
+	}
+	DWORD old;
+	if (VirtualProtect(p, SCRATCH_SIZE, PAGE_EXECUTE_READWRITE, &old)) {
+		scratch_fill_code(p);
+		VirtualProtect(p, SCRATCH_SIZE, old, &old);
+	}
+	FlushInstructionCache(GetCurrentProcess(), p, SCRATCH_SIZE);
+	return changed;
 }
 
 static unsigned scratch_rva(unsigned ref)

@@ -46,5 +46,10 @@ unsigned addr_xr(unsigned ref);
 // 1 when addr_xr(ref) is a real address of the running build (always on the known build), 0 when the address was not found and a harmless block stands in for it: code that
 // reads state through such an address must not wait for or act on it.
 int addr_resolved(unsigned ref);
+// The block that stands in for code that was not found must stay `ret` (a patch of an unresolved function would land in it and change what every other unresolved
+// function returns): logs and puts it back when something wrote to it; `when` names the step that ran before. The number of bytes found changed.
+int addr_scratch_check(const char *when);
+// 1 when p lies in one of the blocks that stand in for addresses that were not found (hook_jump writes nothing there).
+int addr_in_scratch(const void *p);
 // 32-bit: the running build is the iw4x-sp client's known 1.0.159 exe: addr_xr() reads the table of addr159.c from now on (mode 2).
 void addr_use_159(void);

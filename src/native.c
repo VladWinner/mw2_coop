@@ -1129,7 +1129,7 @@ static void perf_report(void)
 	}
 #else
 	if (!game_is_iw4x() && CFG_ONCE("sndlog", 0)) {
-		const uint8_t *l = base + 0x17f5b4c; // rva of the listener array in the official 32-bit build
+		const uint8_t *l = base + XR(0x17f5b4c); // the listener array (official 32-bit rva)
 		log_printf("native: sound listeners: 0 %s at %.0f %.0f %.0f, 1 %s at %.0f %.0f %.0f", l[0x38] ? "on" : "off", (double)((const float *)l)[0], (double)((const float *)l)[1], (double)((const float *)l)[2],
 			   l[0x3c + 0x38] ? "on" : "off", (double)((const float *)(l + 0x3c))[0], (double)((const float *)(l + 0x3c))[1], (double)((const float *)(l + 0x3c))[2]);
 	}
@@ -3704,11 +3704,11 @@ static void slice_install(void)
 // client next-state values skipped and doubled in the split screen, where the client's snapshot reads are late). A ring of copies, one per build and tagged with the
 // snapshot's time, gives the read the states of the snapshot it is reading. [native] entring=0 turns it off.
 #ifdef _WIN64
-#define ENTRING_ARRAY 0x19c6410u
-#define ENTRING_TIME 0xd96ec8u       // level time (the snapshot's time), getter 0x171360
-#define ENTRING_BUILD_SITE 0x234a44u // a tail jmp to the snapshot build 0x234540
-#define ENTRING_GET_SITE 0xb9772u    // the getter call in CG_SetNextSnap 0xb9320
-#define ENTRING_NEXTSNAP 0x51b080u   // cg.nextSnap
+#define ENTRING_ARRAY XR(0x19c6410)
+#define ENTRING_TIME XR(0xd96ec8)       // level time (the snapshot's time), getter 0x171360
+#define ENTRING_BUILD_SITE XR(0x234a44) // a tail jmp to the snapshot build 0x234540
+#define ENTRING_GET_SITE XR(0xb9772)    // the getter call in CG_SetNextSnap 0xb9320
+#define ENTRING_NEXTSNAP XR(0x51b080)   // cg.nextSnap
 #else
 // 32-bit (VA - 0x400000): the array VA 0x1b2aca0 (0x56000 bytes, the next array starts right behind it), level time VA 0x10a3c44 (getter 0x4f4700), the build 0x65cc90 called at
 // VA 0x42d18b, the getter 0x40dd30 (cdecl) called at VA 0x41a649 by the function (0x41a3a0) that makes cg.snap = cg.nextSnap, cg.nextSnap at VA 0x867990
@@ -5556,7 +5556,7 @@ static void hang_dump_thread(const char *why, DWORD only) // only: one thread's 
 #endif
 #ifndef _WIN64
 				// the string release loop of the iw4x exe (SL_RemoveRef..., rva 0x213d5c): the string (ebp), its hash bucket chain
-				if (game_is_iw4x() && CTX_IP(ctx) >= (uintptr_t)base + 0x213d50 && CTX_IP(ctx) <= (uintptr_t)base + 0x213d63) {
+				if (game_is_iw4x() && CTX_IP(ctx) >= (uintptr_t)base + 0x213d50 && CTX_IP(ctx) <= (uintptr_t)base + 0x213d63) { // raw-ok: an address of the 159 image, iw4x-sp only
 					const uint8_t *str = (const uint8_t *)ctx.Ebp;
 					char text[48] = "?";
 					MEMORY_BASIC_INFORMATION mbi;
@@ -5565,7 +5565,7 @@ static void hang_dump_thread(const char *why, DWORD only) // only: one thread's 
 							text[i] = str[4 + i] >= 32 && str[4 + i] < 127 ? (char)str[4 + i] : '.', text[i + 1] = 0;
 						log_printf("native: string release loop: string %p refs %u text '%s' bytes %02x%02x%02x%02x %02x%02x%02x%02x", str, *(const uint16_t *)str, text, str[0], str[1], str[2], str[3], str[4], str[5], str[6], str[7]);
 					}
-					const uint8_t *tbl = (const uint8_t *)base + 0x128f380;
+					const uint8_t *tbl = (const uint8_t *)base + 0x128f380; // raw-ok: an address of the 159 image, iw4x-sp only
 					unsigned idx = ((unsigned)ctx.Eax - 0x168f380u) / 8;
 					char chain[600] = "";
 					int cn = 0;
@@ -7482,7 +7482,7 @@ static unsigned make_cmd_calls[3]; // QA (padlog): calls of the usercmd maker pe
 // frame runs the scripts. A copy is taken when a server step ends and compared at the next points outside it (the client frame's begin and end, the next step's start): every
 // 16-byte entry that differs there was written by something that is not the server step, and is logged with its old and new bytes and the window it was found in.
 #ifndef _WIN64
-#define SCRW_RVA 0x12c7480u
+#define SCRW_RVA 0x12c7480u // raw-ok: iw4x-sp diagnostics, 159 image
 #define SCRW_SIZE 0x220000u
 static uint8_t *scrw_copy;
 static unsigned scrw_logged;
@@ -7490,9 +7490,9 @@ static void strw_check(const char *label)
 {
 	// the script VM between scripts: value stack top (VA 0x190de00; the stack starts at 0x190e110, 8 bytes a value), call depth (0x190ddf8), parameter counts (0x190de08, 0x190de0c):
 	// at a server step's edge nothing runs, so a top or depth that drifts away from the start shows a builtin that pushed or popped too many
-	const uint32_t top = *(const uint32_t *)(base + 0x150de00);
-	const int depth = *(const int *)(base + 0x150ddf8);
-	const int pc1 = *(const int *)(base + 0x150de08), pc2 = *(const int *)(base + 0x150de0c);
+	const uint32_t top = *(const uint32_t *)(base + 0x150de00); // raw-ok: iw4x-sp diagnostics, 159 image
+	const int depth = *(const int *)(base + 0x150ddf8); // raw-ok: iw4x-sp diagnostics, 159 image
+	const int pc1 = *(const int *)(base + 0x150de08), pc2 = *(const int *)(base + 0x150de0c); // raw-ok: iw4x-sp diagnostics, 159 image
 	static int last_top = -1, last_depth = -1, logged;
 	const int idx = (int)((top - 0x190e110u) / 8);
 	if ((idx != last_top || depth != last_depth) && logged < 400) {
@@ -7554,7 +7554,7 @@ static void client_frame_inner(void)
 			log_printf("native: client frame #%d (active %d, ctx %d, ready %d, split %d, cg draws %u) cls %d | sv clients %d %d | hooks: snap %u ps %u step %u ucmd %u smsg %u scmd %u | entities %d", seen, native_active, ctx_current, ctx1_ready, split_on, cg_draw_count, *(int *)(base + RVA_CLS_STATE), *(int *)(base + RVA_SV_CLIENTS), *(int *)(base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE), hook_counts[0], hook_counts[1], hook_counts[2], hook_counts[3], hook_counts[4], hook_counts[5], *(int *)(base + RVA_LEVEL_NUM_ENT));
 #ifndef _WIN64
 			if (game_is_iw4x()) // the script variable pool (159 image): AllocVariable counts the variables of the root object (VA 0x18e7540) and of all others (0x18e7544); the table has 0x22000 entries
-			log_printf("native: script variables in use: root %d, others %d, of 139264 (free list head entry %u)", *(int *)(base + 0x14e7540), *(int *)(base + 0x14e7544), (unsigned)*(const uint16_t *)(base + 0x12c7480));
+			log_printf("native: script variables in use: root %d, others %d, of 139264 (free list head entry %u)", *(int *)(base + 0x14e7540), *(int *)(base + 0x14e7544), (unsigned)*(const uint16_t *)(base + 0x12c7480)); // raw-ok: iw4x-sp diagnostics, 159 image
 #endif
 			last = now;
 		}
@@ -10094,7 +10094,7 @@ static void die_hook(void)
 		if (IsBadReadPtr(sp + i, 4))
 			break;
 		uintptr_t v = sp[i];
-		if (v >= (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a0000)
+		if (v >= (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a0000) // raw-ok: the image bounds as a plausibility test
 			n += snprintf(line + n, sizeof(line) - n, " %x", (unsigned)(v - (uintptr_t)base));
 	}
 	log_printf("%s", line);

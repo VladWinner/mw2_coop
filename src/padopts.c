@@ -28,13 +28,13 @@ static const struct {
 };
 
 #ifdef _WIN64
-#define RVA_DVAR_REGISTER_BOOL XR(0x26c930)  // dvar_t *(const char *name, bool value, unsigned flags, const char *description)
-#define RVA_DVAR_REGISTER_FLOAT XR(0x26cb90) // dvar_t *(const char *name, float value, float min, float max, unsigned flags, const char *description)
-#define RVA_AIM_DVARS XR(0x3cf050)		 // the aim_* dvars: aim_aimAssistRangeScale (0x3cf050) ... aim_scale_view_axis (0x3cf178)
-#define RVA_AIM_DVARS_END XR(0x3cf180)
+#define REF_DVAR_REGISTER_BOOL 0x26c930  // dvar_t *(const char *name, bool value, unsigned flags, const char *description)
+#define REF_DVAR_REGISTER_FLOAT 0x26cb90 // dvar_t *(const char *name, float value, float min, float max, unsigned flags, const char *description)
+#define REF_AIM_DVARS 0x3cf050		 // the aim_* dvars: aim_aimAssistRangeScale (0x3cf050) ... aim_scale_view_axis (0x3cf178)
+#define REF_AIM_DVARS_END 0x3cf180
 #else
-#define RVA_DVAR_REGISTER_BOOL XR(0x866b0)   // VA 0x4866b0, cdecl, the value is a byte at [esp+8] (docs/32bit-native-map/inputui.md)
-#define RVA_DVAR_REGISTER_FLOAT XR(0x9f700)  // VA 0x49f700, cdecl
+#define REF_DVAR_REGISTER_BOOL 0x866b0   // VA 0x4866b0, cdecl, the value is a byte at [esp+8] (docs/32bit-native-map/inputui.md)
+#define REF_DVAR_REGISTER_FLOAT 0x9f700  // VA 0x49f700, cdecl
 extern const uint32_t aim_dvar_rvas32[38]; // native.c: where each aim_* dvar_t * lives in 32 bits (scattered, not one block)
 #endif
 #define DVAR_ARCHIVE 1
@@ -47,18 +47,29 @@ static char names[2][OPTS][32];
 
 static void register_dvars(void)
 {
-	if (dvars[0][0])
+	static int tried;
+	if (tried)
 		return;
+	tried = 1;
+	// on a build whose addresses moved, a register function that was not found is a `ret` block: it would hand back no dvar (the iw4x-sp exe through the signature path crashed
+	// reading one, 2026-11-17), so the options stay at their defaults
+	if (!addr_resolved(REF_DVAR_REGISTER_BOOL) || !addr_resolved(REF_DVAR_REGISTER_FLOAT)) {
+		log_printf("padopts: the dvar register functions were not found in this build: the gamepad options stay at their defaults");
+		return;
+	}
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
-	dvar_t *(*reg_bool)(const char *, int, unsigned, const char *) = (void *)(base + RVA_DVAR_REGISTER_BOOL);
-	dvar_t *(*reg_float)(const char *, float, float, float, unsigned, const char *) = (void *)(base + RVA_DVAR_REGISTER_FLOAT);
+	dvar_t *(*reg_bool)(const char *, int, unsigned, const char *) = (void *)(base + XR(REF_DVAR_REGISTER_BOOL));
+	dvar_t *(*reg_float)(const char *, float, float, float, unsigned, const char *) = (void *)(base + XR(REF_DVAR_REGISTER_FLOAT));
 	for (int pl = 0; pl < 2; pl++)
 		for (int o = 0; o < OPTS; o++) {
 			snprintf(names[pl][o], sizeof(names[pl][o]), "mw2coop_pad%d_%s", pl + 1, opts[o].key);
 			dvars[pl][o] = o == OPT_SENS ? reg_float(names[pl][o], opts[o].def, 1.0f, 10.0f, DVAR_ARCHIVE, opts[o].description)
 						     : reg_bool(names[pl][o], opts[o].def != 0, DVAR_ARCHIVE, opts[o].description);
 		}
-	log_printf("padopts: gamepad options registered (sensitivity %.1f / %.1f)", dvars[0][OPT_SENS]->current.value, dvars[1][OPT_SENS]->current.value);
+	if (dvars[0][OPT_SENS] && dvars[1][OPT_SENS])
+		log_printf("padopts: gamepad options registered (sensitivity %.1f / %.1f)", dvars[0][OPT_SENS]->current.value, dvars[1][OPT_SENS]->current.value);
+	else
+		log_printf("padopts: the game gave no dvar for the gamepad options: they stay at their defaults");
 }
 
 // the aim_* dvars are registered with the cgame (a level's start), after the main menu: checked on every tick
@@ -67,7 +78,9 @@ static void unlock_aim_dvars(void)
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	int unlocked = 0;
 #ifdef _WIN64
-	for (uint32_t rva = RVA_AIM_DVARS; rva < RVA_AIM_DVARS_END; rva += 8) {
+	if (!addr_resolved(REF_AIM_DVARS) || !addr_resolved(REF_AIM_DVARS_END) || XR(REF_AIM_DVARS_END) - XR(REF_AIM_DVARS) != REF_AIM_DVARS_END - REF_AIM_DVARS)
+		return; // (a build whose addresses moved: only the block as the reference build has it)
+	for (uint32_t rva = XR(REF_AIM_DVARS); rva < XR(REF_AIM_DVARS_END); rva += 8) {
 		dvar_t *d = *(dvar_t **)(base + rva);
 #else
 	for (int i = 0; i < 38; i++) {
