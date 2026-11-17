@@ -38,13 +38,20 @@
 #define RVA_MAP_CHECKSUM        0x19c3864
 #define RVA_CLC_RING            0x54784c // local client 0's reliable command ring (0x1400ca250: 0x54784c + client * 0x3218)
 #define RVA_CGS_SEQUENCE        0x40cab0 // the cgame's last server command sequence (set by 0xa9230 when a save is loaded)
-#define SITE_RING_CALL          0x233b25 // the call of the ring getter in the block writer 0x233aa0
-#define SITE_SEQ_CALL           0x2337b0 // the call of the sequence setter in the block reader 0x2336e0
+#define RVA_SITE_RING_CALL      0x233b25 // the call of the ring getter in the block writer 0x233aa0 (RVA_: tools/addrsig.py collects it)
+#define SITE_RING_CALL          RVA_SITE_RING_CALL
+#define RVA_SITE_SEQ_CALL       0x2337b0 // the call of the sequence setter in the block reader 0x2336e0
+#define SITE_SEQ_CALL           RVA_SITE_SEQ_CALL
 #define RVA_COOP_FLAG           0x52fb5c // the co-op session byte
 #define RVA_SV_CMD_MAP          0x1904f10 // the server command node of "map" (handler 0x22cb70)
 #define RVA_MAP_FN              0x22cb70
 #define RVA_LOAD_NAME           0xf4e140 // the saved game G_InitGame loads (0x40 characters; 0x1819e0 sets it, 0x1807f0 reads it)
-#define SITE_LOAD_CALL          0x17f3f3 // the call of G_LoadGame in 0x17f3b0
+#define RVA_SITE_LOAD_CALL      0x17f3f3 // the call of G_LoadGame in 0x17f3b0
+#define SITE_LOAD_CALL          RVA_SITE_LOAD_CALL
+#define RVA_COMMIT_SITE_1       0x1809b8 // the calls of the disk write 0x1af150
+#define RVA_COMMIT_SITE_2       0x180a04
+#define RVA_COMMIT_SITE_3       0x17f337
+#define RVA_COMMIT_SITE_4       0x22cd75
 #define RVA_LEVEL_TIME          0xd96ec8
 #else
 // 32 bits (VA = rva + 0x400000): Cmd_AddServerCommand 0x45f330 in 0x493340, loadgame_continue 0x659c50, the commit check 0x4af8d0, G_SaveGame 0x5c6530,
@@ -261,7 +268,7 @@ static DWORD WINAPI fast_restart_wait(LPVOID unused)
 // savegame ... to file save\estate.svg"). In a co-op session the write is left out; the checkpoint is loaded from memory. The game's own temporary save of a
 // vid_restart / snd_restart (internal/...) is still written: the restart loads it back from the disk.
 #ifdef _WIN64
-static const uint32_t commit_write_sites[] = {0x1809b8, 0x180a04, 0x17f337, 0x22cd75}; // the calls of 0x1af150
+static const uint32_t commit_write_sites[] = {RVA_COMMIT_SITE_1, RVA_COMMIT_SITE_2, RVA_COMMIT_SITE_3, RVA_COMMIT_SITE_4};
 #endif
 // (32 bits: the function itself, from its 13th byte: the iw4x-sp exe reached it from another place than the two calls of the official one, and the level's autosaves
 // went to players\saveutosave there; QA 2026-11-17)
@@ -418,7 +425,8 @@ static void LOAD_CC g_load_hook(void *f)
 #define RVA_G_SAVE_END  0x1819e0
 #define RVA_G_LOADGAME  0x17f8e0
 #define RVA_G_LOAD_END  0x180930
-#define SITE_SAVE_CALL  0x181b45 // the call of G_SaveGame in 0x181a00
+#define RVA_SITE_SAVE_CALL 0x181b45 // the call of G_SaveGame in 0x181a00
+#define SITE_SAVE_CALL  RVA_SITE_SAVE_CALL
 
 static void (*mem_write_orig)(void *, int, const void *);
 static void (*mem_read_orig)(void *, int, void *);
