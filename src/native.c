@@ -8250,6 +8250,14 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 			cmd[0x3d] = (uint8_t)(int8_t)p->rc_yaw;
 		}
 	}
+	if (CFG_ONCE("cmdlog1", 0) && cmd && native_active && ctx_current == 1) { // QA: player 2's usercmd angles as made, 4 a second (Big Brother's gunner)
+		static DWORD at;
+		if (GetTickCount() - at >= 250) {
+			at = GetTickCount();
+			log_printf("native: cmdlog1 time %d buttons %08x angles %d %d %d (short units) kb_player %d", *(int *)cmd, *(int *)(cmd + 4), *(int *)(cmd + 8), *(int *)(cmd + 12),
+				   *(int *)(cmd + 16), kb_player());
+		}
+	}
 	if (inputlog_on() && cmd && native_active && (ctx_current == 0 || ctx_current == 1)) { // the usercmd as it leaves the maker (about 20 a second per context)
 		static DWORD cmd_at[2];
 		DWORD now_ms = GetTickCount();
