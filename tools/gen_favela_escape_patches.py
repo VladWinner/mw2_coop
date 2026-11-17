@@ -33,7 +33,7 @@ assert n, rel
 # the chopper's rope ladder for both players (maps\\_mw2coop_favelaescape.gsc)
 p.note("""{0}. The chopper's rope ladder for both players (maps\\_mw2coop_favelaescape): whichever player
    leaps for the ladder first starts the scene (who), and the other catches the same rope with a
-   rig of his own (partner_jumps).""".format(n + 1))
+   rig of his own (partner_jumps); each rig and each body is hidden from the other player.""".format(n + 1))
 src = p.func('solorun_chopperjump')
 orig = src[src.index('\tthread player_jump_watcher();\n'):src.index('\tflag_set( "chopperjump_player_jump" );')]
 p.subst('solorun_chopperjump', 'level.player', 'who')
@@ -47,7 +47,7 @@ p.replace(orig.replace('level.player', 'who'),
 p.replace('\t// catch the jump\n', '\tthread maps\\_mw2coop_favelaescape::slide_sync();\n\n\t// catch the jump\n')
 p.replace('\tchopper thread anim_single( player_and_ladder, jump_scene, propsTag );\n',
           '\tchopper thread anim_single( player_and_ladder, jump_scene, propsTag );\n'
-          '\tthread maps\\_mw2coop_favelaescape::partner_jumps( who, chopper, jump_scene, propsTag );\n')
+          '\tthread maps\\_mw2coop_favelaescape::partner_jumps( who, chopper, jump_scene, propsTag, player_rig );\n')
 p.replace('\tthread chopperjump_player_blend_to_anim( player_rig );\n', '\tthread chopperjump_player_blend_to_anim( player_rig, who );\n')
 p.replace('chopperjump_player_blend_to_anim( player_rig )\n{\n', 'chopperjump_player_blend_to_anim( player_rig, who )\n{\n')
 p.subst('chopperjump_player_blend_to_anim', 'level.player', 'who')

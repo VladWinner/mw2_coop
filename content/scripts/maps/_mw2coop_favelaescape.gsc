@@ -48,13 +48,28 @@ catch_leap( volume, ladder, look_spots )
 }
 
 // solorun_chopperjump(), where the jump scene starts for who: the other player catches the rope too.
-partner_jumps( who, chopper, scene, tag )
+// Both hang on the same rope at the same spot, so each one's arms (the scene's rig) and body were in the
+// other's view, over his own (owner, 2026-11-17: "the players see each other's bodies and they overlap").
+// who_rig: the level's rig of the player who leapt. Each rig is hidden from the other player and neither
+// has a body to the end of the level (it ends with this flight), as in Loose Ends' ending.
+partner_jumps( who, chopper, scene, tag, who_rig )
 {
 	if ( !coop() )
 		return;
 	other = maps\_mw2coop::other_player( who );
 	if ( !isdefined( other ) || !isalive( other ) )
 		return;
+	if ( isdefined( who_rig ) )
+	{
+		// the level shows that rig 0.9 s into the scene (chopperjump_player_blend_to_anim: delaycall Show), and a Show()
+		// undoes hideOnClient (see maps\_mw2coop_climb::rig_show): hidden again after it
+		who_rig hideOnClient( other );
+		who_rig delayCall( 1.0, ::hideOnClient, other );
+		who_rig delayCall( 1.5, ::hideOnClient, other );
+	}
+	foreach ( player in level.players )
+		player maps\_utility::SetModelFunc( undefined );
+	SetDvar( "mw2coop_hide_names", "1" );	// no name over the other's head either (src/control.c)
 	other notify( "stop_sliding" );
 	other DisableWeapons();
 	other AllowJump( false );
@@ -64,6 +79,7 @@ partner_jumps( who, chopper, scene, tag )
 		other SetOrigin( who.origin );
 	rig = spawn_anim_model( "player", chopper.origin );
 	rig Hide();
+	rig hideOnClient( who );
 	rig LinkTo( chopper, tag );
 	chopper thread anim_single_solo( rig, scene, tag );
 	maps\_mw2coop::state( "favela_escape: the second player catches the rope too" );
@@ -71,6 +87,7 @@ partner_jumps( who, chopper, scene, tag )
 	other PlayerLinkToBlend( rig, "tag_player", 0.6, 0.2, 0.4 );
 	wait 0.6;
 	rig Show();
+	rig hideOnClient( who );	// (Show() undid it)
 }
 
 // solorun(), where the screen of player 1 fades to black.

@@ -9,7 +9,8 @@
 // (the cave-in then buries a player who did not clip on). Player 2 stood in the rubble the whole
 // time and the level ended without him. Now each player has a rig, a carabiner and an extra rig of his
 // own, plays the same animations at the same time, and clips on by his own use (the rope's trigger stays
-// on until both have). Both rigs are in one place, so the players do not see each other's body.
+// on until both have). Both rigs are in one place: each player's rigs are hidden from the other and
+// neither has a body (hide_from_each_other).
 #include common_scripts\utility;
 #include maps\_utility;
 #include maps\_anim;
@@ -32,7 +33,45 @@ add_rig( guys )
 	level.mw2coop_evac.extra Hide();
 	level.mw2coop_evac.t0 = GetTime();
 	guys[ "player_rig_2" ] = level.mw2coop_evac.rig;
+	level thread hide_from_each_other( guys[ "player_rig" ] );
 	return guys;
+}
+
+// Both players' rigs (arms on the rubble, the carabiner, the arms on the rope) are in one place, so each one saw the
+// other's arms and body over his own (owner, 2026-11-17: "the players see each other's bodies and they overlap").
+// Each rig is hidden from the other player, again and again: the scene shows its rigs as it goes (player_hooks_up,
+// partner_hooks_up: Show()), and a Show() undoes hideOnClient (see maps\_mw2coop_climb::rig_show). Neither player has a
+// body or a name over his head to the end of the level (it ends with this flight), as in Loose Ends' ending.
+// p1_rig: the level's rig of player 1 ("player_rig"); his carabiner and his rig on the rope are found by their animname.
+hide_from_each_other( p1_rig )
+{
+	level endon( "mw2coop_level_end" );
+	foreach ( player in level.players )
+		player maps\_utility::SetModelFunc( undefined );
+	SetDvar( "mw2coop_hide_names", "1" );	// (src/control.c)
+	maps\_mw2coop::state( "gulag evac: each player's rigs hidden from the other, no bodies, no names" );
+	mine = [];
+	mine[ 0 ] = level.mw2coop_evac.rig;
+	mine[ 1 ] = level.mw2coop_evac.carabiner;
+	mine[ 2 ] = level.mw2coop_evac.extra;
+	for ( ;; )
+	{
+		if ( !isdefined( level.player2 ) )
+			return;
+		theirs = [];
+		if ( isdefined( p1_rig ) )
+			theirs[ theirs.size ] = p1_rig;
+		foreach ( ent in GetEntArray( "script_model", "classname" ) )
+			if ( isdefined( ent.animname ) && ( ent.animname == "player_carabiner" || ent.animname == "player_rig" ) && !is_in_array( mine, ent ) )
+				theirs[ theirs.size ] = ent;
+		foreach ( ent in mine )
+			if ( isdefined( ent ) )
+				ent hideOnClient( level.player );
+		foreach ( ent in theirs )
+			if ( isdefined( ent ) )
+				ent hideOnClient( level.player2 );
+		wait 0.1;
+	}
 }
 
 // gulag_evac(), where player 1 is linked to his rig for the "evac" scene.
