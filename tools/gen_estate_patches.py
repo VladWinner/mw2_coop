@@ -15,7 +15,7 @@ M = 'maps\\_mw2coop_estate::'
 EACH = 'foreach ( mw2coop_player in level.players ) mw2coop_player'
 STATEMENT = re.compile(r'^[ \t]*(level\.player[ .][^;\n]*;)', re.M)
 
-# What the ending does to player 1 alone: Shepherd's hit (the other player is stunned instead,
+# What the ending does to player 1 alone: Shepherd's hit (the other player gets it from
 # _mw2coop_estate::partner_shot), its rumbles, the damage watch (it sets both players' accuracy
 # already), the breathing sound (played where both are), and the blur cycle (paced by player 1).
 ONLY_PLAYER_1 = [
@@ -52,8 +52,8 @@ p = Patch(gsc_root, 'estate/maps/estate.gsc', out_dir)
 n = enemies_for_both(p, ['ending_drag_failure'])
 p.note('''{0}. The ending for two players (maps\\_mw2coop_estate): both go through it as Roach, held on
    the same view with no bodies of their own; what it does to player 1 it does to each player,
-   except Shepherd's hit: the other player is stunned (a black screen) until the bodies are
-   thrown, and both go in the one throw.'''.format(n + 1))
+   except Shepherd's hit (the other player takes it from maps\\_mw2coop_estate and sees the scene on);
+   no damage between the players while they are held there; both go in the one throw.'''.format(n + 1))
 p.subst('ending_moments', 'flag_wait( "play_ending_sequence" );',
         'flag_wait( "play_ending_sequence" );\n\t' + M + 'players_into_ending();')
 assert both(p, 'ending_moments') >= 20

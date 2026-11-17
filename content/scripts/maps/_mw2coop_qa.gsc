@@ -4967,6 +4967,8 @@ betrayal()
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
 	foreach ( player in level.players )
 		player thread betrayal_hits();
+	level thread betrayal_partner_fire();
+	level thread betrayal_after_shot();
 	phases = strtok( "play_ending_sequence begin_ending_music enter_the_littlebirds made_it_to_lz begin_overlapped_gasoline_sequence end_the_mission", " " );
 	last = "";
 	apart = 0;
@@ -5015,6 +5017,76 @@ betrayal()
 		check( isdefined( player.mw2coop_qa_low ) && player.mw2coop_qa_low <= 50, "Shepherd's shot hits " + player_name( player ) + " (health down to " + player.mw2coop_qa_low + ")" );
 	SetDvar( "mw2coop_qa_phase", "done" );	// the next mission does not rerun it
 	report( "done" );
+}
+
+// Owner 2026-11-17: held on one spot in Ghost's drag, player 1's fire at the Russians hurt player 2; and each player must be able
+// to fire there himself. 6 s into the drag (both linked, both armed): each player in turn holds his trigger for 2.5 s (split
+// screen: his pad dvar; network co-op: press(), on his own machine); his clip must go down and the other's health must not.
+// Then a partner hit is made the game's way (DoDamage with the other player as the attacker). The lobby's friendly fire is
+// on in this run (MW2COOP_PRE / MW2COOP_HOST_CMDS "set mw2coop_ff 1").
+betrayal_partner_fire()
+{
+	flag_wait( "play_ending_sequence" );
+	// the drag's rifle comes some 12 s in (before that both hold "none": a first version pressed then and proved nothing)
+	for ( t = 0; t < 40 && !flag( "made_it_to_lz" ); t++ )
+	{
+		armed = 0;
+		foreach ( player in level.players )
+			if ( player GetCurrentWeapon() != "none" )
+				armed++;
+		if ( armed == level.players.size )
+			break;
+		wait 0.5;
+	}
+	wait 1.5;
+	if ( flag( "made_it_to_lz" ) )
+		return;
+	split = GetDvarInt( "mw2coop_native_split" ) != 0;
+	foreach ( n, shooter in level.players )
+	{
+		other = level.player2;
+		if ( shooter == level.player2 )
+			other = level.player;
+		weapon = shooter GetCurrentWeapon();
+		clip = shooter GetWeaponAmmoClip( weapon );
+		before = other.health;
+		low = before;
+		if ( split )
+			SetDvar( "mw2coop_qa_pad" + ( n + 1 ), "0 0 0 0 0 0 255 0" );
+		else
+			press( shooter, "attack", 2500 );
+		for ( i = 0; i < 25; i++ )
+		{
+			low = min( low, other.health );
+			wait 0.1;
+		}
+		if ( split )
+			SetDvar( "mw2coop_qa_pad" + ( n + 1 ), "0 0 0 0 0 0 0 0" );
+		wait 0.5;
+		after = shooter GetWeaponAmmoClip( weapon );
+		report( "partner fire: " + player_name( shooter ) + " held his trigger (" + weapon + ", clip " + clip + " -> " + after + "); " + player_name( other ) + "'s health " + before + " -> " + other.health + " (lowest " + low + "), ff dvar " + GetDvar( "mw2coop_ff" ) + ", scale " + GetDvar( "g_friendlyfireDamageScale" ) );
+		check( after < clip, player_name( shooter ) + " fires himself in the drag (his clip went down)" );
+		check( other.health >= before, player_name( shooter ) + "'s fire does not cost " + player_name( other ) + " health while they are held together" );
+	}
+	p1 = level.player.health;
+	p2 = level.player2.health;
+	level.player2 DoDamage( 40, level.player.origin, level.player );
+	level.player DoDamage( 40, level.player2.origin, level.player2 );
+	wait 0.3;
+	report( "partner hits: player 1 " + p1 + " -> " + level.player.health + ", player 2 " + p2 + " -> " + level.player2.health );
+	check( level.player2.health >= p2 && level.player.health >= p1, "a hit from the partner costs nothing in the ending (both back to their health)" );
+}
+
+// Owner 2026-11-17: player 2's screen went black at Shepherd's shot (maps\_mw2coop_estate::partner_shot). 1.5 s after the
+// LZ's shot: no black screen element for him, and both frames are saved (mw2coop\shots) to look at.
+betrayal_after_shot()
+{
+	flag_wait( "made_it_to_lz" );
+	while ( !flag( "end_the_mission" ) && level.player.health >= level.player.maxhealth )
+		wait 0.05;
+	wait 1.5;
+	check( !isdefined( level.mw2coop_estate_black ), "no black screen for player 2 after Shepherd's shot" );
+	qa_shot( "aftershot" );
 }
 
 // his lowest health after the LZ (Shepherd's pistol; the ending's death shield sends no damage

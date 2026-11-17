@@ -7,8 +7,10 @@
 // In co-op both players go through it as Roach (owner, 2026-10-22: as in COD-MOD): every
 // player is held on the same view (the level's code does to each player what it did to player
 // 1), nobody has a body of his own, so the men throw the two bodies the level shows (Roach's
-// and Ghost's) and both players go in the one throw. When Shepherd fires at Roach, player 2 is
-// stunned: his screen goes black, no text, until the bodies are thrown.
+// and Ghost's) and both players go in the one throw. When Shepherd fires at Roach, player 2
+// takes the same hit and goes on seeing the scene as Roach does (owner, 2026-11-17: no black
+// screen for him). Held on one spot, the players cannot hurt each other while they fight the
+// Russians from Ghost's back (owner, 2026-11-17: player 1's fire hit player 2).
 #include common_scripts\utility;
 #include maps\_utility;
 
@@ -35,20 +37,26 @@ players_into_ending()
 			maps\_mw2coop::state( "estate ending: " + player_name( player ) + " was down" );
 		player maps\_utility::SetModelFunc( undefined );
 	}
-	maps\_mw2coop::state( "estate ending: both players in Roach's view, no bodies, no names" );
+	// Both are held on Roach's spot from here on: each one's fire at the Russians went through the
+	// other (owner, 2026-11-17). Damage between the players is off to the end of the level, whatever
+	// the lobby's friendly fire (the next level sets it again: maps\_mw2coop::friendly_fire_setting),
+	// and the one point a hit still does at scale 0 is given back.
+	SetSavedDvar( "g_friendlyfireDamageScale", 0 );
+	if ( GetDvar( "mw2coop_ff" ) != "0" )	// (off: friendly_fire_setting() already gives it back)
+		foreach ( player in level.players )
+			player thread maps\_mw2coop::give_back_partner_damage();
+	maps\_mw2coop::state( "estate ending: both players in Roach's view, no bodies, no names, no damage between them" );
 }
 
 // Shepherd fires at Roach (notetrack shepherd_fire2; player 1 takes the hit as before). The
 // other player sees from Roach's eyes, so the pistol points at him too: the same shot hits him
-// as it hits Roach (the death shield of the ending keeps him alive), and he is stunned: his
-// screen goes black (owner, 2026-10-22: shot by Shepherd, then a black screen, no text). Below
-// the subtitles (sort -1, not foreground, as maps\_mw2coop_knife's blackout), so Ghost's "No!"
-// and Shepherd still read.
+// as it hits Roach (the death shield of the ending keeps him alive), and he sees the rest of the
+// scene as player 1 does. (Until 2026-11-17 his screen went black here until the bodies were
+// thrown; owner: "that should not happen".)
 partner_shot( gunpos )
 {
 	if ( !coop() )
 		return;
-	level.mw2coop_estate_black = [];
 	foreach ( player in level.players )
 	{
 		if ( player == level.player )
@@ -57,21 +65,7 @@ partner_shot( gunpos )
 		player SetNormalHealth( 1 );
 		player DoDamage( 99 / player.damagemultiplier, gunpos );
 		player delayThread( 0.3, ::full_health );
-		black = NewClientHudElem( player );
-		black.x = 0;
-		black.y = 0;
-		black SetShader( "black", 640, 480 );
-		black.alignX = "left";
-		black.alignY = "top";
-		black.horzAlign = "fullscreen";
-		black.vertAlign = "fullscreen";
-		black.sort = -1;
-		black.foreground = false;
-		black.alpha = 0;
-		black FadeOverTime( 0.3 );	// the hit shows first
-		black.alpha = 1;
-		level.mw2coop_estate_black[ level.mw2coop_estate_black.size ] = black;
-		maps\_mw2coop::state( "estate ending: Shepherd shoots " + player_name( player ) + " too, he is stunned (black screen)" );
+		maps\_mw2coop::state( "estate ending: Shepherd shoots " + player_name( player ) + " too, he sees the scene on" );
 	}
 }
 
@@ -81,7 +75,8 @@ full_health()
 	self SetNormalHealth( 1 );
 }
 
-// The body toss (estate_ending_part2): his screen comes back with Roach's, over time seconds.
+// The body toss (estate_ending_part2). Since 2026-11-17 nobody's screen is blacked out at the shot, so there is nothing to bring back:
+// kept for the patch's call (and for a save made by an older build).
 partner_wakes( time )
 {
 	if ( !isdefined( level.mw2coop_estate_black ) )
