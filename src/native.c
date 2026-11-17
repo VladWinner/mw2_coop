@@ -3949,10 +3949,11 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 // the current and the next state of every entity, and are put back after it ([native] visswap=0 off).
 static void vis_swap(void)
 {
-#ifndef _WIN64
-	return; // (the 32-bit entity layout's state offsets are not mapped yet)
+#ifdef _WIN64
+	static const int offs[2] = {0x70, 0xec}; // the current state's flags, the next state's (the lerp states' eFlags, 0x10 in front of their positions CF_ORG1 / CF_ORG2)
+#else
+	static const int offs[2] = {0x64, 0xe0}; // 32 bits: the same 0x10 in front of CF_ORG1 / CF_ORG2 (0x74 / 0xf0); 0xe0 is CENT_FLAGS (night audit A6: the 32-bit build had no visswap)
 #endif
-	static const int offs[2] = {0x70, 0xec}; // the current state's flags, the next state's (the lerp states' eFlags, in front of their position trajectories at 0x74 / 0xf0)
 	for (int n = 0; n < 2048; n++) {
 		uint8_t *c = base + RVA_CENT + (size_t)n * CENT_SIZE;
 		for (int k = 0; k < 2; k++) {
@@ -3972,7 +3973,12 @@ static void vis_swap(void)
 static int vis_swapped; // vis_swap has given player 2's draw his own marks: add_entity_hook's older per-entity swap (swapbits) must not undo them at +0xec
 static void cg_draw_vis(unsigned local_client, int a, int b)
 {
+#ifdef _WIN64
 	const int swap = ctx_current == 1 && split_on && CFG_ONCE("visswap", 1);
+#else
+	// 32 bits: off by default; the offsets are derived (CF_ORG1 / CF_ORG2), and the climb A/B of 2026-11-17 (QA climblb, composed frame) showed no difference to confirm them
+	const int swap = ctx_current == 1 && split_on && CFG_ONCE("visswap", 0);
+#endif
 	if (swap)
 		vis_swap(), vis_swapped = 1;
 	cg_draw_original(local_client, a, b);
@@ -4604,7 +4610,9 @@ static int p2cmds_on(void)
 #ifdef _WIN64
 	return native_active && ctx_on && ctx1_ready && p2cmd_filter_ok && CFG_ONCE("p2cmds", 1);
 #else
-	return 0; // (the 32-bit addresses of the command filter are not mapped yet)
+	// 32 bits: off unless [native] p2cmds32=1. The port installs (QA p2cmds on mw2-32, 2026-11-17) but no command reached context 1's cgame, and while client 1's
+	// commands are queued without being handed out the server's ring could run over ("Server command overflow"); not shipped on until that is understood.
+	return native_active && ctx_on && ctx1_ready && p2cmd_filter_ok && CFG_ONCE("p2cmds32", 0);
 #endif
 }
 static void sv_add_command(uint8_t *cl, const char *text)
@@ -4683,12 +4691,16 @@ static const range_t ranges[] = {
     {0x51dcb0, 0x51de80 - 0x51dcb0}, // the player bodies' bone controllers (rva 0x9df60 from the pass 0xb0860: new 0x51dcc4, old 0x51dd54, blended 0x51dde4 + entity * 0x48, the
                                      // interpolation 0x51dcb0), right after the snapshot range: with one table, player 2's cgame wrote over what player 1's had set before player 1's
                                      // frame skinned the body (tried for the smeared bodies of mode 11: it brought the shards back, the copy of player 1's body into context 1 relies on one table). [native] ctlsplit=1 on, off by default
+    {0x3efcf0, 0x94},                // the camera shakes (CG_StartShakeCamera 0x8d420, called from the event handler 0x9f9a0: four slots of 0x24 from 0x3efcf0, a field to 0x3efd84): one set for
+                                     // both views, into which both contexts' event passes put every explosion's shake (twice). The Xbox 360 keeps 0x94 bytes per player (0x824289d8 +
+                                     // lc * 0x94, filled by its loop 0x820dcb68). Night audit, engine fix 6. [native] shakesplit=0 off
 };
 #define RANGE_FX 9
 #define RANGE_VIEW 10
 #define RANGE_SUN 11
 #define RANGE_BLUR 12
 #define RANGE_CTL 13
+#define RANGE_SHAKE 14
 #define SUNSPLIT_DEFAULT 1
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
@@ -4934,6 +4946,32 @@ static int p0copy_on(void)
 {
 	return CFG_ONCE("p0copy", cent_share_on() ? 0 : 1);
 }
+#if defined(_WIN64) && defined(RANGE_FX)
+// Diagnostic ([native] fxspotcheck=1): the live effects system's spot light (one per system: count +0xa2c, element count +0xa30, effect handle +0xa34) must point at a live
+// effect (its definition pointer not null); logged when the effects range leaves or enters a context with it broken.
+static void fx_spot_check(const char *what, int ctx)
+{
+	static int logged;
+	static long checks;
+	static int last[2][4], have[2];
+	if (logged >= 60 || !CFG_ONCE("fxspotcheck", 0) || ctx < 0 || ctx > 1)
+		return;
+	checks++;
+	const uint8_t *sys = base + XR(0xbc7300);
+	const int ecount = *(const int *)(sys + 0xa2c), lcount = *(const int *)(sys + 0xa30);
+	const int eh = *(const uint16_t *)(sys + 0xa34), lh = *(const uint16_t *)(sys + 0xa36);
+	const uint8_t *eff = *(uint8_t *const *)(sys + 0x180) + (size_t)eh * 4;
+	const int def_live = *(void *const *)eff != NULL;
+	const int now[4] = {ecount, lcount, eh, lh};
+	if (have[ctx] && !memcmp(now, last[ctx], sizeof(now)))
+		return;
+	memcpy(last[ctx], now, sizeof(now));
+	have[ctx] = 1;
+	logged++;
+	log_printf("native: fxspot: context %d %s: spot effects %d elems %d, effect %d (%s), elem %d%s (check %ld)", ctx, what, ecount, lcount, eh, def_live ? "live" : "FREE", lh,
+		   (lcount > 0 && (ecount <= 0 || !def_live)) ? " BROKEN" : "", checks);
+}
+#endif
 static void ctx_swap_mask(int to, unsigned mask)
 {
 	if (CFG_ONCE("swapsites", 0))
@@ -4956,6 +4994,13 @@ static void ctx_swap_mask(int to, unsigned mask)
 		       // scripts start (PlayFX: a temporary entity whose event only context 0 handles; the exploders' smoke) were in player 1's half only (owner, Gulag fly-in: "when the
 		       // first player sees the smoke, the other doesn't"; checked: with the copy the smoke column in one half only, without it in both). [native] fxsplit=1 the copy again
 		fx_on = cfg("fxsplit", mode == 11 ? 0 : 1);
+#ifdef RANGE_FX
+	// EXPERIMENT, off ([native] fxphyswait=1 on): ctx_wait_workers leaves out worker type 19, "fx physics" (the names at rva 0x370340), whose jobs may write the live
+	// effects system; this waits for it too before the effects range moves. Tried 2026-11-17 against the Gulag "cafe" crashes with fxseed (0x11b0d9: a trail list of
+	// context 1's system looped in FX_UpdateEffect 0x11afd0; 0xfd0d5: context 0's spot light pointed at a freed effect): both kept happening with it, so not the cause.
+	if ((need & (1u << RANGE_FX)) && fx_on && CFG_ONCE("fxphyswait", 0))
+		((void (*)(int))(base + RVA_WAIT_TYPE))(19);
+#endif
 #if defined(RANGE_SUN)
 	if ((need & (1u << RANGE_SUN)) && CFG_ONCE("sunwait", 1) && CFG_ONCE("sunsplit", SUNSPLIT_DEFAULT)) { // the sun state is written by the frame the renderer draws, after the client went on: without this wait each context's state got the other view's value (QA 2026-11-02: player 1 turning moved player 2's state); [native] sunwait=0 off
 		render_wait_idle();
@@ -4986,10 +5031,22 @@ static void ctx_swap_mask(int to, unsigned mask)
 		if (i == RANGE_CTL && !CFG_ONCE("ctlsplit", 0))
 			continue;
 #endif
+#ifdef RANGE_SHAKE
+		if (i == RANGE_SHAKE && !CFG_ONCE("shakesplit", 1))
+			continue;
+#endif
 		uint8_t *live = base + RANGE_RVA(i);
+#if defined(_WIN64) && defined(RANGE_FX)
+		if (i == RANGE_FX)
+			fx_spot_check("as it leaves", range_owner[i]);
+#endif
 		swap_copy(ctx_store[range_owner[i]][i], live, ranges[i].size);
 		swap_copy(live, ctx_store[to][i], ranges[i].size);
 		range_owner[i] = to;
+#if defined(_WIN64) && defined(RANGE_FX)
+		if (i == RANGE_FX)
+			fx_spot_check("as it comes back", to);
+#endif
 	}
 	if (cent_keep_on)
 		memcpy(base + RVA_CENT, cent_keep, sizeof(cent_keep));
@@ -5056,6 +5113,35 @@ static void ctx_seed_cgame(void)
 			memcpy(ctx_store[1][i], live, ranges[i].size);
 		}
 	}
+#ifdef _WIN64
+	// EXPERIMENT, off ([native] fxseed=1 on): context 1's own effects system (fxsplit, mode 10) starts EMPTY, made by the game's FX_InitSystem (rva 0x119a00), instead of as
+	// a copy of context 0's. Why it was tried: the Gulag's start "cafe" crashes 3 s after the split began, every run (rva 0x2713ee, read of -1 taking a node from the shared
+	// physics pool, 0x2713e0); with fxsplit=0 no crash in 160 s. The copy holds context 0's live effects, and with them the physics objects of their debris, which both
+	// systems then free. With the empty start that crash is gone, but the game crashed later in all 7 runs (38-90 s: 0x11b0d9, a trail list of context 1's system looping
+	// in FX_UpdateEffect 0x11afd0; 0xfd0d5, context 0's spot light pointing at a freed effect), and effects started before the split (the Gulag's helicopter spot light,
+	// PlayFXOnTag) are missing in player 2's view. Likely why: the copied cgame state of context 1 (its entities) still points at effects of context 0's system, which the
+	// empty system does not have. FX_InitSystem also resets the impact marks (globals rva 0xbc6280..0xbc72e0, pools 0xb7ac00 + 0x4b000), shared by both views: they are kept.
+	if (cfg("fxsplit", mode == 11 ? 0 : 1) && cfg("fxseed", 0)) {
+		const size_t fx_size = ranges[RANGE_FX].size, marks_g = 0xbc72e0 - 0xbc6280, marks_p = 0x4b000;
+		uint8_t *fx_live = base + RANGE_RVA(RANGE_FX), *mg = base + XR(0xbc6280), *mp = base + XR(0xb7ac00);
+		uint8_t *keep = VirtualAlloc(NULL, fx_size + marks_g + marks_p, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		if (keep && XR(0x119a00) && XR(0xbc6280) && XR(0xb7ac00)) {
+			ctx_wait_workers();
+			((void (*)(int))(base + RVA_WAIT_TYPE))(19); // fx physics jobs write the live system (see fxphyswait)
+			memcpy(keep, fx_live, fx_size);
+			memcpy(keep + fx_size, mg, marks_g);
+			memcpy(keep + fx_size + marks_g, mp, marks_p);
+			((void (*)(int))(base + XR(0x119a00)))(0);
+			memcpy(ctx_store[1][RANGE_FX], fx_live, fx_size);
+			memcpy(fx_live, keep, fx_size);
+			memcpy(mg, keep + fx_size, marks_g);
+			memcpy(mp, keep + fx_size + marks_g, marks_p);
+			log_printf("native: context 1's effects system starts empty (its own FX_InitSystem), not as a copy of context 0's");
+		}
+		if (keep)
+			VirtualFree(keep, 0, MEM_RELEASE);
+	}
+#endif
 	ctx_seeded = 1;
 }
 
@@ -5708,6 +5794,88 @@ static void server_cmds_hook(uintptr_t lc, int *msg)
 		ctx_swap_hand(was);
 }
 
+// Context 1's cgame runs only the server commands that belong to a player. The rest (music, sound mixes, slow motion, objectives, prints, menus, saves, achievements,
+// client dvars: on the PC these are one state for the whole game) context 0 already runs; "s" and "checksound" the engine itself keeps for local client 0, which context 1
+// pretends to be. CG_ServerCommand is rva 0xb4890 (the command in the client's tokenizer), called at 0xb5ed7.
+static int p2cmd_allowed(const char *c)
+{
+	static const char *const ok[] = {"visionset_naked", "visionset_night", "visionset_missilecam", "visionset_thermal", "visionset_pain", "scr_blur", "clear_blur", "scr_fade",
+					 "watersheeting", "ls", "ls_stop", "offhand", "ret_lock_on", "showViewModel", "hideViewModel", "hud_drawHUD"};
+	for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
+		if (!strcmp(c, ok[i]))
+			return 1;
+	return 0;
+}
+// the addresses (rva; 32 bits: VA - 0x400000, the official build, cdecl calls)
+#ifdef _WIN64
+#define P2C_SCMD_CALL 0xb5ed7  // call of CG_ServerCommand
+#define P2C_SCMD_FN 0xb4890
+#define P2C_EXEC_CALL 0xb8a7d  // call of CG_ExecuteNewServerCommands
+#define P2C_EXEC_FN 0xb5ea0
+#define P2C_CGS_DONE 0x40cab0  // cgs: the number of the last command run
+#define P2C_CLC_NEWEST 0x547850 // clc: the newest command received
+#define P2C_CLC_ACK 0x547854   // clc: the last one handed out (the server's acknowledged number after a delivery)
+#else
+#define P2C_SCMD_CALL 0xfb44a
+#define P2C_SCMD_FN 0x16d060
+#define P2C_EXEC_CALL 0x16e90e
+#define P2C_EXEC_FN 0xfb420
+#define P2C_CGS_DONE 0x35f2b0
+#define P2C_CLC_NEWEST 0x48e340
+#define P2C_CLC_ACK 0x48e344
+#endif
+static void (*cg_scmd_original)(int);
+static void cg_scmd_hook(int lc)
+{
+	if (ctx_current == 1 && p2cmds_on()) {
+		const char *c = game_cmd_argv(0);
+		const int run = c && p2cmd_allowed(c);
+		static unsigned n;
+		if (CFG_ONCE("p2cmdlog", 0) && n++ < 300)
+			log_printf("native: p2cmds: player 2's server command '%.60s' %s", c ? c : "", run ? "run" : "left to player 1's context");
+		if (!run)
+			return;
+	}
+	cg_scmd_original(lc);
+}
+// The cgame runs the server commands up to the number the snapshot names (rva 0xb5ea0(lc, latest), called at 0xb8a7d with cgs+4, rva 0x40cab4). Both contexts parse the
+// same snapshot, client 0's, so context 1 asked its own connection for client 0's command numbers and ran nothing. In context 1 the latest is its own connection's newest
+// command (clc +0x547850), and its counter of executed commands (0x40cab0, copied from context 0 when context 1 was made) is kept inside the last delivery's window
+// (clc's acknowledged number +0x547854 .. the newest): older numbers point into a buffer the next delivery overwrote.
+static void (*cg_exec_original)(int, int);
+static void cg_exec_hook(int lc, int latest)
+{
+	if (ctx_current == 1 && p2cmds_on()) {
+		int *done = (int *)(base + XR(P2C_CGS_DONE));
+		const int newest = *(int *)(base + XR(P2C_CLC_NEWEST)), ack = *(int *)(base + XR(P2C_CLC_ACK));
+		if (*done < ack || *done > newest)
+			*done = ack;
+		latest = newest;
+	}
+	cg_exec_original(lc, latest);
+}
+static void p2cmd_filter_install(void)
+{
+	if (!CFG_ONCE("p2cmds", 1))
+		return;
+	if (!XR(P2C_SCMD_CALL) || !XR(P2C_EXEC_CALL) || !XR(P2C_CGS_DONE) || !XR(P2C_CLC_NEWEST)) {
+		log_printf("native: p2cmds: the addresses are not known in this build: player 2 gets no server commands");
+		return;
+	}
+	uint8_t *site = base + XR(P2C_SCMD_CALL);
+	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + XR(P2C_SCMD_FN) || !jhook_call(site, (void *)cg_scmd_hook, (void **)&cg_scmd_original)) {
+		log_printf("native: p2cmds: the server command call at rva 0x%x is not as expected: player 2 gets no server commands", P2C_SCMD_CALL);
+		return;
+	}
+	uint8_t *exec_site = base + XR(P2C_EXEC_CALL);
+	if (exec_site[0] != 0xe8 || exec_site + 5 + *(int32_t *)(exec_site + 1) != base + XR(P2C_EXEC_FN) || !jhook_call(exec_site, (void *)cg_exec_hook, (void **)&cg_exec_original)) {
+		log_printf("native: p2cmds: the command run call at rva 0x%x is not as expected: player 2 gets no server commands", P2C_EXEC_CALL);
+		return;
+	}
+	p2cmd_filter_ok = 1;
+	log_printf("native: p2cmds: player 2's own server commands (vision sets, blur, local sounds ...) reach his view");
+}
+
 #ifdef _WIN64
 // The naked vision set for player 2 (Vlad, nightly 2026-11-08: Oil Rig, player 2's picture stayed underwater-blue while player 1's changed). Server commands reach context 0 only
 // (server_cmds_hook drops client 1's), and VisionSetNaked, a script function for everybody, is sent as the command "visionset_naked <name> <time>" that the cgame handles at rva 0xb4890
@@ -5763,67 +5931,6 @@ static uint64_t vision_apply_hook(uintptr_t lc, int type, int state, const char 
 	return r;
 }
 
-// Context 1's cgame runs only the server commands that belong to a player. The rest (music, sound mixes, slow motion, objectives, prints, menus, saves, achievements,
-// client dvars: on the PC these are one state for the whole game) context 0 already runs; "s" and "checksound" the engine itself keeps for local client 0, which context 1
-// pretends to be. CG_ServerCommand is rva 0xb4890 (the command in the client's tokenizer), called at 0xb5ed7.
-static int p2cmd_allowed(const char *c)
-{
-	static const char *const ok[] = {"visionset_naked", "visionset_night", "visionset_missilecam", "visionset_thermal", "visionset_pain", "scr_blur", "clear_blur", "scr_fade",
-					 "watersheeting", "ls", "ls_stop", "offhand", "ret_lock_on", "showViewModel", "hideViewModel", "hud_drawHUD"};
-	for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
-		if (!strcmp(c, ok[i]))
-			return 1;
-	return 0;
-}
-#ifdef _WIN64
-static void (*cg_scmd_original)(int);
-static void cg_scmd_hook(int lc)
-{
-	if (ctx_current == 1 && p2cmds_on()) {
-		const char *c = game_cmd_argv(0);
-		const int run = c && p2cmd_allowed(c);
-		static unsigned n;
-		if (CFG_ONCE("p2cmdlog", 0) && n++ < 300)
-			log_printf("native: p2cmds: player 2's server command '%.60s' %s", c ? c : "", run ? "run" : "left to player 1's context");
-		if (!run)
-			return;
-	}
-	cg_scmd_original(lc);
-}
-// The cgame runs the server commands up to the number the snapshot names (rva 0xb5ea0(lc, latest), called at 0xb8a7d with cgs+4, rva 0x40cab4). Both contexts parse the
-// same snapshot, client 0's, so context 1 asked its own connection for client 0's command numbers and ran nothing. In context 1 the latest is its own connection's newest
-// command (clc +0x547850), and its counter of executed commands (0x40cab0, copied from context 0 when context 1 was made) is kept inside the last delivery's window
-// (clc's acknowledged number +0x547854 .. the newest): older numbers point into a buffer the next delivery overwrote.
-static void (*cg_exec_original)(int, int);
-static void cg_exec_hook(int lc, int latest)
-{
-	if (ctx_current == 1 && p2cmds_on()) {
-		int *done = (int *)(base + XR64(0x40cab0));
-		const int newest = *(int *)(base + XR64(0x547850)), ack = *(int *)(base + XR64(0x547854));
-		if (*done < ack || *done > newest)
-			*done = ack;
-		latest = newest;
-	}
-	cg_exec_original(lc, latest);
-}
-static void p2cmd_filter_install(void)
-{
-	if (!CFG_ONCE("p2cmds", 1))
-		return;
-	uint8_t *site = base + XR64(0xb5ed7);
-	if (site[0] != 0xe8 || site + 5 + *(int32_t *)(site + 1) != base + XR64(0xb4890) || !jhook_call(site, (void *)cg_scmd_hook, (void **)&cg_scmd_original)) {
-		log_printf("native: p2cmds: the server command call at 0xb5ed7 is not as expected: player 2 gets no server commands");
-		return;
-	}
-	uint8_t *exec_site = base + XR64(0xb8a7d);
-	if (exec_site[0] != 0xe8 || exec_site + 5 + *(int32_t *)(exec_site + 1) != base + XR64(0xb5ea0) || !jhook_call(exec_site, (void *)cg_exec_hook, (void **)&cg_exec_original)) {
-		log_printf("native: p2cmds: the command run call at 0xb8a7d is not as expected: player 2 gets no server commands");
-		return;
-	}
-	p2cmd_filter_ok = 1;
-	log_printf("native: p2cmds: player 2's own server commands (vision sets, blur, local sounds ...) reach his view");
-}
-#endif
 
 // QA ([native] cmdlog=1, 64-bit): every client command the engine hands to the server for local client 0 (rva 0xd02a0, its ClientCommand call at 0xd0306), with the
 // live context: which player's "n <action>" texts reach which client
@@ -5844,8 +5951,35 @@ static void cmd_deliver_install(void)
 		log_printf("native: cmdlog on");
 }
 #endif
+// IsSplitScreen() (script builtin, entry rva 0x3c3048, function 0x194720 = "xor ecx,ecx; jmp 0x222140": always false on the PC). The Xbox 360's returns its splitscreen
+// dvar (0x82224558), so the stock scripts' split screen branches run there: the HUD of Special Ops (positions, the AC-130's font, timers), the blood overlay, the revive
+// HUD, is_coop_online() false, the hint arrows. In a split session it now says so (night audit, engine fix 5); outside one (single player, online co-op) it is false as
+// before. The mod's own "|| GetDvarInt( "mw2coop_native_split" )" hunks stay. [native] issplit=0 off.
+static void issplitscreen_builtin(void)
+{
+	((void (*)(int))(base + XR(0x222140)))(native_active ? 1 : 0);
+}
+static void issplitscreen_install(void)
+{
+	if (!cfg("issplit", 1))
+		return;
+	uint8_t *entry = game_builtin_entry(XR(0x3c3048), "issplitscreen");
+	if (!entry) {
+		log_printf("native: no issplitscreen builtin entry: IsSplitScreen() stays false in the split screen");
+		return;
+	}
+	void (**func)(void) = (void (**)(void))(entry + sizeof(char *));
+	if (*func == issplitscreen_builtin)
+		return;
+	DWORD old;
+	VirtualProtect(func, sizeof(*func), PAGE_READWRITE, &old);
+	*func = issplitscreen_builtin;
+	VirtualProtect(func, sizeof(*func), old, &old);
+	log_printf("native: IsSplitScreen() is true in the split screen session (as the console's)");
+}
 static void vision_forward_install(void)
 {
+	issplitscreen_install();
 	if (!cfg("visionfwd", 1))
 		return;
 	uint8_t *entry = game_builtin_entry(RVA_FN_VISIONSETNAKED_ENTRY, "visionsetnaked");
@@ -7465,12 +7599,30 @@ static void mouse_read2_hook(intptr_t state, float *x, float *y)
 #ifdef _WIN64
 static void (*key_event_original)(int, int, int, unsigned);
 #endif
+static uint8_t key_in_ctx1[512]; // the keys whose press went to context 1 (player 2 on the keyboard): their release goes there too
 static void key_event_hook(int lc, int key, int down, unsigned time)
 {
 	unsigned catchers = *(unsigned *)(base + RVA_KEY_CATCHERS);
+	const unsigned k = (unsigned)key;
+	// A key player 2 pressed is released in his context whatever is open meanwhile (night audit A2: a release during the pause menu or the console went to context 0,
+	// whose button never saw the press, and player 2 kept walking or firing after the pause)
+	if (!down && k < sizeof(key_in_ctx1) && key_in_ctx1[k]) {
+		key_in_ctx1[k] = 0;
+		if (native_active && ctx1_ready && ctx_current == 0) {
+			ctx_swap(1);
+			key_event_original(lc, key, down, time);
+#ifndef _WIN64
+			cbuf_run_now();
+#endif
+			ctx_swap(0);
+			return;
+		}
+	}
 	if (native_active && kb_player() == 1 && (catchers & 0x10) && !(catchers & 0x1) && down)
 		return;
 	if (native_active && kb_player() == 1 && ctx1_ready && ctx_current == 0 && !(catchers & 0x11)) {
+		if (down && k < sizeof(key_in_ctx1))
+			key_in_ctx1[k] = 1;
 		ctx_swap(1);
 		key_event_original(lc, key, down, time);
 #ifndef _WIN64
@@ -8278,9 +8430,12 @@ static void p0_put(uint8_t *slot)
 	}
 	// ... and his pitch (the float before each yaw): the body's torso aims by it. Without it the body of player 1 in player 2's half held his rifle low whatever he looked at
 	// (aiming at player 2's head, the muzzle was well below it) ([native] pitchkeep=0 off)
+	// Off by default (night 2026-11-17, GitHub issue #25: "depending on where player 1 looks, the entire body rotates", S.S.D.D., split screen): these angles turn the
+	// whole model, so player 1 looking down folded his body to the floor in player 2's half, as p0aim's pitch did in mode 11 (b7ae6cd). The Xbox 360's own-entity write
+	// sets the yaw only (0x82102f28). [native] pitchkeep=1 puts the pitch back.
 	static int pitch_on = -1;
 	if (pitch_on < 0)
-		pitch_on = cfg("pitchkeep", 1);
+		pitch_on = cfg("pitchkeep", 0);
 	if (pitch_on && ctx_store[0][5]) {
 		float pt = *(const float *)(ctx_store[0][5] + CL_BLOCK_PS + 0x108);
 		float *f = (float *)slot;
@@ -9217,6 +9372,42 @@ static void ev_check_run(int k, int lc, uint8_t *cent)
 	if (mute)
 		snd_mute = 0;
 }
+// EXPERIMENT, off ([native] dynpush1=1 on). The push of the world's movable objects by an explosion (rva 0xf53c0, from the event handler 0x9f9a0 and 0xc2410: it wakes the
+// dynamic entities near the blast and makes a physics object for each, 0x1e5de0 -> 0x1e3120, from a shared pool). The dynamic entities and their physics are one state for
+// the whole game, but both contexts run every event, so each explosion may wake the same objects twice (the 360 runs each event once). With this on, context 1 skips the
+// push. It was tried 2026-11-17 as the cause of the Gulag "cafe" crash at rva 0x2713ee (read of -1 taking a node from that pool, context 1 live, 3 s after the split
+// began): the crash stayed, so it is not; and how the objects move with the skip was not checked in a level.
+void *dynpush_orig;
+int dynpush_skip(void)
+{
+	return ctx_current == 1 && native_active && CFG_ONCE("dynpush1", 0);
+}
+extern char dynpush_stub[];
+__asm__(".text\n.globl dynpush_stub\ndynpush_stub:\n"
+	"\tpush %rcx\n"
+	"\tpush %rdx\n"
+	"\tpush %r8\n"
+	"\tpush %r9\n"
+	"\tsub $0x68, %rsp\n" // (4 pushes + 0x68: the stack stays 16-aligned at the call; 0x20 shadow, then the four xmm)
+	"\tmovdqu %xmm0, 0x20(%rsp)\n"
+	"\tmovdqu %xmm1, 0x30(%rsp)\n"
+	"\tmovdqu %xmm2, 0x40(%rsp)\n"
+	"\tmovdqu %xmm3, 0x50(%rsp)\n"
+	"\tcall dynpush_skip\n"
+	"\tmovdqu 0x20(%rsp), %xmm0\n"
+	"\tmovdqu 0x30(%rsp), %xmm1\n"
+	"\tmovdqu 0x40(%rsp), %xmm2\n"
+	"\tmovdqu 0x50(%rsp), %xmm3\n"
+	"\tadd $0x68, %rsp\n"
+	"\tpop %r9\n"
+	"\tpop %r8\n"
+	"\tpop %rdx\n"
+	"\tpop %rcx\n"
+	"\ttest %eax, %eax\n"
+	"\tjnz 1f\n"
+	"\tjmp *dynpush_orig(%rip)\n"
+	"1:\tret\n"
+	);
 static void ev_check_hook0(int lc, uint8_t *cent)
 {
 	ev_check_run(0, lc, cent);
@@ -9883,6 +10074,7 @@ static int hooks_apply32_contexts(void)
 	skip_hud_mask = cfg("skiphud", 0);
 	skip_ctx = cfg("skipctx", 1);
 	ctx_on = 1;
+	p2cmd_filter_install();
 	log_printf("native: 32-bit client contexts on (call sites redirected)");
 	return 1;
 }
@@ -9957,6 +10149,11 @@ static void contexts_install(void)
 					log_printf("native: the world's event sounds start once (context 0); context 1's copies are muted");
 				else
 					log_printf("native: the entity event calls at 0x9c924 / 0x9c954 are not as expected: event sounds start in both contexts");
+				static const uint8_t dynpush_bytes[21] = {0x88, 0x54, 0x24, 0x10, 0x89, 0x4c, 0x24, 0x08, 0x55, 0x53, 0x57, 0x41, 0x54,
+									 0x48, 0x8d, 0xac, 0x24, 0xb8, 0xdf, 0xff, 0xff}; // mov [rsp+10],dl; mov [rsp+8],ecx; push rbp/rbx/rdi/r12; lea rbp,[rsp-0x2048]
+				if (cfg("dynpush1", 0))
+					log_printf("native: explosions push the world's objects once (context 0): %s",
+						   jhook_function(base + XR(0xf53c0), dynpush_bytes, sizeof(dynpush_bytes), dynpush_stub, &dynpush_orig) ? "on" : "the code at 0xf53c0 is not as expected, off");
 				static const uint8_t fxq_head[] = {0x44, 0x8b, 0x15}; // mov r10d, [rip+count]; then cmp r10d, 0x20; jz
 				uint8_t *fxq = base + XR(0x237a70);
 				if (!memcmp(fxq, fxq_head, sizeof(fxq_head)) && fxq[7] == 0x41 && fxq[8] == 0x83 && fxq[9] == 0xfa && fxq[10] == 0x20 && fxq + 7 + *(int32_t *)(fxq + 3) == base + XR(0x1a2cf58)) {
