@@ -10,6 +10,8 @@ A signature file (the format the game's loader in src/addr.c reads too) has one 
   CODE 0x00cf10 off=16 sig=8B 44 24 04 ?? ?? ?? ?? 56 ...     the function / code point at ref rva 0xcf10 is 16 bytes into the signature
   DATA 0x33ba88 abs  cap=4 sig=A1 ?? ?? ?? ?? ...               a global: the 4 bytes at offset 4 of the signature are its absolute address
   DATA 0x1b21e90 rip cap=3 tail=0 sig=48 8D 0D ?? ?? ?? ?? ...  a global: a rip-relative displacement at offset 3, `tail` bytes follow it in the instruction
+  DATA 0x4812878 img cap=8 delta=4 sig=...                       a global: the 4 bytes at offset 8 are an RVA (code that reaches it through the image base)
+  (delta=n on a DATA line: the code reached a field n bytes into the global, not the global itself)
 
 ?? are wildcards: absolute addresses, relative displacements and rip-relative displacements inside the window.
 A signature counts only if it matches exactly one place in the target's code. An address is accepted when one candidate has at least
@@ -171,6 +173,30 @@ class X64Backend:
     def refs_to(self, data_va, text_va, text):
         return [{"op": f, "kind": "rip", "tail": t} for f, t in self.rip_refs.get(data_va, [])]
 
+    def refs_img(self, data_va, text_va, text, span=(-0x800, 0x800)):
+        """References through the image base: a disp32 that is the global's RVA ([reg + rva], the register holding the image base, as MSVC's x64 code reaches some
+        tables). A dword of the code equal to the RVA (or to one close to it: delta) is taken as one; the signature's uniqueness and the votes keep a chance constant out."""
+        if not hasattr(self, "_img"):
+            lo = min(va for name, va, vs, raw, rs, ex in self.img.secs if not ex) - self.img.base
+            hi = max(va + vs for name, va, vs, raw, rs, ex in self.img.secs if not ex) - self.img.base
+            self._img = {}
+            for i in range(len(text) - 3):
+                v = struct.unpack_from("<I", text, i)[0]
+                if lo <= v < hi:
+                    self._img.setdefault(v, []).append(text_va + i)
+            self._img_keys = sorted(self._img)
+        import bisect
+        rva = data_va - self.img.base
+        out = []
+        i = bisect.bisect_left(self._img_keys, rva + span[0])
+        while i < len(self._img_keys) and self._img_keys[i] <= rva + span[1]:
+            v = self._img_keys[i]
+            for op in self._img[v][:4]:
+                out.append({"op": op, "kind": "img", "tail": 0, "delta": v - rva})
+            i += 1
+        out.sort(key=lambda r: abs(r["delta"]))
+        return out
+
     def refs_near(self, data_va, text_va, text, span=(-0x20, 0x100)):
         out = []
         for target in sorted(self.rip_refs):
@@ -272,10 +298,16 @@ def data_signatures(img, be, ref_rva, per_address=16, max_sites=60):
     refs = be.refs_to(va, text_va, text)[:max_sites]
     if not refs:
         refs = be.refs_near(va, text_va, text)[:max_sites]
+    # 64 bits: a table reached only through a field further in (or before): a wider window (2026-11-18: 8 of the 12 globals the 64-bit file could not find).
+    # Not on 32 bits: on the iw4x-sp 1.0.159 exe it placed 7 globals of .rdata 0x80 off (the neighbour it went through moved by another amount); unresolved is safer.
+    if not refs and hasattr(be, "refs_img"):
+        refs = be.refs_near(va, text_va, text, span=(-0x800, 0x800))[:max_sites]
+    if not refs and hasattr(be, "refs_img"):
+        refs = be.refs_img(va, text_va, text)[:max_sites]
     found = []
     for r in refs:
         for pre, post in DATA_SHAPES:
-            if r["kind"] == "abs":
+            if r["kind"] in ("abs", "img"):
                 a0 = r["op"] - pre
                 length = pre + 4 + post
                 cap = pre
@@ -293,7 +325,7 @@ def data_signatures(img, be, ref_rva, per_address=16, max_sites=60):
                 continue
             sig = mask_to_sig(buf, mark)
             if len(find_all(text, sig_to_pattern(sig), 2)) == 1:
-                extra = "abs cap=%d" % cap if r["kind"] == "abs" else "rip cap=%d tail=%d" % (cap, tail)
+                extra = "%s cap=%d" % (r["kind"], cap) if r["kind"] in ("abs", "img") else "rip cap=%d tail=%d" % (cap, tail)
                 if r.get("delta"):
                     extra += " delta=%d" % r["delta"]
                 found.append(("DATA", ref_rva, extra, sig))
@@ -334,7 +366,7 @@ def parse_sigs(path):
         kind, rva, extra, sig = m.groups()
         opts = dict(re.findall(r"(\w+)=(\d+)", extra))
         out.append({"kind": kind, "rva": int(rva, 16), "off": int(opts.get("off", 0)), "cap": int(opts.get("cap", 0)),
-                    "tail": int(opts.get("tail", 0)), "delta": int(re.search(r"delta=(-?\d+)", extra).group(1)) if "delta=" in extra else 0, "mode": "rip" if "rip" in extra.split() else "abs", "pat": sig_to_pattern(sig)})
+                    "tail": int(opts.get("tail", 0)), "delta": int(re.search(r"delta=(-?\d+)", extra).group(1)) if "delta=" in extra else 0, "mode": "rip" if "rip" in extra.split() else "img" if "img" in extra.split() else "abs", "pat": sig_to_pattern(sig)})
     return out
 
 
@@ -358,6 +390,8 @@ def resolve(sigs, tgt):
             cand = va + h + s["off"] - tgt.base
         elif s["mode"] == "abs":
             cand = struct.unpack_from("<I", text, h + s["cap"])[0] - tgt.base
+        elif s["mode"] == "img":  # the dword is the RVA itself
+            cand = struct.unpack_from("<I", text, h + s["cap"])[0]
         else:
             disp = struct.unpack_from("<i", text, h + s["cap"])[0]
             cand = va + h + s["cap"] + 4 + s["tail"] + disp - tgt.base
@@ -467,6 +501,19 @@ def x64_addresses():
         for name, first in (("ranges", True), ("xranges", True), ("client_n_sites", True), ("sites", True), ("probes", False), ("net_port_immediates_official", False)):
             for v in _array_members(code, name, first):
                 out.setdefault(v, fn + ":" + name)
+        # a name given to XR(): a #define of a number (P2C_SCMD_CALL), or an array the code walks (XR(movs[i])). 2026-11-18: six such addresses were missing from
+        # the file, so on a build whose addresses moved they pointed at the harmless blocks and the split screen hung at the level start.
+        for m in re.finditer(r"\bXR(?:64)?\(\s*([A-Za-z_]\w*)\s*(\[)?", code):
+            name, indexed = m.group(1), m.group(2)
+            if indexed and name not in ("ranges", "xranges", "client_n_sites", "sites"):  # (those: above, the first member of each entry)
+                body = re.search(r"\b%s\[[^\]]*\]\s*=\s*\{(.*?)\};" % re.escape(name), code, re.S)
+                for v in _array_members(code, name, body is not None and "{" in body.group(1)):  # entries {rva, ...}: the first member of each
+                    if v >= 0x1000:  # (not the bytes of a nested { .. } an entry holds: an RVA is never that small)
+                        out.setdefault(v, fn + ":" + name)
+            else:
+                d = re.search(r"#define\s+%s\s+(0x[0-9a-fA-F]+)\b" % re.escape(name), code)
+                if d:
+                    out.setdefault(int(d.group(1), 16), fn + ":" + name)
     return out
 
 
@@ -485,7 +532,14 @@ def cmd_gen(argv):
     items, missing = [], []
     for i, rva in enumerate(addrs):
         va = img.base + rva
-        sigs = code_signatures(img, be, rva) if img.is_code(va) else data_signatures(img, be, rva)
+        # an import table slot the reference's code range takes in (the 32-bit dump's flat .text holds the IAT: rva 0x29116c, read as [0x69116c] by the asset lookup
+        # that localize.c's hook expects): its bytes are a system DLL's addresses on the machine the dump was made on, never the same elsewhere, so the code that
+        # reads the slot gives the signatures (2026-11-18: the slot was unresolved and the hook off on every build found by signature)
+        iat = (arch == "x86" and img.is_code(va) and va % 4 == 0 and  # (a table of them: the slot and both neighbours, 4-aligned; code bytes rarely look so)
+               all(0x60000000 <= v < 0x80000000 for v in struct.unpack("<3I", img.read(va - 4, 12).ljust(12, b"\0"))))
+        sigs = code_signatures(img, be, rva) if img.is_code(va) and not iat else data_signatures(img, be, rva)
+        if not sigs and img.is_code(va) and not iat:
+            sigs = data_signatures(img, be, rva)
         if not sigs:
             missing.append(("CODE" if img.is_code(va) else "DATA", rva))
         items += sigs
@@ -504,6 +558,13 @@ def cmd_verify(argv):
     got = resolve(sigs, tgt)
     addrs = sorted(set(s["rva"] for s in sigs))
     print("%d addresses with signatures, %d resolved" % (len(addrs), len(got)))
+    if opts.get("--list") in ("1", "reference"):  # the unresolved ones; with "reference" (the target is the build the file was made from) also the ones found elsewhere
+        kinds = {s["rva"]: s["kind"] for s in sigs}
+        for a in addrs:
+            if a not in got:
+                print("  unresolved: %s 0x%x" % (kinds.get(a, "?"), a))
+            elif opts["--list"] == "reference" and got[a] != a:
+                print("  moved on the reference: %s 0x%x -> 0x%x" % (kinds.get(a, "?"), a, got[a]))
     if "--truth" in opts:
         truth = {}
         for line in open(opts["--truth"]):

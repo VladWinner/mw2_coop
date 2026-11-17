@@ -86,6 +86,21 @@ def collect():
             add(int(m.group(1), 16) - 0x400000, f)
         for m in re.finditer(r'#define\s+REF_\w+\s+(%s)' % HEX, code):  # the RVA macros of menus.c (REF_x, used as XR(REF_x)): the 32-bit values
             add(int(m.group(1), 16), f)
+        # any other name given to XR(): a #define of a number (P2C_SCMD_CALL), or an array the code walks (XR(movs[i])); 2026-11-18, the 64-bit signature file missed six such
+        for m in re.finditer(r'\bXR\(\s*([A-Za-z_]\w*)\s*(\[)?', code):
+            name, indexed = m.group(1), m.group(2)
+            if indexed and name != 'ranges':  # (ranges: above, the first member of each entry)
+                a = re.search(r'\b%s\[[^\]]*\]\s*=\s*\{(.*?)\};' % re.escape(name), code, re.S)
+                if a:  # an array of entries {rva, ...}: the first member of each; else every number
+                    body = a.group(1)
+                    nums = re.findall(r'\{\s*(%s)\s*,' % HEX, body) if '{' in body else re.findall(HEX, body)
+                    for h in nums:
+                        if int(h, 16) >= 0x1000:  # (not the bytes of a nested { .. } an entry holds)
+                            add(int(h, 16), f + ':' + name)
+            else:
+                d = re.search(r'#define\s+%s\s+(%s)\b' % (re.escape(name), HEX), code)
+                if d:
+                    add(int(d.group(1), 16), f + ':' + name)
         if f != 'native.c':
             continue
         w32 = '\n'.join(w32_lines(text))

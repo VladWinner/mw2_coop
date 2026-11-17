@@ -20,6 +20,7 @@ typedef struct {
 	int kind;      // KIND_CODE / KIND_DATA
 	int derive;    // no signature: derive from neighbours
 	int rip;       // DATA: rip-relative operand (else absolute)
+	int img;       // DATA: the operand is the global's RVA (code that reaches it through the image base: [reg + rva])
 	uint32_t rva;
 	int off, cap, tail, delta;
 	int len;
@@ -84,6 +85,7 @@ static int parse_line(char *line, Sig **sigs, int *n, int *cap)
 		s.tail = parse_int_opt(line, "tail=", 0);
 		s.delta = parse_int_opt(line, "delta=", 0);
 		s.rip = strstr(line, " rip") != NULL;
+		s.img = strstr(line, " img") != NULL;
 		sig += 4;
 		int count = 0;
 		for (char *p = sig; *p; p++)
@@ -298,6 +300,8 @@ int addr_resolve(const char *sigs_text, const AddrSection *secs, int nsecs, uint
 		uint32_t cand;
 		if (s->kind == KIND_CODE) {
 			cand = rva_at + (uint32_t)s->off;
+		} else if (s->img) {
+			memcpy(&cand, ix.flat + hits[0] + s->cap, 4);
 		} else if (!s->rip) {
 			uint32_t v;
 			memcpy(&v, ix.flat + hits[0] + s->cap, 4);
@@ -695,3 +699,23 @@ unsigned addr_dead_block(void)
 	return off;
 }
 #endif
+
+int addr_moved_allowed(int found, int total, const char *ini, const char **why)
+{
+	const int setting = ini ? (int)GetPrivateProfileIntA("native", "movedbuilds", -1, ini) : -1;
+	const int pct = total > 0 ? found * 100 / total : 0;
+	if (getenv("MW2COOP_MOVED") != NULL) {
+		*why = "forced (MW2COOP_MOVED)";
+		return total > 0;
+	}
+	if (setting == 0) {
+		*why = "[native] movedbuilds=0";
+		return 0;
+	}
+	if (setting > 0) {
+		*why = pct >= 85 ? "[native] movedbuilds=1, 85% or more found" : "[native] movedbuilds=1 but fewer than 85% found";
+		return pct >= 85;
+	}
+	*why = pct >= 95 ? "95% or more found (the default)" : "fewer than 95% found ([native] movedbuilds=1 tries from 85%)";
+	return pct >= 95;
+}

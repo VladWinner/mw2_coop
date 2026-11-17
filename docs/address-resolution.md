@@ -124,9 +124,30 @@ routing (it now reads only the lines the 32-bit build compiles, plus the `REF_` 
   region; `.data` is many regions once the game writes to it, so the functions' table there was never searched, and the three rumble functions were "not found" on the 64-bit
   unknown-build path. It walks the regions now and searches only the initialised part of a section; all six rumble builtins are found by name.
 
+## Fourth round (2026-11-18): every address found, moved builds on by default
+
+* **Every address the mod uses is in the files.** The generators collected `XR(0x..)` literals, `RVA_` / `REF_` defines and a fixed list of tables. A name given to `XR()`
+  (a `#define` like `P2C_SCMD_CALL`, an array the code walks like `XR(movs[i])`) was missed: six 64-bit addresses (the player-2 server command calls, the clc newest command,
+  the cg.localClientNum pins) had no line, and on the unknown-build path they pointed at the harmless blocks, so the split screen hung at the level start (a wait on a zero
+  flag). `tools/addrsig.py` (64 bits) and `tools/gen_addr159.py` (32 bits) now take any such name (an array of `{rva, ...}` entries by its first members; nothing under
+  0x1000). x64 468 addresses, x86 407.
+* **Globals no instruction names directly.** 64-bit code reaches some tables through the image base (`[reg + rva]`): a new `img` kind of DATA line (the captured dword is
+  the RVA itself), read by both resolvers; and on 64 bits a second, wider window (±0x800) for a reference into a field of the table. Not on 32 bits: on the iw4x-sp exe
+  it placed seven `.rdata` globals 0x80 off; unresolved is safer.
+* **Import table slots.** The 32-bit dump's flat `.text` holds the IAT, and the asset lookup's `[0x69116c]` (the bytes `localize.c`'s hook expects) got a code signature
+  of the slot's contents (system DLL addresses of the machine the dump was made on): never found elsewhere, so that hook (texts, the model transplant) was off on every build
+  found by signature. A slot (4-aligned, it and both neighbours pointers into 0x60000000..0x80000000) now gets data signatures from the code that reads it.
+* **Measured.** On the reference builds: x64 468 of 468, x86 407 of 407 (`tools/addrsig.py verify ... --list reference`: none unresolved, none elsewhere). The iw4x-sp
+  1.0.159 exe through the signatures: 349 of 407, 336 equal to the hand-checked table (the others: 7 the table marks off on that client, a call site the hook checks by its
+  target, a log-only global 0x80 off).
+* **A build whose addresses moved runs by default when 95% or more are found** (`addr_moved_allowed()`, both builds); `[native] movedbuilds=1` runs it from 85%, `0`
+  never. Checked on the unknown-build path (`MW2COOP_FORCE_UNKNOWN=1 MW2COOP_FORCE_RESOLVED=1`, without `MW2COOP_MOVED`): 64-bit 468 of 468 found, the default lets it
+  run, mode 11 split screen on Trainer (5200 draws, no address left to a harmless block but the builtin table entries found by name); 32-bit 407 of 407, the asset hook
+  on, mode 11 split screen on Trainer.
+
 ## What is not done
 
-* A 64-bit build whose addresses moved runs only with `movedbuilds=1` and only if 85% of the addresses are found; no such build exists here to run it on. The path is run on the reference
+* No 64-bit build whose addresses moved exists here to run it on. The path is run on the reference
   exe with the lookups forced (`MW2COOP_FORCE_UNKNOWN=1 MW2COOP_MOVED=1 MW2COOP_FORCE_RESOLVED=1`): every address resolves to itself, so what that proves is that every use goes through the
   resolver and that the unresolved ones are survived.
 * The renderer (`src/dx`) is still tied to the reference build as a whole (its build hash, above): on any other 64-bit build the game keeps its own Direct3D 9.

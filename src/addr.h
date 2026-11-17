@@ -40,6 +40,10 @@ void addr_result_free(AddrResult *r);
 int addr_layout_same(void);
 int addr_mode(void);
 int addr_resolve_running(int *total);
+// A build whose addresses moved (not the reference layout): does the mod run on it with the addresses found? [native] movedbuilds in the given settings file:
+// 1 runs it when 85% or more were found, 0 never; not set (the default) runs it when 95% or more were found (2026-11-18, owner: "the mod independent of the
+// game's version": the near-complete resolution of today's signature files). QA: MW2COOP_MOVED forces it. *why gets a short reason for the log.
+int addr_moved_allowed(int found, int total, const char *ini, const char **why);
 
 // An address of the reference build, translated for the running build: the same number in mode 0, the resolved one in mode 1, 0 if it has none.
 unsigned addr_xr(unsigned ref);
