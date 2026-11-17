@@ -59,9 +59,16 @@ static DWORD WINAPI raw_thread(LPVOID unused)
 static uint64_t consumer(int x, int y, int dx, int dy)
 {
 	static LONG seen;
+	static DWORD last_poll;
 	LONG events = raw_events;
 	LONG rdx = InterlockedExchange(&raw_dx, 0), rdy = InterlockedExchange(&raw_dy, 0);
 	const int cursor_dx = dx, cursor_dy = dy;
+	// The raw mouse is registered to be heard in the background too (RIDEV_INPUTSINK), and the poll runs only while the game's window is in front: the movement of a whole
+	// Alt+Tab (or of a load) came in one poll and the view spun round (night audit SML-1). A poll after more than 250 ms without one (longer than any hitch of the game) starts from nothing.
+	const DWORD now = GetTickCount();
+	if (last_poll && now - last_poll > 250)
+		rdx = rdy = 0;
+	last_poll = now;
 	if (events != seen)
 		dx = (int)rdx, dy = (int)rdy;
 	if (inputlog_on() && (rdx || rdy || cursor_dx || cursor_dy))

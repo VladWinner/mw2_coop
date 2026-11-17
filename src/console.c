@@ -5051,7 +5051,9 @@ static LRESULT CALLBACK raw_input_relay_proc(HWND h, UINT msg, WPARAM w, LPARAM 
 static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 {
 	int scan = (int)((l >> 16) & 0xff);
-	if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && (scan == SCAN_TILDE || w == VK_OEM_3) && !(l & 0x40000000)) {
+	// The key left of 1 by its scan code. VK_OEM_3 only for input without a scan code (a remote desktop, an on-screen keyboard): it is a letter key on other layouts (o-umlaut on a German one,
+	// u-grave on a French one, '@ on a UK one), which opened the console in the game's text fields and was swallowed (night audit CON-1).
+	if ((msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && (scan == SCAN_TILDE || (scan == 0 && w == VK_OEM_3)) && !(l & 0x40000000)) {
 		if (GetKeyState(VK_SHIFT) & 0x8000) {
 			if (is_open && full_console)
 				console_window_maximize_toggle();
@@ -7596,10 +7598,28 @@ static DWORD WINAPI setup_thread(LPVOID unused)
 			log_printf("console: raw mouse packets are reaching the overlay");
 		}
 		EnumWindows(find_window_cb, (LPARAM)&now);
-		if (now && (now != game_window || (WNDPROC)GetWindowLongPtrA(now, GWLP_WNDPROC) != (WNDPROC)console_proc)) {
-			if ((WNDPROC)GetWindowLongPtrA(now, GWLP_WNDPROC) != (WNDPROC)console_proc) {
-				game_proc = (WNDPROC)SetWindowLongPtrA(now, GWLP_WNDPROC, (LONG_PTR)console_proc);
-				log_printf("console: ready (device %p, window %p was %p, ` opens it)", (void *)dev, (void *)now, (void *)game_proc);
+		// The console's window procedure goes in once per window. On the same window it goes in again only when the procedure is back to the one it wraps (the game set
+		// its own again): a procedure someone else put over it (the Steam or Discord overlay subclasses the window, and does it again after a device reset) still calls the
+		// console's. Putting the console over that one made it the console's "game_proc": console -> overlay -> console -> ... and the stack ran out on the next message
+		// (night audit CON-6; the Alt+Tab crash of 2026-11-05: stack overflow in gameoverlayrenderer64.dll after the device reset, repeating frames).
+		static HWND proc_window;
+		if (now) {
+			WNDPROC cur = (WNDPROC)GetWindowLongPtrA(now, GWLP_WNDPROC);
+			if (now != proc_window) {
+				if (cur != (WNDPROC)console_proc) {
+					game_proc = (WNDPROC)SetWindowLongPtrA(now, GWLP_WNDPROC, (LONG_PTR)console_proc);
+					log_printf("console: ready (device %p, window %p was %p, ` opens it)", (void *)dev, (void *)now, (void *)game_proc);
+				}
+				proc_window = now;
+			} else if (cur != (WNDPROC)console_proc) {
+				static WNDPROC told;
+				if (cur == game_proc) {
+					SetWindowLongPtrA(now, GWLP_WNDPROC, (LONG_PTR)console_proc);
+					log_printf("console: the window's procedure was set back to the game's: the console's put in again");
+				} else if (told != cur) {
+					told = cur;
+					log_printf("console: another window procedure (%p) was put over the console's: left as it is", (void *)cur);
+				}
 			}
 			if (now != game_window && is_open)
 				set_open(0);
