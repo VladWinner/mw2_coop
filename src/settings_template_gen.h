@@ -136,8 +136,8 @@ static const char settings_template[] =
 	"crashdump=1\n"
 	"\n"
 	"[native]\n"
-	"; 0 (the default): an iw4sp.exe whose addresses differ from the ones the mod knows is left alone (nothing is patched). 1: the mod looks its addresses up by byte signatures\n"
-	"; (docs/address-resolution.md) and, when it finds at least 85% of them, runs with what it found (best effort: a hook whose bytes differ is refused, an address that was not found\n"
-	"; points at a harmless block, so a feature without its addresses does nothing). 32-bit builds only for now. Experimental: it has been tried on the iw4x-sp client's 1.0.159 exe,\n"
-	"; where it started without a crash but most hooks were refused, because that exe's code differs from the official one.\n"
+	"; A game build whose addresses differ from the ones the mod knows (an update, another edition): the mod looks its addresses up by byte signatures\n"
+	"; (docs/address-resolution.md). Not set (the default): it runs with what it found when it found 95% or more of them. 1: it runs from 85%. 0: it leaves such a\n"
+	"; build alone (nothing is patched). Best effort: a hook whose bytes differ is refused and an address that was not found points at a harmless block, so a feature\n"
+	"; without its addresses does nothing. The mod's own Direct3D 11 / 12 renderers stay off on such a build (the game keeps its Direct3D 9).\n"
 	";movedbuilds=0\n";

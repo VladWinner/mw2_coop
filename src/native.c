@@ -10414,7 +10414,7 @@ static void stop_note(int k)
 	const USHORT got = RtlCaptureStackBackTrace(2, 6, frames, NULL);
 	uint32_t r[4] = {0};
 	for (int i = 0; i < 4 && i < got; i++)
-		r[i] = (uintptr_t)frames[i] >= (uintptr_t)base && (uintptr_t)frames[i] < (uintptr_t)base + 0x5000000 ? (uint32_t)((uint8_t *)frames[i] - base) : 0xffffffffu;
+		r[i] = (uintptr_t)frames[i] >= (uintptr_t)base && (uintptr_t)frames[i] < (uintptr_t)base + 0x5000000 ? (uint32_t)((uint8_t *)frames[i] - base) : 0xffffffffu; // raw-ok: an image bound for a QA log
 	r[3] = (r[3] & 0x0fffffffu) | (uint32_t)k << 28;
 	for (int i = 0; i < 24; i++) {
 		if (stop_stacks[i].n && !memcmp(stop_stacks[i].rva, r, sizeof(r))) {
