@@ -197,3 +197,56 @@ street_insta_death_for()
 		return flag( "street_insta_death" );
 	return isdefined( self.mw2coop_street_exposed );
 }
+
+// --------------------------------------------------------------------------------------------
+// The street after the EMP (dcemp_code.gsc; night audit 2026-11-17).
+
+// do_player_crash_fx(): a helicopter crashes beside the street. Within 1500 units the player's pad shakes and he is jolted up; within 650 he is
+// knocked into a crouch for a second, slowed and out of breath. Player 1 alone was; player 2 the same by his own distance (the earthquake is the
+// level's, for both).
+partner_crash_fx( origin )
+{
+	if ( !coop() || !IsAlive( level.player2 ) || maps\_mw2coop::is_downed( level.player2 ) )
+		return;
+	p2 = level.player2;
+	dist = DistanceSquared( p2.origin, origin );
+	if ( dist >= squared( 1500 ) )
+		return;
+	p2 PlayRumbleLoopOnEntity( "tank_rumble" );
+	p2 delaycall( 1.0, ::stopRumble, "tank_rumble" );
+	if ( !p2 IsLinked() )
+		p2 SetVelocity( AnglesToUp( p2.angles ) * 210 );
+	if ( dist >= squared( 650 ) )
+		return;
+	p2 AllowStand( false );
+	p2 AllowProne( false );
+	p2 SetStance( "crouch" );
+	p2 blend_movespeedscale( .5 );
+	p2 delayThread( .1, ::playLocalSoundWrapper, "breathing_hurt" );
+	time = 1;
+	p2 delayThread( .5, ::blend_movespeedscale, .8, 1.0 );
+	p2 delayThread( time + .25, ::playLocalSoundWrapper, "breathing_better" );
+	p2 delaycall( time, ::allowStand, true );
+	p2 delaycall( time, ::allowProne, true );
+	p2 delaycall( time, ::setstance, "stand" );
+	maps\_mw2coop::state( "dcemp street: a crash " + int( sqrt( dist ) ) + " units from player 2 knocks him down" );
+}
+
+// street_hide_moment(): after the helicopters the level hands player 1 a Beretta and fills his rifle, grenade launcher, frags and flashes. Player 2
+// gets the same (the Beretta itself reaches him through the weapon sync a moment later).
+partner_street_ammo()
+{
+	if ( !coop() || !IsAlive( level.player2 ) )
+		return;
+	wait 0.5;
+	p2 = level.player2;
+	if ( !p2 HasWeapon( "Beretta" ) )
+		p2 GiveWeapon( "Beretta" );
+	p2 SetWeaponAmmoClip( "Beretta", 30 );
+	p2 SetWeaponAmmoStock( "Beretta", 90 );
+	p2 SetWeaponAmmoStock( "m4m203_eotech", 300 );
+	p2 SetWeaponAmmoStock( "m203_m4_eotech", 9 );
+	p2 SetWeaponAmmoStock( "fraggrenade", 4 );
+	p2 SetWeaponAmmoStock( "flash_grenade", 4 );
+	maps\_mw2coop::state( "dcemp street: player 2's ammo refilled as player 1's" );
+}

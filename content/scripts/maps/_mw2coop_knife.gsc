@@ -272,6 +272,31 @@ witness_think()
 	maps\_mw2coop::state( "knife fight: " + player_name( self ) + " is down and passes out" + ter( placed, " near the fight", "" ) );
 	self thread witness_breathing();
 	self thread witness_follow();
+	self thread witness_up_at_credits();
+}
+
+// The museum credits that follow the walk to the helicopter in the same level (credits_1 mode: af_chase_knife_fight.gsc end_credits() sets
+// "do_museum_credits" under both players' black screen): the witness is up for them. His own black screen, the "stunned" text, the heartbeat and
+// the downed pose were never ended (nothing sent "mw2coop_knife_witness_up") and ran through the credits (night audit 2026-11-17, GSC-2).
+witness_up_at_credits()
+{
+	level waittill( "do_museum_credits" );
+	level notify( "mw2coop_knife_witness_up" );
+	self.mw2coop_awake = true;
+	self.mw2coop_want_awake = true;
+	if ( isdefined( self.mw2coop_blackout ) )
+		self.mw2coop_blackout Destroy();
+	if ( isdefined( self.mw2coop_stunned_texts ) )
+	{
+		foreach ( elem in self.mw2coop_stunned_texts )
+			elem Destroy();
+	}
+	self.mw2coop_stunned_texts = [];
+	self.laststand = undefined;
+	self SetMoveSpeedScale( 1 );
+	self AllowJump( true );
+	self AllowSprint( true );
+	maps\_mw2coop::state( "knife fight: " + player_name( self ) + " is up for the credits" );
 }
 
 // The other player is the lead's partner; whoever is not the lead.

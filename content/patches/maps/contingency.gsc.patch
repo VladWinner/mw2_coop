@@ -78,3 +78,12 @@ level.player stealth_plugin_basic();
 foreach ( mw2coop_player in level.players )
 		mw2coop_player stealth_plugin_basic();
 @@@ end
+
+5. The Predator hint ("hint_predator_drone", shown to both players) goes away by the drone use of the player who sees it
+   (should_break_use_drone read player 1's weapon and flight: player 2's copy closed only when player 1 used his laptop).
+   Night audit 2026-11-17. (Hand-added like hunks 2-4: tools/gen_seek_patches.py makes hunk 1 only.)
+@@@ subst should_break_use_drone
+level.player
+@@@ to
+self
+@@@ end

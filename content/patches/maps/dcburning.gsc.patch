@@ -65,10 +65,58 @@ maps\_mw2coop_dcburning::partner_lets_go();
 	level.blackhawk vehicle_delete();
 @@@ end
 
-4. The allies' catch-up sprint (friendly_adjust_movement_speed / friendly_should_speed_up) runs only when the host cannot see the ally; with the host ahead and the client trailing the
-   allies sprinted past the client's eyes (an owner's report). Now no player may see them (maps\_mw2coop::any_player_sees).
-@@@ subst friendly_should_speed_up
-within_fov( level.player.origin, level.player getPlayerAngles(), self.origin, level.cosine[ "90" ] )
+4. The Barrett on the Crow's Nest (maps\_barrett, _barrett.gsc.patch): the enemies' warning shots at the player on the rifle
+   (player_barrett_damage) hit whoever is on it, not always player 1.
+@@@ subst player_barrett_damage
+level.player
 @@@ to
-maps\_mw2coop::any_player_sees( self, level.cosine[ "90" ] )
+mw2coop_user
+@@@ end
+
+5. The Javelin hints (pick it up, switch to it, fire; shown to both players) go away by the Javelin of the player who sees
+   them: player_has_javelin() and javelin_equipped() asked player 1 also when a hint's break test asked them for player 2.
+@@@ subst player_has_javelin
+level.player
+@@@ to
+mw2coop_player
+@@@ end
+@@@ subst player_has_javelin
+player_has_javelin()
+{
+
+@@@ to
+player_has_javelin()
+{
+	mw2coop_player = get_player_from_self();
+
+@@@ end
+@@@ subst javelin_equipped
+level.player
+@@@ to
+mw2coop_player
+@@@ end
+@@@ subst javelin_equipped
+javelin_equipped()
+{
+
+@@@ to
+javelin_equipped()
+{
+	mw2coop_player = get_player_from_self();
+
+@@@ end
+@@@ subst should_break_javelin_pickup_hint
+level.player
+@@@ to
+self
+@@@ end
+@@@ subst player_barrett_damage
+while ( flag( "player_is_on_turret" ) )
+	{
+
+@@@ to
+while ( flag( "player_is_on_turret" ) )
+	{
+		mw2coop_user = maps\_mw2coop_dcburning::barrett_user();
+
 @@@ end

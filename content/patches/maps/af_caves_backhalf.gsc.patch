@@ -16,3 +16,61 @@ level.player.ignoreme = true;
 @@@ to
 maps\_mw2coop::players_ignoreme( true );
 @@@ end
+
+3. The cave exit's collapse (AAA_sequence_airstrip) for both players (maps\_mw2coop_cave): the self-destruct
+   alarm, the knock-down on a view of his own (crouched, slow, invulnerable, shell shocked), the move to the cave mouth
+   beside player 1 while the screen is black, the frozen moment of the second blackout and the release. Before, player 2
+   kept running, was not protected or shocked, and stayed behind the rubble that closes the cave.
+@@@ subst AAA_sequence_airstrip
+level.player PlayLocalSound( "af_caves_selfdestruct" );
+@@@ to
+level.player PlayLocalSound( "af_caves_selfdestruct" );
+	maps\_mw2coop_cave::partner_local_sound( "af_caves_selfdestruct" );
+@@@ end
+@@@ subst AAA_sequence_airstrip
+level.player enableinvulnerability();
+@@@ to
+level.player enableinvulnerability();
+	maps\_mw2coop_cave::collapse_partner_link( playerOrg );
+@@@ end
+@@@ subst AAA_sequence_airstrip
+level.player ShellShock( "af_cave_collapse", shellshockTime );
+@@@ to
+level.player ShellShock( "af_cave_collapse", shellshockTime );
+	maps\_mw2coop_cave::collapse_partner_shock( shellshockTime );
+@@@ end
+@@@ subst AAA_sequence_airstrip
+level.player SetOrigin( playerOrg.origin );
+	level.player PlayerLinkToBlend( playerOrg, "tag_player", 1 );
+@@@ to
+level.player SetOrigin( playerOrg.origin );
+	level.player PlayerLinkToBlend( playerOrg, "tag_player", 1 );
+	maps\_mw2coop_cave::collapse_partner_to_exit( cave_exit_playerview_01 );
+@@@ end
+@@@ subst AAA_sequence_airstrip
+playerOrg RotateTo( playerOrg.angles + ( 40, 0, -70 ), 12, 5, 5 );
+@@@ to
+playerOrg RotateTo( playerOrg.angles + ( 40, 0, -70 ), 12, 5, 5 );
+	maps\_mw2coop_cave::collapse_partner_rotate();
+@@@ end
+@@@ subst AAA_sequence_airstrip
+level.player FreezeControls( true );
+@@@ to
+level.player FreezeControls( true );
+	maps\_mw2coop_cave::collapse_partner_blackout( cave_exit_playerview_01 );
+@@@ end
+@@@ subst AAA_sequence_airstrip
+level.player FreezeControls( false );
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player FreezeControls( false );
+@@@ end
+@@@ subst AAA_sequence_airstrip
+level.player setMoveSpeedScale( 1 );
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player setMoveSpeedScale( 1 );
+@@@ end
+@@@ subst AAA_sequence_airstrip
+level.player disableinvulnerability();
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player disableinvulnerability();
+@@@ end

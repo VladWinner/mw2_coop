@@ -83,3 +83,11 @@ player_rappels( ent );
 player_rappels( ent );
 	level thread maps\_mw2coop_gulag::rappel_partner( ent );
 @@@ end
+
+5. The riot shield's bash hint (shown to both players) goes away when the player who sees it puts his shield away; it read player 1's
+   weapon (night audit 2026-11-17).
+@@@ subst stop_bash_hint
+!player_current_weapon( "riotshield" )
+@@@ to
+self GetCurrentWeapon() != "riotshield"
+@@@ end

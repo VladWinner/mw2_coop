@@ -70,3 +70,21 @@ tools/gen_gulag_end_patches.py; do not edit by hand. Co-op logic lives in mw2coo
 
 	nextmission();
 @@@ end
+
+2. The evacuation gives both players their walk speed, view (no ground reference) and sight (no blur) back after the fall in
+   the cafeteria, which knocks both down now (gulag_ending_code.gsc.patch, maps\_mw2coop_gulag::fall_*).
+@@@ subst gulag_evac
+level.player SetMoveSpeedScale( 1 );
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player SetMoveSpeedScale( 1 );
+@@@ end
+@@@ subst gulag_evac
+level.player SetBlurForPlayer( 0, 1 );
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player SetBlurForPlayer( 0, 1 );
+@@@ end
+@@@ subst gulag_evac
+level.player PlayerSetGroundReferenceEnt( undefined );
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player PlayerSetGroundReferenceEnt( undefined );
+@@@ end

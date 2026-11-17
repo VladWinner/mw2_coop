@@ -108,3 +108,45 @@ level.player.ignoreme = false;
 @@@ to
 maps\_mw2coop::players_ignoreme( false );
 @@@ end
+
+6. The slowed walk of the level (the stunned march down the street, the corner, the lobby, the parking deck, the plaza; night
+   audit 2026-11-17) is both players' walk: player 2 walked at full speed beside the others.
+@@@ subst street_main
+level.player blend_movespeedscale( .8 );
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player blend_movespeedscale( .8 );
+@@@ end
+@@@ subst corner_main
+level.player blend_movespeedscale( .77 );
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player blend_movespeedscale( .77 );
+@@@ end
+@@@ subst plaza_main2
+level.player blend_movespeedscale_default( 1 );
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player blend_movespeedscale_default( 1 );
+@@@ end
+@@@ subst start_plaza
+level.player blend_movespeedscale( .8 );
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player blend_movespeedscale( .8 );
+@@@ end
+@@@ subst lobby_main
+level.player add_func( ::blend_movespeedscale, .65 );
+@@@ to
+add_func( maps\_mw2coop::players_blend_movespeedscale, .65 );
+@@@ end
+@@@ subst lobby_main
+level.player add_func( ::blend_movespeedscale, .77 );
+@@@ to
+add_func( maps\_mw2coop::players_blend_movespeedscale, .77 );
+@@@ end
+@@@ subst parking_main
+level.player add_func( ::blend_movespeedscale, .8 );
+@@@ to
+add_func( maps\_mw2coop::players_blend_movespeedscale, .8 );
+@@@ end

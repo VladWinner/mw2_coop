@@ -26,3 +26,114 @@ mw2coop patch for maps/roadkill.gsc (Team Player, Modern Warfare 2, 64-bit Steam
 @@@ with
 	maps\_mw2coop::players_ignoreme( false );
 @@@ end
+
+4. Both players ride, so the ride's protection covers both (night audit 2026-11-17): the death shield from the start of the
+   ride to the crazy ride, again for the end of the ride and four seconds after the crash; random bullets missing the
+   players after the enemies retreat, at the end of the ride and at the dismount start points; the near-death vision off.
+   Before, player 1 alone had them, and he may not be the gunner.
+@@@ replace
+	level.player EnableDeathShield( true );
+
+
+	thread player_doesnt_die_in_red_flashing();
+	level.player DisableWeapons();
+	level.player ent_flag_clear( "near_death_vision_enabled" );
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player EnableDeathShield( true );
+
+
+	thread player_doesnt_die_in_red_flashing();
+	level.player DisableWeapons();
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player ent_flag_clear( "near_death_vision_enabled" );
+@@@ end
+
+   (same)
+@@@ replace
+
+	level.player EnableDeathShield( false );
+
+
+	wait( 0.05 );// wait for level.lead_vehicle to get set.
+@@@ with
+
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player EnableDeathShield( false );
+
+
+	wait( 0.05 );// wait for level.lead_vehicle to get set.
+@@@ end
+
+   (same)
+@@@ replace
+	level.player.IgnoreRandomBulletDamage = false;
+
+	array_thread( level.school_ambush_spawners, ::spawn_ai );
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player.IgnoreRandomBulletDamage = false;
+
+	array_thread( level.school_ambush_spawners, ::spawn_ai );
+@@@ end
+
+   (same)
+@@@ replace
+	level.player.IgnoreRandomBulletDamage = true;
+	thread player_gets_max_health_for_dismount();
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player.IgnoreRandomBulletDamage = true;
+	thread player_gets_max_health_for_dismount();
+@@@ end
+
+   (same)
+@@@ replace
+	level.player EnableDeathShield( true );
+	rocket = undefined;
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player EnableDeathShield( true );
+	rocket = undefined;
+@@@ end
+
+   (same)
+@@@ replace
+	level.player delayCall( 4, ::EnableDeathShield, false );
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player delayCall( 4, ::EnableDeathShield, false );
+@@@ end
+
+   (same)
+@@@ replace
+	level.player.IgnoreRandomBulletDamage = true;
+	thread player_becomes_normal_gameskill();
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player.IgnoreRandomBulletDamage = true;
+	thread player_becomes_normal_gameskill();
+@@@ end
+
+5. The crash at the end of the ride knocks both players down: the shell shock and the prone landing (player 2 is put next to
+   player 1 by hunk 2).
+@@@ replace
+	level.player ShellShock( "default", 5 );
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player ShellShock( "default", 5 );
+@@@ end
+
+   (same)
+@@@ replace
+	level.player SetStance( "prone" );
+	level.player AllowCrouch( true );
+	level.player AllowProne( true );
+@@@ with
+	foreach ( mw2coop_player in level.players )
+	{
+		mw2coop_player SetStance( "prone" );
+		mw2coop_player AllowCrouch( true );
+		mw2coop_player AllowProne( true );
+	}
+@@@ end

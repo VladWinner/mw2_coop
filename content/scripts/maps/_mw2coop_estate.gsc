@@ -125,3 +125,132 @@ player_name( player )
 		return "player 1";
 	return "player 2";
 }
+
+// --------------------------------------------------------------------------------------------
+// The bouncing-betty ambush on the way to the house (estate_code.gsc bouncing_betty_*; patched by tools/gen_estate_patches.py). In single player a
+// mine pops up right in front of Roach ("his personal mine"): prone, it throws him away from it, he is shocked and can only lie for 5 s; standing,
+// it kills him (the hint says to go prone). Player 2 had no mine: he walked through the ambush unthrown, unshocked, at full speed in the slow motion.
+// Now each player has his own mine in front of him with the same rule; the scene's dialogue, the fake RPGs and its flags stay with player 1's mine.
+
+// bouncing_betty_activate(), after player 1's mine: player 2's own mine, at his own ground spot in front of him (playerFovGroundSpot).
+partner_mine()
+{
+	if ( !coop() || !IsAlive( level.player2 ) || maps\_mw2coop::is_downed( level.player2 ) )
+		return;
+	p2 = level.player2;
+	mine_org = maps\estate_code::playerFovGroundSpot( "specialPlayerCase", p2 );
+	skip_fx = undefined;
+	if ( !isdefined( mine_org ) )
+	{
+		mine_org = p2.origin;
+		skip_fx = 1;
+	}
+	thread maps\estate_code::bouncing_betty_throwplayer( mine_org, p2 );
+	mine = Spawn( "script_origin", mine_org );
+	mine thread maps\estate_code::bouncing_betty_fx( 1, undefined, skip_fx, p2 );
+	maps\_mw2coop::state( "estate mines: player 2's own mine at " + mine_org + ", " + int( Distance( mine_org, p2.origin ) ) + " units from him" );
+}
+
+// player_can_see_origin() of maps\_utility for a given player (it asks player 1).
+sees_origin( player, origin )
+{
+	if ( player == level.player )
+		return player_can_see_origin( origin );
+	if ( !player animscripts\battlechatter::pointInFov( origin ) )
+		return false;
+	return SightTracePassed( player GetEye(), origin, true, player );
+}
+
+// bouncing_betty_throwplayer(): the throw of a player waits for his own mine to find him prone (the level's flag "mine_throw_player" is set by the
+// first); a player his mine killed is not thrown.
+throw_wait( player )
+{
+	if ( !coop() )
+	{
+		flag_wait( "mine_throw_player" );
+		return;
+	}
+	player endon( "death" );
+	while ( !isdefined( player.mw2coop_mine_throw ) )
+		wait 0.05;
+	player.mw2coop_mine_throw = undefined;
+	maps\_mw2coop::state( "estate mines: " + player_name( player ) + " is thrown by his mine" );
+}
+
+// bouncing_betty_shellshock() for player 2: the shock and, once the prone-only moment is over (player 1's stances), his stances and sprint back.
+partner_mine_shock()
+{
+	self endon( "death" );
+	self ShellShock( "estate_bouncingbetty", 10 );
+	flag_wait( "ambushed_player_back_to_normal" );
+	self AllowCrouch( true );
+	self AllowStand( true );
+	self AllowSprint( true );
+}
+
+// bouncing_betty_fx() of a mine in the woods (bouncing_betty_gameplay: it goes off when a player walks into it and looks at it): every player in its
+// radius, not player 1 alone. Prone: the blast hurts the enemies only, he gets dirt on his screen and a short shock; standing: it kills him and the
+// mission fails with the prone reminder, as it did for player 1. mine: the mine (its origin and radius).
+gameplay_mine_blast( mine, explosion_org )
+{
+	prone = [];
+	standing = [];
+	foreach ( player in level.players )
+	{
+		if ( !IsAlive( player ) )
+			continue;
+		player PlayRumbleOnEntity( "artillery_rumble" );
+		if ( Length( player.origin - mine.origin ) > mine.radius )
+			continue;
+		if ( player GetStance() == "prone" )
+			prone[ prone.size ] = player;
+		else
+			standing[ standing.size ] = player;
+	}
+	if ( prone.size )
+	{
+		SetPlayerIgnoreRadiusDamage( true );
+		mine thread maps\estate_code::bouncing_betty_gameplay_real_damage( explosion_org );
+		foreach ( player in prone )
+		{
+			if ( within_fov( player.origin, player.angles + ( 0, -95, 0 ), mine.origin, Cos( 180 ) ) )
+				player thread maps\_gameskill::grenade_dirt_on_screen( "right" );
+			if ( within_fov( player.origin, player.angles + ( 0, 95, 0 ), mine.origin, Cos( 180 ) ) )
+				player thread maps\_gameskill::grenade_dirt_on_screen( "left" );
+			if ( within_fov( player.origin, player.angles, mine.origin, Cos( 10 ) ) )
+				player thread maps\_gameskill::grenade_dirt_on_screen( "bottom_b" );
+			player thread gameplay_mine_shock();
+			maps\_mw2coop::state( "estate mines: a mine in the woods went off by " + player_name( player ) + ", prone: shocked" );
+		}
+	}
+	if ( standing.size )
+	{
+		wait 0.2;
+		damaged = false;
+		foreach ( player in standing )
+		{
+			if ( !IsAlive( player ) )
+				continue;
+			if ( !damaged )
+			{
+				mine thread maps\estate_code::bouncing_betty_gameplay_real_damage( explosion_org );
+				damaged = true;
+			}
+			level notify( "new_quote_string" );
+			maps\_mw2coop::state( "estate mines: a mine in the woods killed " + player_name( player ) + " (not prone)" );
+			player Kill();
+			thread maps\estate_code::bouncing_betty_deathquote();
+		}
+	}
+}
+
+// bouncing_betty_gameplay_shock() for one player (it shocked player 1 and hid both from the enemies).
+gameplay_mine_shock()
+{
+	self endon( "death" );
+	self ShellShock( "estate_bouncingbetty", 3.5 );
+	Earthquake( 1, 0.8, self.origin, 2000 );
+	self.ignoreme = true;
+	wait 3.5;
+	self.ignoreme = false;
+}

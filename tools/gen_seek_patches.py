@@ -51,6 +51,34 @@ for rel, title, scenes in SCRIPTS:
         p.subst('player_init', 'level.player stealth_cliffhanger();',
                 'foreach ( mw2coop_player in level.players )\n\t\tmw2coop_player stealth_cliffhanger();')
         n += 1
+        p.note('''{0}. The heartbeat sensor's hint (shown to both players) goes away by the sensor of the player who sees it: its break
+   test read player 1's weapons (night audit 2026-11-17).'''.format(n + 1))
+        p.subst('should_break_activate_heartbeat', 'level.player', 'self')
+        n += 1
+    if rel == 'af_caves/maps/af_caves_backhalf.gsc':
+        # night audit 2026-11-17: the cave exit's collapse was player 1's alone
+        C = 'maps\\_mw2coop_cave::'
+        EACH = 'foreach ( mw2coop_player in level.players ) mw2coop_player'
+        p.note('''{0}. The cave exit's collapse (AAA_sequence_airstrip) for both players (maps\\_mw2coop_cave): the self-destruct
+   alarm, the knock-down on a view of his own (crouched, slow, invulnerable, shell shocked), the move to the cave mouth
+   beside player 1 while the screen is black, the frozen moment of the second blackout and the release. Before, player 2
+   kept running, was not protected or shocked, and stayed behind the rubble that closes the cave.'''.format(n + 1))
+        fn = 'AAA_sequence_airstrip'
+        p.subst(fn, 'level.player PlayLocalSound( "af_caves_selfdestruct" );',
+                'level.player PlayLocalSound( "af_caves_selfdestruct" );\n\t' + C + 'partner_local_sound( "af_caves_selfdestruct" );')
+        p.subst(fn, 'level.player enableinvulnerability();', 'level.player enableinvulnerability();\n\t' + C + 'collapse_partner_link( playerOrg );')
+        p.subst(fn, 'level.player ShellShock( "af_cave_collapse", shellshockTime );',
+                'level.player ShellShock( "af_cave_collapse", shellshockTime );\n\t' + C + 'collapse_partner_shock( shellshockTime );')
+        p.subst(fn, 'level.player SetOrigin( playerOrg.origin );\n\tlevel.player PlayerLinkToBlend( playerOrg, "tag_player", 1 );',
+                'level.player SetOrigin( playerOrg.origin );\n\tlevel.player PlayerLinkToBlend( playerOrg, "tag_player", 1 );\n\t'
+                + C + 'collapse_partner_to_exit( cave_exit_playerview_01 );')
+        p.subst(fn, 'playerOrg RotateTo( playerOrg.angles + ( 40, 0, -70 ), 12, 5, 5 );',
+                'playerOrg RotateTo( playerOrg.angles + ( 40, 0, -70 ), 12, 5, 5 );\n\t' + C + 'collapse_partner_rotate();')
+        p.subst(fn, 'level.player FreezeControls( true );', 'level.player FreezeControls( true );\n\t' + C + 'collapse_partner_blackout( cave_exit_playerview_01 );')
+        p.subst(fn, 'level.player FreezeControls( false );', EACH + ' FreezeControls( false );')
+        p.subst(fn, 'level.player setMoveSpeedScale( 1 );', EACH + ' setMoveSpeedScale( 1 );')
+        p.subst(fn, 'level.player disableinvulnerability();', EACH + ' disableinvulnerability();')
+        n += 1
     if rel == 'ending/maps/char_museum_code.gsc':
         M = 'maps\_mw2coop_ending::'
         p.note('''{0}. The credits' camera carries both players (camera_move blends both onto it).'''.format(n + 1))

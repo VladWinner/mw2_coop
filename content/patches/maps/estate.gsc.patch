@@ -283,3 +283,12 @@ level.player endingBlurView(
 @@@ to
 maps\_mw2coop_estate::players_blur_view(
 @@@ end
+
+5. The forest fight's start point (and a co-op restart there) puts every player in the state the mine ambush
+   leaves him in (thrown, shocked, prone for a moment), not player 1 alone.
+@@@ subst estate_ambush
+thread bouncing_betty_throwplayer( level.player.origin );
+@@@ to
+foreach ( mw2coop_player in level.players )
+		thread bouncing_betty_throwplayer( mw2coop_player.origin, mw2coop_player );
+@@@ end

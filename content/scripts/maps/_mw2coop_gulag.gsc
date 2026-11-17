@@ -243,3 +243,75 @@ rappel_partner( ent )
 	maps\_mw2coop::state( "gulag: the rope is free for the second player" );
 	maps\gulag_code::player_rappels( ent );
 }
+
+// --------------------------------------------------------------------------------------------
+// The fall in the cafeteria (gulag_ending_code.gsc stumble_trigger_think after "player_falls_down"; night audit 2026-11-17): the ceiling comes
+// down, player 1 is knocked over (his view tilted by a roller, turned to where he looks), shielded from death, slowed to a quarter, left at 5 health
+// with a growing blur, put prone, and the screen goes black for a second before the evacuation. Player 2 stood on unhurt at full speed. Now he
+// falls the same way, his own roller turned to where he looks; gulag_ending.gsc's evacuation gives both their speed, view and blur back.
+
+fall_coop()
+{
+	return maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) && IsAlive( level.player2 );
+}
+
+// After player 1 is hit (roller: the level's eq_view_roller, already turned to player 1's view; blur_func: the level's player_blur_manager, run on
+// player 2: this file is loaded with gulag_code.gsc too, where gulag_ending_code.gsc may not be).
+fall_partner_hit( roller, blur_func )
+{
+	if ( !fall_coop() )
+		return;
+	p2 = level.player2;
+	angles = p2 GetPlayerAngles();
+	if ( !isdefined( level.mw2coop_fall ) )
+	{
+		// his own roller, turned to where he looks, and the ground reference on it
+		f = SpawnStruct();
+		f.roller = spawn_tag_origin();
+		f.roller.origin = roller.origin;
+		f.roller.angles = ( 0, angles[ 1 ], 0 );
+		f.ref = spawn_tag_origin();
+		f.ref.origin = f.roller.origin;
+		f.ref.angles = f.roller.angles;
+		f.ref LinkTo( f.roller );
+		level.mw2coop_fall = f;
+	}
+	f = level.mw2coop_fall;
+	f.yaw = angles[ 1 ] - roller.angles[ 1 ];	// his fall is player 1's turned by the difference of their views
+	p2 PlayerSetGroundReferenceEnt( f.ref );
+	p2 EnableDeathShield( true );
+	p2 SetMoveSpeedScale( 0.25 );
+	above = p2.origin + ( 0, 0, 100 ) + AnglesToForward( f.roller.angles ) * 50;
+	mult = 1;
+	if ( isdefined( p2.damageMultiplier ) && p2.damageMultiplier > 0 )
+		mult = p2.damageMultiplier;
+	if ( p2.health > 5 )
+		p2 DoDamage( ( p2.health - 5 ) / mult, above );
+	p2 thread [[ blur_func ]]();
+	maps\_mw2coop::state( "gulag cafeteria: player 2 falls with player 1 (health " + p2.health + ")" );
+}
+
+// eq_view_roller RotateTo() of the fall: player 2's roller turns the same way in his own frame.
+fall_rotate( roller, angles, time, accel, decel )
+{
+	roller RotateTo( angles, time, accel, decel );
+	if ( !fall_coop() || !isdefined( level.mw2coop_fall ) )
+		return;
+	level.mw2coop_fall.roller RotateTo( angles + ( 0, level.mw2coop_fall.yaw, 0 ), time, accel, decel );
+}
+
+// The black second after the fall, on player 2's screen too.
+fall_partner_black( on )
+{
+	if ( !fall_coop() )
+		return;
+	if ( on )
+	{
+		if ( !isdefined( level.mw2coop_fall_black ) )
+			level.mw2coop_fall_black = maps\_hud_util::create_client_overlay( "black", 0, level.player2 );
+		level.mw2coop_fall_black.alpha = 1;
+		return;
+	}
+	if ( isdefined( level.mw2coop_fall_black ) )
+		level.mw2coop_fall_black Destroy();
+}

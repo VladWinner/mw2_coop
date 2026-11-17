@@ -22,3 +22,11 @@ level.player stealth_cliffhanger();
 foreach ( mw2coop_player in level.players )
 		mw2coop_player stealth_cliffhanger();
 @@@ end
+
+3. The heartbeat sensor's hint (shown to both players) goes away by the sensor of the player who sees it: its break
+   test read player 1's weapons (night audit 2026-11-17).
+@@@ subst should_break_activate_heartbeat
+level.player
+@@@ to
+self
+@@@ end

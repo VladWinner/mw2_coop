@@ -54,3 +54,56 @@ partner_lets_go()
 	level.player2 AllowJump( true );
 	level.mw2coop_heli_rider = undefined;
 }
+
+// --------------------------------------------------------------------------------------------
+// The Barrett on the Crow's Nest (maps\_barrett exchange_barrett_trigger, patched by tools/gen_dcburning_patches.py; night audit 2026-11-17): its use
+// trigger answered either player, but the level put player 1 on the rifle wherever he stood. Now whoever uses it gets on it; the rifle's shots,
+// recoil shock, zoom lesson and the enemies' warning shots (dcburning.gsc player_barrett_damage) are his.
+
+// The use trigger's user (player 1 when the trigger did not say).
+barrett_got_on( user )
+{
+	if ( !isdefined( user ) || !is_in_array( level.players, user ) )
+		user = level.player;
+	level.mw2coop_barrett_user = user;
+	if ( coop() )
+		maps\_mw2coop::state( "barrett: " + maps\_mw2coop::player_label( user ) + " gets on the rifle" );
+	return user;
+}
+
+barrett_got_off()
+{
+	level.mw2coop_barrett_user = undefined;
+}
+
+// The player on the rifle (player 1 when nobody is).
+barrett_user()
+{
+	if ( isdefined( level.mw2coop_barrett_user ) && IsAlive( level.mw2coop_barrett_user ) )
+		return level.mw2coop_barrett_user;
+	return level.player;
+}
+
+barrett_attack_pressed()
+{
+	user = barrett_user();
+	return user AttackButtonPressed();
+}
+
+barrett_movement()
+{
+	user = barrett_user();
+	return user GetNormalizedMovement();
+}
+
+// Player 1 got on the rifle: the level turned his weapons and night-vision slot off, and src/mirror.c did the same to player 2, who is not on it.
+// He gets them back (src/mirror.c mirrors calls on player 1 to player 2 unconditionally; this scene is player 1's alone).
+barrett_partner_kit( user )
+{
+	if ( !coop() || user != level.player || !IsAlive( level.player2 ) )
+		return;
+	level.player2 EnableWeapons();
+	if ( level.script == "dcburning" )
+		level.player2 SetActionSlot( 1, "nightvision" );
+	maps\_mw2coop::state( "barrett: player 2 keeps his weapons and night vision while player 1 is on the rifle" );
+}

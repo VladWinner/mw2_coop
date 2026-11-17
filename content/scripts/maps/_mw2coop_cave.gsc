@@ -157,3 +157,101 @@ second_done( who, ending_rig, rig, old_weapon )
 	who thread maps\_mw2coop::teleport_to_partner_when_safe( maps\_mw2coop::other_player( who ), 3 );
 	maps\_mw2coop::state( "af_caves: the second player is down" );
 }
+
+// --------------------------------------------------------------------------------------------
+// The cave exit (af_caves_backhalf.gsc AAA_sequence_airstrip, patched by tools/gen_seek_patches.py): the control room blows up behind the
+// players. Player 1 hears the self-destruct alarm, is knocked down onto a view of his own (crouched, slow, no sprint or jump, invulnerable, shell
+// shocked for 17 s), blacks out, comes to at the cave mouth (cave_exit_playerview_01) on that view, which tilts over as he passes out again, and
+// wakes up at the same place, held still until the second blackout lifts. Player 2 kept running, unprotected and unshocked, and was left in the
+// cave behind the rubble that closes it. Now he goes through the same moments, on a view of his own, beside player 1.
+
+collapse_coop()
+{
+	return maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) && IsAlive( level.player2 ) && !maps\_mw2coop::is_downed( level.player2 );
+}
+
+// The alarm, a sound played for one client: on player 2's own machine too (on one machine, the split screen, player 1's is heard already).
+partner_local_sound( alias )
+{
+	if ( !collapse_coop() || GetDvarInt( "mw2coop_native_split" ) )
+		return;
+	level.player2 PlayLocalSound( alias );
+}
+
+// Knocked down where he is: on a tag of his own at his place, with player 1's view angles (the cave mouth's, rolled over).
+collapse_partner_link( p1_tag )
+{
+	if ( !collapse_coop() )
+		return;
+	p2 = level.player2;
+	tag = spawn_tag_origin();
+	tag.origin = p2.origin + ( 0, 0, 10 );
+	tag.angles = p1_tag.angles;
+	level.mw2coop_collapse_tag = tag;
+	p2 PlayerLinkToBlend( tag, "tag_player", 1 );
+	p2 AllowSprint( false );
+	p2 SetMoveSpeedScale( 0.2 );
+	p2 EnableInvulnerability();
+	maps\_mw2coop::state( "cave exit collapse: player 2 knocked down " + int( Distance( p2.origin, level.player.origin ) ) + " units from player 1" );
+}
+
+collapse_partner_shock( time )
+{
+	if ( !collapse_coop() )
+		return;
+	p2 = level.player2;
+	p2 ShellShock( "af_cave_collapse", time );
+	p2 AllowStand( false );
+	p2 AllowProne( false );
+	p2 AllowSprint( false );
+	p2 AllowJump( false );
+	p2 AllowCrouch( true );
+}
+
+// Player 1 is put at the cave mouth while the screen is black: player 2 beside him, on his own tag.
+collapse_partner_to_exit( view )
+{
+	if ( !collapse_coop() || !isdefined( level.mw2coop_collapse_tag ) )
+		return;
+	p2 = level.player2;
+	spot = maps\_mw2coop::free_spot_beside( view.origin, view.angles, level.player );
+	level.mw2coop_collapse_spot = spot;
+	tag = level.mw2coop_collapse_tag;
+	tag.origin = spot;
+	p2 Unlink();
+	p2 SetOrigin( spot );
+	p2 PlayerLinkToBlend( tag, "tag_player", 1 );
+	maps\_mw2coop::state( "cave exit collapse: player 2 at the cave mouth, " + int( Distance( spot, view.origin ) ) + " units from player 1's place" );
+}
+
+// His view tilts over with player 1's as they pass out again.
+collapse_partner_rotate()
+{
+	if ( !collapse_coop() || !isdefined( level.mw2coop_collapse_tag ) )
+		return;
+	tag = level.mw2coop_collapse_tag;
+	tag RotateTo( tag.angles + ( 40, 0, -70 ), 12, 5, 5 );
+}
+
+// The second blackout: off the tag, standing at his place beside player 1, facing out of the cave, held still until it lifts (the level lets both go).
+collapse_partner_blackout( view )
+{
+	if ( !collapse_coop() )
+		return;
+	p2 = level.player2;
+	spot = level.mw2coop_collapse_spot;
+	if ( !isdefined( spot ) )
+		spot = maps\_mw2coop::free_spot_beside( view.origin, view.angles, level.player );
+	p2 Unlink();
+	p2 SetOrigin( spot );
+	p2 SetPlayerAngles( view.angles );
+	p2 FreezeControls( true );
+	p2 AllowStand( true );
+	p2 AllowSprint( true );
+	p2 AllowJump( true );
+	p2 AllowCrouch( true );
+	p2 AllowProne( true );
+	if ( isdefined( level.mw2coop_collapse_tag ) )
+		level.mw2coop_collapse_tag Delete();
+	maps\_mw2coop::state( "cave exit collapse: player 2 held at the cave mouth for the blackout" );
+}

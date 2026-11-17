@@ -141,6 +141,21 @@ main()
 		case "p2cmds":
 			p2cmds();
 			break;
+		case "p2fire":
+			p2fire();
+			break;
+		case "padlost":
+			padlost();
+			break;
+		case "issplit":
+			report( "IsSplitScreen " + IsSplitScreen() + ", is_coop " + is_coop() + ", is_coop_online " + is_coop_online() );
+			break;
+		case "snowturn":
+			snowturn();
+			break;
+		case "ownswap":
+			ownswap();
+			break;
 		case "laserpad":
 			laserpad();
 			break;
@@ -579,7 +594,9 @@ main()
 			speed();
 			break;
 		default:
-			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
+			// the night audit's scenarios (2026-11-17): maps\_mw2coop_qa_bind
+			if ( !maps\_mw2coop_qa_bind::dispatch( GetDvar( "mw2coop_qa" ) ) )
+				report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
 	}
 }
 
@@ -6153,6 +6170,8 @@ fxplay()
 	{
 		PlayFX( level._effect[ name ], spot );
 		wait 1;
+		if ( i == 2 || i == 5 )
+			SetDvar( "mw2coop_qa_frame", "fxplay-" + i ); // (the composed frame: both halves, the smoke in each?)
 	}
 	report( "fxplay done" );
 }
@@ -6308,5 +6327,83 @@ p2cmds()
 	level.player2 SetBlurForPlayer( 6, 0.5 );
 	report( "player 2: vision black_bw and blur 6 set for him only" );
 	wait 2;
+	report( "done" );
+}
+
+// Player 2 fires on his pad for 2 s, then player 1 for 2 s (with [native] sndcount=2: each player's own gun must start its sounds in his own context, evsnd1 mutes only
+// the world's copies in context 1)
+p2fire()
+{
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 3;
+	report( "player 2 fires" );
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 255 0" );
+	wait 2;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	wait 2;
+	report( "player 1 fires" );
+	SetDvar( "mw2coop_qa_pad1", "0 0 0 0 0 0 255 0" );
+	wait 2;
+	SetDvar( "mw2coop_qa_pad1", "0 0 0 0 0 0 0 0" );
+	wait 2;
+	report( "done" );
+}
+
+// A pad that drops while a button is held ([native] audit A3): the test harness holds player 2's right trigger through mw2coopakepad.txt, then deletes the file (his
+// pad is gone); his fire button must not stay pressed. Reports his attack button every second.
+padlost()
+{
+	level.mw2coop_no_follow = true;
+	for ( t = 0; t < 40; t++ )
+	{
+		report( "t " + t + ": player 2 attack " + level.player2 AttackButtonPressed() );
+		wait 1;
+	}
+	report( "done" );
+}
+
+// Spec Ops snowmobile race (Vlad, mode 10: "camera turns do not work, strong jitter for both"): after the countdown (freezeControls false) each player's pad holds the right
+// stick to the right for 1.5 s; his view yaw before / after is reported, and his view yaw every 0.1 s while he holds still (the jitter). Needs set specialops 1.
+snowturn()
+{
+	wait 22;	// (the race starts 5.8 s after start_race; the level's intro before it)
+	foreach ( n, player in level.players )
+	{
+		pad = "mw2coop_qa_pad" + ( n + 1 );
+		a0 = player GetPlayerAngles();
+		samples = "";
+		for ( i = 0; i < 10; i++ )
+		{
+			wait 0.1;
+			samples = samples + " " + int( player GetPlayerAngles()[ 1 ] * 10 ) / 10;
+		}
+		report( "snowturn: " + player_name( player ) + " still, yaw every 0.1 s:" + samples + ", linked " + player IsLinked() );
+		SetDvar( pad, "0 0 25000 0 0 0 0 0" );
+		wait 1.5;
+		SetDvar( pad, "0 0 0 0 0 0 0 0" );
+		a1 = player GetPlayerAngles();
+		report( "snowturn: " + player_name( player ) + " stick right 1.5 s: yaw " + int( a0[ 1 ] ) + " -> " + int( a1[ 1 ] ) + " (turned " + int( AngleClamp180( a1[ 1 ] - a0[ 1 ] ) ) + ")" );
+		wait 1;
+	}
+	report( "done" );
+}
+
+// ownswap (dc_whitehouse): each player keeps his own inventory (owner, 2026-11-16, maps\_mw2coop::sync_weapons). What a level gives player 1 reaches player 2; a swap on the
+// ground (one weapon out, another in, in the same moment) stays player 1's.
+ownswap()
+{
+	common_checks();
+	// (only weapons the level has: the zone may not have others) a level takes one from player 1: player 2 loses it too
+	level.player TakeWeapon( "flash_grenade" );
+	wait 2;
+	check( !level.player2 HasWeapon( "flash_grenade" ), "a level's take reaches player 2 (" + weapdrop_text( level.player2 ) + ")" );
+	// player 1 swaps on the ground: his pistol out, the flash grenade in, in the same moment
+	level.player TakeWeapon( "beretta" );
+	level.player GiveWeapon( "flash_grenade" );
+	wait 2;
+	report( "ownswap: after player 1's swap, player 1 has " + weapdrop_text( level.player ) + "| player 2 has " + weapdrop_text( level.player2 ) );
+	check( level.player2 HasWeapon( "beretta" ), "player 2 keeps his pistol" );
+	check( !level.player2 HasWeapon( "flash_grenade" ), "player 1's pickup stays his" );
 	report( "done" );
 }

@@ -32,3 +32,38 @@ maps\_mw2coop::players_attackeraccuracy( 0 );
 	foreach ( mw2coop_player in level.players )
 		mw2coop_player thread player_riotshield_threatbias();
 @@@ end
+
+4. The explosion in the night-vision hallway after the cell block (gulag_rappel; night audit 2026-11-17) knocks down every player in its
+   earthquake (5000 units from player 1): the shell shock, prone and the rumble. Player 2 stayed up and unshocked.
+@@@ subst gulag_rappel
+level.player delayCall( 0.5, ::ShellShock, "gulag_attack", 5, false );
+	level.player delayCall( 0.6, ::setstance, "prone" );
+@@@ to
+foreach ( mw2coop_player in level.players )
+	{
+		if ( Distance( mw2coop_player.origin, level.player.origin ) > 5000 )
+			continue;
+		mw2coop_player delayCall( 0.5, ::ShellShock, "gulag_attack", 5, false );
+		mw2coop_player delayCall( 0.6, ::setstance, "prone" );
+		if ( mw2coop_player != level.player )
+		{
+			mw2coop_player PlayRumbleLoopOnEntity( "damage_heavy" );
+			mw2coop_player delayCall( 2, ::StopRumble, "damage_heavy" );
+		}
+	}
+@@@ end
+
+5. The armory fight's breather (gulag_armory): random bullets miss both players while the level saves, not player 1 alone; their
+   accuracy against them goes with maps\_utility::set_player_attacker_accuracy (_utility.gsc.patch hunk 8).
+@@@ subst gulag_armory
+level.player.ignorerandombulletdamage = true;
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player.ignorerandombulletdamage = true;
+@@@ end
+@@@ subst gulag_armory
+level.player.ignorerandombulletdamage = false;
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player.ignorerandombulletdamage = false;
+@@@ end

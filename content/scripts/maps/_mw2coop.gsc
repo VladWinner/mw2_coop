@@ -746,10 +746,11 @@ sync_weapons()
 			if ( swapped )
 				state( "player 1 swapped a weapon on the ground: his own (player 2 keeps his)" );
 		}
-		if ( level.mw2coop_weapon_sync != "own" && !swapped && !is_downed( level.player ) && !is_downed( level.player2 ) )
+		downed = is_downed( level.player ) || is_downed( level.player2 );
+		if ( level.mw2coop_weapon_sync != "own" && !swapped && !downed )
 		{
 			foreach ( weapon in now1 )
-				if ( !is_in_array( prev1, weapon ) && !level.player2 HasWeapon( weapon ) && !own_weapon_busy( weapon ) )
+				if ( !is_in_array( prev1, weapon ) && !level.player2 HasWeapon( weapon ) && !own_weapon_busy( weapon ) && !forced_pistol( level.player, weapon ) )
 					give_weapon( level.player2, weapon );
 			if ( level.mw2coop_weapon_sync == "both" )
 				foreach ( weapon in now2 )
@@ -782,9 +783,21 @@ sync_weapons()
 		}
 		else
 			level.mw2coop_empty_hands = 0;
-		prev1 = level.player GetWeaponsListAll();
-		prev2 = level.player2 GetWeaponsListAll();
+		// While someone is down the comparison waits (the revive system's pistol comes and goes meanwhile): what the level gave or took in the
+		// meantime is mirrored once both are up. Before, the lists were refreshed anyway and such a change never reached player 2 (night audit
+		// 2026-11-17, GSC-3).
+		if ( !downed )
+		{
+			prev1 = level.player GetWeaponsListAll();
+			prev2 = level.player2 GetWeaponsListAll();
+		}
 	}
+}
+
+// The pistol the revive system hands a downed player who has none (maps\_coop player_coop_force_switch_to_pistol), not a weapon of the level's.
+forced_pistol( player, weapon )
+{
+	return isdefined( player.forced_pistol ) && player.forced_pistol == weapon;
 }
 
 // --------------------------------------------------------------------------------------------
@@ -1462,8 +1475,14 @@ player_gameskill()
 // hit (QA pvp0: 100 to 92), which is given back.
 friendly_fire_setting()
 {
+	// a saved dvar outlives the level: it is set at every level start either way. Off was set and never undone, so friendly fire stayed off in an
+	// "on" session played after an "off" one, and a restart during Team Player's ride (maps\_mw2coop_roadkill ride_peace sets 0 until the ride
+	// ends) left it at 0 (night audit 2026-11-17, GSC-4).
 	if ( GetDvar( "mw2coop_ff" ) != "0" )
+	{
+		SetSavedDvar( "g_friendlyfireDamageScale", 1 );
 		return;
+	}
 	SetSavedDvar( "g_friendlyfireDamageScale", 0 );
 	foreach ( player in level.players )
 		player thread give_back_partner_damage();
@@ -1928,4 +1947,108 @@ hint_is_own( hint )
 	if ( isdefined( level.mw2coop_hint_own[ hint ] ) )
 		return true;
 	return IsSubStr( hint, "_player1" ) || IsSubStr( hint, "_player2" ) || IsSubStr( hint, "mineavoid_hint" );
+}
+
+// --------------------------------------------------------------------------------------------
+// Night audit of 2026-11-17 (every place where the game's code is tied to one player): helpers for the patches that make those places per player.
+
+// maps\_utility helpers that act on "the player" (set_player_attacker_accuracy(), ...) fall back to player 1 when they are called on the level or on an
+// entity that is no player (get_player_from_self()). Such a call is about the scene, which both players are in: true when it should be done to both.
+// A call made on one player stays his.
+for_both_players( caller )
+{
+	if ( !is_campaign_coop() || !isdefined( level.player2 ) )
+		return false;
+	return !isdefined( caller ) || !is_in_array( level.players, caller );
+}
+
+// A level that waits for "the player" to throw a grenade (level.player waittill( "grenade_fire" ), e.g. the smoke that marks Wolverines' BMP) waits for
+// either player's. Returns a struct: .grenade, .weapon and .player of the first throw (of that weapon, when one is named).
+any_player_grenade_fire( weapon_name )
+{
+	relay = SpawnStruct();
+	foreach ( player in level.players )
+		player thread grenade_fire_relay( relay, weapon_name );
+	relay waittill( "mw2coop_grenade", grenade, weapon, player );
+	relay notify( "mw2coop_done" );
+	result = SpawnStruct();
+	result.grenade = grenade;
+	result.weapon = weapon;
+	result.player = player;
+	return result;
+}
+
+grenade_fire_relay( relay, weapon_name )
+{
+	relay endon( "mw2coop_done" );
+	self endon( "death" );
+	for ( ;; )
+	{
+		self waittill( "grenade_fire", grenade, weapon );
+		if ( !isdefined( weapon_name ) || weapon == weapon_name )
+		{
+			relay notify( "mw2coop_grenade", grenade, weapon, self );
+			return;
+		}
+	}
+}
+
+// The highest ammo stock of a weapon any player has (a level that asks whether "the player" still has smoke or C4).
+players_ammo_stock( weapon )
+{
+	best = 0;
+	foreach ( player in level.players )
+	{
+		n = player GetWeaponAmmoStock( weapon );
+		if ( n > best )
+			best = n;
+	}
+	return best;
+}
+
+// A free place for a player beside a spot where a scene puts the other player (a view node): 48 units to its right or left or behind it (the
+// choice of teleport_to_partner), with floor at about its height and room around it; the spot itself when nothing near is free.
+free_spot_beside( origin, angles, ignore_ent )
+{
+	yaw = ( 0, angles[ 1 ], 0 );
+	forward = AnglesToForward( yaw );
+	right = AnglesToRight( yaw );
+	offsets = [];
+	offsets[ offsets.size ] = right * 48;
+	offsets[ offsets.size ] = right * -48;
+	offsets[ offsets.size ] = forward * -48;
+	offsets[ offsets.size ] = right * 64 + forward * -48;
+	offsets[ offsets.size ] = right * -64 + forward * -48;
+	offsets[ offsets.size ] = forward * -96;
+	chest = origin + ( 0, 0, 48 );
+	best = undefined;
+	best_open = -1;
+	foreach ( offset in offsets )
+	{
+		spot = origin + offset;
+		if ( !BulletTracePassed( chest, spot + ( 0, 0, 48 ), false, ignore_ent ) )
+			continue;
+		ground = PlayerPhysicsTrace( spot + ( 0, 0, 48 ), spot - ( 0, 0, 96 ) );
+		if ( abs( ground[ 2 ] - origin[ 2 ] ) > 40 || spot_stuck( ground ) )
+			continue;
+		open = open_sides( ground );
+		if ( open >= 5 )
+			return ground;
+		if ( open > best_open )
+		{
+			best = ground;
+			best_open = open;
+		}
+	}
+	if ( isdefined( best ) )
+		return best;
+	return origin;
+}
+
+// A level's slowed walk for "the player" (maps\_utility blend_movespeedscale) set for both players: add_func() of a level's waits calls it on the
+// level (Second Sun's lobby and parking deck).
+players_blend_movespeedscale( scale, time )
+{
+	foreach ( player in level.players )
+		player blend_movespeedscale( scale, time );
 }

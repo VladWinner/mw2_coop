@@ -154,3 +154,24 @@ display_hint_timeout( hint, timeout, parm1, parm2, parm3 )
 	if ( player == level.player && isdefined( level.player2 ) && maps\_mw2coop::is_campaign_coop() && !maps\_mw2coop::hint_is_own( hint ) )
 		level.player2 thread display_hint_timeout( hint, timeout, parm1, parm2, parm3 );
 @@@ end
+
+8. set_player_attacker_accuracy() called on the level, not on a player, sets it for both players: the Gulag armory and Team Player's
+   ride, dismount and Shepherd's scene protect "the player" with it, and get_player_from_self() gave player 1 alone (player 2 kept
+   his full accuracy-against while player 1 was safe). A call on one player stays his.
+@@@ replace
+set_player_attacker_accuracy( val )
+{
+	// sets player attackeraccuracy
+	player = get_player_from_self();
+@@@ with
+set_player_attacker_accuracy( val )
+{
+	// sets player attackeraccuracy
+	if ( maps\_mw2coop::for_both_players( self ) )
+	{
+		foreach ( mw2coop_player in level.players )
+			mw2coop_player set_player_attacker_accuracy( val );
+		return;
+	}
+	player = get_player_from_self();
+@@@ end

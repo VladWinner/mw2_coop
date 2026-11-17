@@ -118,3 +118,45 @@ within_fov( level.player.origin, level.player getPlayerAngles(), self.origin, le
 @@@ to
 maps\_mw2coop::any_player_sees( self, level.cosine[ "60" ] )
 @@@ end
+
+7. The smoke on the BMP that rolls up to Nate's (the "house destroyer", night audit 2026-11-17): the level waited for player 1's smoke
+   grenade only (wait_till_btr_smoked, watch_for_smoke_throws), so player 2's smoke on the BMP did nothing and the section waited for
+   player 1. Either player's throw counts now (maps\_mw2coop::any_player_grenade_fire); the nag asks for a throw while either player
+   has a smoke grenade, and the "get smoke" hint goes away by the smoke of the player who sees it.
+@@@ subst wait_till_btr_smoked
+level.player waittill ( "grenade_fire", grenade, weaponName );
+@@@ to
+mw2coop_throw = maps\_mw2coop::any_player_grenade_fire();
+		grenade = mw2coop_throw.grenade;
+		weaponName = mw2coop_throw.weapon;
+@@@ end
+@@@ subst watch_for_smoke_throws
+level.player waittill ( "grenade_fire", grenade, weaponName );
+@@@ to
+mw2coop_throw = maps\_mw2coop::any_player_grenade_fire();
+		grenade = mw2coop_throw.grenade;
+		weaponName = mw2coop_throw.weapon;
+@@@ end
+@@@ subst dialog_semtex_that_bmp
+player_has_semtex = level.player GetWeaponAmmoStock( "smoke_grenade_american" );
+@@@ to
+player_has_semtex = maps\_mw2coop::players_ammo_stock( "smoke_grenade_american" );
+@@@ end
+@@@ subst should_break_get_smoke
+level.player
+@@@ to
+self
+@@@ end
+
+8. The Predator hint against the BMPs and the Stinger's aim-down-the-sight hint (shown to both players) go away by the action of the
+   player who sees them; they read player 1's weapon, flight and aim (night audit 2026-11-17).
+@@@ subst should_break_use_drone_vs_bmps
+level.player
+@@@ to
+self
+@@@ end
+@@@ subst should_break_ads_with_stinger
+level.player
+@@@ to
+self
+@@@ end

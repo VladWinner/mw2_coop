@@ -191,3 +191,140 @@ player_gets_on_turret()
 
 		maps\_mw2coop::players_threatbias( 150 );
 @@@ end
+
+12. The protection of "the player" while he cannot fight back covers both players (night audit 2026-11-17): near the
+   commanders at the start (protect_player_while_scene_is_active, player_is_protected_near_commanders: random bullets miss),
+   in red-flashing health on the ride (player_doesnt_die_in_red_flashing: enemies stop hitting him), the full health right
+   after the ride (player_gets_max_health_for_dismount) and the return to normal afterwards (player_becomes_normal_gameskill).
+   Their accuracy against him goes with maps\_utility::set_player_attacker_accuracy (_utility.gsc.patch hunk 8).
+@@@ replace
+		set_player_attacker_accuracy( 0 );
+		level.player.IgnoreRandomBulletDamage = true;
+@@@ with
+		set_player_attacker_accuracy( 0 );
+		foreach ( mw2coop_player in level.players )
+			mw2coop_player.IgnoreRandomBulletDamage = true;
+@@@ end
+
+   (same)
+@@@ replace
+		maps\_gameskill::updateAllDifficulty();
+		level.player.IgnoreRandomBulletDamage = false;
+	}
+@@@ with
+		maps\_gameskill::updateAllDifficulty();
+		foreach ( mw2coop_player in level.players )
+			mw2coop_player.IgnoreRandomBulletDamage = false;
+	}
+@@@ end
+
+   (same)
+@@@ replace
+	protect_player_while_scene_is_active();
+	maps\_gameskill::updateAllDifficulty();
+	level.player.IgnoreRandomBulletDamage = false;
+@@@ with
+	protect_player_while_scene_is_active();
+	maps\_gameskill::updateAllDifficulty();
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player.IgnoreRandomBulletDamage = false;
+@@@ end
+
+   (same)
+@@@ replace
+		if ( level.player ent_flag( "player_has_red_flashing_overlay" ) )
+			maps\_mw2coop::players_attackeraccuracy( 0 );
+@@@ with
+		foreach ( mw2coop_player in level.players )
+			if ( mw2coop_player ent_flag( "player_has_red_flashing_overlay" ) )
+				mw2coop_player.attackeraccuracy = 0;
+@@@ end
+
+   (same)
+@@@ replace
+		level.player.health = level.player.maxhealth;
+@@@ with
+		foreach ( mw2coop_player in level.players )
+			if ( IsAlive( mw2coop_player ) && !maps\_mw2coop::is_downed( mw2coop_player ) )
+				mw2coop_player.health = mw2coop_player.maxhealth;
+@@@ end
+
+   (same)
+@@@ replace
+	level.player recover_random_bullet_damage();
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player recover_random_bullet_damage();
+@@@ end
+
+   (same)
+@@@ replace
+recover_random_bullet_damage()
+{
+	level.player.IgnoreRandomBulletDamage = false;
+@@@ with
+recover_random_bullet_damage()
+{
+	self.IgnoreRandomBulletDamage = false;
+@@@ end
+
+13. Exposing himself on the street in front of the school (handle_player_exposing_himself_in_front_of_school) is still
+   player 1's rule, as before: set_player_attacker_accuracy() on the level now sets both players (hunk 12), and the rule
+   must not punish player 2 for player 1's move. Unknown which player the flag's trigger saw.
+@@@ replace
+		set_player_attacker_accuracy( 1000 );
+@@@ with
+		level.player set_player_attacker_accuracy( 1000 );
+@@@ end
+
+14. The flash-bang and grenade-launcher lessons (shown to both players) go away by the throw or the weapon of the player who
+   sees them: their break tests read player 1's (night audit 2026-11-17). The level also calls player_learned_m203() on itself
+   (riverbank_player_learns_m203): that call stays player 1's (get_player_from_self).
+@@@ replace
+	level.player.flash_ammo = level.player GetWeaponAmmoStock( "flash_grenade" );
+@@@ with
+	foreach ( mw2coop_player in level.players )
+		mw2coop_player.flash_ammo = mw2coop_player GetWeaponAmmoStock( "flash_grenade" );
+@@@ end
+
+   (same)
+@@@ replace
+player_learned_flash()
+{
+	flash_ammo = level.player GetWeaponAmmoStock( "flash_grenade" );
+	if ( flash_ammo <= 0 )
+		return true;
+
+	return level.player.flash_ammo > flash_ammo;
+}
+@@@ with
+player_learned_flash()
+{
+	mw2coop_player = get_player_from_self();
+	flash_ammo = mw2coop_player GetWeaponAmmoStock( "flash_grenade" );
+	if ( flash_ammo <= 0 )
+		return true;
+
+	return mw2coop_player.flash_ammo > flash_ammo;
+}
+@@@ end
+
+   (same)
+@@@ replace
+player_learned_m203()
+{
+	if ( flag( "leaving_riverbank" ) )
+		return true;
+		
+	return level.player getcurrentweapon() == "m203_m4_eotech";
+}
+@@@ with
+player_learned_m203()
+{
+	mw2coop_player = get_player_from_self();
+	if ( flag( "leaving_riverbank" ) )
+		return true;
+		
+	return mw2coop_player getcurrentweapon() == "m203_m4_eotech";
+}
+@@@ end

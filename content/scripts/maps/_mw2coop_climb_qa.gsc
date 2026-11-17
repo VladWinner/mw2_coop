@@ -325,5 +325,8 @@ climblb()
 		SetDvar( pad, "0 0 0 0 0 0 0 0" );
 		wait 2;
 	}
+	// both on the wall, both looking at it: the composed frame (each half: his own arms and picks, the partner at his side)
+	SetDvar( "mw2coop_qa_frame", "climb-both" );
+	wait 1;
 	maps\_mw2coop_qa::report( "done" );
 }

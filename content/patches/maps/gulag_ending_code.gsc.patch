@@ -49,3 +49,69 @@ level.player
 @@@ to
 level.mw2coop_cavein_player
 @@@ end
+
+2. The earthquakes on the way out (stumble_trigger_think) and the fall in the cafeteria for both players (night audit 2026-11-17;
+   maps\_mw2coop_gulag::fall_*): the stumbles tilt both views (both stand on the same ground: the shared ground reference), and in the
+   cafeteria each player is knocked down: rumble, his own fall turned from where he looks, a death shield, a quarter walk speed, health
+   down to 5, the blur, prone and a moment of black. Before, player 2 stood on unhurt at full speed and only his weapons went with
+   player 1's.
+@@@ subst stumble_trigger_think
+level.player PlayerSetGroundReferenceEnt( player_ent );
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player PlayerSetGroundReferenceEnt( player_ent );
+@@@ end
+@@@ subst stumble_trigger_think
+level.player PlayRumbleOnEntity( "light_3s" );
+	level.player delaycall( 1.5, ::PlayRumbleOnEntity, "heavy_2s" );
+@@@ to
+foreach ( mw2coop_player in level.players )
+	{
+		mw2coop_player PlayRumbleOnEntity( "light_3s" );
+		mw2coop_player delaycall( 1.5, ::PlayRumbleOnEntity, "heavy_2s" );
+	}
+@@@ end
+@@@ subst stumble_trigger_think
+level.player disableweapons();
+@@@ to
+level.player disableweapons();
+	maps\_mw2coop_gulag::fall_partner_hit( eq_view_roller, ::player_blur_manager );
+@@@ end
+@@@ subst stumble_trigger_think
+eq_view_roller RotateTo( ent.angles, timer,
+@@@ to
+maps\_mw2coop_gulag::fall_rotate( eq_view_roller, ent.angles, timer,
+@@@ end
+@@@ subst stumble_trigger_think
+level.player setstance( "prone" );
+@@@ to
+foreach ( mw2coop_player in level.players )
+		mw2coop_player setstance( "prone" );
+@@@ end
+@@@ subst stumble_trigger_think
+black_overlay.alpha = 1;
+@@@ to
+black_overlay.alpha = 1;
+	maps\_mw2coop_gulag::fall_partner_black( true );
+@@@ end
+@@@ subst stumble_trigger_think
+level.player allowcrouch( true );
+	level.player allowstand( true );
+@@@ to
+foreach ( mw2coop_player in level.players )
+	{
+		mw2coop_player allowcrouch( true );
+		mw2coop_player allowstand( true );
+	}
+@@@ end
+@@@ subst stumble_trigger_think
+black_overlay destroy();
+@@@ to
+black_overlay destroy();
+	maps\_mw2coop_gulag::fall_partner_black( false );
+@@@ end
+@@@ subst player_blur_manager
+level.player
+@@@ to
+self
+@@@ end

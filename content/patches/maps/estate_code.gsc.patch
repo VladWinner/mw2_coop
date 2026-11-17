@@ -36,3 +36,206 @@ level.player freezeControls( false );
 @@@ to
 foreach ( mw2coop_player in level.players ) mw2coop_player freezeControls( false );
 @@@ end
+
+3. The bouncing-betty ambush for both players (maps\_mw2coop_estate): each player gets a mine of his own
+   in front of him (playerFovGroundSpot for that player), its hint, its rule (prone: it throws him away from
+   it, with its shock and the prone-only moment; standing: it kills him) and the slow motion's walk speed.
+   Before, only player 1's mine existed: player 2 walked through the ambush unthrown, unshocked, at full
+   speed, and could stand.
+@@@ subst bouncing_betty_slow_mo
+level.player SetMoveSpeedScale( slomobreachplayerspeed );
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player SetMoveSpeedScale( slomobreachplayerspeed );
+@@@ end
+@@@ subst bouncing_betty_slow_mo
+level.player SetMoveSpeedScale( 1.0 );
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player SetMoveSpeedScale( 1.0 );
+@@@ end
+@@@ subst playerFovGroundSpot
+level.player
+@@@ to
+mw2coop_player
+@@@ end
+@@@ subst playerFovGroundSpot
+player_can_see_origin( alt.origin + ( 0, 0, 6 ) )
+@@@ to
+maps\_mw2coop_estate::sees_origin( mw2coop_player, alt.origin + ( 0, 0, 6 ) )
+@@@ end
+@@@ subst playerFovGroundSpot
+playerFovGroundSpot( specialPlayerCase )
+{
+
+@@@ to
+playerFovGroundSpot( specialPlayerCase, mw2coop_player )
+{
+	if ( !isdefined( mw2coop_player ) )
+		mw2coop_player = level.player;
+
+@@@ end
+@@@ subst bouncing_betty_activate
+thread bouncing_betty_hintprint();
+@@@ to
+maps\_mw2coop_estate::partner_mine();
+	thread bouncing_betty_hintprint();
+@@@ end
+@@@ subst bouncing_betty_activate
+level.player allowSprint( false );
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player allowSprint( false );
+@@@ end
+@@@ subst bouncing_betty_hintprint
+level.player thread display_hint(
+@@@ to
+foreach ( mw2coop_player in level.players ) mw2coop_player thread display_hint(
+@@@ end
+@@@ subst bouncing_betty_fx
+level.player
+@@@ to
+mw2coop_player
+@@@ end
+@@@ subst bouncing_betty_fx
+bouncing_betty_fx( specialPlayerCase, gameplayOn, skipFX )
+{
+
+@@@ to
+bouncing_betty_fx( specialPlayerCase, gameplayOn, skipFX, mw2coop_player )
+{
+	if ( !isdefined( mw2coop_player ) )
+		mw2coop_player = level.player;
+
+@@@ end
+@@@ subst bouncing_betty_fx
+friendlies = getaiarray( "allies" );
+@@@ to
+friendlies = getaiarray( "allies" );
+		if ( mw2coop_player != level.player )
+			friendlies = [];
+@@@ end
+@@@ subst bouncing_betty_fx
+flag_set( "mine_throw_player" );
+@@@ to
+mw2coop_player.mw2coop_mine_throw = true;
+			flag_set( "mine_throw_player" );
+@@@ end
+@@@ subst bouncing_betty_fx
+if( gameplay )
+		{
+			dist = length( mw2coop_player.origin - self.origin );
+@@@ to
+if( gameplay && maps\_mw2coop_estate::coop() )
+			maps\_mw2coop_estate::gameplay_mine_blast( self, explosion_org );
+		else if( gameplay )
+		{
+			dist = length( mw2coop_player.origin - self.origin );
+@@@ end
+@@@ subst bouncing_betty_gameplay
+level.player
+@@@ to
+mw2coop_player
+@@@ end
+@@@ subst bouncing_betty_gameplay
+self waittill ( "trigger" );
+@@@ to
+self waittill ( "trigger", mw2coop_player );
+		if ( !isdefined( mw2coop_player ) || !isplayer( mw2coop_player ) )
+			mw2coop_player = level.player;
+@@@ end
+@@@ subst bouncing_betty_throwplayer
+level.player
+@@@ to
+mw2coop_player
+@@@ end
+@@@ subst bouncing_betty_throwplayer
+flag_wait( "mine_throw_player" );
+@@@ to
+maps\_mw2coop_estate::throw_wait( mw2coop_player );
+@@@ end
+@@@ subst bouncing_betty_throwplayer
+thread bouncing_betty_shellshock();
+@@@ to
+thread bouncing_betty_shellshock( mw2coop_player );
+@@@ end
+@@@ subst bouncing_betty_throwplayer
+thread bouncing_betty_stances();
+@@@ to
+thread bouncing_betty_stances( mw2coop_player );
+@@@ end
+@@@ subst bouncing_betty_throwplayer
+thread ambush_fake_rpg_barrage();
+@@@ to
+if ( mw2coop_player == level.player )
+		thread ambush_fake_rpg_barrage();
+@@@ end
+@@@ subst bouncing_betty_throwplayer
+bouncing_betty_throwplayer( mineOrg )
+{
+
+@@@ to
+bouncing_betty_throwplayer( mineOrg, mw2coop_player )
+{
+	if ( !isdefined( mw2coop_player ) )
+		mw2coop_player = level.player;
+
+@@@ end
+@@@ subst bouncing_betty_shellshock
+bouncing_betty_shellshock()
+{
+
+@@@ to
+bouncing_betty_shellshock( mw2coop_player )
+{
+	if ( isdefined( mw2coop_player ) && mw2coop_player != level.player )
+	{
+		mw2coop_player maps\_mw2coop_estate::partner_mine_shock();
+		return;
+	}
+
+@@@ end
+@@@ subst bouncing_betty_stances
+level.player
+@@@ to
+mw2coop_player
+@@@ end
+@@@ subst bouncing_betty_stances
+bouncing_betty_stances()
+{
+
+@@@ to
+bouncing_betty_stances( mw2coop_player )
+{
+	if ( !isdefined( mw2coop_player ) )
+		mw2coop_player = level.player;
+
+@@@ end
+@@@ subst bouncing_betty_throwplayer
+flag_set( "bouncing_betty_player_released" );
+@@@ to
+flag_set( "bouncing_betty_player_released" );
+	mw2coop_player notify( "mw2coop_mine_released" );
+@@@ end
+@@@ subst bouncing_betty_stances
+flag_wait( "bouncing_betty_player_released" );
+@@@ to
+mw2coop_player waittill( "mw2coop_mine_released" );
+@@@ end
+
+4. The hint to go prone goes away by the stance of the player it is shown to (it read player 1's).
+@@@ subst should_break_mineavoid_hint
+level.player
+@@@ to
+self
+@@@ end
+
+5. The claymore hint (shown to both players) goes away when the player who sees it takes his claymores; the d-pad press it
+   also reads is a key of the local machine, kept for player 1 only (night audit 2026-11-17).
+@@@ subst should_break_claymore_hint
+weapon = level.player GetCurrentWeapon();
+@@@ to
+weapon = self GetCurrentWeapon();
+@@@ end
+@@@ subst should_break_claymore_hint
+if( !( level.player buttonpressed( "DPAD_RIGHT" ) ) )
+@@@ to
+if( self != level.player || !( level.player buttonpressed( "DPAD_RIGHT" ) ) )
+@@@ end
