@@ -8,7 +8,8 @@ https://github.com/stxlvn/mw2_enhanced
 
 Нужно:
 - Windows 10/11, MW2 (2009) в Steam (appid 10180), 64-битная сборка (обновление сентября
-  2026). На другой сборке мод сам выключается и ничего не делает.
+  2026). На другой сборке мод ищет свои адреса по сигнатурам и работает, если нашёл 95%
+  из них; иначе сам выключается и ничего не делает.
 - Игра у каждого из двух игроков, и ОДИНАКОВЫЕ файлы мода у обоих (иначе рассинхрон).
 - Хосту: открытый UDP-порт 28960 (проброс на роутере) или общая локальная сеть / VPN
   (Radmin VPN, ZeroTier и т. п.).
@@ -70,7 +71,8 @@ Two-player co-op for the MW2 (2009) campaign on the current 64-bit Steam build. 
 piece is reworked for two and it is playable; known issues are in README.md on GitHub.
 
 Needs: Windows 10/11; MW2 (2009) on Steam (appid 10180), the 64-bit build (September 2026
-update; on any other build the mod switches itself off); the game and the SAME mod files on
+update; another build: the mod finds its addresses by signatures and runs when it finds 95%
+of them, else it switches itself off); the game and the SAME mod files on
 both PCs; for the host, UDP port 28960 reachable (port forward) or a shared LAN/VPN.
 
 Install (both players): Steam -> Library -> Modern Warfare 2 -> Manage -> Browse local files
