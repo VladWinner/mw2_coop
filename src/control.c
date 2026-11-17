@@ -578,6 +578,25 @@ static void run_line(char *line)
 		game_xuid_add(strtoll(line + 10, NULL, 10));
 		return;
 	}
+#ifdef _WIN64
+	if (strcmp(line, "!objdump") == 0) { // QA: the level's objectives as the server keeps them, configstrings 0x10 + n (objective_position etc. write "state", "org",
+		// "entNumPlusOne" ...: rva 0x199450), read with SV_GetConfigstring (rva 0x232190). From this thread (QA only: the server may change one meanwhile).
+		uint8_t *img = (uint8_t *)GetModuleHandleA(NULL);
+		void (*get_cs)(int, char *, int) = (void (*)(int, char *, int))(img + XR(0x232190));
+		static char cs[1024];
+		int shown = 0;
+		for (int i = 0; i < 32; i++) {
+			cs[0] = 0;
+			get_cs(0x10 + i, cs, sizeof(cs));
+			if (cs[0]) {
+				log_printf("objdump: objective %d: %.300s", i, cs);
+				shown++;
+			}
+		}
+		log_printf("objdump: %d objective(s)", shown);
+		return;
+	}
+#endif
 	if (strcmp(line, "!cmds") == 0) {
 		game_log_commands();
 		return;

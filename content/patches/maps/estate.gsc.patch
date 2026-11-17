@@ -292,3 +292,18 @@ thread bouncing_betty_throwplayer( level.player.origin );
 foreach ( mw2coop_player in level.players )
 		thread bouncing_betty_throwplayer( mw2coop_player.origin, mw2coop_player );
 @@@ end
+
+6. The objectives also come right when the level starts at a later start point (a co-op restart at a checkpoint or a Continue):
+   objectives() waited for deploy_house_defense_jeeps and ghost_gives_regroup_order, which no start function sets, and stood on its
+   first objective ("Assassinate Makarov", at the house) for the rest of the level (owner, 2026-11-17: after the DSM the marker stayed at
+   the house). Each of those waits also ends at the flag of the next step, which every later start sets.
+@@@ subst objectives
+flag_wait( "deploy_house_defense_jeeps" );
+@@@ to
+flag_wait_any( "deploy_house_defense_jeeps", "house_exterior_has_been_breached" );
+@@@ end
+@@@ subst objectives
+flag_wait( "ghost_gives_regroup_order" );
+@@@ to
+flag_wait_any( "ghost_gives_regroup_order", "house_briefing_is_over" );
+@@@ end

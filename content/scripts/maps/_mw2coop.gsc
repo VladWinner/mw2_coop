@@ -334,6 +334,7 @@ regroup_after_start()
 	restore_checkpoint_spot();
 	thread restore_ally_positions();
 	thread restore_weapons();
+	thread restore_flags();
 	for ( waited = 0; waited < 120; waited += 0.25 )
 	{
 		if ( level.player2 IsLinked() )
@@ -1000,6 +1001,7 @@ section_reached( name, leader, by_table )
 	SetDvar( "mw2coop_cp_pos", spot );
 	snapshot_allies();
 	snapshot_weapons( name );
+	snapshot_flags( name );
 	request( "checkpoint " + level.script + " " + name + " " + spot );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
@@ -1035,6 +1037,64 @@ snapshot_weapons( name )
 		}
 		SetDvar( "mw2coop_cp_w" + n, text );
 	}
+}
+
+// The level's flags at a checkpoint. A restart at a checkpoint runs the level's start function for it (a start point made for the developers), which sets the flags of
+// its own section only; the level's threads that run through the whole mission (objectives, dialogue, music, the next phase of a scene) wait on flags that a normal run
+// set long before, and stood still: the next phase did not come, a line was not said, an objective marker stayed where it had been (owner, 2026-11-17, Loose Ends:
+// after restarts at "escape" the marker stayed at the house: estate.gsc objectives() stopped at flag_wait( "deploy_house_defense_jeeps" ) on objective 1, at the house).
+// At the checkpoint the names of every set flag are kept (dvars mw2coop_cp_f0.. of 800 characters, mw2coop_cp_fn their count, mw2coop_cp_fname level and start point);
+// after the restart at that checkpoint the ones still clear are set again, as they were. [dvar mw2coop_cpflags 0: off]
+snapshot_flags( name )
+{
+	chunks = [];
+	text = "";
+	count = 0;
+	if ( isdefined( level.flag ) )
+	{
+		foreach ( flag_name, value in level.flag )
+		{
+			if ( !isdefined( value ) || !value )
+				continue;
+			if ( text.size + flag_name.size + 1 > 800 )
+			{
+				chunks[ chunks.size ] = text;
+				text = "";
+			}
+			text += flag_name + " ";
+			count++;
+		}
+	}
+	if ( text != "" )
+		chunks[ chunks.size ] = text;
+	foreach ( i, chunk in chunks )
+		SetDvar( "mw2coop_cp_f" + i, chunk );
+	SetDvar( "mw2coop_cp_fn", chunks.size );
+	SetDvar( "mw2coop_cp_fname", level.script + " " + name );
+	level.mw2coop_cp_flags_kept = count;
+}
+
+restore_flags()
+{
+	level endon( "mw2coop_level_end" );
+	if ( GetDvar( "mw2coop_cpflags" ) == "0" || !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_fname" ) != level.script + " " + level.start_point )
+		return;
+	wait 0.5;	// after the start function (its spawns and its own flags)
+	set = 0;
+	kept = 0;
+	n = GetDvarInt( "mw2coop_cp_fn" );
+	for ( i = 0; i < n; i++ )
+	{
+		foreach ( flag_name in StrTok( GetDvar( "mw2coop_cp_f" + i ), " " ) )
+		{
+			kept++;
+			if ( !isdefined( level.flag[ flag_name ] ) || level.flag[ flag_name ] )
+				continue;
+			flag_set( flag_name );
+			set++;
+		}
+	}
+	state( "restart at " + level.start_point + ": " + set + " of the " + kept + " flags set at the checkpoint were clear and are set again" );
 }
 
 restore_weapons()

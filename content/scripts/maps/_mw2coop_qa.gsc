@@ -302,6 +302,9 @@ main()
 		case "cpweapons":
 			cpweapons();
 			break;
+		case "cpflags":
+			cpflags();
+			break;
 		case "swaphint":
 			swaphint();
 			break;
@@ -1682,6 +1685,56 @@ cpweapons()
 	wait 1;
 	SetDvar( "mw2coop_qa_failed", "1" );
 	report( "cpweapons: failing the mission" );
+	level thread maps\_mw2coop::mission_failed();
+	wait 30;
+}
+
+// cpflags (estate, start point "house_defense", MW2COOP_PRE "set mw2coop_qa_failed 0"): the level's flags survive a restart at a checkpoint (maps\_mw2coop snapshot_flags /
+// restore_flags). Owner 2026-11-17: after restarts at "escape" the objective marker stayed at the house (estate.gsc objectives() waited for flags that the start function of
+// "escape" does not set). First run: the download is finished and the DSM taken (the level's own trigger), so the checkpoint "escape" is reached the normal way and keeps the
+// flags; the mission fails. After the restart at "escape" every flag objectives() waits on must be set.
+cpflags()
+{
+	common_checks();
+	// (deploy_house_defense_jeeps and ghost_gives_regroup_order are not set by the start functions of house_defense or escape: a run that began there never had them; the estate
+	// patch lets objectives() go on by the next step's flag instead. Read the objectives themselves with MW2COOP_MID "!objdump" after the restart.)
+	need = strtok( "print_first_objective house_exterior_has_been_breached house_interior_breaches_done all_enemies_killed_up_to_house_capture house_briefing_is_over download_started download_complete dsm_recovered", " " );
+	if ( GetDvar( "mw2coop_qa_failed" ) == "1" )
+	{
+		wait 3;
+		report( "cpflags after the restart at '" + level.start_point + "': checkpoint kept " + GetDvar( "mw2coop_cp_fn" ) + " chunk(s) for '" + GetDvar( "mw2coop_cp_fname" ) + "'" );
+		missing = "";
+		foreach ( name in need )
+			if ( !flag_exist( name ) || !flag( name ) )
+				missing += name + " ";
+		check( level.start_point == "escape", "the restart was at the checkpoint escape (" + level.start_point + ")" );
+		check( missing == "", "the flags the objectives wait on are set again (missing: '" + missing + "')" );
+		qa_shot( "afterrestart" );
+		SetDvar( "mw2coop_qa_phase", "done" );
+		report( "done" );
+		return;
+	}
+	wait 5;
+	missing = "";
+	foreach ( name in need )
+		if ( !flag_exist( name ) || !flag( name ) )
+			missing += name + " ";
+	report( "cpflags: at the start '" + level.start_point + "' these are clear: '" + missing + "'" );
+	flag_set( "download_started" );
+	wait 1;
+	flag_set( "download_complete" );
+	trig = GetEnt( "dsm_usetrigger", "targetname" );
+	for ( t = 0; t < 15 && !flag( "dsm_recovered" ); t++ )
+	{
+		wait 1;
+		trig notify( "trigger", level.player );
+	}
+	check( flag( "dsm_recovered" ), "the DSM was taken (" + t + " s)" );
+	wait 2;	// the checkpoint (maps\_mw2coop_checkpoints: dsm_recovered marks "escape")
+	report( "cpflags: checkpoint '" + GetDvar( "mw2coop_cp_fname" ) + "', " + level.mw2coop_cp_flags_kept + " flags kept in " + GetDvar( "mw2coop_cp_fn" ) + " chunk(s)" );
+	check( GetDvar( "mw2coop_cp_fname" ) == "estate escape", "the checkpoint escape was reached and kept the flags" );
+	SetDvar( "mw2coop_qa_failed", "1" );
+	report( "cpflags: failing the mission" );
 	level thread maps\_mw2coop::mission_failed();
 	wait 30;
 }
