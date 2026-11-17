@@ -98,3 +98,6 @@
 0xe7460 -> 0x22670    # the HUD type-13 callback thunk (a1 <lc>; mov [esp+4],eax; jmp): the 159 exe has two such thunks, the other is 0xe6a90 -> 0x97d40
 0x32f3ec -> 0x3323ec    # the renderer's view rectangle: the only reference is its getter "mov eax,x; ret" (official rva 0xa6fd0, 159 rva 0x53980), +0x3000 as the cgame data next to it
 0x12afc0 -> 0x12b6e0    # the engine's wait that runs the workers' jobs (predicate in ESI): 159 takes one stack argument more (its end-frame pushes 1); found through the call in the end-frame (official 0x50d682, 159 0x50ddb8)
+# split screen sound (2026-11-17), found by hand in the 159 exe (11 calls of the world sound start in each build, matched by their bytes):
+0x88796 -> 0xa6336    # the vehicle turret's spin loop: its call of the world sound start 0x66d250 (159 0x66f910); the surrounding 65 bytes match 46, no other call above 20
+0xd91d3 -> 0x26fcd3    # return address of the sound helper 0xd9190 (push 0 variant; 159 has it at 0x26fc90 with the same 0x3e bytes, the push 1 twin 0x18850 is 159 0x45ce0)

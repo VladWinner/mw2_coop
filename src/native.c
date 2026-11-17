@@ -10219,6 +10219,119 @@ static void aim_targets_update(void)
 	}
 }
 
+// Split screen: the sound mixer is one for both views. Its environment effects (the reverb room per priority) and its channel volumes (per priority) are set every frame
+// by the cgame of a player in a state that has them (the shell shock sound state, 32-bit VA 0x56deb0: environment priority 2 and channel volumes priority 4; the remote
+// camera, VA 0x570f00: priority 3) and deactivated every frame by the other view's cgame, whose player is not in that state. Second Sun's opening (player 1 dazed, "hands
+// up"): about 90 sets and 90 deactivations of priority 2 a second, so the mixer flipped between the muffled and the clear sound every frame (owner: "звук лагает", gone once
+// the hands go down; envlog QA 2026-11-17). Rule: a priority stays as the views that hold it want it. A view holds a priority while it sets it, and while it fades it out
+// (a deactivation with a fade time: the dazed player coming to, while the other view deactivated it at once every frame and the fade was lost). A view's deactivation is
+// dropped while the other view set the priority in the last 250 ms or fades it out; when both set it, or both fade it out, player 1's calls win. Single player passes
+// everything. [native] mixor=0 off; envlog=1 logs the calls that went through and the dropped ones every 5 s.
+enum { MIX_ENV, MIX_VOL };
+static void (*env_set_original)(int, const char *, float, float, int);
+static void (*env_off_original)(int, int);
+static void (*vol_set_original)(int, const void *, int);
+static void (*vol_off_original)(int, int);
+static DWORD mix_set_at[2][2][8], mix_fade_at[2][2][8]; // [kind][context][priority]: the tick of the view's last set / fading deactivation, 0 once it stopped holding
+static unsigned mix_n[2][4][8], mix_dropped[2];		 // envlog: [context][environment set, off, volumes set, off][priority] passed; dropped per context
+static void mix_report(void)
+{
+	static DWORD at;
+	if (!at)
+		at = GetTickCount();
+	if (GetTickCount() - at < 5000)
+		return;
+	at = GetTickCount();
+	static const char *const what[4] = {"env set", "env off", "vol set", "vol off"};
+	char line[600];
+	size_t n = (size_t)snprintf(line, sizeof(line), "native: envlog 5 s: dropped ctx0 %u ctx1 %u;", mix_dropped[0], mix_dropped[1]);
+	for (int c = 0; c < 2; c++)
+		for (int k = 0; k < 4; k++)
+			for (int p = 0; p < 8; p++)
+				if (mix_n[c][k][p] && n < sizeof(line))
+					n += (size_t)snprintf(line + n, sizeof(line) - n, " ctx%d %s %d: %u", c, what[k], p, mix_n[c][k][p]);
+	log_printf("%s", line);
+	memset(mix_n, 0, sizeof(mix_n));
+	memset(mix_dropped, 0, sizeof(mix_dropped));
+}
+static int mix_recent(DWORD at, DWORD now)
+{
+	return at && now - at < 250;
+}
+// set: 1 for a set, 0 for a deactivation with this fade time (ms)
+static int mix_pass(int kind, int prio, int set, int fade)
+{
+	const int me = ctx_current == 1;
+	const unsigned p = (unsigned)prio & 7;
+	int pass = 1;
+	if (native_active && (unsigned)prio < 8 && CFG_ONCE("mixor", 1)) {
+		const DWORD now = GetTickCount(), stamp = now ? now : 1;
+		const int other_sets = mix_recent(mix_set_at[kind][!me][p], now), other_fades = mix_recent(mix_fade_at[kind][!me][p], now);
+		if (set) {
+			mix_set_at[kind][me][p] = stamp, mix_fade_at[kind][me][p] = 0;
+			pass = !(me && other_sets);
+		} else {
+			mix_set_at[kind][me][p] = 0, mix_fade_at[kind][me][p] = fade > 0 ? stamp : 0;
+			pass = !other_sets && !(other_fades && (me || fade <= 0));
+		}
+	}
+	if (CFG_ONCE("envlog", 0)) {
+		if (pass)
+			mix_n[me][kind * 2 + !set][p]++;
+		else
+			mix_dropped[me]++;
+		mix_report();
+	}
+	return pass;
+}
+static void mix_level_load(void)
+{
+	memset(mix_set_at, 0, sizeof(mix_set_at));
+	memset(mix_fade_at, 0, sizeof(mix_fade_at));
+}
+static void env_set_hook(int prio, const char *room, float dry, float wet, int fade)
+{
+	if (mix_pass(MIX_ENV, prio, 1, fade))
+		env_set_original(prio, room, dry, wet, fade);
+}
+static void env_off_hook(int prio, int fade)
+{
+	if (mix_pass(MIX_ENV, prio, 0, fade))
+		env_off_original(prio, fade);
+}
+static void vol_set_hook(int prio, const void *volumes, int fade)
+{
+	if (mix_pass(MIX_VOL, prio, 1, fade))
+		vol_set_original(prio, volumes, fade);
+}
+static void vol_off_hook(int prio, int fade)
+{
+	if (mix_pass(MIX_VOL, prio, 0, fade))
+		vol_off_original(prio, fade);
+}
+#ifdef _WIN64
+// the 64-bit mixer functions (the shell shock sound state rva 0xb7de0 calls all four; environment set 0x23d140, channel volumes set 0x23d050, environment deactivate
+// 0x2381a0). The channel volumes' deactivation 0x2380b0 starts with a rip-relative test, so its six callers (the cgame's sound states) are hooked instead.
+static void mix_install64(void)
+{
+	static const uint8_t env_set_bytes[14] = {0x40, 0x57, 0x48, 0x83, 0xec, 0x40, 0x0f, 0x29, 0x74, 0x24, 0x30, 0x0f, 0x28, 0xf3}; // push rdi; sub rsp,0x40; movaps [rsp+0x30],xmm6; movaps xmm6,xmm3
+	static const uint8_t vol_set_bytes[14] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x63, 0xd9, 0x4c, 0x8b, 0xca, 0x8d, 0x43, 0xff}; // mov [rsp+8],rbx; movsxd rbx,ecx; mov r9,rdx; lea eax,[rbx-1]
+	static const uint8_t env_off_bytes[16] = {0x40, 0x57, 0x48, 0x83, 0xec, 0x20, 0x44, 0x8d, 0x41, 0xff, 0x8b, 0xfa, 0x41, 0x83, 0xf8, 0x02}; // push rdi; sub rsp,0x20; lea r8d,[rcx-1]; mov edi,edx; cmp r8d,2
+	const uint32_t vol_off_calls[6] = {XR(0xb4d1d), XR(0xb54ea), XR(0xb7ca1), XR(0xb7d39), XR(0xb7ed2), XR(0xc12ca)}; // (XR literals: the signature generator collects them)
+	const int a = jhook_function(base + XR(0x23d140), env_set_bytes, sizeof(env_set_bytes), (void *)env_set_hook, (void **)&env_set_original);
+	const int b = a && jhook_function(base + XR(0x2381a0), env_off_bytes, sizeof(env_off_bytes), (void *)env_off_hook, (void **)&env_off_original);
+	int c = jhook_function(base + XR(0x23d050), vol_set_bytes, sizeof(vol_set_bytes), (void *)vol_set_hook, (void **)&vol_set_original), sites = 0;
+	if (c)
+		for (size_t i = 0; i < 6; i++) {
+			uint8_t *at = base + vol_off_calls[i];
+			if (vol_off_calls[i] && at[0] == 0xe8 && at + 5 + *(const int32_t *)(at + 1) == base + XR(0x2380b0) && jhook_call(at, (void *)vol_off_hook, (void **)&vol_off_original))
+				sites++;
+		}
+	log_printf("native: the sound mixer's environment %s, its channel volumes %s (deactivations at %d of 6 calls)", b ? "is held while either view holds it" : "is not hooked (rva 0x23d140 / 0x2381a0)",
+		   c ? "too" : "are not hooked (rva 0x23d050)", sites);
+}
+#endif
+
 #ifndef _WIN64
 // ---- 32 bits: the stubs the register-convention hooks go through, and the wrappers that call the originals (a C function cannot receive ESI or EAX/EBX)
 void n32_mouse_hook(intptr_t state, float *x, float *y);
@@ -10620,6 +10733,21 @@ static int call_of32(const uint8_t *site, const uint8_t *target)
 {
 	return site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == target;
 }
+// the mixer's environment and channel volume setters (see mix_pass)
+static void mix_install32(void)
+{
+	uint8_t want_flag[8] = {0x51, 0x80, 0x3d, 0, 0, 0, 0, 0x00}; // push ecx; cmp byte [sound off flag],0 (environment set and channel volumes off)
+	const uint32_t off_flag = XV(0x1bf0b50);
+	memcpy(want_flag + 3, &off_flag, 4);
+	static const uint8_t want_env_off[7] = {0x8b, 0x44, 0x24, 0x04, 0x56, 0x8b, 0xf0}; // mov eax,[esp+4]; push esi; mov esi,eax
+	static const uint8_t want_vol_set[5] = {0x57, 0x8b, 0x7c, 0x24, 0x08};		    // push edi; mov edi,[esp+8]
+	const int a = jhook_function(base + XR(0xcb5b0), want_flag, sizeof(want_flag), (void *)env_set_hook, (void **)&env_set_original);
+	const int b = a && jhook_function(base + XR(0xd3e90), want_env_off, sizeof(want_env_off), (void *)env_off_hook, (void **)&env_off_original);
+	const int c = jhook_function(base + XR(0x60140), want_vol_set, sizeof(want_vol_set), (void *)vol_set_hook, (void **)&vol_set_original);
+	const int d = c && jhook_function(base + XR(0xf9840), want_flag, sizeof(want_flag), (void *)vol_off_hook, (void **)&vol_off_original);
+	log_printf("native: the sound mixer's environment %s, its channel volumes %s", b ? "is held while either view holds it" : "is not hooked (rva 0xcb5b0 / 0xd3e90)",
+		   d ? "too" : "are not hooked (rva 0x60140 / 0xf9840)");
+}
 static void sound_once_install32(void)
 {
 	if (!cfg("evsnd1", 1) && !cfg("sndcount", 0))
@@ -10735,6 +10863,7 @@ static int hooks_apply32_contexts(void)
 		}
 	}
 	sound_once_install32();
+	mix_install32();
 	aim_for_client_fn = base + XR(0x15b040);
 	{ // the aim assist's screen targets of each context's cgame and the server's target list of the client it is (docs/32bit-native-map/aimrumble.md 1.4, 1.5)
 		static const uint32_t screen_site[] = {0x66adc}, list_site[] = {0x88ba8};
@@ -10853,6 +10982,7 @@ static void contexts_install(void)
 					log_printf("native: the pending sound queue at 0x237a70 is not as expected: effects' sounds play in both contexts");
 			}
 		}
+		mix_install64();
 		if (!jhook_function(base + XR(0x9c960), add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
 		if (!jhook_function(base + XR(0xb0680), pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
@@ -11424,6 +11554,7 @@ void native_level_load(void)
 #else
 	const unsigned ref_clients = 0x1723988;
 #endif
+	mix_level_load();
 	if (!base || !cfg("p2cmdclear", 1))
 		return;
 	// Context 1 still runs on the previous level's state until this level's cgame is up and it is seeded again ("context 1 initialised"); the commands it makes
