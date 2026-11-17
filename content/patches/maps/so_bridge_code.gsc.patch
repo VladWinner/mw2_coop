@@ -1,0 +1,19 @@
+mw2coop patch for maps/so_bridge_code.gsc (Spec Ops bridge missions: The Pit's crossing and demolition): the seekers hunt the nearest player.
+
+1. The rappelling seekers (player_seek_stages, the rappel_bridge_seek spawners of so_crossing_so_bridge and so_demo_so_bridge) went for player 1 wherever
+   player 2 was: every one of them converged on him (Spec Ops audit 2026-11-17, item 1.3). Each stage now aims at the nearest player who is up
+   (maps\_mw2coop::seek_player), taken again at each stage as the players move.
+@@@ replace
+	self SetGoalEntity( level.players[ 0 ] );
+
+	foreach ( iRadius in stages )
+	{
+		self.goalradius = iRadius;
+@@@ with
+	self SetGoalEntity( maps\_mw2coop::seek_player( self.origin ) );
+
+	foreach ( iRadius in stages )
+	{
+		self SetGoalEntity( maps\_mw2coop::seek_player( self.origin ) );
+		self.goalradius = iRadius;
+@@@ end

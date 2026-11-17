@@ -30,3 +30,12 @@ level.player
 @@@ to
 self
 @@@ end
+
+4. A guard's view opens wide when a player comes within his sprint-hearing distance (increase_fov_when_player_is_near: the
+   blue building's smoker and loader in Spec Ops' Sabotage, the campaign's camp): it watched player 1 alone, and player 2 could walk
+   right up to them (Spec Ops audit 2026-11-17, item 1.7). Any player near does it.
+@@@ subst increase_fov_when_player_is_near
+if ( DistanceSquared( self.origin, level.player.origin ) < squared( self.footstepDetectDistSprint ) )
+@@@ to
+if ( DistanceSquared( self.origin, maps\_mw2coop::seek_player( self.origin ).origin ) < squared( self.footstepDetectDistSprint ) )
+@@@ end

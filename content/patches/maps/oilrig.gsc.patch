@@ -264,3 +264,27 @@ while( level.player isTouching( safeVolume ) )
 @@@ to
 while( maps\_mw2coop::any_player_touching( safeVolume ) )
 @@@ end
+
+11. The deck-2 helicopter's damage ramp (heli_ramp_up_damage, Recruit and Regular: a short invulnerability after each
+   hit of its guns, for 20 or 40 hits) protects every player, not player 1 alone: called on the level (the campaign
+   and Spec Ops' so_assault_oilrig do), it runs once for each player on him (Spec Ops audit 2026-11-17, item 1.5).
+@@@ subst heli_ramp_up_damage
+	if ( level.gameskill > 1 )
+		return;
+
+@@@ to
+	if ( level.gameskill > 1 )
+		return;
+	if ( !IsPlayer( self ) )
+	{
+		foreach ( mw2coop_player in level.players )
+			mw2coop_player thread heli_ramp_up_damage( eHeli );
+		return;
+	}
+
+@@@ end
+@@@ subst heli_ramp_up_damage
+level.player
+@@@ to
+self
+@@@ end

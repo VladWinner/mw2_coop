@@ -21,3 +21,55 @@ blizzard_start_proc()
 		if ( is_coop() )
 			PlayFXOnTagForClients( level._effect[ "blizzard_main" ], fx_ent, "tag_origin", self );
 @@@ end
+
+2. The frost on the screen (overlay_frozen, blizzard_overlay_alpha / blizzard_overlay_clear) went to player 1 alone when the level turned
+   the blizzard on or off (called on the level: so_snowrace_code, so_sabotage_cliffhanger_code, the campaign's transitions): player 2's
+   view never froze over (Spec Ops audit 2026-11-17, item 1.6). Called on the level, they now do it for each player (each fade starts
+   from the level's previous alpha, as player 1's did).
+@@@ replace
+blizzard_overlay_alpha( time, alpha, skipCap )
+{
+	player = self;
+	if ( !isplayer( player ) )
+		player = level.player;
+@@@ with
+blizzard_overlay_alpha( time, alpha, skipCap )
+{
+	if ( !isplayer( self ) && isdefined( level.players ) && level.players.size > 1 )
+	{
+		mw2coop_start = level.blizzard_overlay_alpha;
+		foreach ( mw2coop_player in level.players )
+		{
+			level.blizzard_overlay_alpha = mw2coop_start;
+			mw2coop_player blizzard_overlay_alpha( time, alpha, skipCap );
+		}
+		return;
+	}
+	player = self;
+	if ( !isplayer( player ) )
+		player = level.player;
+@@@ end
+@@@ replace
+		player = self;
+		if ( !isplayer( player ) )
+			player = level.player;
+		overlay = get_frozen_overlay( player );
+		overlay destroy();
+		return;
+@@@ with
+		if ( !isplayer( self ) && isdefined( level.players ) && level.players.size > 1 )
+		{
+			foreach ( mw2coop_player in level.players )
+			{
+				mw2coop_overlay = get_frozen_overlay( mw2coop_player );
+				mw2coop_overlay destroy();
+			}
+			return;
+		}
+		player = self;
+		if ( !isplayer( player ) )
+			player = level.player;
+		overlay = get_frozen_overlay( player );
+		overlay destroy();
+		return;
+@@@ end

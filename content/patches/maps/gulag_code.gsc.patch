@@ -32,10 +32,23 @@ maps\_mw2coop::players_ignoreme( false );
 3. The riot shield watcher runs on each player (self, see maps/gulag.gsc): whoever carries the
    shield is the one enemies want and the nearest enemy aims well at; the armory's accuracy
    change for the whole level runs once, from player 1's watcher.
+   Called on the level (Spec Ops' so_showers_gulag calls it so: script errors once a second for the
+   whole mission and no shield rule, Spec Ops audit 2026-11-17), it starts one watcher per player.
 @@@ subst player_riotshield_threatbias
 level.player
 @@@ to
 self
+@@@ end
+@@@ subst player_riotshield_threatbias
+self endon( "death" );
+@@@ to
+if ( !IsPlayer( self ) )	// called on the level (Spec Ops' so_showers_gulag): each player gets his own watcher
+	{
+		foreach ( mw2coop_player in level.players )
+			mw2coop_player thread player_riotshield_threatbias();
+		return;
+	}
+	self endon( "death" );
 @@@ end
 @@@ subst player_riotshield_threatbias
 	thread modulate_player_attacker_accuracy_for_armory();

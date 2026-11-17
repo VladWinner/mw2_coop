@@ -55,6 +55,13 @@ for rel, title, scenes in SCRIPTS:
    test read player 1's weapons (night audit 2026-11-17).'''.format(n + 1))
         p.subst('should_break_activate_heartbeat', 'level.player', 'self')
         n += 1
+        p.note('''{0}. A guard's view opens wide when a player comes within his sprint-hearing distance (increase_fov_when_player_is_near: the
+   blue building's smoker and loader in Spec Ops' Sabotage, the campaign's camp): it watched player 1 alone, and player 2 could walk
+   right up to them (Spec Ops audit 2026-11-17, item 1.7). Any player near does it.'''.format(n + 1))
+        p.subst('increase_fov_when_player_is_near',
+                'if ( DistanceSquared( self.origin, level.player.origin ) < squared( self.footstepDetectDistSprint ) )',
+                'if ( DistanceSquared( self.origin, maps\\_mw2coop::seek_player( self.origin ).origin ) < squared( self.footstepDetectDistSprint ) )')
+        n += 1
     if rel == 'af_caves/maps/af_caves_backhalf.gsc':
         # night audit 2026-11-17: the cave exit's collapse was player 1's alone
         C = 'maps\\_mw2coop_cave::'

@@ -1,0 +1,14 @@
+mw2coop patch for maps/so_showers_gulag.gsc (Spec Ops: Bathroom Fight, Gulag showers): the bathroom's first seconds spare both players.
+
+1. Entering the bathroom (flag player_enters_bathroom), the enemies could not hit player 1 for 6 s, while player 2 took their full fire
+   (Spec Ops audit 2026-11-17, item 1.4). Both players get the 6 s.
+@@@ replace
+	level.player.attackeraccuracy = 0;
+	level.player delayThread( 6, maps\_gameskill::update_player_attacker_accuracy );
+@@@ with
+	foreach ( mw2coop_player in level.players )
+	{
+		mw2coop_player.attackeraccuracy = 0;
+		mw2coop_player delayThread( 6, maps\_gameskill::update_player_attacker_accuracy );
+	}
+@@@ end
