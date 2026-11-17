@@ -2899,6 +2899,38 @@ static void vid_restart_install(void)
 	*entry = (void *)vid_restart_hook;
 	VirtualProtect(entry, sizeof(void *), old, &old);
 }
+#else
+// 32 bits: the same guard on the server command's node (VA 0x931e8c, registered by 0x4f3480; handler 0x4e5110). The engine restores the level after the restart from a save
+// it makes itself, and the official 32-bit exe quits with 0x8000dead whenever a save is loaded with the mod in (saves.c): in any running level it is refused there, in a
+// co-op level on the iw4x-sp client too, as on 64 bits (an Alt+Enter in a level was a crash; Vlad's 32-bit vid_restart report, 2026-11-03).
+#define REF_SV_CMD_VID_RESTART 0x531e8c
+#define REF_VID_RESTART_FN     0xe5110
+static void (*vid_restart_original)(void);
+static void vid_restart_hook(void)
+{
+	if (!cfg("vidrestart", 0) && *(volatile int *)(base + RVA_CLS_STATE) == 6) { // a level is running
+		char coop[8] = "";
+		game_dvar_string("coop", coop, sizeof(coop));
+		if (coop[0] == '1' || !game_is_iw4x()) {
+			log_printf("native: vid_restart ignored: a level is running (%s; change the video settings in the main menu)",
+				   coop[0] == '1' ? "a co-op level: the engine could not restore it" : "this exe quits when the engine restores the level from its save");
+			return;
+		}
+	}
+	zones_pools_reset(); // the restart initialises the asset database again: the raised pool sizes of the co-op levels must not be what it builds from
+	vid_restart_original();
+}
+static void vid_restart_install(void)
+{
+	cmd_function_t *node = (cmd_function_t *)(base + XR(REF_SV_CMD_VID_RESTART));
+	if (node->function != (void (*)(void))(base + XR(REF_VID_RESTART_FN))) {
+		log_printf("native: vid_restart not hooked (the command table entry differs)");
+		return;
+	}
+	vid_restart_original = node->function;
+	node->function = vid_restart_hook;
+	log_printf("native: vid_restart guarded in levels");
+}
 #endif
 
 // Phase A (docs/native-splitscreen-360.md): the static model list builders (rva 0x3ad40, 0x3b810, 0x3be80, 0x3c440) take their output chunks from two regions of the
@@ -10925,6 +10957,9 @@ void native_install(void)
 #ifdef _WIN64
 	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0) || cfg("presentlog", 0) || settings_upscale() || settings_fsr3()) // presentlog: the frame cadence of the plain game too (QA: FSR against native)
 		CreateThread(NULL, 0, device_hooks_thread, NULL, 0, NULL);
+#endif
+#ifndef _WIN64
+	vid_restart_install(); // (the server command table is filled at the start, before this runs)
 #endif
 #ifdef _WIN64
 	rawinput_install();
