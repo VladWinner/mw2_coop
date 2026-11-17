@@ -53,3 +53,9 @@ int progress_snapshot_extra(const char *key, char *out, int size);
 int progress_snapshot_tag(const char *key, char *tag, int size);
 // The key and the tag of the snapshot of the save the host picked; 0 if it has none (a save from before snapshots)
 int progress_chosen_snapshot(char *key, int key_size, char *tag, int tag_size);
+
+// Split screen Start (menus.c, native.c): each player's difficulty for the level (0 Recruit .. 3 Veteran) into g_gameskill (player 1's), g_gameskill_player_1 / _2 and the
+// party members' difficulty, current and latched.
+void progress_split_skill(int p1, int p2);
+// The difficulty the Special Ops lobby's popup picked: g_gameskill's latched value (its setdvar), else its current one; -1 if neither is 0..3.
+int progress_skill_lobby(void);

@@ -2612,6 +2612,12 @@ static void native_launch(void)
 	devices_end();
 	InterlockedExchange(&split_mode, 0);
 	((void (*)(void))(base + RVA_PARTY_RESET))();
+	{ // each player's difficulty for the level (progress_split_skill): Special Ops' one difficulty row for both, a campaign mission each player's row
+		const int lobby = progress_skill_lobby();
+		const int p1 = specops ? lobby : (split_skill[0] >= 0 ? (int)split_skill[0] : lobby), p2 = specops ? lobby : (split_skill[1] >= 0 ? (int)split_skill[1] : lobby);
+		if (p1 >= 0 && p2 >= 0)
+			progress_split_skill(p1, p2);
+	}
 	char cmd[160];
 	if (!specops)
 		campaign_loading_begin(); // (a Special Ops op keeps its own loading screen: specialops stays 1)

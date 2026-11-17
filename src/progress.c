@@ -591,6 +591,36 @@ static void skill_apply(int skill)
 		log_printf("progress: difficulty %d for both players", skill);
 }
 
+// The split screen's Start: no party is left (it is reset for the two local players), and the level start (rva 0x22e1a0) sets g_gameskill_player_<n> only for a party
+// member that exists, so both kept what an earlier session or profile left there: GetPlayerSetting("gameskill") (rva 0x18dda0: g_gameskill_player_<n>) gave the scripts
+// that and the level played the higher (Vlad 2026-11-17, split screen Special Ops: "the difficulty is ignored, Veteran for everybody"). Set here for each player.
+void progress_split_skill(int p1, int p2)
+{
+	const int want[3] = {p1, p1, p2};
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	for (int i = 0; i < 2; i++)
+		*(volatile int32_t *)(base + RVA_PARTY_SKILL + i * 0x38) = i ? p2 : p1;
+	for (int i = 0; i < 3; i++) {
+		dvar_t *d = game_find_dvar(skill_dvars[i]);
+		if (!d || d->type != DVAR_TYPE_INT || want[i] < 0 || want[i] > 3)
+			continue;
+		d->current.integer = want[i];
+		d->latched.integer = want[i];
+		d->modified = 1;
+	}
+	log_printf("progress: split screen difficulty: player 1 %d, player 2 %d", p1, p2);
+}
+
+int progress_skill_lobby(void)
+{
+	dvar_t *d = game_find_dvar("g_gameskill");
+	if (!d || d->type != DVAR_TYPE_INT)
+		return -1;
+	if (d->latched.integer >= 0 && d->latched.integer <= 3)
+		return d->latched.integer;
+	return d->current.integer >= 0 && d->current.integer <= 3 ? d->current.integer : -1;
+}
+
 int progress_launch_packet(char *buf, int size)
 {
 	int skill = skill_pick();

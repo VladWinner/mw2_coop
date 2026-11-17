@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "progress.h"
 #include "dx/natboot.h"
 #include "game.h"
 #include "pads.h"
@@ -11684,6 +11685,11 @@ static void native_launch_f(void)
 	lstrcpynA(start, game_cmd_argv(3), sizeof(start));
 	if (strpbrk(start, " \t;\"\n"))
 		start[0] = 0;
+	{ // QA: [native] qa_skill=<0..3> stands for the lobby's difficulty pick of both players, through the lobby's own path (progress_split_skill)
+		const int qs = cfg("qa_skill", -1);
+		if (qs >= 0 && qs <= 3)
+			progress_split_skill(qs, qs);
+	}
 	snprintf(text, sizeof(text), "set start \"%s\"\nset coop_mapName %s\nmap %s\n", start, map, map);
 	game_cbuf_addtext(text);
 }
