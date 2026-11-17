@@ -347,3 +347,28 @@ seat_player( player, seat )
 	player enableWeapons();
 	player.mw2coop_seated = GetTime();
 }
+
+// oilrig.gsc railing_patroller_player_detect (patch 12): the 2 s between a player in the trigger by MacTavish's firing spot and the smoker's alarm start, in co-op,
+// once MacTavish stands at that spot (node_railing_friendly), as he always does first in single player; he then shoots the smoker (friendly_aims_at_railing_guy waits
+// for the same flag). In co-op one player could run ahead while MacTavish still helped the other out of the water, and the mission failed with no shot fired
+// (tester's report: "the hostage assault fails by itself"). A real noise (player_broke_stealth) keeps the 2 s of the original; 40 s at most.
+railing_grace()
+{
+	if ( !coop() || flag( "player_broke_stealth" ) )
+		return;
+	node = GetNode( "node_railing_friendly", "targetname" );
+	if ( !isdefined( node ) )
+		return;
+	for ( t = 0; t < 40; t += 0.25 )
+	{
+		if ( flag( "railing_patroller_dead" ) || flag( "player_broke_stealth" ) )
+			return;
+		if ( isdefined( level.teamleader ) && IsAlive( level.teamleader ) && DistanceSquared( level.teamleader.origin, node.origin ) < 48 * 48 )
+		{
+			if ( t > 0 )
+				maps\_mw2coop::state( "oilrig: the railing alarm waited " + t + " s for MacTavish at his spot" );
+			return;
+		}
+		wait 0.25;
+	}
+}

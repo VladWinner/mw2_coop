@@ -178,6 +178,7 @@ connect <IP хоста> 8305
 - `missions.csv`: миссии (название в Discord, зона Spec Ops, картинка лобби).
 - `menus.menu`: кнопки и окна, которые мод добавляет в главное меню, в синтаксисе `.menu` Call of Duty.
 - `addresses-x86.txt`, `addresses-x64.txt`: сигнатуры байтов для поиска адресов игры в версии, которую мод не знает ([docs/address-resolution.md](docs/address-resolution.md)).
+- `SDL3.dll`, `SDL3-LICENSE.txt`: [SDL 3](https://libsdl.org) (лицензия zlib), без изменений из официального релиза: читает геймпады, которые не Xbox (PlayStation, Switch, 8BitDo в своих режимах). Без него у мода только геймпады Xbox.
 
 </details>
 
@@ -219,6 +220,7 @@ LLVM_MINGW=/путь/к/llvm-mingw-ucrt-x86_64 ./build.sh release
 - **[h2-mod](https://github.com/alicealys/h2-mod)** (alicealys и участники): образец для этого мода и источник русской формулировки цели в «Побеге из фавел».
 - **COD-MOD** и его пак кооперативной кампании (`x_coop`, автор неизвестен): первый кооп кампании MW2, для старой 32-битной версии. Перед каждой миссией мы смотрели, как это сделано там (где стоят игроки, сигнальная ракета в «Белом доме»), и потом делали своё. Клиент COD-MOD — momo5502 и соавторы ([FreeTheTech101/cod-mod](https://github.com/FreeTheTech101/cod-mod)).
 - **[iw4x-sp](https://git.alterware.dev/alterware/iw4x-sp)** от AlterWare: по нему разбирались, как движок обрабатывает ввод игрока и пулы ресурсов (только для справки, код не брали).
+- **[SDL](https://libsdl.org)** (Сэм Лантинга и соавторы, лицензия zlib): `SDL3.dll` читает геймпады PlayStation, Switch и другие не-Xbox, поставляется без изменений.
 - **Infinity Ward**: кооператив Спецопераций самой игры, из которого мод делает режим кампании.
 - **[Co-op Anything](https://github.com/cranebeaker/coop-anything)**: методички и инструменты тестирования, с которыми сделан мод.
 - Инструменты: [Ghidra](https://github.com/NationalSecurityAgency/ghidra) (NSA), [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (Martin Storsjö), [Capstone](https://www.capstone-engine.org/), [документация Steamworks](https://partner.steamgames.com/doc/home), значки [shields.io](https://shields.io).

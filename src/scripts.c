@@ -97,6 +97,43 @@ typedef char *(*hunk_temp_high_t)(int size);
 #endif
 
 // Reads <mod_dir>\<sub>\<ext><suffix> into a malloc'd, NUL-terminated buffer with '\r' removed.
+static char *read_mod_file(const char *sub, const char *ext, const char *suffix, int *size);
+
+// The mod's QA scenarios (maps/_mw2coop_qa.gsc, about 270 KB, and maps/_mw2coop_qa_bind.gsc, which only it calls) in a session without one (the dvar mw2coop_qa
+// empty: every player's session): a stub with the entry points the other scripts call. The scenarios' text made thousands of script strings on every co-op level,
+// and Just Like Old Times (af_caves) needs nearly the whole script string table of the 32-bit game: after 16 levels in one process its load ran out ("exceeded
+// maximum number of script strings"; the error box then failed on its own string, again and again, until the stack overflowed: QA level chains 2026-11-17).
+static int is_name(const char *a, const char *b) // (a script name, either slash)
+{
+	for (; *a && *b; a++, b++)
+		if (!((*a == '/' || *a == '\\') && (*b == '/' || *b == '\\')) && (*a | 0x20) != (*b | 0x20))
+			return 0;
+	return !*a && !*b;
+}
+static char *read_mod_script(const char *ext, int *size)
+{
+	char qa[64] = "";
+	const int have_qa = game_dvar_raw("mw2coop_qa", qa, sizeof(qa)) && qa[0];
+	// (QA "hoplite": the stub too, with one thing of its own: each mission is completed 15 s after it starts, a level chain as a player has it, without the scenarios)
+	if (is_name(ext, "maps/_mw2coop_qa.gsc") && (!have_qa || !strcmp(qa, "hoplite"))) {
+		static const char stub[] = "// the QA scenarios are left out of a session without one (src/scripts.c): their entry points\n"
+					   "main()\n{\n\tif ( GetDvar( \"mw2coop_qa\" ) == \"hoplite\" )\n\t\tlevel thread hoplite();\n}\n"
+					   "hoplite()\n{\n\twait 15;\n\tmaps\\_mw2coop::mission_complete();\n}\n"
+					   "link_probe()\n{\n}\nclimbsolo()\n{\n}\ncheck( ok, text )\n{\n}\nreport( text )\n{\n}\n"
+					   "qa_shot( label )\n{\n}\nwait_intro()\n{\n}\nplayer_name( player )\n{\n\treturn \"\";\n}\n";
+		char *buf = malloc(sizeof(stub));
+		if (!buf)
+			return NULL;
+		memcpy(buf, stub, sizeof(stub));
+		*size = (int)sizeof(stub) - 1;
+		static int told;
+		if (!told++)
+			log_printf("scripts: no QA scenario in this session: maps/_mw2coop_qa.gsc is a stub of its entry points (the scenarios' strings stay out of the game's string table)");
+		return buf;
+	}
+	return read_mod_file("scripts", ext, "", size);
+}
+
 static char *read_mod_file(const char *sub, const char *ext, const char *suffix, int *size)
 {
 	char path[MAX_PATH];
@@ -392,7 +429,7 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 		last_coop = coop;
 		log_printf("scripts: %s", coop ? "co-op session: the mod's scripts and patches are loaded" : "single player: the game's own scripts (only the fixes that are no part of the co-op: *.fix.patch, _mw2fix*)");
 	}
-	char *own = coop || fix_script(ext) ? read_mod_file("scripts", ext, "", &size) : NULL;
+	char *own = coop || fix_script(ext) ? read_mod_script(ext, &size) : NULL;
 	if (own) {
 		char *buf = to_hunk(own, size);
 		log_printf("scripts: %s <- mw2coop (%d bytes, hash %08x)", ext, size, fnv1a(own, size));
@@ -477,7 +514,7 @@ static script_entry_t *script_entry(const char *name, raw_file_t *raw)
 		if (entries[i].coop == coop && strcmp(entries[i].name, name) == 0)
 			return &entries[i];
 	int size;
-	char *own = coop || fix_script(name) ? read_mod_file("scripts", name, "", &size) : NULL;
+	char *own = coop || fix_script(name) ? read_mod_script(name, &size) : NULL;
 	if (!own && !raw)
 		return NULL;
 	if (entry_count >= (int)(sizeof(entries) / sizeof(entries[0]))) {

@@ -25,7 +25,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "fonts.h"
+#include "scrdebug.h"
 #include "game.h"
+#include "pads.h"
 #include "access.h"
 #include "firewall.h"
 #include "hook.h"
@@ -3031,15 +3034,7 @@ static DWORD WINAPI lobby_pad_thread(LPVOID unused)
 		BYTE lt, rt;
 		SHORT lx, ly, rx, ry;
 	} xs_t;
-	DWORD(WINAPI * get)(DWORD, xs_t *) = NULL;
-	const char *dlls[] = {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"};
-	for (int k = 0; k < 3 && !get; k++) {
-		HMODULE h = LoadLibraryA(dlls[k]);
-		if (h)
-			get = (DWORD(WINAPI *)(DWORD, xs_t *))GetProcAddress(h, "XInputGetState");
-	}
-	if (!get)
-		return 0;
+	DWORD(WINAPI * get)(DWORD, xs_t *) = (DWORD(WINAPI *)(DWORD, xs_t *))pads_xinput_proc("XInputGetState"); // (XInput and PlayStation pads, pads.c)
 	int seen = -1;
 	WORD prev = 0;
 	DWORD repeat_at = 0;
@@ -3591,6 +3586,10 @@ static void tick_f(void)
 	add_saves_menu();
 	add_partner_popups();
 	padopts_tick();
+	fonts_retry_tick(); // (the fonts' late retry: here, at the top of the main thread, not inside an asset lookup)
+#ifndef _WIN64
+	scrdebug_string_census_tick();
+#endif
 	gfxopts_tick();
 	enhopts_tick();
 	picking_tick();

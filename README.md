@@ -174,6 +174,7 @@ Everything the mod shows or decides is in readable files in the game's `mw2coop`
 - `missions.csv`: the missions (title in Discord, Spec Ops zone, lobby picture).
 - `menus.menu`: the buttons and popups the mod adds to the main menu, in the `.menu` syntax of Call of Duty.
 - `addresses-x86.txt`, `addresses-x64.txt`: byte signatures for finding the game's addresses in a build the mod has not seen ([docs/address-resolution.md](docs/address-resolution.md)).
+- `SDL3.dll`, `SDL3-LICENSE.txt`: [SDL 3](https://libsdl.org) (zlib license), unchanged from its official release: it reads the pads that are not Xbox pads (PlayStation, Switch, 8BitDo in its own modes). Without it the mod has the Xbox pads only.
 
 </details>
 
@@ -216,6 +217,7 @@ Modern Warfare 2 Enhanced (`mw2coop` inside: the folder, the DLL's scripts and s
 - **COD-MOD** and its campaign co-op pack (`x_coop`, author unknown): the first MW2 campaign co-op, for the old 32-bit build. We checked how it handled each mission (where the players stand, the Whiskey Hotel flare) before building ours. The COD-MOD client is by momo5502 and contributors ([FreeTheTech101/cod-mod](https://github.com/FreeTheTech101/cod-mod)).
 - **H\*-Mod fonts** (Vlad Loktionov, made for [h2-mod](https://github.com/alicealys/h2-mod); suggested in issue 1): the fonts of the Russian game's new look, SIL Open Font License 1.1 as stated in the files (the notes and the license text are in `mw2coop\fonts`).
 - **[iw4x-sp](https://git.alterware.dev/alterware/iw4x-sp)** by AlterWare: read for how the engine handles player input and asset pools (reference only; no code taken).
+- **[SDL](https://libsdl.org)** (Sam Lantinga and contributors, zlib license): `SDL3.dll` reads the PlayStation, Switch and other non-Xbox pads, shipped unchanged.
 - **Infinity Ward**: the game's own Spec Ops co-op, which the mod turns into a campaign mode.
 - **[Co-op Anything](https://github.com/cranebeaker/coop-anything)**: the playbook and test tools this mod was built with.
 - Tools: [Ghidra](https://github.com/NationalSecurityAgency/ghidra) (NSA), [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (Martin Storsjö), [Capstone](https://www.capstone-engine.org/), the [Steamworks documentation](https://partner.steamgames.com/doc/home), [shields.io](https://shields.io) badges.

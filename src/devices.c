@@ -10,6 +10,7 @@
 #include "devices.h"
 #include "log.h"
 #include "menus.h"
+#include "pads.h"
 
 static volatile LONG assigned_dev[2] = {DEVICE_NONE, DEVICE_NONE}; // the players' devices: DEVICE_NONE, DEVICE_KEYBOARD, or an XInput pad 0-3
 static volatile LONG assign_gen;
@@ -28,16 +29,8 @@ static int pad_event(int i)
 {
 	static WORD was[4];
 	static int moved[4];
-	if (!assign_xinput) {
-		const char *dlls[] = {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"};
-		for (int k = 0; k < 3 && !assign_xinput; k++) {
-			HMODULE h = LoadLibraryA(dlls[k]);
-			if (h)
-				assign_xinput = (DWORD(WINAPI *)(DWORD, assign_pad_t *))GetProcAddress(h, "XInputGetState");
-		}
-		if (!assign_xinput)
-			return 0;
-	}
+	if (!assign_xinput)
+		assign_xinput = (DWORD(WINAPI *)(DWORD, assign_pad_t *))pads_xinput_proc("XInputGetState"); // (XInput and PlayStation pads, pads.c)
 	assign_pad_t st;
 	memset(&st, 0, sizeof(st));
 	if (assign_xinput((DWORD)i, &st) != ERROR_SUCCESS) {

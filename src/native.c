@@ -16,6 +16,7 @@
 
 #include "dx/natboot.h"
 #include "game.h"
+#include "pads.h"
 #include "hook.h"
 #include "log.h"
 #include "localize.h"
@@ -6420,13 +6421,7 @@ static int qa_noassist[2];
 static int pad_read(int pl, xin_state_t *st)
 {
 	if (!xinput_get) {
-		HMODULE m = LoadLibraryA("xinput1_4.dll");
-		if (!m)
-			m = LoadLibraryA("xinput1_3.dll");
-		if (!m)
-			m = LoadLibraryA("xinput9_1_0.dll");
-		if (m)
-			xinput_get = (DWORD(WINAPI *)(DWORD, xin_state_t *))GetProcAddress(m, "XInputGetState");
+		xinput_get = (DWORD(WINAPI *)(DWORD, xin_state_t *))pads_xinput_proc("XInputGetState"); // (XInput and PlayStation pads, pads.c)
 		if (!xinput_get) {
 			static int logged;
 			if (!logged++)
@@ -6503,6 +6498,9 @@ static void pad_menu(int pl, const xin_state_t *st)
 			send = 1;
 		if (!send)
 			continue;
+		static int logged;
+		if (logged++ < 300) // (a few lines per menu visit: which player's pad worked it, for reports)
+			log_printf("native: player %d's pad works the menu: key %d", pl + 1, keys[i].key);
 		pad_key(keys[i].key, 1);
 		pad_key(keys[i].key, 0);
 		if (i < 4)
@@ -6813,7 +6811,7 @@ static const pad_map_t pad_map[] = {
     {0x0040, "breath_sprint", NULL}, // left stick
     {0x0080, "melee", NULL},         // right stick
     {0x0020, "scores", NULL},        // Back: the objectives
-    {0x0010, NULL, "togglemenu"},    // Start: pause
+    {0x0010, NULL, "togglemenu"},    // Start: pause (sent as the Escape key: pad_frame_player)
     {0x0001, "actionslot 1", NULL},  // d-pad up
     {0x0002, "actionslot 2", NULL},  // d-pad down
     {0x0004, "actionslot 3", NULL},  // d-pad left
@@ -6861,7 +6859,14 @@ static void pad_frame_player(int pl, int play)
 		return;
 	}
 	p->active = 1;
-	if (*(unsigned *)(base + RVA_KEY_CATCHERS) & 0x10) { // a menu: player 1 works it; player 2 only pauses the game (Start in play), he does not work the menus
+	{ // the log says when a menu takes the keys and when it gives them back (pause, objectives, options: for reports and the QA of the pads in menus)
+		static int menu_was = -1, menu_logged;
+		const int menu_now = (*(unsigned *)(base + RVA_KEY_CATCHERS) & 0x10) != 0;
+		if (menu_now != menu_was && menu_logged++ < 200)
+			log_printf("native: %s", menu_now ? "a menu has the keys" : "no menu has the keys");
+		menu_was = menu_now;
+	}
+	if (*(unsigned *)(base + RVA_KEY_CATCHERS) & 0x10) { // a menu: either player's pad works it (the menu is one, shared; until 2026-11-17 player 2's pad was left out here and he could only pause)
 		if (inputlog_on()) {
 			static DWORD menu_at[2];
 			if (GetTickCount() - menu_at[pl] > 250 || st.pad.buttons) {
@@ -6869,8 +6874,7 @@ static void pad_frame_player(int pl, int play)
 				inputlog("PADMENU,%d,%d,%d,%u,%d,%d,%d,%d,%u", pl, pad_dev[pl], ctx_current, *(unsigned *)(base + RVA_KEY_CATCHERS), st.pad.lx, st.pad.ly, st.pad.rx, st.pad.ry, st.pad.buttons);
 			}
 		}
-		if (pl == 0)
-			pad_menu(pl, &st);
+		pad_menu(pl, &st);
 		p->forward = p->right = 0;
 		rumble_frame(pl, pad_dev[pl], 0); // paused: still
 		return;
@@ -6960,7 +6964,12 @@ static void pad_frame_player(int pl, int play)
 			continue;
 		if (map[i].hold)
 			pad_binding(map[i].hold, is);
-		else if (map[i].press && is)
+		else if (map[i].press && is && map[i].mask == 0x0010) {
+			// Start: the Escape key, as the keyboard pauses (the action "togglemenu" only queued a client command no part of the game handles: no pad could
+			// open the pause menu; QA pausepad2 2026-11-17, two presses of player 2's Start and no menu took the keys)
+			pad_key(27, 1);
+			pad_key(27, 0);
+		} else if (map[i].press && is)
 			pad_action(map[i].press);
 	}
 	p->held = buttons;

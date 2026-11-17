@@ -223,6 +223,37 @@ __asm__(
 	"1:\n"
 	"\tret\n");
 
+void scrdebug_string_census(const char *when)
+{
+	if (!base)
+		return;
+	// the table (0x7000 entries of 8 bytes: status and next index, then the string's handle); an entry in use has a status bit (head 0x10000 or moved 0x20000)
+	const uint8_t *tbl = base + RVA_SL_TABLE;
+	unsigned used = 0;
+	for (unsigned i = 1; i < 0x7000; i++)
+		if (*(const uint32_t *)(tbl + (size_t)i * 8) & 0x30000)
+			used++;
+	log_printf("script strings: %u of %u table entries in use (%s)", used, 0x7000u - 1, when);
+}
+
+void scrdebug_string_census_tick(void)
+{
+	static DWORD at;
+	static unsigned last;
+	if (!base || GetTickCount() - at < 5000)
+		return;
+	at = GetTickCount();
+	const uint8_t *tbl = base + RVA_SL_TABLE;
+	unsigned used = 0;
+	for (unsigned i = 1; i < 0x7000; i++)
+		if (*(const uint32_t *)(tbl + (size_t)i * 8) & 0x30000)
+			used++;
+	if (used + 200 <= last || used >= last + 200) {
+		log_printf("script strings: %u of %u table entries in use (in the level)", used, 0x7000u - 1);
+		last = used;
+	}
+}
+
 int sl_free_check(unsigned handle, const uint8_t *str, int len, const uintptr_t *entry_sp)
 {
 	static volatile LONG reported;

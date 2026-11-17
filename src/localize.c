@@ -626,7 +626,7 @@ static void *find_header(int type, const char *name)
 	if (type == ASSET_TYPE_FONT)
 		fonts_seen(found, name, original);
 	else
-		fonts_retry(original); // catch localization/assets that become ready after the first font lookup
+		fonts_retry_later(original); // catch localization/assets that become ready after the first font lookup (run by the menu tick, outside the lookup)
 	return found;
 }
 

@@ -1137,6 +1137,22 @@ static volatile LONG retry_tick;
 static volatile LONG waiting_language_logged;
 static volatile LONG waiting_atlas_logged;
 
+// The lookup hook's request and the tick that serves it. Until 2026-11-17 the hook ran fonts_retry itself, inside the game's asset lookup: during a level's load
+// the script compiler asks for every script and include through that lookup (a deep recursion of its own), and the retry's font lookups went deeper still from
+// there; the 32-bit main thread's stack (640 KB, the exe's) overflowed at the af_caves load in two level chains (the official 32-bit exe and iw4x-sp, QA hop).
+static void *(*volatile retry_find)(int, const char *);
+void fonts_retry_later(void *(*find)(int, const char *))
+{
+	if (find && !retry_find)
+		retry_find = find;
+}
+void fonts_retry_tick(void)
+{
+	void *(*find)(int, const char *) = retry_find;
+	if (find)
+		fonts_retry(find);
+}
+
 void fonts_retry(void *(*find)(int, const char *))
 {
 	// Called for ordinary non-font asset lookups too. These cached-state reads are on a

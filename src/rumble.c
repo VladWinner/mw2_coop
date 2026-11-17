@@ -12,6 +12,7 @@
 #include "game.h"
 #include "log.h"
 #include "rumble.h"
+#include "pads.h"
 
 #ifdef _WIN64
 #define RVA_EMPTY_BUILTIN XR(0xa650)
@@ -288,13 +289,7 @@ void rumble_install(void)
 		log_printf("rumble: norumble file found, the builtins stay empty");
 		return;
 	}
-	HMODULE m = LoadLibraryA("xinput1_4.dll");
-	if (!m)
-		m = LoadLibraryA("xinput1_3.dll");
-	if (!m)
-		m = LoadLibraryA("xinput9_1_0.dll");
-	if (m)
-		xinput_set = (DWORD(WINAPI *)(DWORD, void *))GetProcAddress(m, "XInputSetState");
+	xinput_set = (DWORD(WINAPI *)(DWORD, void *))pads_xinput_proc("XInputSetState"); // (XInput and PlayStation pads, pads.c)
 	static const struct {
 		uint32_t rva;
 		const char *name;

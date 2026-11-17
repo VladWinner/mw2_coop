@@ -288,3 +288,20 @@ level.player
 @@@ to
 self
 @@@ end
+
+12. The railing smoker's alarm (railing_patroller_player_detect: a player in the trigger by MacTavish's firing spot, then 2 s while the
+   smoker lives, then "stealth_broken" and the mission fails, "enemies alerted, hostages killed"): in single player MacTavish is at his spot
+   first and shoots the smoker the moment the player comes; in co-op one player can run ahead while MacTavish still helps the other out of the
+   water, and the 2 s ran out before he got there (tester's log: player 1 at the lower door, MacTavish short of his spot; QA oilrigwait: the
+   flag at 6750, the alarm at 8750, the fail at 10000). In co-op the 2 s start once MacTavish stands at his spot (40 s at most); a real noise
+   (player_broke_stealth) is not delayed.
+@@@ subst railing_patroller_player_detect
+	flag_wait_either( "player_alerted_railing", "player_broke_stealth" );
+	wait( 2 );
+
+@@@ to
+	flag_wait_either( "player_alerted_railing", "player_broke_stealth" );
+	maps\_mw2coop_oilrig::railing_grace();
+	wait( 2 );
+
+@@@ end

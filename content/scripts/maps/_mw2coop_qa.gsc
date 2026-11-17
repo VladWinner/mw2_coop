@@ -54,6 +54,8 @@
 //              of the helicopter are reported; frames come from MW2COOP_QA_CMDS shots
 //   oilrigdoors - (oilrig, start "rig") the lower hostage room has two doors (breach group 100): player 1 stands at one door, player 2 at the other, player 1
 //              presses Use (oilrigdoors2: player 2 presses; oilrigdoors3: both at the SAME door, the stock passive breacher). Both must breach, nobody dies, no hostage is killed
+//   oilrigwait - (oilrig, start "rig") the tester's fail: player 1 waits at the lower hostage room's door for his partner with the level's stealth monitor on;
+//              the mission must not fail (it did, 2 s after he reached the door: the tester's report); the level's alarms are reported as they come
 //   takedown3 - player 2 ducks with REAL input: a network client presses his stance key (press(), mw2coop_bind +stance); takedown3s: split screen, his pad's B
 //              through the dvar mw2coop_qa_pad2. Player 1 ducks through the notify. Makarov must not hit player 2 (Vlad's report: he could not duck)
 //   crashsite - (dcburning, start "crash") the same crash site at the end of dcburning
@@ -461,6 +463,9 @@ main()
 			break;
 		case "gulagturn":
 			gulagturn();
+			break;
+		case "oilrigwait":
+			oilrigwait();
 			break;
 		case "oilrigdoors":
 		case "oilrigdoors2":
@@ -3665,6 +3670,65 @@ weapon_change_watch()
 		}
 		wait 0.2;
 	}
+}
+
+// oilrigwait: player 1 at the lower room's door, player 2 left at the water exit (as in the tester's log), nothing switched off: the room's guards come (the flag a player
+// sets by walking past the trigger), and for 25 s the stock sight check is run against player 1 each second to show the case is exercised; the mission must not fail.
+oilrigwait()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	p1 = level.player;
+	wait 4;
+	check( isdefined( level.breach_groups ) && isdefined( level.breach_groups[ 0 ] ), "the level has breach 0" );
+	a = level.breach_groups[ 0 ];
+	// what breaks the stealth, when (the level's own alarms): the flags and the notify the fail paths wait for
+	foreach ( f in strtok( "player_alerted_railing player_broke_stealth railing_patroller_dead oilrig_mission_failed", " " ) )
+		level thread oilrigwait_flag( f );
+	level thread oilrigwait_notify( "stealth_broken" );
+	report( "before the door: player 1 ignoreme " + p1.ignoreme + ", player 2 ignoreme " + level.player2.ignoreme );
+	qa_stand_at_door( p1, a );
+	report( "at the door: player 1 ignoreme " + p1.ignoreme + ", in the door's volume " + p1 IsTouching( a.door_volume ) );
+	flag_set( "player_at_lower_breach" );
+	wait 2;
+	check( isdefined( level.oilrigStealth ) && level.oilrigStealth, "the level's stealth monitor is on" );
+	seen = 0;
+	for ( t = 0; t < 25 && !flag( "oilrig_mission_failed" ); t++ )
+	{
+		wait 1;
+		guards = 0;
+		foreach ( ai in GetAIArray( "axis" ) )
+		{
+			if ( !IsAlive( ai ) )
+				continue;
+			guards++;
+			if ( within_fov( ai.origin, ai.angles, p1.origin + ( 0, 0, 32 ), level.cosine[ "45" ] ) && sighttracepassed( ai.origin + ( 0, 0, 32 ), p1.origin + ( 0, 0, 32 ), false, ai ) && distancesquared( ai.origin, p1.origin ) < level.stealthDistanceSquared )
+			{
+				seen++;
+				break;
+			}
+		}
+		if ( t % 5 == 0 )
+			report( "t " + t + ": guards alive " + guards + ", player 1 " + vec_int( p1.origin ) + " at the door " + p1 IsTouching( a.door_volume ) + ", seconds a guard had him in the stock check " + seen );
+	}
+	report( "seconds in which a guard had player 1 in the stock check: " + seen + ", death quote '" + GetDvar( "ui_deadquote" ) + "'" );
+	check( !flag( "oilrig_mission_failed" ), "the mission did not fail while player 1 waited at the door (" + t + " s)" );
+	check( p1 IsTouching( a.door_volume ), "player 1 is still at the door" );
+}
+
+oilrigwait_flag( f )
+{
+	level endon( "mw2coop_qa_done" );
+	flag_wait( f );
+	report( "flag " + f + " set at " + GetTime() );
+}
+
+oilrigwait_notify( n )
+{
+	level endon( "mw2coop_qa_done" );
+	level waittill( n );
+	report( "level notify " + n + " at " + GetTime() );
 }
 
 oilrigdoors()

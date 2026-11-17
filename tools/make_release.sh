@@ -32,6 +32,11 @@ cp content/release/menus.menu "$OUT/mw2coop/"
 cp content/release/logo-enhanced.tga "$OUT/mw2coop/"
 cp content/release/about-icons.tga "$OUT/mw2coop/"
 case "$2" in x86) cp content/release/addresses-x86.txt "$OUT/mw2coop/" ;; *) cp content/release/addresses-x64.txt "$OUT/mw2coop/" ;; esac
+# SDL3 for the pads that are not Xbox pads (src/pads.c): the official release's DLL, checked by SHA-256 (tools/sdl3.sh), with its zlib license
+case "$2" in x86) SA=x86 ;; *) SA=x64 ;; esac
+SDL=$(sh tools/sdl3.sh $SA)
+cp "$SDL" "$OUT/mw2coop/SDL3.dll"
+cp "$(dirname "$SDL")/LICENSE.txt" "$OUT/mw2coop/SDL3-LICENSE.txt"
 sed "s/{VERSION}/$VERSION/" $INSTALL | sed 's/$/\r/' > "$OUT/INSTALL.txt"
 sed 's/$/\r/' LICENSE > "$OUT/LICENSE.txt"
 ( cd dist && python -I -c "

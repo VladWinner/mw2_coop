@@ -42,6 +42,8 @@ for t in "$@"; do
 	case "$BITS" in 32) AF=addresses-x86.txt ;; *) AF=addresses-x64.txt ;; esac
 	[ "$MW2COOP_IW4X" = 1 ] && AF=addresses-x86.txt
 	cp "content/release/$AF" "$t/mw2coop/"
+	case "$AF" in *x86*) SA=x86 ;; *) SA=x64 ;; esac
+	SDL=$(SDL3_ZIP_DIR=${SDL3_ZIP_DIR:-../third-party/sdl3/3.4.20/dl} sh tools/sdl3.sh $SA) && cp "$SDL" "$t/mw2coop/SDL3.dll" && cp "$(dirname "$SDL")/LICENSE.txt" "$t/mw2coop/SDL3-LICENSE.txt" || echo "no SDL3.dll for $t: Xbox pads only there"
 	[ -f "$t/mw2coop/settings.ini" ] || cp content/release/settings.ini "$t/mw2coop/"
 	cp content/release/mw2coop-firewall.ps1 "$t/mw2coop/"
 	rm -f "$t/mw2coop/mw2coop.log"

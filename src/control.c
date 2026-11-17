@@ -674,6 +674,17 @@ static void run_line(char *line)
 			menus_log_action(menu, item);
 		return;
 	}
+	if (strncmp(line, "!close", 6) == 0) { // QA: WM_CLOSE posted to the game window (what Alt+F4 or the window's X button do: PostQuitMessage, then the game's own quit)
+		HWND game = NULL;
+		struct find_data {
+			HWND *out;
+		} fd = {&game};
+		EnumWindows(qa_find_window, (LPARAM)&fd);
+		log_printf("control: !close %s", game ? "posts WM_CLOSE to the game window" : "found no game window");
+		if (game)
+			PostMessageA(game, WM_CLOSE, 0, 0);
+		return;
+	}
 	if (strncmp(line, "!key ", 5) == 0) { // QA: a key press posted to the game window ("!key 1b" is Escape; virtual key code in hex)
 		unsigned vk = 0;
 		if (sscanf(line + 5, "%x", &vk) == 1) {

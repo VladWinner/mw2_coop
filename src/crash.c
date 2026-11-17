@@ -26,6 +26,97 @@
 static uintptr_t image_base, image_end;
 static volatile LONG logged;
 
+// A minidump of the process at the first crash: <game dir>\mw2coop\crash.dmp (the last crash's, overwritten). MiniDumpWriteDump is looked up at the start (no library load in the
+// handler, which may run under the loader lock) and called from a thread of its own: the crashing thread may have no stack left (a stack overflow).
+typedef struct {
+	DWORD ThreadId;
+	EXCEPTION_POINTERS *ExceptionPointers;
+	BOOL ClientPointers;
+} dump_exception_t;
+static BOOL(WINAPI *write_dump)(HANDLE, DWORD, HANDLE, DWORD, dump_exception_t *, void *, void *);
+static char dump_path[MAX_PATH];
+static dump_exception_t dump_exc;
+static DWORD WINAPI dump_thread(LPVOID unused)
+{
+	(void)unused;
+	HANDLE f = CreateFileA(dump_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (f == INVALID_HANDLE_VALUE)
+		return 0;
+	// MiniDumpNormal (the threads' stacks, the modules) + MiniDumpWithUnloadedModules 0x20 + MiniDumpWithThreadInfo 0x1000
+	const BOOL ok = write_dump(GetCurrentProcess(), GetCurrentProcessId(), f, 0x20 | 0x1000, &dump_exc, NULL, NULL);
+	CloseHandle(f);
+	return ok ? 1 : 0;
+}
+static void write_crash_dump(EXCEPTION_POINTERS *info)
+{
+	static volatile LONG once;
+	if (!write_dump || !dump_path[0] || InterlockedExchange(&once, 1))
+		return;
+	dump_exc.ThreadId = GetCurrentThreadId();
+	dump_exc.ExceptionPointers = info;
+	dump_exc.ClientPointers = FALSE;
+	HANDLE t = CreateThread(NULL, 0, dump_thread, NULL, 0, NULL);
+	if (!t)
+		return;
+	DWORD rc = 0;
+	if (WaitForSingleObject(t, 20000) == WAIT_OBJECT_0 && GetExitCodeThread(t, &rc) && rc == 1)
+		log_printf("CRASH: a dump of the process is in mw2coop\\crash.dmp (send it with mw2coop.log)");
+	CloseHandle(t);
+}
+
+// After a stack overflow: the code addresses found most often on the whole stack, with their counts; a recursion shows as the few addresses of its loop. Static storage: the handler
+// runs on what is left of the stack.
+static void log_stack_loop(const uintptr_t *sp, const uintptr_t *base)
+{
+	static uintptr_t val[96];
+	static int cnt[96];
+	static char line[900];
+	int n = 0;
+	uintptr_t q_lo = 0, q_hi = 0;
+	int q_code = 0;
+	for (const uintptr_t *p = sp; p < base; p++) {
+		const uintptr_t v = *p;
+		if (v < 0x10000)
+			continue;
+		if (v < q_lo || v >= q_hi) {
+			MEMORY_BASIC_INFORMATION mbi;
+			if (!VirtualQuery((void *)v, &mbi, sizeof(mbi)))
+				continue;
+			q_lo = (uintptr_t)mbi.BaseAddress;
+			q_hi = q_lo + mbi.RegionSize;
+			q_code = mbi.Type == MEM_IMAGE && (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+		}
+		if (!q_code)
+			continue;
+		int k = 0;
+		while (k < n && val[k] != v)
+			k++;
+		if (k < n)
+			cnt[k]++;
+		else if (n < 96)
+			val[n] = v, cnt[n] = 1, n++;
+	}
+	int m = wsprintfA(line, "CRASH: the stack's most frequent code addresses (a loop shows here), %d slots:", (int)(base - sp));
+	for (int shown = 0; shown < 10 && m < (int)sizeof(line) - 80; shown++) {
+		int best = -1;
+		for (int k = 0; k < n; k++)
+			if (cnt[k] > 0 && (best < 0 || cnt[k] > cnt[best]))
+				best = k;
+		if (best < 0)
+			break;
+		HMODULE mod = NULL;
+		char name[MAX_PATH] = "?";
+		const char *s = name;
+		if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)val[best], &mod) && mod) {
+			GetModuleFileNameA(mod, name, sizeof(name));
+			s = strrchr(name, 0x5c) ? strrchr(name, 0x5c) + 1 : name;
+		}
+		m += wsprintfA(line + m, " %s+%lx x%d", s, (unsigned long)(val[best] - (uintptr_t)mod), cnt[best]);
+		cnt[best] = -cnt[best];
+	}
+	log_printf("%s", line);
+}
+
 static int in_image(uintptr_t p)
 {
 	return p >= image_base && p < image_end;
@@ -132,7 +223,10 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 			}
 		}
 		log_printf("%s", oldest);
+		log_stack_loop((const uintptr_t *)CTX_SP(c), top);
 	}
+	if (logged == 1)
+		write_crash_dump(info);
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -334,6 +428,21 @@ void crash_install(void)
 	image_base = (uintptr_t)exe;
 	image_end = image_base + nt->OptionalHeader.SizeOfImage;
 	AddVectoredExceptionHandler(1, on_exception);
+	{ // the dump writer, ready before any crash ([log] crashdump=0 in settings.ini: none)
+		char dir[MAX_PATH];
+		DWORD n = GetModuleFileNameA(NULL, dir, MAX_PATH);
+		while (n > 0 && dir[n - 1] != 0x5c)
+			n--;
+		dir[n] = 0;
+		char ini[MAX_PATH];
+		wsprintfA(ini, "%smw2coop\\settings.ini", dir);
+		if (n && GetPrivateProfileIntA("log", "crashdump", 1, ini)) {
+			HMODULE dbg = LoadLibraryA("dbghelp.dll");
+			if (dbg)
+				write_dump = (BOOL(WINAPI *)(HANDLE, DWORD, HANDLE, DWORD, dump_exception_t *, void *, void *))(void *)GetProcAddress(dbg, "MiniDumpWriteDump");
+			wsprintfA(dump_path, "%smw2coop\\crash.dmp", dir);
+		}
+	}
 #ifdef _WIN64
 	{ // sub rsp,28h; call; test rax,rax; jz short: 14 bytes, the jump's size (the retail exe only)
 		uint8_t *ab = (uint8_t *)image_base + XR(0x303a64);

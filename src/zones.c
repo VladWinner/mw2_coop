@@ -19,6 +19,7 @@
 #include "missions.h"
 #include "zones.h"
 #include "guards.h"
+#include "scrdebug.h"
 #ifdef _WIN64
 #include "game.h"
 #include "transplant.h"
@@ -112,6 +113,9 @@ void zones_pools_reset(void)
 
 static void load_level_zones(const char *map, int flag)
 {
+#ifndef _WIN64
+	scrdebug_string_census(map ? map : "level load");
+#endif
 	guards_invalidate_caches();
 	transplant_new_level();
 	char coop[8] = "";
