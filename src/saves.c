@@ -164,6 +164,27 @@ static DWORD WINAPI fast_restart_wait(LPVOID unused)
 }
 
 #ifdef _WIN64
+// ---- a co-op checkpoint stays in memory
+// A committed save also goes to disk (0x1af150 -> 0x1adce0: players\save\<map>.svg, save\autosave\<map>-<name>.svg), unless 0x233d90 says not to: arcade mode,
+// Spec Ops, or a running server with sv_saveOnStartMap 0, which is how the co-op session had it while the mod turned the game's saves off. With them on, a
+// co-op campaign wrote its checkpoints over the player's single player saves of that level (the 32-bit split screen's console log 2026-11-17: "Writing
+// savegame ... to file save\estate.svg"). In a co-op session the write is left out; the checkpoint is loaded from memory. The game's own temporary save of a
+// vid_restart / snd_restart (internal/...) is still written: the restart loads it back from the disk.
+#define RVA_COOP_FLAG 0x52fb5c
+static const uint32_t commit_write_sites[] = {0x1809b8, 0x180a04, 0x17f337, 0x22cd75}; // the calls of 0x1af150
+static uint64_t (*commit_write_orig)(void *);
+static uint64_t commit_write_hook(void *slot)
+{
+	const char *name = (const char *)slot + 0x3e0;
+	if ((native_split_active() || *(base + XR(RVA_COOP_FLAG))) && !strstr(name, "internal")) {
+		static int told;
+		if (!told++)
+			log_printf("saves: co-op checkpoints stay in memory, not written over the single player saves ('%.60s')", name);
+		return 0;
+	}
+	return commit_write_orig(slot);
+}
+
 // ---- trace (dvar mw2coop_saves 1, 64 bits): the bytes G_SaveGame writes and G_LoadGame reads, by the place in either function that asked for them. For each
 // place, the first time it is reached the bytes so far are logged; a save and the load of it must list the same numbers in the same order (the place in the
 // per local client part 0xc95f0 is logged by itself). Only the main thread saves.
@@ -318,6 +339,15 @@ void saves_install(void)
 	}
 	log_printf("saves: split screen client blocks of a save, %d of 2 calls", fixes);
 #ifdef _WIN64
+	int writes = 0;
+	for (size_t i = 0; i < sizeof(commit_write_sites) / sizeof(commit_write_sites[0]); i++) {
+		void *orig = NULL;
+		if (hook_call(base + XR(commit_write_sites[i]), (void *)commit_write_hook, &orig)) {
+			commit_write_orig = (uint64_t (*)(void *))orig; // (the same callee at every site)
+			writes++;
+		}
+	}
+	log_printf("saves: co-op checkpoints kept off the disk at %d of 4 calls", writes);
 	log_printf("saves: save trace hooks %d of 4 (on with dvar mw2coop_saves 1)", trace_install());
 #endif
 }
