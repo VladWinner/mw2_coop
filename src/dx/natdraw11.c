@@ -174,6 +174,7 @@ struct nd_shader {
 	} var[32]; // the variants of one shader: a vertex shader per vertex declaration, a pixel shader per set of samplers that hold depth textures (hardware shadow maps)
 	int nvar;
 	int failed;
+	unsigned hash; // FNV-1a of the code: the name of its MW2COOP_DUMPSHADERS file
 };
 
 nd_shader *nd_shader_create(nd *d, const uint32_t *code, size_t dwords)
@@ -186,6 +187,9 @@ nd_shader *nd_shader_create(nd *d, const uint32_t *code, size_t dwords)
 	memcpy(s->code, code, dwords * 4);
 	s->dwords = dwords;
 	s->is_vs = (code[0] >> 16) == 0xfffe;
+	s->hash = 2166136261u;
+	for (size_t i = 0; i < dwords * 4; i++)
+		s->hash = (s->hash ^ ((const uint8_t *)code)[i]) * 16777619u;
 	return s;
 }
 void nd_shader_destroy(nd_shader *s)
@@ -391,6 +395,7 @@ void nd_stats(const nd *d, unsigned *states, unsigned *layouts, unsigned *shader
 	*refused = d->n_refused;
 }
 
+static void trace_target(nd *d, char *out, size_t n);
 static void get_views(nd *d, int srgb, ID3D11RenderTargetView **rtv, ID3D11DepthStencilView **dsv)
 {
 	*rtv = d->rt ? nat_image_rtv(d->rt, srgb) : (srgb ? nat_scene_rtv_srgb(d->dev) : nat_scene_rtv(d->dev));
@@ -419,7 +424,11 @@ static void nd_clear_record(nd *d, unsigned flags, const float rgba[4])
 void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned stencil)
 {
 	if (nd_trace && nat_log_hook)
-		nat_log_hook("trace: clear flags %u %.2f %.2f %.2f %.2f", flags, rgba[0], rgba[1], rgba[2], rgba[3]);
+	{
+		char t[160];
+		trace_target(d, t, sizeof(t));
+		nat_log_hook("trace: clear flags %u %.2f %.2f %.2f %.2f %s", flags, rgba[0], rgba[1], rgba[2], rgba[3], t);
+	}
 	ID3D11RenderTargetView *rtv;
 	ID3D11DepthStencilView *dsv;
 	get_views(d, 0, &rtv, &dsv);
@@ -690,6 +699,14 @@ static void trace_target(nd *d, char *out, size_t n)
 		nat_get_size(d->dev, &w, &h);
 		snprintf(out, n, "rt SCENE %ux%u", w, h);
 	}
+	size_t k = strlen(out); // the depth target with it
+	if (d->ds == ND_NO_DEPTH)
+		snprintf(out + k, n - k, " ds none");
+	else if (d->ds) {
+		nat_image_size(d->ds, &w, &h, &s);
+		snprintf(out + k, n - k, " ds %p %ux%u x%u", (void *)d->ds, w, h, s);
+	} else
+		snprintf(out + k, n - k, " ds SCENE");
 }
 
 static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count);
@@ -701,7 +718,7 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 {
 	d->err[0] = 0;
 	if (nd_trace && nat_log_hook) {
-		char t[96], tx[400] = "";
+		char t[160], tx[400] = "";
 		trace_target(d, t, sizeof(t));
 		for (int i = 0; i < 16; i++) {
 			nat_image *im = g->tex[i] ? d->ops.image(g->tex[i]) : NULL;
@@ -711,7 +728,34 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 				snprintf(tx + strlen(tx), sizeof(tx) - strlen(tx), " t%d=%p(%ux%u%s)", i, (void *)im, w, h, im == d->rt ? " =RT" : "");
 			}
 		}
-		nat_log_hook("trace: draw %s vp %.0f,%.0f %.0fx%.0f prims %u ps %p%s | ps c0 %.3f %.3f %.3f %.3f c1 %.3f %.3f %.3f %.3f", t, d->vp[0], d->vp[1], d->vp[2], d->vp[3], prim_count, (void *)g->ps, tx, g->ps_c[0][0], g->ps_c[0][1], g->ps_c[0][2], g->ps_c[0][3], g->ps_c[1][0], g->ps_c[1][1], g->ps_c[1][2], g->ps_c[1][3]);
+		unsigned hv = 0, hp = 0; // the shaders' FNV-1a hashes: the names of their MW2COOP_DUMPSHADERS files (vs_<hash>.bin, ps_<hash>.bin)
+		for (int k = 0; k < 2; k++) {
+			nd_shader *sh = (k ? g->ps : g->vs) ? d->ops.shader(k ? g->ps : g->vs) : NULL;
+			if (!sh || !sh->code)
+				continue;
+			uint32_t h = 2166136261u;
+			const uint8_t *b = (const uint8_t *)sh->code;
+			for (size_t i = 0; i < sh->dwords * 4; i++)
+				h = (h ^ b[i]) * 16777619u;
+			*(k ? &hp : &hv) = h;
+		}
+		nat_log_hook("trace: draw %s vp %.0f,%.0f %.0fx%.0f prims %u vs_%08x ps_%08x%s | ps c0 %.3f %.3f %.3f %.3f c1 %.3f %.3f %.3f %.3f", t, d->vp[0], d->vp[1], d->vp[2], d->vp[3], prim_count, hv, hp, tx, g->ps_c[0][0], g->ps_c[0][1], g->ps_c[0][2], g->ps_c[0][3], g->ps_c[1][0], g->ps_c[1][1], g->ps_c[1][2], g->ps_c[1][3]);
+	}
+	{ // QA: MW2COOP_SKIPPS=<hash>[,<hash>..] (8 hex digits, the ps_<hash>.bin names): draws with one of these pixel shaders are not drawn
+		static char list[512];
+		static int read;
+		if (!read) {
+			const char *e = getenv("MW2COOP_SKIPPS");
+			snprintf(list, sizeof(list), "%s", e ? e : "");
+			read = 1;
+		}
+		nd_shader *psk = list[0] && g->ps ? d->ops.shader(g->ps) : NULL;
+		if (psk) {
+			char want[12];
+			snprintf(want, sizeof(want), "%08x", psk->hash);
+			if (strstr(list, want))
+				return 1;
+		}
 	}
 	{ // QA: MW2COOP_SKIPTEX=512x512[,1024x256..]: draws whose first texture has one of these sizes are not drawn (which draw makes a wrong detail)
 		static char list[128];

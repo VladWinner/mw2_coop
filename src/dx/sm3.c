@@ -522,6 +522,7 @@ static int emit_instr(const shader_t *sh, const instr_t *in, sb_t *L, flow_t *st
 			// tex2Dlod / tex2Dgrad on a hardware shadow map: Direct3D 9 compares the coordinate's z with the stored depth here too (no projection: texldl and texldd take the
 			// coordinate as it is). The split screen's mode 11 draws the sun's shadow with such shaders (four tex2Dlod taps on sampler 4, z = the pixel's depth in the light,
 			// averaged: PCF); a comparison sampler has no SampleLevel / SampleGrad (HLSL error X3013, every such draw was refused, 2026-11-17). A shadow map has one level.
+			// (The white surfaces after this change were not the comparison's: the scene's depth was left uncleared with MSAA and r_zFeather, natbring.c shared_depth.)
 			snprintf(a, sizeof(a), "(%s.SampleCmpLevelZero(%s, (%s).xy, (%s).z)).xxxx", tex, ss, S[1], S[1]);
 		} else if (name == OP_TEXLDL) {
 			snprintf(a, sizeof(a), "%s.SampleLevel(%s, (%s)%s, (%s).w)", tex, ss, S[1], dim, S[1]);

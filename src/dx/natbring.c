@@ -367,6 +367,12 @@ int nbr_start(nbr *n, uint8_t *p)
 	RD_PTR(e, G_DEVICE) = n->sentinel; // a non-NULL sentinel: the game tests it to mean "there is a device"
 	const nat_caps *caps = nat_get_caps(n->dev);
 	ngs_caps_globals(&n->ngs_, caps);
+	{ // the multisample type and quality the Direct3D 9 start (0xedd0) leaves for the game: 0x5c240 clears the scene and lays its depth again after r_zFeather's pre-pass
+		// only when the scene has MSAA, and 0x391d0 / 0x39420 decide the targets' depth by it (shared_depth)
+		const unsigned smp = nat_scene_samples(n->dev);
+		RD_I32(e, 0x411325c) = smp > 1 ? (int32_t)smp : 0;
+		RD_I32(e, 0x4113260) = 0;
+	}
 	RD_I32(e, 0x4113730) = RD_I32(p, 8);
 	ngs_display_globals(&n->ngs_, caps, RD_I32(p, 0xc) != 0, np.width, np.height, (unsigned)RD_I32(p, 0x18), (unsigned)RD_I32(p, 0x1c));
 	RD_I32(e, 0x4358e80) = (int32_t)np.width;
@@ -729,9 +735,16 @@ static void make_record(nbr *n, int idx, int size_mode, unsigned shift, int fmt,
 }
 
 // the shared single-sample depth image of the offscreen targets
+// 0x391d0's depth of the offscreen colour targets (the float depth target of r_zFeather's pre-pass among them): without MSAA the scene's own depth (Direct3D 9: the
+// back buffer entry's surface 0x4359030), so the pre-pass leaves its depth for the scene, which the game then does not clear (0x5c240); with MSAA a depth of one
+// sample of their own (they have one sample), and the game clears the scene and lays its depth again. Native: NULL in a target record is the scene's depth.
+// (A depth of their own also without MSAA left the scene's depth uncleared and never written in the frame: with MSAA 4x and r_zFeather 1 the models came out
+// white or in black and white patches, 2026-11-17.)
 static nat_image *shared_depth(nbr *n)
 {
 	uint8_t *e = n->exe;
+	if (nat_scene_samples(n->dev) <= 1)
+		return NULL;
 	if (!RD_PTR(e, 0x4113268))
 		RD_PTR(e, 0x4113268) = ngr_depth_create(&n->r, (unsigned)RD_I32(e, 0x4113728), (unsigned)RD_I32(e, 0x411372c), 1);
 	return RD_PTR(e, 0x4113268);

@@ -303,13 +303,13 @@ static struct { uint32_t rva; LONG n[2]; } snd_callers[64]; // ([native] sndcoun
 #endif
 static int from_menu;
 static int menu_pad = -1, menu_pad0 = -1; // the lobby's devices of player 2 and player 1 (-1: the keyboard and mouse)
-// The split screen a menu start gets: mode 11 (each player in his own renderer frame, as the Xbox 360) on the 64-bit game with its own Direct3D 9; mode 10 on the
-// mod's native Direct3D 11 / 12 renderers (mode 11 is not drawn there yet: the top half stays black) and on 32 bits (mode 11 is not ported, it would fall back to 5).
-// [native] experiment=10 or 11 in settings.ini still picks one.
+// The split screen a menu start gets: mode 11 (each player in his own renderer frame, as the Xbox 360) on the 64-bit game, with its own Direct3D 9 and with the mod's
+// native Direct3D 11 / 12 renderers (drawn there since 2026-11-17: both halves, checked on Trainer against the Direct3D 9 frame); mode 10 on 32 bits (mode 11 is
+// not ported, it would fall back to 5). [native] experiment=10 or 11 in settings.ini still picks one.
 static int split_mode_default(void)
 {
 #ifdef _WIN64
-	return natboot_active() ? 10 : 11;
+	return 11;
 #else
 	return 10;
 #endif
