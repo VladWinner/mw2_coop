@@ -189,10 +189,22 @@ static int list_saves(save_file_t *out)
 	WIN32_FIND_DATAA fd;
 	HANDLE h = FindFirstFileA(pattern, &fd);
 	if (h != INVALID_HANDLE_VALUE) {
+		// the newest MAX_FILES of them, whatever their number (the first MAX_FILES the folder listed were kept before, and a newer save past them was never
+		// offered: QA lobby 2026-11-17, a test copy with 413 saves)
 		do {
-			snprintf(out[n].file, MAX_PATH, "%sprogress\\%s", dir, fd.cFileName);
-			out[n++].time = fd.ftLastWriteTime;
-		} while (n < MAX_FILES && FindNextFileA(h, &fd));
+			int at = n;
+			if (n == MAX_FILES) { // full: the oldest kept one makes room, if this one is newer
+				at = 0;
+				for (int i = 1; i < n; i++)
+					if (CompareFileTime(&out[i].time, &out[at].time) < 0)
+						at = i;
+				if (CompareFileTime(&fd.ftLastWriteTime, &out[at].time) <= 0)
+					continue;
+			} else
+				n++;
+			snprintf(out[at].file, MAX_PATH, "%sprogress\\%s", dir, fd.cFileName);
+			out[at].time = fd.ftLastWriteTime;
+		} while (FindNextFileA(h, &fd));
 		FindClose(h);
 	}
 	for (int i = 1; i < n; i++) // newest first
@@ -410,6 +422,14 @@ void progress_snapshot_note(const char *key, const char *tag, const char *extra,
 	}
 	if (host && target_file[0]) {
 		lstrcpynA(target.snap, tag, sizeof(target.snap));
+		// a checkpoint can come before the mod's first one of the session (progress_save): a save without its mission is no save (read_save), and Continue
+		// passed over it (QA lobby 2026-11-17: save_413.txt had "map " empty and the lobby continued an older one)
+		if (!target.map[0]) {
+			char map[64] = "";
+			game_dvar_raw("mapname", map, sizeof(map));
+			if (map[0] && is_name(map))
+				lstrcpynA(target.map, map, sizeof(target.map));
+		}
 		write_save(target_file, &target);
 	}
 }
