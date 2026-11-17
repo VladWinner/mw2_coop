@@ -61,6 +61,7 @@ static const uint8_t begin_frame_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 
 #define RVA_CG_TIME XR(0x374c20)
 static const uint8_t cg_draw_bytes[] = {0x83, 0xec, 0x0c, 0x53, 0x55};
 #endif
+#define RVA_CG_PS (RVA_CG_TIME + 0xc) // cg.predictedPlayerState: 0xc after cg.time in both builds (64: rva 0x422440)
 #define RVA_CG_PS_ORIGIN (RVA_CG_TIME + 0x28) // the origin in cg.ps (the camera of the live context): 0x1c into the playerState, which starts 0xc after cg.time, in both builds
 static void (*cg_draw_original)(unsigned, int, int);
 static void (*begin_frame_original)(void);
@@ -233,6 +234,60 @@ static uint8_t *base;
 // the add-by-type cases that add the "general" entity types: 0x561d00 (case 0), 0x561d60 (case 2), 0x5621d0 (case 5)
 #define P0GENERAL_RET(r) (((r) >= base + XR(0x161d00) && (r) < base + XR(0x161d5a)) || ((r) >= base + XR(0x161d60) && (r) < base + XR(0x161e17)) || ((r) >= base + XR(0x1621d0) && (r) < base + XR(0x162294)))
 #endif
+// Mode 11 (both players drawn in every engine frame, each in his own renderer frame) in both builds. The 32-bit addresses: docs/32bit-native-map/mode11-frame.md,
+// mode11-cgame.md, mode11-hud.md (2026-11-17, both decompiles compared).
+#ifdef _WIN64
+#define M11_SCR_BUSY XR(0x5db410)        // the screen update's busy flag (a set flag makes the client frame's screen update return at once)
+#define M11_CL_SERVERTIME XR(0x51dca8)   // cl.serverTime (in the swapped cl range)
+#define M11_CS_INDEX XR(0x5d8d02)        // the cgame's table of configstring indices (uint16), entries 0xc + 2 * lc / 0xd + 2 * lc: the popup friendly name
+#define M11_VIEWRECT XR(0x3bd808)        // the renderer's per-player view rectangle, 4 floats (what 0xbd520 returns)
+#define M11_CG_VIEWRECT XR(0x43c630)     // the cgame's view rectangle in pixels, 4 ints
+#define M11_DISP_W XR(0x4113728)         // the picture's size (the renderer's display globals)
+#define M11_DISP_H XR(0x411372c)
+#define M11_FD_CUR XR(0x410fd00)         // the frame data the main thread fills
+#define M11_RT_FRAMES XR(0x1429b5c)      // frames handed to the render thread and not finished
+#define M11_RLC XR(0x51deb8)             // the renderer's local player
+#define M11_LIST_END XR(0xc800)          // the frame's command list: end of the views' commands
+#define M11_LIST_2DSTART XR(0xc7e0)      // ... the final 2D section's start
+#define M11_LIST_2DFIRST XR(0xe900)      // ... its first command
+#define M11_LIST_CLOSE XR(0xe440)        // ... the close
+#define M11_END_FRAME XR(0xc4c0)         // void (unsigned flags): the end-frame
+#define M11_MODEL_CLEAR XR(0x7b60)       // void (void): the scene's model records cleared
+#define M11_RT_WAIT XR(0x301e0)          // void (int (*predicate)(void)): wait, helping the workers, until the predicate holds
+#define M11_PLACE_SW XR(0x548bfc)        // the screen size the 2D placements are made for
+#define M11_PLACE_SH XR(0x548c00)
+#define M11_PLACE_CLIENT XR(0x5e0c60)    // the per-client 2D placement
+#define M11_PLACE_SET XR(0xdb0b0)        // void (float *placement, float x, y, w, h, int screen w, int screen h)
+#define M11_BE_FD XR(0x4358f58)          // the frame data the back end (render thread) is drawing
+#define M11_CG_VIEWORG XR(0x42d310)      // the cgame's view: origin, then the axis (forward at +0xc): inside the cgame range of both builds
+#define M11_FD_SCENES 0x41a34            // frame data: scene count
+#define M11_FD_VIEWS 0x419e8             // frame data: view count
+#else
+#define M11_SCR_BUSY XR(0x531ee0)
+#define M11_CL_SERVERTIME XR(0x46a5b4)
+#define M11_CS_INDEX XR(0x52443a)
+#define M11_VIEWRECT XR(0x32f3ec)
+#define M11_CG_VIEWRECT XR(0x35f008)     // (not inside a swapped range in 32 bits: mode 11 sets it before each player's draw)
+#define M11_DISP_W XR(0x188eda4)
+#define M11_DISP_H XR(0x188eda8)
+#define M11_FD_CUR XR(0x1893238)
+#define M11_RT_FRAMES XR(0x1151b60)
+#define M11_RLC XR(0x35e688)
+#define M11_LIST_END XR(0x10d7c0)
+#define M11_LIST_2DSTART XR(0x10d7a0)
+#define M11_LIST_2DFIRST XR(0x10f1f0)
+#define M11_LIST_CLOSE XR(0x10edc0)
+#define M11_END_FRAME XR(0x10d630)
+#define M11_MODEL_CLEAR XR(0x107410)
+#define M11_PLACE_SW XR(0x494374)
+#define M11_PLACE_SH XR(0x494378)
+#define M11_PLACE_CLIENT XR(0x537500)
+#define M11_PLACE_SET XR(0xa7320)        // (cdecl; it hands the placement to its helper in EBX itself)
+#define M11_BE_FD XR(0x1e1e5b4)
+#define M11_CG_VIEWORG XR(0x37fae8)
+#define M11_FD_SCENES 0x419c4
+#define M11_FD_VIEWS 0x41980
+#endif
 static char settings_path[MAX_PATH];
 static int mode;
 static int second_pass;
@@ -304,16 +359,13 @@ static struct { uint32_t rva; LONG n[2]; } snd_callers[64]; // ([native] sndcoun
 #endif
 static int from_menu;
 static int menu_pad = -1, menu_pad0 = -1; // the lobby's devices of player 2 and player 1 (-1: the keyboard and mouse)
-// The split screen a menu start gets: mode 11 (each player in his own renderer frame, as the Xbox 360) on the 64-bit game, with its own Direct3D 9 and with the mod's
-// native Direct3D 11 / 12 renderers (drawn there since 2026-11-17: both halves, checked on Trainer against the Direct3D 9 frame); mode 10 on 32 bits (mode 11 is
-// not ported, it would fall back to 5). [native] experiment=10 or 11 in settings.ini still picks one.
+// The split screen a menu start gets: mode 11 (each player in his own renderer frame, as the Xbox 360), on the 64-bit game with its own Direct3D 9 and with the mod's
+// native Direct3D 11 / 12 renderers (drawn there since 2026-11-17: both halves, checked on Trainer against the Direct3D 9 frame), and since 2026-11-17 on the 32-bit game and
+// the iw4x-sp client too (docs/32bit-native-map/mode11-*.md; mode 10 drew the Endgame wake-up with a second view over player 1's half and no hands in player 2's).
+// [native] experiment=10 or 11 in settings.ini still picks one.
 static int split_mode_default(void)
 {
-#ifdef _WIN64
 	return 11;
-#else
-	return 10;
-#endif
 }
 static int cfg(const char *key, int def)
 {
@@ -1364,8 +1416,8 @@ static void present_stat(void)
 // 2D (the HUD) only for a frame that has bit 1 (0x453c0 tests `flags & 2`; 0x45060 presents on the same bit). Player 1's frame had flags 1, so it got neither a post-process nor
 // its HUD; only player 2's frame (flags 3) did, which is also why his 2D painted over the half (2D of one frame only). The 360 draws each view with its own 2D.
 // The back end's call of 0x45060 (at 0x45757) strips the mark, and the Present that frame makes is skipped, so one picture is shown per engine frame ([native] exp11p1show=0 off).
-#ifdef _WIN64
 static volatile int be_skip_present;
+#ifdef _WIN64
 static void (*be_end_original)(unsigned flags);
 static void be_end_hook(unsigned flags)
 {
@@ -1376,16 +1428,29 @@ static void be_end_hook(unsigned flags)
 	be_end_original(flags);
 	be_skip_present = 0;
 }
+#else
+// 32 bits (mode11-frame.md): the back end's frame (VA 0x5397e0, cdecl void (void), called three times from the render thread's loop 0x5398e0) tests the show bit itself and
+// tail-jumps to the frame end, which presents; there is no call that receives the flags. The frame it draws is the one the loop has just stored at VA 0x2534c74; its flags
+// are at +0x41a38 (nothing in the 32-bit back end tests 0x80). While a frame marked 0x80 (player 1's) is drawn, its Present is skipped.
+#define BE_FRAME_DATA XR(0x2134c74)
+#define BE_FD_FLAGS 0x41a38
+static void (*be_frame_original)(void);
+static void be_frame_hook(void)
+{
+	const uint8_t *fd = *(const uint8_t *const *)(base + BE_FRAME_DATA);
+	if (fd && (*(const unsigned *)(fd + BE_FD_FLAGS) & 0x80u))
+		be_skip_present = 1;
+	be_frame_original();
+	be_skip_present = 0;
+}
 #endif
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
 	skip_this_present = 0;
-#ifdef _WIN64
 	if (be_skip_present) { // the frame that is not shown (player 1's): everything the Present hook does for a shown frame waits for player 2's
 		skip_this_present = 1;
 		return;
 	}
-#endif
 	int on = CFG_ONCE("perflog", 0);
 	if (CFG_ONCE("presentlog", 0))
 		present_stat();
@@ -2174,7 +2239,7 @@ static HRESULT STDMETHODCALLTYPE t_clear(IDirect3DDevice9 *dev, DWORD n, const D
 		IDirect3DDevice9_GetViewport(dev, &lv);
 		if (cl_n < 60)
 			cl_n++, log_printf("native: clear11 #%u: flags %lx n %lu rect %ld,%ld,%ld,%ld color %08lx | viewport %lu,%lu %lux%lu | fd %p (p2 fd %p) | caller rva %llx", cl_n, (unsigned long)f, (unsigned long)n, r && n ? (long)r[0].x1 : 0, r && n ? (long)r[0].y1 : 0, r && n ? (long)r[0].x2 : 0,
-					   r && n ? (long)r[0].y2 : 0, (unsigned long)c, (unsigned long)lv.X, (unsigned long)lv.Y, (unsigned long)lv.Width, (unsigned long)lv.Height, *(void **)(base + XR64(0x4358f58)), p2_fd,
+					   r && n ? (long)r[0].y2 : 0, (unsigned long)c, (unsigned long)lv.X, (unsigned long)lv.Y, (unsigned long)lv.Width, (unsigned long)lv.Height, *(void **)(base + M11_BE_FD), p2_fd,
 					   (unsigned long long)((uint8_t *)__builtin_return_address(0) - base));
 	}
 	IDirect3DSurface9 *rt0 = NULL, *bb = NULL;
@@ -2185,10 +2250,10 @@ static HRESULT STDMETHODCALLTYPE t_clear(IDirect3DDevice9 *dev, DWORD n, const D
 	if (bb)
 		IDirect3DSurface9_Release(bb);
 	if (on_bb) {
-		const int w = *(int *)(base + XR64(0x4113728)), h = *(int *)(base + XR64(0x411372c));
+		const int w = *(int *)(base + M11_DISP_W), h = *(int *)(base + M11_DISP_H);
 		D3DVIEWPORT9 vp, full = {0, 0, (DWORD)w, (DWORD)h, 0.0f, 1.0f};
 		if (w > 0 && h > 0 && SUCCEEDED(IDirect3DDevice9_GetViewport(dev, &vp))) {
-			const int p2 = *(void **)(base + XR64(0x4358f58)) == p2_fd;
+			const int p2 = *(void **)(base + M11_BE_FD) == p2_fd;
 			const D3DRECT rc = {0, p2 ? h / 2 : 0, w, p2 ? h : h / 2};
 			IDirect3DDevice9_SetViewport(dev, &full); // a clear's rectangles are clipped to the viewport
 			const HRESULT hr = clear_orig(dev, 1, &rc, f, c, z, st);
@@ -3104,11 +3169,11 @@ static void end_frame_hook(unsigned flags)
 #ifdef _WIN64
 		ng_skip_reset_2d = 0;
 #endif
-		p2_fd = *(void **)(base + XR64(0x410fd00));
+		p2_fd = *(void **)(base + M11_FD_CUR);
 		static int nlog2;
 		if (nlog2 < 4) {
 			nlog2++;
-			log_printf("native: exp11frames: p2 end-frame %u (fd %p) ...", flags, *(void **)(base + XR64(0x410fd00)));
+			log_printf("native: exp11frames: p2 end-frame %u (fd %p) ...", flags, *(void **)(base + M11_FD_CUR));
 			end_frame_original(flags);
 			log_printf("native: exp11frames: p2 end-frame done");
 			return;
@@ -3119,7 +3184,19 @@ static void end_frame_hook(unsigned flags)
 static void ctx_wait_workers(void);
 static int rt_frames_done(void) // the render thread has no frame in hand (rva 0x1429b5c: frames handed over by 0x204230 and not finished)
 {
-	return *(volatile int *)(base + XR(0x1429b5c)) <= 0;
+	return *(volatile int *)(base + M11_RT_FRAMES) <= 0;
+}
+// Waits until the predicate holds: on 64 bits the engine's own wait, which helps the front end's workers meanwhile (M11_RT_WAIT). The 32-bit one (VA 0x52afc0) takes the
+// predicate in ESI and has another shape in the iw4x-sp exe: the predicate is polled here instead, as render_wait_idle does (200 ms at most; the workers are threads of their own).
+static void m11_rt_wait(int (*pred)(void))
+{
+#ifdef _WIN64
+	((void (*)(int (*)(void)))(base + M11_RT_WAIT))(pred);
+#else
+	const DWORD t0 = GetTickCount();
+	while (!pred() && GetTickCount() - t0 < 200)
+		Sleep(0);
+#endif
 }
 static int trace_on_now(void);
 static void body_rec_log(const char *when) // QA (traceprims): the scene records of the player bodies (entities 0, 1) in the traced frame: index, state (+0x28: skin offset + 4), DObj
@@ -3143,6 +3220,7 @@ static void body_rec_log(const char *when) // QA (traceprims): the scene records
 }
 static void rs_log(const char *when)
 {
+#ifdef _WIN64 // (QA: the frame data's 64-bit fields)
 	static int n;
 	if (n >= 12 || !CFG_ONCE("rslog", 0))
 		return;
@@ -3154,6 +3232,9 @@ static void rs_log(const char *when)
 	log_printf("native: rslog %s: lc %d second %d | spot lights %u | entry0 %llx %llx %llx %llx | scenes %u views %u | spot dvar %d",
 		when, *(int *)(base + XR(0x51deb8)), second_pass, *(unsigned *)(fd + 0x41ea8), e[0], e[1], e[2], e[3],
 		*(unsigned *)(fd + 0x41a34), *(unsigned *)(fd + 0x419e8), *(int *)(*(uint8_t **)(base + XR64(0x4115fe0)) + 0x10));
+#else
+	(void)when;
+#endif
 }
 static void render_scene_hook(void *refdef, uintptr_t scene, uintptr_t c, uintptr_t d)
 {
@@ -3169,7 +3250,7 @@ static void render_scene_hook(void *refdef, uintptr_t scene, uintptr_t c, uintpt
 		return;
 	}
 	rs_log("before p2");
-	int *rlc = (int *)(base + XR(0x51deb8));
+	int *rlc = (int *)(base + M11_RLC);
 	const int saved = *rlc;
 	*rlc = 1;
 	rs_player1 = 1;
@@ -3191,7 +3272,6 @@ static void rs_shock_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
 // in the other half (owner's report, 2026-11-15). [native] fxclock=0 off.
 static int ctx1_ready; // the second context is live (set when its statics are initialised)
 static volatile int p2_cmd_hold; // a new level is loading: context 1 still holds the previous level's state, its commands are not given to the server (native_level_load)
-#ifdef _WIN64
 static void (*fx_step_original)(int *ctx, int time);
 static void fx_step_hook(int *ctx, int time)
 {
@@ -3199,7 +3279,6 @@ static void fx_step_hook(int *ctx, int time)
 		return;
 	fx_step_original(ctx, time);
 }
-#endif
 
 static void rs_cgents_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
 {
@@ -3377,17 +3456,12 @@ static void vehjit_log(int ctx)
 		   (double)*(const float *)(base + XR(0x431ae4)), (double)*(const float *)(base + XR(0x431ae8)), (double)*(const float *)(ps + 0x108), (double)*(const float *)(ps + 0x10c),
 		   (double)acc[0], (double)acc[1]);
 }
-static int be_end_installed;
+#endif
+static int be_end_installed; // (32 bits: the back end's frame is wrapped, be_frame_hook)
 static unsigned p1_frame_flags(void)
 {
 	return be_end_installed && CFG_ONCE("exp11p1show", 1) ? 0x83u : 1u;
 }
-#else
-static unsigned p1_frame_flags(void)
-{
-	return 1u;
-}
-#endif
 // The two views of mode 11 as fractions of the picture (x, y, w, h). Default: the top and the bottom half, full width. [native] viewlayout=1 (or 360; the menu row Enhanced > console-style view boxes; read at each split screen start): the console's own boxes, read from its code
 // (0x82110a70 registers cg_coopSplitscreenView0X 0, View1X 0.2, ViewWidth 0.8, ViewHeight 0.49; 0x82111cf8 builds view 0 = (0, 0, 0.8, 0.49) and view 1 = (0.2, 1 - 0.49, 0.8, 0.49), the
 // pixels fraction * size + 0.5 truncated, the view's aspect (w / h) * the display's): two staggered boxes, top left and bottom right, with black between and around them.
@@ -3415,7 +3489,6 @@ static void exp11_pixels(int idx, int sw, int sh, int *cvr)
 		cvr[0] = 0, cvr[1] = idx ? sh / 2 : 0, cvr[2] = sw, cvr[3] = idx ? sh - sh / 2 : sh / 2;
 	}
 }
-#ifdef _WIN64
 // Each player's 2D in his own half, the engine's way (2026-11-16, from the 360 and the PC's own placement code; [native] exp11place=0 off). The cgame's 2D code takes its
 // screen placement from rva 0xdaf10(lc): while CG_DrawActiveFrame has switched the placements to "per client" (0xdad10, called at 0xbca35) that is the one at rva
 // 0x5e0c60, otherwise the full screen one at 0x5e0bf0. The placement is set by 0xdb0b0(placement, x, y, w, h, screen w, screen h) (0xdb060 does it for the whole screen, at the
@@ -3431,7 +3504,7 @@ static void place_client_set(int bottom, int whole)
 		return;
 	if (exp11_cycle_state() == 1) // QA cycle: the whole-screen placement for both players
 		bottom = 0, whole = 1;
-	const int sw = *(const int *)(base + XR(0x548bfc)), sh = *(const int *)(base + XR(0x548c00));
+	const int sw = *(const int *)(base + M11_PLACE_SW), sh = *(const int *)(base + M11_PLACE_SH);
 	if (sw <= 0 || sh <= 0)
 		return;
 	int vp[4];
@@ -3440,8 +3513,8 @@ static void place_client_set(int bottom, int whole)
 	static unsigned logged;
 	if (logged < 6)
 		logged++, log_printf("native: exp11place: the 2D placement of the %s is (%g, %g, %g, %g) of a %dx%d screen", whole ? "whole screen" : bottom ? "bottom half" : "top half", (double)x, (double)y, (double)w, (double)h, sw, sh);
-	float *pl = (float *)(base + XR(0x5e0c60));
-	((void (*)(float *, float, float, float, float, int, int))(base + XR(0xdb0b0)))(pl, x, y, w, h, sw, sh);
+	float *pl = (float *)(base + M11_PLACE_CLIENT);
+	((void (*)(float *, float, float, float, float, int, int))(base + M11_PLACE_SET))(pl, x, y, w, h, sw, sh);
 	// The size of the 2D in a half. A half is 0.5 of the screen high, so the engine's scale (height / 480) makes a HUD that is half the size of the single picture's: barely
 	// readable. The 360 enlarges the HUD of its split views: cg_hudLegacySplitscreenScale (registered at 0x82140e60: default 1.5, minimum 1; "Screen scale for hud elements in
 	// splitscreen", with cg_hudSplitscreenOffsetsUseScale 1: the offsets scale too), the active factor kept in 0x8266be6c (0x82140de8: that dvar while the screen is split, else 1) and
@@ -3460,7 +3533,6 @@ static void place_client_set(int bottom, int whole)
 		}
 	}
 }
-#endif
 // [native] smoothlog=1: how evenly the camera of each view moves from one draw to the next while it walks (the draws in a row that did not move although it did, the speed per draw)
 static void smooth_sample(int k)
 {
@@ -4295,8 +4367,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		if (mode >= 5 && !split_on)
 			half_forget();
 		if (mode == 11 && !split_on) { // back to one picture: player 1's view rectangle covers the screen again
-			int *cvr = (int *)(base + XR(0x43c630));
-			const int sw_px = *(int *)(base + XR64(0x4113728)), sh_px = *(int *)(base + XR64(0x411372c));
+			int *cvr = (int *)(base + M11_CG_VIEWRECT);
+			const int sw_px = *(int *)(base + M11_DISP_W), sh_px = *(int *)(base + M11_DISP_H);
 			if (sw_px > 0 && sh_px > 0 && (cvr[2] != sw_px || cvr[3] != sh_px))
 				cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px;
 		}
@@ -4317,7 +4389,11 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	}
 	if (mode == 11) { // both views in this frame: the per-player view rectangle (rva 0x3bd808, what 0xbd520 returns) top for player 1, bottom for player 2 (context 1, drawn
 			  // as local client 0 with its statics swapped in); the second draw skips begin-frame (second_pass) and its static model chunks go to our buffers
-		float *vrect = (float *)(base + XR(0x3bd808));
+		// The Present hooks, as mode 10 puts them in (comp_hook): player 1's frame is ended with the show bit and marked 0x80, and the back end skips its Present only through
+		// them (be_skip_present). Mode 11 never called this: the hooks came only with the developer console open or [native] presentkeep=1, so a player's session presented
+		// both renderer frames of an engine frame (2026-11-17, found porting mode 11 to the 32-bit build).
+		comp_hook(NULL);
+		float *vrect = (float *)(base + M11_VIEWRECT);
 		float *aspect = (float *)(base + RVA_CG_ASPECT);
 		{
 			static unsigned n11;
@@ -4325,10 +4401,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				log_printf("native: mode 11 draw #%u (ctx1 ready %d)", n11, ctx1_ready);
 		}
 		const float aspect_was = *aspect;
-		const int sw_px = *(int *)(base + XR64(0x4113728)), sh_px = *(int *)(base + XR64(0x411372c)); // the picture's size (the renderer's display globals)
+		const int sw_px = *(int *)(base + M11_DISP_W), sh_px = *(int *)(base + M11_DISP_H); // the picture's size (the renderer's display globals)
 		if (sw_px > 0 && sh_px > 0 && CFG_ONCE("exp11aspect", 1))
 			*aspect = exp11_aspect(0, sw_px, sh_px); // a half's shape: the cgame builds the field of view for it (as mode 10 does)
-		int *cvr = (int *)(base + XR(0x43c630)); // the cgame's view rectangle in pixels (x, y, w, h; the refdef's, copied by 0xbe710; set at the level start by 0xa6680): one per context
+		int *cvr = (int *)(base + M11_CG_VIEWRECT); // the cgame's view rectangle in pixels (x, y, w, h; the refdef's, copied by 0xbe710; set at the level start by 0xa6680): one per context
 		exp11_view(0, vrect);
 		if (sw_px > 0 && sh_px > 0)
 			exp11_pixels(0, sw_px, sh_px, cvr);
@@ -4341,8 +4417,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				log_printf("native: split rects p1: view rect %.3f %.3f %.3f %.3f | cg view %d %d %d %d | picture %d %d", (double)vrect[0], (double)vrect[1], (double)vrect[2],
 					   (double)vrect[3], cvr[0], cvr[1], cvr[2], cvr[3], sw_px, sh_px);
 		}
-#ifdef _WIN64
 		place_client_set(0, 0); // player 1's 2D goes to the top half
+#ifdef _WIN64
 		viewjit_log(0);
 		vehjit_log(0);
 #endif
@@ -4392,16 +4468,16 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				ctx_wait_workers(); // player 1's front-end jobs (skinning, surface lists) read the frame data pointer 0x410fd00, which the end-frame clears and player 2's begin moves
 			// The list's shape, as the screen update 0xd5890 builds it: the views' commands, end marker (0xc800, 0x40000; the 360's 0x823912a8 after each view),
 			// the final 2D section's start kept at frame data +0x41a40 (0xc7e0), its first command 0x80017 (0xe900), then the close (0xe440).
-			((void (*)(void))(base + XR64(0xc800)))();
-			((void (*)(void))(base + XR(0xc7e0)))();
-			((void (*)(void))(base + XR(0xe900)))();
-			((void (*)(void))(base + XR(0xe440)))();
+			((void (*)(void))(base + M11_LIST_END))();
+			((void (*)(void))(base + M11_LIST_2DSTART))();
+			((void (*)(void))(base + M11_LIST_2DFIRST))();
+			((void (*)(void))(base + M11_LIST_CLOSE))();
 			// The PC's frame begin (0x44d00 on bit 0) is more than the 360's: BeginScene and the upload of the frame's dynamic data, so player 2's frame needs
 			// bit 0 too (exp11frames=2: flags 1 then 3).
 			static int nlog1;
 			if (nlog1 < 4)
-				log_printf("native: exp11frames: p1 end-frame (fd %p) ...", *(void **)(base + XR64(0x410fd00)));
-			((void (*)(unsigned))(base + XR(0xc4c0)))(p1_frame_flags());
+				log_printf("native: exp11frames: p1 end-frame (fd %p) ...", *(void **)(base + M11_FD_CUR));
+			((void (*)(unsigned))(base + M11_END_FRAME))(p1_frame_flags());
 			if (nlog1 < 4)
 				nlog1++, log_printf("native: exp11frames: p1 end-frame done");
 			if (CFG_ONCE("p2skindump", 0)) { // QA: which records and skin offsets player 2's frame leaves behind, before the clear
@@ -4428,8 +4504,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				// bodies of both players into shards. Wait until it has finished the frame: the engine's own count of frames handed over and not done
 				// (rva 0x1429b5c; begin-frame waits for <= 1 through 0x2039f0), with its own wait that helps the workers (0x301e0).
 				if (CFG_ONCE("exp11rtwait", 1))
-					((void (*)(int (*)(void)))(base + XR(0x301e0)))(rt_frames_done);
-				((void (*)(void))(base + XR64(0x7b60)))();
+					m11_rt_wait(rt_frames_done);
+				((void (*)(void))(base + M11_MODEL_CLEAR))();
 			}
 			p2_frame = 1;
 #ifdef _WIN64
@@ -4488,17 +4564,15 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				seq1++;
 			}
 			second_pass = frames ? 0 : 1;
-#ifdef _WIN64
 			place_client_set(1, 0); // player 2's 2D goes to the bottom half
+#ifdef _WIN64
 			viewjit_log(1);
 			vehjit_log(1);
 #endif
 			cg_draw_vis(0, a, b);
 			if (CFG_ONCE("npclog", 0) && ctx_current == 1) // QA: the actors as player 2's draw placed them (the frame hook logs context 0 only in mode 11)
 				npc_log();
-#ifdef _WIN64
 			place_client_set(0, 1); // the whole screen again, as at the video start
-#endif
 			second_pass = 0;
 			if (nogun11)
 				gun11->current.enabled = (uint8_t)wasgun;
@@ -4521,16 +4595,19 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		{
 			static unsigned n11b;
-			uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
+			uint8_t *fd = *(uint8_t **)(base + M11_FD_CUR);
 			if (fd && n11b++ % 1200 == 0) {
-				const int views = *(int *)(fd + 0x419e8);
+				const int views = *(int *)(fd + M11_FD_VIEWS);
 				char line[400];
-				const int *cvr = (const int *)(base + XR(0x43c630));
-				int n = snprintf(line, sizeof(line), "native: mode 11 frame: scenes %d views %d | cg view rect %d %d %d %d", *(int *)(fd + 0x41a34), views, cvr[0], cvr[1], cvr[2], cvr[3]);
+				const int *cvr = (const int *)(base + M11_CG_VIEWRECT);
+				int n = snprintf(line, sizeof(line), "native: mode 11 frame: scenes %d views %d | cg view rect %d %d %d %d", *(int *)(fd + M11_FD_SCENES), views, cvr[0], cvr[1], cvr[2], cvr[3]);
+#ifdef _WIN64 // (the frame data's view array: 64-bit offsets)
 				for (int i = 0; i < views && i < 4; i++) {
 					const int *vp = (const int *)(fd + 0x1100 + (size_t)i * 0x150 + 0x130);
 					n += snprintf(line + n, sizeof(line) - n, " | view %d rect %d %d %d %d", i, vp[0], vp[1], vp[2], vp[3]);
 				}
+#endif
+				(void)n;
 				log_printf("%s", line);
 			}
 		}
@@ -4878,6 +4955,9 @@ static void render_wait_idle(void)
 #endif
 }
 #define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)
+// The cgame's aspect lies inside the cgame range (0) in the 64-bit build only: in 32 bits it is below it (VA 0x75f018 against the range's 0x75f280, mode11-frame.md), and the
+// copy into context 1's block wrote 0x268 bytes before that block (mode 10 since the 32-bit port; found 2026-11-17)
+#define CG_ASPECT_IN_RANGE0 (RVA_CG_ASPECT >= RANGE_RVA(0) && RVA_CG_ASPECT + 4 <= RANGE_RVA(0) + ranges[0].size)
 static uint8_t *ctx_store[2][NRANGES];
 static int ctx_current;
 int native_log_ctx(void) { return native_active ? ctx_current : 0; } // (for the script debug log of the 32-bit builds)
@@ -7422,7 +7502,7 @@ static void video_push(void)
 	*a = (float)comp_w / (float)half;
 	*pa = 1.0f;
 	*ca = *a;
-	if (ctx_current == 0 && ctx_store[1][0]) // context 1's cgame block holds its own copy of the cgame's aspect
+	if (ctx_current == 0 && ctx_store[1][0] && CG_ASPECT_IN_RANGE0) // context 1's cgame block holds its own copy of the cgame's aspect (64 bits; in 32 bits it is outside the block)
 		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - RANGE_RVA(0))) = *a;
 }
 static void video_pop(void)
@@ -7436,7 +7516,7 @@ static void video_pop(void)
 	*(float *)(base + RVA_VIDEO_ASPECT) = video_saved_f[0];
 	*(float *)(base + RVA_PIXEL_ASPECT) = video_saved_f[1];
 	*(float *)(base + RVA_CG_ASPECT) = video_saved_f[2];
-	if (ctx_store[1][0])
+	if (ctx_store[1][0] && CG_ASPECT_IN_RANGE0)
 		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - RANGE_RVA(0))) = video_saved_f[2];
 	video_pushed = 0;
 }
@@ -7715,7 +7795,7 @@ static void client_frame_inner(void)
 		ctx_swap(1);
 		pad_frame_player(1, 1);
 		inputlog_frame(1);
-		uint8_t *scr_busy = base + XR64(0x5db410);
+		uint8_t *scr_busy = base + M11_SCR_BUSY;
 		const uint8_t was = *scr_busy;
 		*scr_busy = 1;
 		client_frame_original();
@@ -8557,6 +8637,8 @@ static const uint8_t hudelem_bytes[] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d
 static void (*hudelem_original)(int, void *);
 #ifdef _WIN64
 #define TITLE_BYTES 0xc0
+#else
+#define TITLE_BYTES 0xa8 // (the element is 0xa8 bytes in both builds: mode11-hud.md; 0xc0 read past it)
 #endif
 static void hudelem_hook(int lc, void *e)
 {
@@ -8593,7 +8675,6 @@ static void hudelem_hook(int lc, void *e)
 		title_tick = GetTickCount();
 		return;
 	}
-#ifdef _WIN64
 	if (mode == 11 && native_active && split_on && CFG_ONCE("exp11titles", 1) && e && !IsBadReadPtr(e, TITLE_BYTES) && *(const float *)((const uint8_t *)e + 0x88) == 1.0078125f) {
 		// The title lines (maps\_introscreen patch: sort 1.0078125) are laid out for the whole screen, as in single player (mode 10 drew them once over the whole picture), and each half's
 		// 2D shows its part: a half's 2D is placed relative to its own viewport, so the whole-screen placement is set for the call and player 2's copy is moved up by half the screen
@@ -8603,7 +8684,7 @@ static void hudelem_hook(int lc, void *e)
 		if (ctx_current == 1) {
 			float vr[4];
 			exp11_view(1, vr);
-			const int sw_t = *(const int *)(base + XR(0x548bfc)), sh_t = *(const int *)(base + XR(0x548c00));
+			const int sw_t = *(const int *)(base + M11_PLACE_SW), sh_t = *(const int *)(base + M11_PLACE_SH);
 			*(float *)(tmp + 8) -= vr[1] * 480.0f; // the virtual height of the screen is 480: the half's origin in it
 			if (sw_t > 0 && sh_t > 0 && vr[0] > 0.0f)
 				*(float *)(tmp + 4) -= vr[0] * (float)sw_t * 480.0f / (float)sh_t; // (the boxes' layout: his view also starts to the right)
@@ -8627,7 +8708,6 @@ static void hudelem_hook(int lc, void *e)
 		place_client_set(ctx_current == 1, 0);
 		return;
 	}
-#endif
 	hudelem_original(lc, e);
 }
 
@@ -8754,7 +8834,7 @@ static float ctx_camera_yaw(int ctx, int *ok)
 	*ok = 0;
 	if (!blk)
 		return 0.0f;
-	const float *fwd = (const float *)(blk + (XR(0x42d310) - RANGE_RVA(0)) + 0xc);
+	const float *fwd = (const float *)(blk + (M11_CG_VIEWORG - RANGE_RVA(0)) + 0xc);
 	if (fabsf(fwd[0]) < 1e-4f && fabsf(fwd[1]) < 1e-4f)
 		return 0.0f;
 	*ok = 1;
@@ -8773,7 +8853,7 @@ static void pass2_hook(unsigned lc)
 	// ([native] p0aimsrc=0: the snapshot's, as before)
 	if (ctx_current == 1 && mode == 11 && cent_share_on() && ctx_store[0][0] && ctx_store[0][5] && CFG_ONCE("p0aim", 1)) {
 		float *f = (float *)(base + RVA_CENT);
-		const uint8_t *src = CFG_ONCE("p0aimsrc", 1) ? ctx_store[0][0] + (XR(0x422440) - RANGE_RVA(0)) : ctx_store[0][5] + CL_BLOCK_PS;
+		const uint8_t *src = CFG_ONCE("p0aimsrc", 1) ? ctx_store[0][0] + (RVA_CG_PS - RANGE_RVA(0)) : ctx_store[0][5] + CL_BLOCK_PS;
 		float y = *(const float *)(src + 0x10c);
 		const float pt = *(const float *)(src + 0x108);
 		int cam_ok = 0;
@@ -8799,7 +8879,7 @@ static void pass2_hook(unsigned lc)
 		// no lag behind what he rides and no tie to his camera (the camera's own sway shook both bodies, owner 2026-11-16). On foot the position changes every frame and this
 		// leaves it as it is. A jump of more than 300 units (a teleport) starts over; past 150 ms without a new position it holds.
 		static float last_go[2][3], vel[2][3], written[2][3], err[2][3];
-		const float *slot_o = (const float *)(slot + 0x18);
+		const float *slot_o = (const float *)(slot + CF_ORG0 * 4);
 		// (what is there may be our own write of the last frame, when nothing wrote the slot since: then the game's position is the one we had)
 		const float *go = memcmp(slot_o, written[other], 12) == 0 ? last_go[other] : slot_o;
 		static double last_t[2];
@@ -8877,13 +8957,13 @@ static void pass2_hook(unsigned lc)
 		// [native] bodysrc=1 (default; owner, 2026-11-16: "put the players' seating back as it was"): his cgame playerState origin (cg.predictedPlayerState +0x1c, every frame: in a
 		// helicopter the point of his seat); 2: the game's position carried on as above
 		if (CFG_ONCE("bodysrc", 1) == 1) {
-			const float *pso = (const float *)(ctx_store[other][0] + (XR(0x422440) - RANGE_RVA(0)) + 0x1c);
+			const float *pso = (const float *)(ctx_store[other][0] + (RVA_CG_PS - RANGE_RVA(0)) + 0x1c);
 			if (pso[0] != 0.0f || pso[1] != 0.0f)
 				po[0] = pso[0], po[1] = pso[1], po[2] = pso[2];
 			ahead = 1.0; // (written)
 		}
 		if (ahead > 0.0) {
-			static const int offs[3] = {0x18, 0x80, 0xfc}; // the pose's origin, the current and the next state's origin
+			static const int offs[3] = {CF_ORG0 * 4, CF_ORG1 * 4, CF_ORG2 * 4}; // the pose's origin, the current and the next state's origin
 			for (int k = 0; k < 3; k++)
 				memcpy(slot + offs[k], po, 12);
 			memcpy(written[other], po, 12);
@@ -8892,7 +8972,7 @@ static void pass2_hook(unsigned lc)
 			static unsigned bn[2];
 			if (bn[ctx_current] < 60) {
 				bn[ctx_current]++;
-				const float *q = (const float *)(slot + 0x18);
+				const float *q = (const float *)(slot + CF_ORG0 * 4);
 				log_printf("native: bodypos ctx %d %.2f %.2f %.2f (game %.2f %.2f, ahead %.0f ms)", ctx_current, (double)q[0], (double)q[1], (double)q[2], (double)go[0], (double)go[1], ahead * 1000.0);
 			}
 		}
@@ -8901,13 +8981,13 @@ static void pass2_hook(unsigned lc)
 			int okc = 0;
 			const float cyw = ctx_camera_yaw(other, &okc);
 			if (++bl % 150 == 0 && bl < 6000)
-				log_printf("native: bodylog ctx %d: other's ps yaw %.1f, camera yaw %.1f (%d), origin %.1f %.1f %.1f", ctx_current, (double)*(const float *)(ctx_store[other][0] + (XR(0x422440) - RANGE_RVA(0)) + 0x10c), (double)cyw, okc, (double)po[0], (double)po[1], (double)po[2]);
+				log_printf("native: bodylog ctx %d: other's ps yaw %.1f, camera yaw %.1f (%d), origin %.1f %.1f %.1f", ctx_current, (double)*(const float *)(ctx_store[other][0] + (RVA_CG_PS - RANGE_RVA(0)) + 0x10c), (double)cyw, okc, (double)po[0], (double)po[1], (double)po[2]);
 		}
 		if (ctx_current == 0 && CFG_ONCE("p0aim", 1)) { // and his yaw, as p0aim does for player 1's body in context 1
 			float *f = (float *)slot;
 			int cam_ok = 0;
 			const float cy = ctx_camera_yaw(1, &cam_ok);
-			f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = cam_ok && CFG_ONCE("bodycamyaw", 1) ? cy : *(const float *)(ctx_store[1][0] + (XR(0x422440) - RANGE_RVA(0)) + 0x10c);
+			f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = cam_ok && CFG_ONCE("bodycamyaw", 1) ? cy : *(const float *)(ctx_store[1][0] + (RVA_CG_PS - RANGE_RVA(0)) + 0x10c);
 		}
 	}
 	if (CFG_ONCE("p2hooklog", 0)) { // QA: what the second entity pass sees in both slots
@@ -10588,6 +10668,7 @@ static int cg_draw_install(void)
 // The client-side hooks stay installed; session-specific work is gated by native_active (journal group 0).
 #ifndef _WIN64
 static int hooks_apply32_contexts(void);
+static void hooks_apply32_mode11(void);
 static DWORD WINAPI coop_dvar_thread(LPVOID unused);
 #endif
 #ifndef _WIN64
@@ -10605,6 +10686,8 @@ static int hooks_apply32(void)
 	}
 	if (cfg("experiment", 0) >= 5 && cfg("ctx", 1) && !hooks_apply32_contexts())
 		return 0;
+	if (mode == 11)
+		hooks_apply32_mode11();
 	if (cfg("experiment", 0) >= 5)
 		CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
 	hooks_ok = 1;
@@ -10612,7 +10695,6 @@ static int hooks_apply32(void)
 }
 #endif
 
-#ifdef _WIN64
 // The popup friendly name (the name of the friendly under the cross hair, "Sgt. Foley": rva 0x94e00(local client), called from the HUD at 0x93cf0). The game's server sets it per local
 // client as two configstrings, 0xc + 2 * client and 0xd + 2 * client (the cgame reads the table of 16-bit string indices at rva 0x5d8d02 through 0xca1e0); the HUD draw is called for
 // local client 0 in both contexts, so player 2's half showed the name that player 1's cross hair had put in 0xc / 0xd (the owner: "Sgt. Foley on both halves when the top one looks at
@@ -10621,7 +10703,7 @@ static void (*friend_original)(int);
 static void friend_hook(int lc)
 {
 	if (mode == 11 && split_on && ctx_current == 1 && CFG_ONCE("exp11friend", 1)) {
-		uint16_t *t = (uint16_t *)(base + XR(0x5d8d02));
+		uint16_t *t = (uint16_t *)(base + M11_CS_INDEX);
 		uint16_t a = t[0xc], b = t[0xd];
 		t[0xc] = t[0xe], t[0xd] = t[0xf];
 		t[0xe] = a, t[0xf] = b;
@@ -10656,13 +10738,14 @@ static void cg_step_hook(unsigned lc)
 	if (mode == 11 && split_on && ctx1_ready && ctx_current == 0 && lc == 0 && CFG_ONCE("p2step", 1)) {
 		ctx_swap(1);
 		if (cg_time_have && CFG_ONCE("p2time", 1)) {
-			int *t = (int *)(base + XR(0x51dca8));
+			int *t = (int *)(base + M11_CL_SERVERTIME);
 			static unsigned said;
 			if (said++ < 3)
 				log_printf("native: p2time: player 2's cl.serverTime %d -> %d", *t, (int)cg_time_arg);
 			*t = (int)cg_time_arg;
 		}
 		cg_step_original(0);
+#ifdef _WIN64
 		if (CFG_ONCE("camlog", 0)) { // QA: player 2's slot after his step, next to his snapshot's player state origin (cg.nextSnap ps, rva 0x40cad8, origin +0x1c)
 			static unsigned ks;
 			const uint8_t *nps = *(const uint8_t *const *)(base + XR(0x40cad8));
@@ -10671,8 +10754,76 @@ static void cg_step_hook(unsigned lc)
 				log_printf("native: p2step #%u: ps origin %.1f %.1f | slot1 %.1f %.1f | slot0 %.1f %.1f", ks, (double)((const float *)(nps + 0x1c))[0], (double)((const float *)(nps + 0x1c))[1],
 					   (double)e1[0], (double)e1[1], (double)e0[0], (double)e0[1]);
 		}
+#endif
 		ctx_swap(0);
 	}
+}
+
+#ifndef _WIN64
+// Mode 11 on the 32-bit build (2026-11-17, owner: "mode 11 for the 32-bit version too"): the same hooks as the 64-bit hooks_apply, at the call sites found in
+// docs/32bit-native-map/mode11-*.md (VA - 0x400000). Every call is checked to be a call of the expected function first. The scene3d / scene clear hooks are left out: they
+// only act with two scenes in one renderer frame (exp11frames=0), and each player has his own frame by default.
+static int m11_call32(uint8_t *site, uint8_t *target, void *hook, void **original, const char *what)
+{
+	if (site[0] != 0xe8 || site + 5 + *(const int32_t *)(site + 1) != target) {
+		log_printf("native: mode 11: unexpected code at the %s call (rva 0x%x), not hooked", what, (unsigned)(site - base));
+		return 0;
+	}
+	if (!jhook_call(site, hook, original)) {
+		log_printf("native: mode 11: the %s call (rva 0x%x) could not be hooked", what, (unsigned)(site - base));
+		return 0;
+	}
+	return 1;
+}
+static void hooks_apply32_mode11(void)
+{
+	int ok = 0;
+	ok += m11_call32(base + XR(0x17ae8a), base + M11_END_FRAME, (void *)end_frame_hook, (void **)&end_frame_original, "screen update's end-frame");
+	ok += m11_call32(base + XR(0x17adff), base + XR(0x4a530), (void *)cg_time_hook, (void **)&cg_time_original, "screen update's client time");
+	ok += m11_call32(base + XR(0x17ae05), base + XR(0x4a1b0), (void *)cg_step_hook, (void **)&cg_step_original, "screen update's cgame step");
+	ok += m11_call32(base + XR(0x668b2), base + XR(0x9d120), (void *)fx_step_hook, (void **)&fx_step_original, "cgame's effects step");
+	ok += m11_call32(base + XR(0xf319a), base + XR(0x15e7d0), (void *)friend_hook, (void **)&friend_original, "HUD's popup friendly name");
+	ok += m11_call32(base + XR(0x496b7), base + XR(0x107b10), (void *)render_scene_hook, (void **)&render_scene_original, "R_RenderScene");
+	ok += m11_call32(base + XR(0x107b70), base + XR(0xa31e0), (void *)rs_shock_hook, (void **)&rs_shock_original, "R_RenderScene's shellshock");
+	ok += m11_call32(base + XR(0x106b3c), base + XR(0xf3020), (void *)rs_cgents_hook, (void **)&rs_cgents_original, "R_RenderScene's cgame 2D");
+	if (CFG_ONCE("exp11p1show", 1)) {
+		int be = m11_call32(base + XR(0x1399a6), base + XR(0x1397e0), (void *)be_frame_hook, (void **)&be_frame_original, "render thread's back-end frame (1)");
+		be += m11_call32(base + XR(0x139a02), base + XR(0x1397e0), (void *)be_frame_hook, (void **)&be_frame_original, "render thread's back-end frame (2)");
+		be += m11_call32(base + XR(0x139a67), base + XR(0x1397e0), (void *)be_frame_hook, (void **)&be_frame_original, "render thread's back-end frame (3)");
+		be_end_installed = be == 3; // (all three, or player 1's frame keeps flags 1: a frame that is not shown must never be presented)
+		ok += be;
+	}
+	if (CFG_ONCE("exp11lc", 1) && CFG_ONCE("exp11pin", 1)) {
+		// The readers of the renderer's local player (VA 0x75e688) that index one-element arrays or the cull byte: they take player 0 (see the 64-bit pins). The 64-bit pin at
+		// 0xa4cbf has no 32-bit counterpart that matters (the one read at VA 0x5646c0 goes to an argument nobody reads): not patched.
+		const struct { uint32_t rva; uint8_t len, op; } pins[] = { // (XR at run time: the iw4x-sp table maps them too)
+			{XR(0x89134), 6, 0x0d}, // mov ecx,[lc] -> xor ecx,ecx: the cull byte = 2 (cpose + 3 + lc)
+			{XR(0xe2800), 5, 0xa1}, // mov eax,[lc] -> xor eax,eax: the cull byte 0 -> 1
+			{XR(0xea374), 5, 0xa1}, // the cull byte reset
+			{XR(0xe6a90), 5, 0xa1}, // the cgame's local entities callback (stores lc in its argument)
+			{XR(0xe7460), 5, 0xa1}, // the HUD type-13 callback (the same)
+		};
+		const uint32_t lc_va = (uint32_t)(uintptr_t)(base + M11_RLC);
+		int pinned = 0;
+		for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); i++) {
+			uint8_t *p = base + pins[i].rva;
+			const int six = pins[i].len == 6;
+			if ((six ? (p[0] != 0x8b || p[1] != pins[i].op) : p[0] != 0xa1) || *(const uint32_t *)(p + (six ? 2 : 1)) != lc_va) {
+				log_printf("native: mode 11: unexpected code at the local player read rva 0x%x, not pinned", pins[i].rva);
+				continue;
+			}
+			uint8_t put[6] = {0x31, (uint8_t)(six ? 0xc9 : 0xc0), 0x90, 0x90, 0x90, 0x90};
+			DWORD old;
+			j_save(p, pins[i].len);
+			VirtualProtect(p, pins[i].len, PAGE_EXECUTE_READWRITE, &old);
+			memcpy(p, put, pins[i].len);
+			VirtualProtect(p, pins[i].len, old, &old);
+			FlushInstructionCache(GetCurrentProcess(), p, pins[i].len);
+			pinned++;
+		}
+		log_printf("native: mode 11: %d of %d local player reads pinned to player 0", pinned, (int)(sizeof(pins) / sizeof(pins[0])));
+	}
+	log_printf("native: mode 11 (32-bit): %d of %d calls hooked%s", ok, CFG_ONCE("exp11p1show", 1) ? 11 : 8, be_end_installed ? "" : " (player 1's frame is not shown with its own 2D: the back end's frame is not wrapped)");
 }
 #endif
 
@@ -10839,8 +10990,8 @@ static int activate(int players)
 	mode = cfg("experiment", 10);
 	p0_tail_on = cfg("p0tail", 1);
 #ifndef _WIN64
-	if (mode != 5 && mode != 10)
-		mode = 5; // 32 bits: modes 5 and 10 (the others are experiments of the 64-bit port's history)
+	if (mode != 5 && mode != 10 && mode != 11)
+		mode = 5; // 32 bits: modes 5, 10 and 11 (the others are experiments of the 64-bit port's history)
 #endif
 	if (!hooks_apply() || !players_apply(players)) {
 		mode = 0;

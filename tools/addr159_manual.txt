@@ -90,3 +90,10 @@
 0x60f60 -> 0x0    # svlog (scrdebug32.c): the level spawn's server client connect (official only)
 0xfac9c -> 0x1857c    # the save disk write 0x4fac90 + 0xc (past its call / test / jz / ret; 159 function at 0x18570: same 24 bytes, found by its bytes), saves.c
 0x531e8c -> 0x535414    # the server command node of vid_restart (official VA 0x931e8c, 159 VA 0x935414: pushed with the string and the handler 0x4e5110 -> 159 rva 0xf4f20 in the registration), native.c vid_restart guard
+# mode 11 on the 32-bit build (2026-11-17; docs/32bit-native-map/mode11-frame.md and mode11-cgame.md), found by hand in the 159 exe:
+0x2134c74 -> 0x21378fc    # the frame handed to the back end: "mov esi,[x]" at the start of the back-end frame (official VA 0x5397e0, 159 rva 0x13a070; both read flags at +0x41a38)
+0x139a02 -> 0x13a268    # the 2nd of the three calls of the back-end frame in the render thread loop (159 calls of 0x13a070: 0x13a207, 0x13a268, 0x13a2cf)
+0x139a67 -> 0x13a2cf    # the 3rd of them (map159 matched 0x11e898, a call of something else)
+0x89134 -> 0xcdc64    # mov ecx,[lc] in the cull-byte setter: the function's 16 bytes are the same in both (8b 44 24 04 8b 0d <lc> c6 44 01 03 02 c3)
+0xe7460 -> 0x22670    # the HUD type-13 callback thunk (a1 <lc>; mov [esp+4],eax; jmp): the 159 exe has two such thunks, the other is 0xe6a90 -> 0x97d40
+0x32f3ec -> 0x3323ec    # the renderer's view rectangle: the only reference is its getter "mov eax,x; ret" (official rva 0xa6fd0, 159 rva 0x53980), +0x3000 as the cgame data next to it
