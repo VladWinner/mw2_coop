@@ -175,8 +175,9 @@ static void *wdef_hook(uint64_t index)
 static void (*sway_view_original)(uint64_t, const uint8_t *, float *, float *);
 static void sway_view_hook(uint64_t a, const uint8_t *b, float *c, float *d)
 {
-	// The per client state of the sway (rva 0x1b761a8, stride 0x38) has one entry, for local client 0; the next 0x38 bytes are the weapon definition table. A player state of client 1
-	// (the second player of a Spec Ops split screen) would read and write there. It is run as client 0: its own sway state then is the one entry (the player is the one of this view).
+	// The per client state of the vehicle camera (vehCam, rva 0x1b761a8, stride 0x38) has one entry, for local client 0; right after it are a dvar pointer (0x1b761e0) and the vehicle
+	// definition table (0x1b761f0). b is the cgame struct (rva 0x40caa0) and b + 4 its local client number (the engine audit of 2026-11-17 corrected this note): context 1's is 1, so
+	// player 2 of a split screen would read and write past the table. It is run as client 0: entry 0 is each context's own (native.c swaps it, RANGE_RIDE).
 	const int cn = *(const int *)(b + 4);
 	if (cn != 0) {
 		static LONG logged;

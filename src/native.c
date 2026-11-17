@@ -3291,6 +3291,32 @@ static void viewjit_log(int ctx)
 	log_printf("native: viewjit ctx %d #%u t=%.2f cg.time %d origin %.2f %.2f %.2f pitch %.3f yaw %.3f roll %.3f", ctx, n[ctx], lag_now() * 1000.0, *(int *)(base + XR(0x422434)), (double)*(float *)(ps + 0x1c),
 		   (double)*(float *)(ps + 0x20), (double)*(float *)(ps + 0x24), (double)*(float *)(ps + 0x108), (double)*(float *)(ps + 0x10c), (double)*(float *)(ps + 0x110));
 }
+// QA ([native] vehjit=<seconds after the split began>): the state the cgame's vehicle view (rva 0xbc3e0, the camera of a driven vehicle: snowmobile, boat) left in a context, logged
+// before each of that context's next 400 cgame frames: cg time and frame time, the playerstate's vehicle flags and number, the vehicle's entity (current / next origin and the two
+// yaw words the view takes its turn rate from), the view's smoothing state (rva 0x431ae0 flag, 0x431ae4 / 0x431ae8 pitch / yaw offsets), the predicted view angles and the client's
+// view angle accumulators that CL_SetViewAngles (0xca760) sets from them. Vlad: in the snowmobile races the camera jitters for both players.
+static void vehjit_log(int ctx)
+{
+	static int at = -2;
+	static unsigned n[2];
+	if (at == -2)
+		at = cfg("vehjit", -1);
+	if (at < 0 || !split_tick || GetTickCount() - split_tick < (DWORD)at * 1000 || ctx < 0 || ctx > 1 || n[ctx] >= 400)
+		return;
+	const uint8_t *ps = base + XR(0x422440);
+	const int veh = *(const int *)(base + XR(0x4225ac));
+	if (veh < 0 || veh >= 2048)
+		return;
+	n[ctx]++;
+	const uint8_t *ce = base + XR(0x441070) + (size_t)veh * 0x1a8;
+	const float *acc = (const float *)(base + RVA_ACC_PITCH);
+	log_printf("native: vehjit ctx %d #%u t=%.2f cg %d ft %d | flags %08x mode %d veh %d | org %.1f %.1f > %.1f %.1f | a8 %.2f 124 %.2f 9c %.2f | sm %d %.3f %.3f | view %.2f %.2f | acc %.2f %.2f", ctx, n[ctx],
+		   lag_now() * 1000.0, *(const int *)(base + XR(0x422434)), *(const int *)(base + XR(0x422430)), *(const unsigned *)(ps + 0xac), *(const int *)(ps + 0x190), veh,
+		   (double)*(const float *)(ce + 0x80), (double)*(const float *)(ce + 0x84), (double)*(const float *)(ce + 0xfc), (double)*(const float *)(ce + 0x100),
+		   (double)*(const float *)(ce + 0xa8), (double)*(const float *)(ce + 0x124), (double)*(const float *)(ce + 0x9c), *(const uint8_t *)(base + XR(0x431ae0)),
+		   (double)*(const float *)(base + XR(0x431ae4)), (double)*(const float *)(base + XR(0x431ae8)), (double)*(const float *)(ps + 0x108), (double)*(const float *)(ps + 0x10c),
+		   (double)acc[0], (double)acc[1]);
+}
 static int be_end_installed;
 static unsigned p1_frame_flags(void)
 {
@@ -4240,6 +4266,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 #ifdef _WIN64
 		place_client_set(0, 0); // player 1's 2D goes to the top half
 		viewjit_log(0);
+		vehjit_log(0);
 #endif
 		cg_draw_original(local_client, a, b);
 		if (CFG_ONCE("camlog", 0)) { // QA: player 1's camera (the refdef origin, rva 0x42d310) and his own entity's lerp origin, sampled
@@ -4386,6 +4413,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 #ifdef _WIN64
 			place_client_set(1, 0); // player 2's 2D goes to the bottom half
 			viewjit_log(1);
+			vehjit_log(1);
 #endif
 			cg_draw_vis(0, a, b);
 			if (CFG_ONCE("npclog", 0) && ctx_current == 1) // QA: the actors as player 2's draw placed them (the frame hook logs context 0 only in mode 11)
@@ -4707,6 +4735,11 @@ static const range_t ranges[] = {
     {0x3efcf0, 0x94},                // the camera shakes (CG_StartShakeCamera 0x8d420, called from the event handler 0x9f9a0: four slots of 0x24 from 0x3efcf0, a field to 0x3efd84): one set for
                                      // both views, into which both contexts' event passes put every explosion's shake (twice). The Xbox 360 keeps 0x94 bytes per player (0x824289d8 +
                                      // lc * 0x94, filled by its loop 0x820dcb68). Night audit, engine fix 6. [native] shakesplit=0 off
+    {0x1b761a8, 0x38},               // the view of a player who rides a vehicle (rva 0x27f9e0, the cgame's rider view: it sets the client's view angles every frame through CL_SetViewAngles
+                                     // 0xca760): its smoothing state, a table by client number at 0x1b761a8 (stride 0x38) with room for client 0 only (guards.c runs client 1 as client 0, the
+                                     // next bytes are the weapon definition table). One state for both players: in the Spec Ops snowmobile races both cameras made the same turns, neither
+                                     // with its own sled (Vlad: "camera turns do not work, strong jitter for both"; QA 2026-11-17: both view yaws on one curve while the sleds' yaws
+                                     // differed). Each context keeps its own. [native] ridesplit=0 off
 };
 #define RANGE_FX 9
 #define RANGE_VIEW 10
@@ -4714,6 +4747,7 @@ static const range_t ranges[] = {
 #define RANGE_BLUR 12
 #define RANGE_CTL 13
 #define RANGE_SHAKE 14
+#define RANGE_RIDE 15
 #define SUNSPLIT_DEFAULT 1
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
@@ -5035,6 +5069,60 @@ static void fxbody_report(void) // on the main thread (the swap), when the count
 		full_logged = full;
 	}
 }
+// Context 1's cgame has cg.localClientNum (rva 0x40caa4) = 1 (ctx1lc: the sound listener mask 0xa6d20 needs it), but every client table that these readers index
+// has room for one client (Spec Ops engine audit 2026-11-17, local/scratch/snow1117/engine-oneplayer-audit.md): player 2 read past them. Each reader is pinned to
+// 0 (in single player and network co-op the value is 0 anyway; in the split screen entry 0 is each context's own, its memory swapped):
+// - 0x27f9c0: the snowmobile / boat camera's speed field of view term, 0x1b761d4 + lc * 0x38 (player 2 read the vehicle definition table: no widening);
+// - 0xdaf1f: the 2D placement of a client view, 0x5e0c60 + lc * 0x6c (player 2 got the placement mode int as a placement: Spec Ops' mission-failed quote,
+//   the splatter, damage flash and friendly-fire cross hair drawn with garbage scales); exp11place sets entry 0 to the half being drawn;
+// - 0xbcf7a, 0xbcf8d: the usercmd of the vehicle turret scope zoom (CL_GetCurrentCmdNumber / CL_GetUserCmd(lc): past the one cl block);
+// - 0xaee4c, 0x9a47a, 0x8e630, 0x90700: mov ecx,[cg.localClientNum] for the dead quote, the splatter and the objective-on-entity origin (connection state).
+// [native] lcpin=0 off.
+static void lcnum_pins_install(void)
+{
+	if (!cfg("lcpin", 1)) // (again at each session start: the journal puts the bytes back at its end)
+		return;
+	int pinned = 0;
+	static const uint32_t movs[] = {0xbcf7a, 0xbcf8d, 0xaee4c, 0x9a47a, 0x8e630, 0x90700};
+	for (size_t i = 0; i < sizeof(movs) / sizeof(movs[0]); i++) {
+		uint8_t *q = base + XR(movs[i]);
+		if (q[0] != 0x8b || (q[1] & 0xc7) != 0x05 || *(int32_t *)(q + 2) + (intptr_t)(q + 6) != (intptr_t)(base + XR(0x40caa4))) {
+			log_printf("native: lcpin: unexpected code at rva 0x%x, not pinned", movs[i]);
+			continue;
+		}
+		const uint8_t reg = (q[1] >> 3) & 7; // mov r32, [rip+disp] -> xor r32, r32 (the same register) + nops
+		const uint8_t put[6] = {0x31, (uint8_t)(0xc0 | (reg << 3) | reg), 0x90, 0x90, 0x90, 0x90};
+		j_save(q, 6);
+		DWORD old;
+		VirtualProtect(q, 6, PAGE_EXECUTE_READWRITE, &old);
+		memcpy(q, put, 6);
+		VirtualProtect(q, 6, old, &old);
+		FlushInstructionCache(GetCurrentProcess(), q, 6);
+		pinned++;
+	}
+	static const struct {
+		uint32_t rva;
+		uint8_t len, want[4], put[4];
+	} pins[] = {
+		{0x27f9c0, 4, {0x48, 0x63, 0x41, 0x04}, {0x31, 0xc0, 0x90, 0x90}}, // movsxd rax,[rcx+4] -> xor eax,eax
+		{0xdaf1f, 3, {0x48, 0x63, 0xc1}, {0x31, 0xc0, 0x90}},             // movsxd rax,ecx -> xor eax,eax
+	};
+	for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); i++) {
+		uint8_t *q = base + XR(pins[i].rva);
+		if (memcmp(q, pins[i].want, pins[i].len)) {
+			log_printf("native: lcpin: unexpected code at rva 0x%x, not pinned", pins[i].rva);
+			continue;
+		}
+		j_save(q, pins[i].len);
+		DWORD old;
+		VirtualProtect(q, pins[i].len, PAGE_EXECUTE_READWRITE, &old);
+		memcpy(q, pins[i].put, pins[i].len);
+		VirtualProtect(q, pins[i].len, old, &old);
+		FlushInstructionCache(GetCurrentProcess(), q, pins[i].len);
+		pinned++;
+	}
+	log_printf("native: lcpin: %d client tables read with local client 0 (each context's own entry)", pinned);
+}
 static void fxbody_install(void)
 {
 	uint8_t *c = base + XR(0x11c65f), *d = base + XR(0x119382);
@@ -5108,6 +5196,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 #endif
 #ifdef RANGE_SHAKE
 		if (i == RANGE_SHAKE && !CFG_ONCE("shakesplit", 1))
+			continue;
+#endif
+#ifdef RANGE_RIDE
+		if (i == RANGE_RIDE && !CFG_ONCE("ridesplit", 1))
 			continue;
 #endif
 		uint8_t *live = base + RANGE_RVA(i);
@@ -5844,6 +5936,25 @@ static void ps_publish_hook(unsigned lc, const void *ps)
 	hook_counts[1]++;
 	if (lc == 1 && native_active)
 		p2_stale_command_time((void *)ps);
+	if (lc < 2 && CFG_ONCE("vehwatch", -1) >= 0 && split_tick && GetTickCount() - split_tick > (DWORD)CFG_ONCE("vehwatch", -1) * 1000) {
+		// QA ([native] vehwatch=<seconds after the split began>): write watchpoints on both players' server view angle offsets (delta_angles yaw, ps + 0x64): which code
+		// turns a rider's view with his vehicle (the snowmobile races: both players' cameras turned alike, not with their own sleds, 2026-11-17)
+		static const void *seen[2];
+		static int set;
+		seen[lc] = ps;
+		if (!set && seen[0] && seen[1]) {
+			set = 1;
+			if (CFG_ONCE("vehwatchcl", 0)) { // the client side instead ([native] vehwatchcl=1): the cgame's predicted view yaw and the client's yaw accumulator (both swapped per context)
+				const uintptr_t rc[2] = {XR(0x42254c), XR(0x533d18)};
+				control_watch_multi(rc, 2);
+				log_printf("native: vehwatch: the client view yaw (0x42254c) and yaw accumulator (0x533d18) are watched");
+			} else {
+				const uintptr_t rv[2] = {(uintptr_t)seen[0] + 0x64 - (uintptr_t)base, (uintptr_t)seen[1] + 0x64 - (uintptr_t)base};
+				control_watch_multi(rv, 2);
+				log_printf("native: vehwatch: client 0 ps %p, client 1 ps %p (delta yaw rvas 0x%llx 0x%llx)", seen[0], seen[1], (unsigned long long)rv[0], (unsigned long long)rv[1]);
+			}
+		}
+	}
 	if (lc == 0 && ctx_current == 0)
 		return ps_publish_original(0, ps);
 	ctx_ensure();
@@ -10213,6 +10324,7 @@ static void contexts_install(void)
 	p2cmd_filter_install();
 #ifdef RANGE_FX
 	fxbody_install();
+	lcnum_pins_install();
 #endif
 #endif
 	{
