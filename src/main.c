@@ -26,6 +26,7 @@
 #include "net.h"
 #include "party.h"
 #include "progress.h"
+#include "saves.h"
 #include "scrdebug.h"
 #include "settings.h"
 #include "shot.h"
@@ -76,6 +77,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		net_install();
 		party_install();
 		progress_install();
+		saves_install();
 		menus_install();
 		access_install();
 		upnp_install();

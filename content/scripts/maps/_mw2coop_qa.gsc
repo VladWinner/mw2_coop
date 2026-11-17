@@ -305,6 +305,9 @@ main()
 		case "cpflags":
 			cpflags();
 			break;
+		case "nativesave":
+			nativesave();
+			break;
 		case "swaphint":
 			swaphint();
 			break;
@@ -1737,6 +1740,62 @@ cpflags()
 	report( "cpflags: failing the mission" );
 	level thread maps\_mw2coop::mission_failed();
 	wait 30;
+}
+
+// nativesave (any level; split screen or network): the game's own save in a co-op session. A save is taken in memory (SaveGameNoCommit, CommitSave, as maps\_autosave
+// does), then the world is changed (a flag set, both players moved, a level variable changed) and the mission fails (maps\_mw2coop::mission_failed): both machines must
+// load the save (src/saves.c, fast_restart -> loadgame_continue_missionfailed). The save holds the script VM:
+// this thread goes on after its wait in the saved state, finds the dvar mw2coop_qa_phase "loading" (dvars are not in a save) and checks that the flag is clear again, the
+// variable has its old value and both players stand where they stood.
+nativesave()
+{
+	common_checks();
+	wait 4;
+	if ( !flag_exist( "mw2coop_qa_sv" ) )
+		flag_init( "mw2coop_qa_sv" );
+	level.mw2coop_qa_marker = "before";
+	spots = [];
+	foreach ( i, player in level.players )
+		spots[ i ] = player.origin;
+	text = "";
+	foreach ( i, spot in spots )
+		text += " p" + ( i + 1 ) + " " + spot;
+	report( "nativesave: " + level.players.size + " players," + text + ", time " + GetTime() );
+	SetDvar( "mw2coop_qa_phase", "saving" );
+	saveId = SaveGameNoCommit( "qasave", maps\_autosave::getDescription() );	// with its print, as the level's own autosaves
+	report( "nativesave: SaveGameNoCommit -> " + saveId );
+	wait 0.05;
+	if ( GetDvar( "mw2coop_qa_phase" ) == "loading" )
+	{
+		SetDvar( "mw2coop_qa_phase", "loaded" );
+		wait 2;
+		report( "nativesave: after the load, time " + GetTime() + ", marker " + level.mw2coop_qa_marker + ", flag " + flag( "mw2coop_qa_sv" ) + ", players " + level.players.size );
+		check( level.mw2coop_qa_marker == "before", "the level variable has its value from the save" );
+		check( !flag( "mw2coop_qa_sv" ), "the flag set after the save is clear again" );
+		foreach ( i, player in level.players )
+			check( Distance( player.origin, spots[ i ] ) < 64, "player " + ( i + 1 ) + " is back where he stood at the save (" + Distance( player.origin, spots[ i ] ) + " units off)" );
+		qa_shot( "afterload" );
+		SetDvar( "mw2coop_qa_phase", "done" );
+		report( "done" );
+		return;
+	}
+	report( "nativesave: IsSaveRecentlyLoaded " + IsSaveRecentlyLoaded() + ", IsSaveSuccessful " + IsSaveSuccessful() );
+	CommitSave( saveId );
+	wait 0.4;
+	qa_shot( "checkpoint" );	// the game's own "Checkpoint" text, if it shows in a co-op session
+	wait 0.6;
+	flag_set( "mw2coop_qa_sv" );
+	level.mw2coop_qa_marker = "after";
+	foreach ( player in level.players )
+		player SetOrigin( player.origin + ( 0, 0, 2 ) + AnglesToForward( player.angles ) * 150 );
+	wait 1;
+	report( "nativesave: world changed, p1 " + level.players[ 0 ].origin + ", loading the save" );
+	qa_shot( "beforeload" );
+	SetDvar( "mw2coop_qa_phase", "loading" );
+	level thread maps\_mw2coop::mission_failed();
+	wait 25;
+	report( "nativesave: no load 25 s after the mission failed" );
+	check( false, "the save was loaded" );
 }
 
 // whbreach (dc_whitehouse, run with MW2COOP_PRE "set start oval_office" for a restart there, or without it): the breach and the countdown. Reports the level's flags every 2 s for 16 s, then

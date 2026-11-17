@@ -120,7 +120,7 @@ static void script_request(const char *cmd)
 	if (!host)
 		return;
 	if (strncmp(cmd, "restart", 7) == 0) {
-		game_cbuf_addtext("fast_restart\n"); // SV_MapRestart sends coopRestart to the client
+		game_cbuf_addtext("fast_restart\n"); // SV_MapRestart sends coopRestart to the client; after a failed mission both load the last checkpoint (saves.c)
 	} else if (strncmp(cmd, "checkpoint ", 11) == 0) {
 		char map[64] = "", start[64] = "", spot[64] = "";
 		int n = sscanf(cmd + 11, "%63s %63s %63s", map, start, spot);
@@ -136,7 +136,8 @@ static void script_request(const char *cmd)
 // as they exist (they keep 0x100, so script setdvar still works). The harness creates them
 // before the level starts, so both machines flag them before any script reads them.
 static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
-					   "mw2coop_qa", "mw2coop_qa_phase", "mw2coop_dbg_req", "mw2coop_museum", "mw2coop_skill_p1", "mw2coop_skill_p2", "mw2coop_qa_wait"};
+					   "mw2coop_qa", "mw2coop_qa_phase", "mw2coop_dbg_req", "mw2coop_museum", "mw2coop_skill_p1", "mw2coop_skill_p2", "mw2coop_qa_wait",
+					   "mw2coop_saves"};
 
 static void sync_dvar_flags(void)
 {

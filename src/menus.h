@@ -8,6 +8,8 @@ void menus_poll(void); // control thread, every 250 ms: queues the menu work for
 
 // net.c: a packet from the partner; 1 if it was mw2coop's lobby packet (the game must not see it).
 int menus_on_packet(const char *buf, int len);
+// 1 when the partner's lobby packets say his build loads the game's checkpoints in co-op (saves.c)
+int menus_partner_saves(void);
 
 // net.c: a lobby query ("mw2coop_find") or a host's answer ("mw2coop_here <map>"); 1 if it was
 // one (the game must not see it). An answer to send back to the sender is put into reply.

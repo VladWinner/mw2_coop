@@ -46,6 +46,7 @@
 #include "menus_ui.h"
 #include "net.h"
 #include "progress.h"
+#include "saves.h"
 
 #ifdef _WIN64
 #define RVA_UI_CONTEXT XR(0x1a3ab00) // uiContext_t (Menus_OpenByName's first argument, "openmenu" @0x24ca10)
@@ -2306,7 +2307,7 @@ static void patch_lobby_mission(uint8_t *menu, int campaign)
 // for 3 s is not there. The player id (settings.ini) and the Steam ID tell the host who the
 // partner is: continuing saved progress with someone else asks first (mw2coop_partner popup).
 #define READY_TAG "mw2coop_ready "
-static volatile LONG my_ready, partner_ready;
+static volatile LONG my_ready, partner_ready, partner_saves;
 static volatile DWORD partner_heard, ready_sent;
 static char partner_id[33];
 static uint64_t partner_xuid;
@@ -2318,6 +2319,11 @@ static int add_member;		// ...and said yes to adding the partner to the save's m
 static int partner_present(void)
 {
 	return partner_heard && GetTickCount() - partner_heard < 3000;
+}
+
+int menus_partner_saves(void)
+{
+	return partner_saves != 0;
 }
 
 static int party_full(void)
@@ -2334,8 +2340,8 @@ static int party_full(void)
 static void send_ready(void)
 {
 	char text[96];
-	snprintf(text, sizeof(text), READY_TAG "%ld %s %016llx", my_ready, settings_player_id(),
-		 (unsigned long long)*(uint64_t *)(base + RVA_XUID_TABLE));
+	snprintf(text, sizeof(text), READY_TAG "%ld %s %016llx saves=%d", my_ready, settings_player_id(),
+		 (unsigned long long)*(uint64_t *)(base + RVA_XUID_TABLE), saves_supported());
 	net_send_mod(text);
 	ready_sent = GetTickCount();
 }
@@ -2427,6 +2433,10 @@ int menus_on_packet(const char *buf, int len)
 		log_printf("menus: partner id %s, Steam ID %016llx", partner_id, xuid);
 		InterlockedExchange(&partner_new, 1);
 	}
+	// the partner's build loads the game's checkpoints ("saves=1"; an older mod sends nothing): the host turns them on for the session only when both do (progress.c)
+	LONG saves = strstr(rest, "saves=1") != NULL;
+	if (InterlockedExchange(&partner_saves, saves) != saves)
+		log_printf("menus: the partner's build %s the game's checkpoints", saves ? "loads" : "does not load");
 	if (InterlockedExchange(&partner_ready, ready) != ready || !partner_present())
 		log_printf("menus: partner %s", ready ? "ready" : "not ready");
 	partner_heard = GetTickCount();

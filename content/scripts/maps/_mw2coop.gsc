@@ -308,11 +308,20 @@ send_requests()
 }
 
 // --------------------------------------------------------------------------------------------
-// Saves: each PC would write its own save, and loading one would break lockstep. Progress is
-// kept as checkpoints (level start points) instead.
+// Saves. The game's own checkpoints (maps\_autosave: SaveGameNoCommit / CommitSave, and the level's start) are taken in a co-op campaign as in single player: each
+// machine runs the same scripts in lockstep and keeps the same save in memory (a co-op session writes none to disk). A failed mission loads the last one on both
+// (mission_failed, src/saves.c): the whole level as it was, its scripts, AI, objectives and dialogue included. The level start points (checkpoints of
+// maps\_mw2coop_checkpoints) stay for "Continue" in a later session. [dvar mw2coop_saves 0: the game's saves off, a failed mission restarts at the start point]
+
+saves_on()
+{
+	return GetDvar( "mw2coop_saves" ) != "0";
+}
 
 no_saves()
 {
+	if ( saves_on() )
+		return;
 	waittillframeend;	// maps\_load sets sv_saveOnStartMap after we are called
 	SetSavedDvar( "sv_saveOnStartMap", false );
 	if ( isdefined( level.flag ) && isdefined( level.flag[ "disable_autosaves" ] ) )
@@ -910,8 +919,9 @@ checkpoint_wait( index, cp )
 	snapshot_allies();
 	snapshot_weapons( cp.start );
 	request( "checkpoint " + level.script + " " + cp.start );	// the host saves it for mw2coop_continue
-	foreach ( player in level.players )
-		player thread checkpoint_hud();
+	if ( !saves_on() )	// (with the game's saves its own checkpoints are the ones a failed mission goes back to)
+		foreach ( player in level.players )
+			player thread checkpoint_hud();
 }
 
 // True during the first seconds of a level that was started at a checkpoint (a restart after a failed mission, or a continued game). The start function sets the flags of the sections
@@ -1003,8 +1013,9 @@ section_reached( name, leader, by_table )
 	snapshot_weapons( name );
 	snapshot_flags( name );
 	request( "checkpoint " + level.script + " " + name + " " + spot );	// the host saves it for mw2coop_continue
-	foreach ( player in level.players )
-		player thread checkpoint_hud();
+	if ( !saves_on() )
+		foreach ( player in level.players )
+			player thread checkpoint_hud();
 	if ( isdefined( leader ) )
 	{
 		progress_of( leader );
@@ -1627,7 +1638,17 @@ mission_failed()
 	level.mw2coop.failing = true;
 	level notify( "mw2coop_level_end" );
 	flag_set( "special_op_terminated" );
-	state( "mission failed (deadquote '" + GetDvar( "ui_deadquote" ) + "'), restart at '" + GetDvar( "start" ) + "'" );
+	// both machines run this in lockstep: their DLLs read mw2coop_retry when the host's fast_restart (and the coopRestart it sends the client) runs, 3 s from now
+	if ( saves_on() )
+	{
+		SetDvar( "mw2coop_retry", "load" );
+		state( "mission failed (deadquote '" + GetDvar( "ui_deadquote" ) + "'), back to the last checkpoint" );
+	}
+	else
+	{
+		SetDvar( "mw2coop_retry", "restart" );
+		state( "mission failed (deadquote '" + GetDvar( "ui_deadquote" ) + "'), restart at '" + GetDvar( "start" ) + "'" );
+	}
 	foreach ( player in level.players )
 	{
 		player EnableInvulnerability();

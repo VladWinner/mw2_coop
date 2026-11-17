@@ -2173,7 +2173,7 @@ static HRESULT STDMETHODCALLTYPE t_clear(IDirect3DDevice9 *dev, DWORD n, const D
 		IDirect3DDevice9_GetViewport(dev, &lv);
 		if (cl_n < 60)
 			cl_n++, log_printf("native: clear11 #%u: flags %lx n %lu rect %ld,%ld,%ld,%ld color %08lx | viewport %lu,%lu %lux%lu | fd %p (p2 fd %p) | caller rva %llx", cl_n, (unsigned long)f, (unsigned long)n, r && n ? (long)r[0].x1 : 0, r && n ? (long)r[0].y1 : 0, r && n ? (long)r[0].x2 : 0,
-					   r && n ? (long)r[0].y2 : 0, (unsigned long)c, (unsigned long)lv.X, (unsigned long)lv.Y, (unsigned long)lv.Width, (unsigned long)lv.Height, *(void **)(base + XR(0x4358f58)), p2_fd,
+					   r && n ? (long)r[0].y2 : 0, (unsigned long)c, (unsigned long)lv.X, (unsigned long)lv.Y, (unsigned long)lv.Width, (unsigned long)lv.Height, *(void **)(base + XR64(0x4358f58)), p2_fd,
 					   (unsigned long long)((uint8_t *)__builtin_return_address(0) - base));
 	}
 	IDirect3DSurface9 *rt0 = NULL, *bb = NULL;
@@ -2184,10 +2184,10 @@ static HRESULT STDMETHODCALLTYPE t_clear(IDirect3DDevice9 *dev, DWORD n, const D
 	if (bb)
 		IDirect3DSurface9_Release(bb);
 	if (on_bb) {
-		const int w = *(int *)(base + XR(0x4113728)), h = *(int *)(base + XR(0x411372c));
+		const int w = *(int *)(base + XR64(0x4113728)), h = *(int *)(base + XR64(0x411372c));
 		D3DVIEWPORT9 vp, full = {0, 0, (DWORD)w, (DWORD)h, 0.0f, 1.0f};
 		if (w > 0 && h > 0 && SUCCEEDED(IDirect3DDevice9_GetViewport(dev, &vp))) {
-			const int p2 = *(void **)(base + XR(0x4358f58)) == p2_fd;
+			const int p2 = *(void **)(base + XR64(0x4358f58)) == p2_fd;
 			const D3DRECT rc = {0, p2 ? h / 2 : 0, w, p2 ? h : h / 2};
 			IDirect3DDevice9_SetViewport(dev, &full); // a clear's rectangles are clipped to the viewport
 			const HRESULT hr = clear_orig(dev, 1, &rc, f, c, z, st);
@@ -2565,10 +2565,10 @@ int native_nat_clear_rect(unsigned flags, long rect[4])
 {
 	if (mode != 11 || !split_on || !p2_fd || !(flags & 1) || !CFG_ONCE("exp11clip", 1))
 		return 0;
-	const int w = *(int *)(base + XR(0x4113728)), h = *(int *)(base + XR(0x411372c));
+	const int w = *(int *)(base + XR64(0x4113728)), h = *(int *)(base + XR64(0x411372c));
 	if (w <= 0 || h <= 0)
 		return 0;
-	const int p2 = *(void **)(base + XR(0x4358f58)) == p2_fd;
+	const int p2 = *(void **)(base + XR64(0x4358f58)) == p2_fd;
 	rect[0] = 0, rect[1] = p2 ? h / 2 : 0, rect[2] = w, rect[3] = p2 ? h : h / 2;
 	static volatile LONG logged[2];
 	if (InterlockedIncrement(&logged[p2]) == 1)
@@ -2962,7 +2962,7 @@ static void fd_scene_save(uint8_t *fd, unsigned scene)
 	if (!glob_copy[k][scene])
 		glob_copy[k][scene] = HeapAlloc(GetProcessHeap(), 0, 0x400);
 	if (glob_copy[k][scene])
-		memcpy(glob_copy[k][scene], base + XR(0x4113400), 0x400); // the view values 0x8210 writes per scene (origin and axes 0x4113434.., fog / LOD / fov 0x41135a4..)
+		memcpy(glob_copy[k][scene], base + XR64(0x4113400), 0x400); // the view values 0x8210 writes per scene (origin and axes 0x4113434.., fog / LOD / fov 0x41135a4..)
 	fd_scene_glob[k][scene] = glob_copy[k][scene];
 }
 // what a scene's 3D pass reads of its own lighting: +0x41940..+0x41a30 (with the sun shadow flag, +0x41958, the shadow bits +0x41970), the sun +0x41a48..+0x41a58, the light
@@ -2975,7 +2975,7 @@ static int fd_scene_load(uint8_t *fd, unsigned scene)
 	for (int k = 0; k < 2; k++)
 		if (fd_scene_owner[k] == fd && fd_scene_copy[k][scene]) {
 			if ((CFG_ONCE("scenekeepparts", 7) & 16) && fd_scene_glob[k][scene])
-				memcpy(base + XR(0x4113400), fd_scene_glob[k][scene], 0x400);
+				memcpy(base + XR64(0x4113400), fd_scene_glob[k][scene], 0x400);
 			for (size_t p = 0; p < sizeof(fd_scene_parts) / sizeof(fd_scene_parts[0]); p++)
 				if (CFG_ONCE("scenekeepparts", 7) & (1 << p))
 				memcpy(fd + fd_scene_parts[p][0], fd_scene_copy[k][scene] + (fd_scene_parts[p][0] - FD_SCENE_LO), fd_scene_parts[p][1] - fd_scene_parts[p][0]);
@@ -2991,7 +2991,7 @@ static void (*scene3d_original)(void *slot);
 static int scene3d_pass = -1; // the scene whose 3D pass runs (several scenes in a frame), -1 otherwise
 static void scene3d_hook(void *slot)
 {
-	uint8_t *scene = *(uint8_t **)(base + XR(0x4358f58)); // the frame data the back end is drawing
+	uint8_t *scene = *(uint8_t **)(base + XR64(0x4358f58)); // the frame data the back end is drawing
 	const unsigned count = scene ? *(unsigned *)(scene + 0x41a34) : 0;
 	if (mode != 11 || count < 2 || !CFG_ONCE("allscenes", 1)) {
 		scene3d_original(slot);
@@ -3033,7 +3033,7 @@ static void scene_clear_hook(void *dev, int flags, void *rgba, float depth, int 
 	if (CFG_ONCE("clearlog", 0)) { // QA: which scene's clear runs, and over what
 		static unsigned n;
 		if (n++ < 24) {
-			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+			uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
 			const float *c = (const float *)rgba;
 			(void)dev;
 			log_printf("native: [x%d] clear scene %d (current %d) flags 0x%x rgba %.3f %.3f %.3f %.3f depth %g | view rect %.3f %.3f %.3f %.3f | cg view %.3f %.3f %.3f %.3f",
@@ -3071,11 +3071,11 @@ static void end_frame_hook(unsigned flags)
 #ifdef _WIN64
 		ng_skip_reset_2d = 0;
 #endif
-		p2_fd = *(void **)(base + XR(0x410fd00));
+		p2_fd = *(void **)(base + XR64(0x410fd00));
 		static int nlog2;
 		if (nlog2 < 4) {
 			nlog2++;
-			log_printf("native: exp11frames: p2 end-frame %u (fd %p) ...", flags, *(void **)(base + XR(0x410fd00)));
+			log_printf("native: exp11frames: p2 end-frame %u (fd %p) ...", flags, *(void **)(base + XR64(0x410fd00)));
 			end_frame_original(flags);
 			log_printf("native: exp11frames: p2 end-frame done");
 			return;
@@ -3093,20 +3093,20 @@ static void body_rec_log(const char *when) // QA (traceprims): the scene records
 {
 	if (!CFG_ONCE("traceprims", 0) || !trace_on_now())
 		return;
-	const unsigned count = *(const unsigned *)(base + XR(0x40dd754));
+	const unsigned count = *(const unsigned *)(base + XR64(0x40dd754));
 	for (unsigned i = 0; i < count && i < 0x200; i++) {
-		const uint8_t *r = base + XR(0x40dd760) + (size_t)i * 0x90;
+		const uint8_t *r = base + XR64(0x40dd760) + (size_t)i * 0x90;
 		const unsigned ent = (*(const unsigned *)(r + 0x70) >> 7) & 0xfff;
 		if (ent <= 1)
 			log_printf("native: bodyrec %s: rec %u ent %u state %u dobj %p", when, i, ent, *(const unsigned *)(r + 0x28), *(void *const *)(r + 0x78));
 	}
 	unsigned st[6] = {0};
 	for (unsigned i = 0; i < count && i < 0x200; i++) {
-		const unsigned v = *(const unsigned *)(base + XR(0x40dd760) + (size_t)i * 0x90 + 0x28);
+		const unsigned v = *(const unsigned *)(base + XR64(0x40dd760) + (size_t)i * 0x90 + 0x28);
 		st[v < 5 ? v : 5]++;
 	}
 	log_printf("native: bodyrec %s: %u records, states 0:%u 1:%u 2:%u 3:%u 4:%u skinned(>4):%u | scene list start %u count %u", when, count, st[0], st[1], st[2], st[3], st[4], st[5],
-		   *(const unsigned *)(base + XR(0x40f09e4)), *(const unsigned *)(base + XR(0x40f09e8)));
+		   *(const unsigned *)(base + XR64(0x40f09e4)), *(const unsigned *)(base + XR64(0x40f09e8)));
 }
 static void rs_log(const char *when)
 {
@@ -3114,13 +3114,13 @@ static void rs_log(const char *when)
 	if (n >= 12 || !CFG_ONCE("rslog", 0))
 		return;
 	n++;
-	uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+	uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
 	if (!fd)
 		return;
 	const uint64_t *e = (const uint64_t *)(fd + 0x41a68);
 	log_printf("native: rslog %s: lc %d second %d | spot lights %u | entry0 %llx %llx %llx %llx | scenes %u views %u | spot dvar %d",
 		when, *(int *)(base + XR(0x51deb8)), second_pass, *(unsigned *)(fd + 0x41ea8), e[0], e[1], e[2], e[3],
-		*(unsigned *)(fd + 0x41a34), *(unsigned *)(fd + 0x419e8), *(int *)(*(uint8_t **)(base + XR(0x4115fe0)) + 0x10));
+		*(unsigned *)(fd + 0x41a34), *(unsigned *)(fd + 0x419e8), *(int *)(*(uint8_t **)(base + XR64(0x4115fe0)) + 0x10));
 }
 static void render_scene_hook(void *refdef, uintptr_t scene, uintptr_t c, uintptr_t d)
 {
@@ -3646,7 +3646,7 @@ static void quad_hook(void *mat, float x, float y, float w, float h, unsigned s0
 		const char *name = mat && !IsBadReadPtr(mat, 8) && *(const char *const *)mat && !IsBadReadPtr(*(const char *const *)mat, 4) ? *(const char *const *)mat : "?";
 		n++;
 		log_printf("native: quad #%u: material %.40s at %g %g size %g x %g uv %g %g %g %g color %08x | fd %p", n, name, (double)x, (double)y, (double)w, (double)h, (double)*(float *)&s0, (double)*(float *)&t0, (double)*(float *)&s1,
-			   (double)*(float *)&t1, col, *(void **)(base + XR(0x4358f58)));
+			   (double)*(float *)&t1, col, *(void **)(base + XR64(0x4358f58)));
 	}
 	quad_orig(mat, x, y, w, h, s0, t0, s1, t1, col);
 }
@@ -3684,6 +3684,7 @@ static void slice_install(void)
 #define ENTRING_TIME XR(0xca3c44)
 #define ENTRING_BUILD_SITE XR(0x2d18b)
 #define ENTRING_GET_SITE XR(0x1a649)
+#define ENTRING_GETTER XR(0xdd30)
 #define ENTRING_NEXTSNAP XR(0x467990)
 #endif
 #define ENTRING_STRIDE 0xacu
@@ -3733,6 +3734,17 @@ static uint8_t *entring_get_hook(int n)
 	entring_misses++;
 	return entring_get_orig(n);
 }
+#ifndef _WIN64
+// 32 bits: the getter's call site (VA 0x41a649) lies in a range the official exe hashes (docs/32bit-plan.md), and loading a save checks it: the game quit with
+// 0x8000dead when a failed mission loaded the last checkpoint (QA nativesave 2026-11-17, the only hashed bytes that differed were that call's). The getter itself
+// (VA 0x40dd30, outside the hashed ranges) is hooked instead, and only the read from that call site goes to the ring.
+static uint8_t *entring_getter_hook(int n)
+{
+	if (__builtin_return_address(0) != (void *)(base + ENTRING_GET_SITE + 5))
+		return entring_get_orig(n);
+	return entring_get_hook(n);
+}
+#endif
 static void entring_install(void)
 {
 	static int done;
@@ -3746,8 +3758,14 @@ static void entring_install(void)
 	int ok = entring_buf != NULL;
 	if (ok && (parts & 1))
 		ok = hook_call(base + ENTRING_BUILD_SITE, (void *)entring_build_hook, (void **)&entring_build_orig);
-	if (ok && (parts & 2))
+	if (ok && (parts & 2)) {
+#ifdef _WIN64
 		ok = hook_call(base + ENTRING_GET_SITE, (void *)entring_get_hook, (void **)&entring_get_orig);
+#else
+		static const uint8_t getter[10] = {0x8b, 0x44, 0x24, 0x04, 0x69, 0xc0, 0xac, 0x00, 0x00, 0x00}; // mov eax, [esp+4]; imul eax, eax, 0xac
+		ok = hook_function(base + ENTRING_GETTER, getter, sizeof(getter), (void *)entring_getter_hook, (void **)&entring_get_orig);
+#endif
+	}
 	log_printf("native: entring (a copy of the snapshot entity states per server build) %s", ok ? "installed" : "FAILED");
 }
 #ifdef _WIN64
@@ -4244,7 +4262,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			half_forget();
 		if (mode == 11 && !split_on) { // back to one picture: player 1's view rectangle covers the screen again
 			int *cvr = (int *)(base + XR(0x43c630));
-			const int sw_px = *(int *)(base + XR(0x4113728)), sh_px = *(int *)(base + XR(0x411372c));
+			const int sw_px = *(int *)(base + XR64(0x4113728)), sh_px = *(int *)(base + XR64(0x411372c));
 			if (sw_px > 0 && sh_px > 0 && (cvr[2] != sw_px || cvr[3] != sh_px))
 				cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px;
 		}
@@ -4273,7 +4291,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				log_printf("native: mode 11 draw #%u (ctx1 ready %d)", n11, ctx1_ready);
 		}
 		const float aspect_was = *aspect;
-		const int sw_px = *(int *)(base + XR(0x4113728)), sh_px = *(int *)(base + XR(0x411372c)); // the picture's size (the renderer's display globals)
+		const int sw_px = *(int *)(base + XR64(0x4113728)), sh_px = *(int *)(base + XR64(0x411372c)); // the picture's size (the renderer's display globals)
 		if (sw_px > 0 && sh_px > 0 && CFG_ONCE("exp11aspect", 1))
 			*aspect = exp11_aspect(0, sw_px, sh_px); // a half's shape: the cgame builds the field of view for it (as mode 10 does)
 		int *cvr = (int *)(base + XR(0x43c630)); // the cgame's view rectangle in pixels (x, y, w, h; the refdef's, copied by 0xbe710; set at the level start by 0xa6680): one per context
@@ -4303,7 +4321,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		if (CFG_ONCE("scenekeep", 0)) { // the scene's culling and light lists are finished by the front end's workers after the draw returns: wait for them, then keep its frame data
 			ctx_wait_workers();
-			fd_scene_save(*(uint8_t **)(base + XR(0x410fd00)), 0);
+			fd_scene_save(*(uint8_t **)(base + XR64(0x410fd00)), 0);
 		}
 		if (ctx_on)
 			ctx_after_draw();
@@ -4340,7 +4358,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				ctx_wait_workers(); // player 1's front-end jobs (skinning, surface lists) read the frame data pointer 0x410fd00, which the end-frame clears and player 2's begin moves
 			// The list's shape, as the screen update 0xd5890 builds it: the views' commands, end marker (0xc800, 0x40000; the 360's 0x823912a8 after each view),
 			// the final 2D section's start kept at frame data +0x41a40 (0xc7e0), its first command 0x80017 (0xe900), then the close (0xe440).
-			((void (*)(void))(base + XR(0xc800)))();
+			((void (*)(void))(base + XR64(0xc800)))();
 			((void (*)(void))(base + XR(0xc7e0)))();
 			((void (*)(void))(base + XR(0xe900)))();
 			((void (*)(void))(base + XR(0xe440)))();
@@ -4348,15 +4366,15 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			// bit 0 too (exp11frames=2: flags 1 then 3).
 			static int nlog1;
 			if (nlog1 < 4)
-				log_printf("native: exp11frames: p1 end-frame (fd %p) ...", *(void **)(base + XR(0x410fd00)));
+				log_printf("native: exp11frames: p1 end-frame (fd %p) ...", *(void **)(base + XR64(0x410fd00)));
 			((void (*)(unsigned))(base + XR(0xc4c0)))(p1_frame_flags());
 			if (nlog1 < 4)
 				nlog1++, log_printf("native: exp11frames: p1 end-frame done");
 			if (CFG_ONCE("p2skindump", 0)) { // QA: which records and skin offsets player 2's frame leaves behind, before the clear
-				const unsigned count = *(const unsigned *)(base + XR(0x40dd754));
+				const unsigned count = *(const unsigned *)(base + XR64(0x40dd754));
 				unsigned shown = 0;
 				for (unsigned i = 0; i < count && i < 0x200 && shown < 24; i++) {
-					const uint8_t *r = base + XR(0x40dd760) + (size_t)i * 0x90;
+					const uint8_t *r = base + XR64(0x40dd760) + (size_t)i * 0x90;
 					const unsigned ent = (*(const unsigned *)(r + 0x70) >> 7) & 0xfff;
 					const unsigned st = *(const unsigned *)(r + 0x28);
 					if (ent <= 1 || st > 4) {
@@ -4377,7 +4395,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				// (rva 0x1429b5c; begin-frame waits for <= 1 through 0x2039f0), with its own wait that helps the workers (0x301e0).
 				if (CFG_ONCE("exp11rtwait", 1))
 					((void (*)(int (*)(void)))(base + XR(0x301e0)))(rt_frames_done);
-				((void (*)(void))(base + XR(0x7b60)))();
+				((void (*)(void))(base + XR64(0x7b60)))();
 			}
 			p2_frame = 1;
 #ifdef _WIN64
@@ -4385,7 +4403,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				ng_skip_reset_2d = 1;
 #endif
 		} else if (p2draw) {
-			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+			uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
 			if (fd)
 				split_smc_redirect(fd);
 		}
@@ -4460,7 +4478,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				end_frame_flags = frames == 1 ? 2 : 3; // the screen update's own end-frame (0xd5aaf, 3) ends player 2's frame: show it (exp11frames=1: do not begin again)
 			if (CFG_ONCE("scenekeep", 0)) {
 				ctx_wait_workers();
-				fd_scene_save(*(uint8_t **)(base + XR(0x410fd00)), 1);
+				fd_scene_save(*(uint8_t **)(base + XR64(0x410fd00)), 1);
 			}
 			if (no2d)
 				draw2d->current.enabled = (uint8_t)was2d;
@@ -4469,7 +4487,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		{
 			static unsigned n11b;
-			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+			uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
 			if (fd && n11b++ % 1200 == 0) {
 				const int views = *(int *)(fd + 0x419e8);
 				char line[400];
@@ -4608,12 +4626,12 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	else
 		sw[2] = 0.5f, sw[3] = 1; // the bottom half
 	if (CFG_ONCE("exp1smc", 1)) { // phase A: the second view's static model draw data goes to buffers of ours (the frame data has room for one view's, see split_smc_redirect)
-		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+		uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
 		if (fd)
 			split_smc_redirect(fd);
 	}
 	{
-		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+		uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
 		static int n1;
 		if (fd && n1++ < 5)
 			log_printf("native: exp1 after draw 1: scenes %d views %d | viewport static %d %d %d %d / %g %g %g %g", *(int *)(fd + 0x41a34), *(int *)(fd + 0x419e8),
@@ -4624,7 +4642,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	cg_draw_original(local_client, a, b);
 	second_pass = 0;
 	{
-		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+		uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
 		static int n2;
 		if (fd && (n2++ % 600) == 0)
 			log_printf("native: exp1 after draw 2: scenes %d views %d | region b7f80 used 0x%x, region d2f80 used 0x%x", *(int *)(fd + 0x41a34), *(int *)(fd + 0x419e8),
@@ -4637,7 +4655,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	}
 	if (fdprobe_on) { // phase A: the highest written byte of each frame data set between +0xd2f80 and +0x1096a8, and of +0xb7f80..+0xd2f80
 		static unsigned hi_d, hi_b, n;
-		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+		uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
 		if (fd) {
 			for (unsigned o = 0x1096a8; o > 0xd2f80; o -= 8)
 				if (*(uint64_t *)(fd + o - 8)) {
@@ -5971,7 +5989,7 @@ static void ps_publish_hook(unsigned lc, const void *ps)
 		if (!set && seen[0] && seen[1]) {
 			set = 1;
 			if (CFG_ONCE("vehwatchcl", 0)) { // the client side instead ([native] vehwatchcl=1): the cgame's predicted view yaw and the client's yaw accumulator (both swapped per context)
-				const uintptr_t rc[2] = {XR(0x42254c), XR(0x533d18)};
+				const uintptr_t rc[2] = {XR64(0x42254c), XR64(0x533d18)};
 				control_watch_multi(rc, 2);
 				log_printf("native: vehwatch: the client view yaw (0x42254c) and yaw accumulator (0x533d18) are watched");
 			} else {
@@ -7650,7 +7668,7 @@ static void client_frame_inner(void)
 		ctx_swap(1);
 		pad_frame_player(1, 1);
 		inputlog_frame(1);
-		uint8_t *scr_busy = base + XR(0x5db410);
+		uint8_t *scr_busy = base + XR64(0x5db410);
 		const uint8_t was = *scr_busy;
 		*scr_busy = 1;
 		client_frame_original();
@@ -9145,7 +9163,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 		static unsigned kb;
 		const float *p = (const float *)e;
 		if (++kb > 3000 && kb < 3060)
-			log_printf("native: bodyadd #%u ctx %d ent %u rec %u draw %.1f %.1f %.1f from rva %llx", kb, ctx_current, c & 0xffff, *(const unsigned *)(base + XR(0x40dd754)), p ? (double)p[0] : 0,
+			log_printf("native: bodyadd #%u ctx %d ent %u rec %u draw %.1f %.1f %.1f from rva %llx", kb, ctx_current, c & 0xffff, *(const unsigned *)(base + XR64(0x40dd754)), p ? (double)p[0] : 0,
 				   p ? (double)p[1] : 0, p ? (double)p[2] : 0, (unsigned long long)((uint8_t *)__builtin_return_address(0) - base));
 	}
 	if (ctx_current == 1 && (c & 0xffff) == 0 && CFG_ONCE("p2hooklog", 0)) { // QA: entity 0's body as context 1 adds it, sampled over the whole run
@@ -10966,6 +10984,19 @@ void native_menu_key(int key)
 int native_split_active(void)
 {
 	return native_active;
+}
+
+// Where context `ctx` keeps the bytes the game has at `rva` (a reference rva inside one of the swapped ranges): the live memory while ctx is the current context, else its
+// store. NULL when no split screen session has its two contexts, or rva is in no range. For code that handles local client <ctx> while only client 0's statics exist
+// (the game's saves: saves.c).
+void *native_ctx_addr(int ctx, unsigned rva)
+{
+	if (!native_active || !ctx_on || !ctx1_ready || !ctx_store[0][0] || (ctx != 0 && ctx != 1))
+		return NULL;
+	for (size_t i = 0; i < NRANGES; i++)
+		if (rva >= ranges[i].rva && rva < ranges[i].rva + ranges[i].size)
+			return ctx == ctx_current ? (void *)(base + RANGE_RVA(i) + (rva - ranges[i].rva)) : (void *)(ctx_store[ctx][i] + (rva - ranges[i].rva));
+	return NULL;
 }
 
 // The Start of a split screen lobby: the game becomes a two local players game; the caller launches the mission. dev0 / dev1: the players' devices (an XInput pad 0-3,

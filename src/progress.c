@@ -50,6 +50,7 @@
 #include "game.h"
 #include "log.h"
 #include "progress.h"
+#include "saves.h"
 #include "menus.h"
 #include "settings.h"
 
@@ -397,7 +398,7 @@ static void continue_f(void)
 
 // Host dvars the client must match before the level loads (level scripts read them).
 static const char *const session_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
-							  "mw2coop_fall_damage", "mw2coop_jump_height", "mw2coop_gravity"};
+							  "mw2coop_fall_damage", "mw2coop_jump_height", "mw2coop_gravity", "mw2coop_saves"};
 #define SESSION_DVARS (int)(sizeof(session_dvars) / sizeof(session_dvars[0]))
 
 static const char *const skill_dvars[] = {"g_gameskill", "g_gameskill_player_1", "g_gameskill_player_2"};
@@ -489,6 +490,14 @@ int progress_launch_packet(char *buf, int size)
 		// the host's own "set mw2coop_skill" above is still queued
 		if (strcmp(session_dvars[i], "mw2coop_skill") == 0)
 			snprintf(value, sizeof(value), "%s", skill >= 0 ? (const char[]){(char)('0' + skill), 0} : "");
+		// the game's checkpoints (saves.c) only when both builds load them: a machine that cannot would restart the level while the other loads the save
+		if (strcmp(session_dvars[i], "mw2coop_saves") == 0 && strcmp(value, "0") != 0 && (!saves_supported() || !menus_partner_saves())) {
+			static int told;
+			if (!told++)
+				log_printf("progress: the game's checkpoints off for this session (%s build does not load them)", saves_supported() ? "the partner's" : "this");
+			snprintf(value, sizeof(value), "0");
+			game_cbuf_addtext("set mw2coop_saves 0\n");
+		}
 		n += snprintf(buf + n, size - n, " %s=%s", session_dvars[i], value);
 	}
 	return n < size ? n : size - 1;
