@@ -80,6 +80,8 @@ rider_model( body, skeleton )
 // module pulls in mapsf_caves_code, which only that level has (a script compile error everywhere else, QA 2026-11-17).
 rope_skeleton()
 {
+	if ( level.script == "gulag" )	// the cellblock rope's stand-in (maps\_mw2coop_gulag::rope_partner_view): a SEAL soldier, whose rappel it plays
+		return "body_seal_udt_assault_a";
 	return "body_desert_tf141_assault_a";
 }
 

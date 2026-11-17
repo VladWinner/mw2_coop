@@ -2359,6 +2359,11 @@ cave_rappel()
 // (linked to a point that follows him, looking at him); frames of both screens every second from the hook-up to the end of each descent.
 rappelview()
 {
+	if ( level.script == "gulag" )
+	{
+		gulag_rappelview();
+		return;
+	}
 	check( level.script == "af_caves" && level.players.size == 2, "af_caves with two players" );
 	t = 0;
 	while ( !flag( "price_hooksup" ) && t < 60 )
@@ -2406,6 +2411,37 @@ rappelview()
 		wait 0.5;
 		t += 0.5;
 	}
+	level notify( "qa_shots_stop" );
+	level.player notify( "qa_look_stop" );
+	report( "done" );
+}
+
+// The Gulag's cellblock rope (start "rappel"), seen by the partner: player 1 rappels, then player 2; the other rides a camera beside him.
+gulag_rappelview()
+{
+	check( level.players.size == 2, "two players" );
+	wait 4;
+	trigger = GetEnt( "rappel_trigger", "script_noteworthy" );
+	check( isdefined( trigger ), "the rope's use trigger exists" );
+	top = level.player.origin;
+	level.player2 SetOrigin( top + ( 30, 0, 0 ) );
+	wait 1;
+	trigger notify( "trigger", level.player );
+	level.player2 thread qa_side_camera( level.player );
+	level thread qa_shots_every( "g1-", 0.7, 18 );
+	wait 13;
+	level notify( "qa_shots_stop" );
+	level.player2 notify( "qa_look_stop" );
+	wait 1;
+	level.player2 SetOrigin( top + ( 20, 0, 0 ) );
+	wait 1;
+	trigger = GetEnt( "rappel_trigger", "script_noteworthy" );
+	check( isdefined( trigger ), "the rope is usable again for player 2" );
+	if ( isdefined( trigger ) )
+		trigger notify( "trigger", level.player2 );
+	level.player thread qa_side_camera( level.player2 );
+	level thread qa_shots_every( "g2-", 0.7, 18 );
+	wait 13;
 	level notify( "qa_shots_stop" );
 	level.player notify( "qa_look_stop" );
 	report( "done" );

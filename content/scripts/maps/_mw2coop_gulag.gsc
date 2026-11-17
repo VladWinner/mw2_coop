@@ -315,3 +315,48 @@ fall_partner_black( on )
 	if ( isdefined( level.mw2coop_fall_black ) )
 		level.mw2coop_fall_black Destroy();
 }
+
+// --------------------------------------------------------------------------------------------
+// The cellblock rope as the other player sees it: the same "second hands" as Just Like Old Times' rope (maps\_mw2coop_cave::partner_view, owner
+// 2026-11-17). The level's rig is first-person hands (viewhands_player_udt), shown for the whole descent next to the rappeller's own upright body.
+// Now the rig is hidden from the other player and he sees a stand-in instead: the rappeller's body mesh on a SEAL soldier's skeleton
+// (maps\_mw2coop_bodies::rider_model) with his head, playing the soldiers' own rappel from the same window (generic "rappel_start",
+// %gulag_rappel_soldier) at the rig's moment, its eyes kept at the rappeller's camera; his own body is off until the rig goes.
+#using_animtree( "generic_human" );
+
+// player_rappels(), once the rig's scene runs. who: the rappeller.
+rope_partner_view( who, rig )
+{
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) || !isdefined( who.mw2coop_body ) || !isdefined( who.mw2coop_head ) )
+		return;
+	other = maps\_mw2coop::other_player( who );
+	if ( !isdefined( other ) )
+		return;
+	soldier = level.scr_anim[ "generic" ][ "rappel_start" ];
+	hands = level.scr_anim[ "player_rappel" ][ "rappel_start" ];
+	body = Spawn( "script_model", who.origin );
+	body SetModel( maps\_mw2coop_bodies::rider_model( who.mw2coop_body, maps\_mw2coop_bodies::rope_skeleton() ) );
+	body Attach( who.mw2coop_head, "", true );
+	body hideOnClient( who );
+	body DontCastShadows();
+	body UseAnimTree( #animtree );
+	body SetAnim( soldier, 1, 0, 0 );
+	level.mw2coop_rope_body = body;	// QA
+	who maps\_utility::SetModelFunc( undefined );
+	maps\_mw2coop::state( "gulag: the rappeller seen by the other player as his body on a SEAL soldier's skeleton" );
+	while ( isdefined( rig ) && IsAlive( who ) )
+	{
+		rig hideOnClient( other );	// (again every frame, as in the caves: a Show would clear it)
+		body SetAnimTime( soldier, min( rig GetAnimTime( hands ), 0.999 ) );
+		body.angles = ( 0, rig GetTagAngles( "tag_player" )[ 1 ], 0 );
+		at = body GetTagOrigin( "tag_eye" );
+		if ( !isdefined( at ) )
+			at = body GetTagOrigin( "j_head" );
+		body.origin = body.origin + ( who GetEye() - at );
+		wait 0.05;
+	}
+	body Delete();
+	level.mw2coop_rope_body = undefined;
+	if ( isdefined( who ) && IsAlive( who ) )
+		who maps\_mw2coop_bodies::give_body( maps\_mw2coop::body_model );
+}
