@@ -2191,7 +2191,8 @@ cave_rappel()
 	report( "done" );
 }
 
-// Escape from Favela (start "chopperjump"): player 2 leaps for the chopper's rope ladder (real keys:
+// Escape from Favela (start point "solorun_chopper": the level's code calls that part "chopperjump", but a start
+// named so does not exist and the level then starts at its beginning, where no chopper comes: 2026-11-17): player 2 leaps for the chopper's rope ladder (real keys:
 // forward, then jump, facing the ladder); player 1 catches the rope too; both are on it when the
 // chopper flies off.
 chopperjump()
