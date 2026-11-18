@@ -946,7 +946,14 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 {
 	{ // a Bink movie's draw on a screen of another shape: letterboxed / pillarboxed (natfilm.h)
 		unsigned mw, mh;
-		if (native_nat_film_size(&mw, &mh) && mw && mh) {
+		// (not a movie a level plays on things in the world, drawn with the depth test on: Just Like Old Times' control room TVs, see native.c bink_is_movie_quad)
+		state11_t fs;
+		int depth_on = 0;
+		if (g->words_valid) {
+			state11_decode(g->word0, g->word1, &fs);
+			depth_on = fs.z_enable != 0;
+		}
+		if (!depth_on && native_nat_film_size(&mw, &mh) && mw && mh) {
 			int luma = 0, chroma = 0;
 			for (int i = 0; i < 16; i++) {
 				nat_image *im = g->tex[i] ? d->ops.image(g->tex[i]) : NULL;

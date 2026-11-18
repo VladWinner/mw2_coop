@@ -1355,6 +1355,12 @@ static int bink_is_movie_quad(IDirect3DDevice9 *dev, UINT primitive, UINT primit
 {
 	if (!bink_d3d_is_active())
 		return 0;
+	// A full-screen movie is drawn by the 2D pass, with no depth test. A movie a level plays on things in the world (CinematicInGame: Just Like Old Times' control room
+	// TVs, the countdown) is drawn on 3D quads with the depth test on: those are not fitted (2026-11-18, owner's screenshot of the control room in split screen: each
+	// TV's draw narrowed the viewport to 4:3 and cleared the sides, vertical strips at 400 and 880 of a 1280x360 half), and their shaders are not learned as the movie's.
+	DWORD zenable = D3DZB_FALSE;
+	if (SUCCEEDED(IDirect3DDevice9_GetRenderState(dev, D3DRS_ZENABLE, &zenable)) && zenable != D3DZB_FALSE)
+		return 0;
 	static const DWORD sampler_stages[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
 		D3DVERTEXTEXTURESAMPLER0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, D3DVERTEXTEXTURESAMPLER3};
 	int movie_quad = 0;

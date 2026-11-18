@@ -4,7 +4,7 @@
   python -I tools/check_gsc.py
 
 The game does not say which line failed: a script that does not compile ends the level load and drops the game back to the menu (the log then shows "scrdebug: 0 script
-functions mapped" and no level). What is checked: a `?` outside strings and comments (GSC has no `a ? b : c`; 2026-11-17 a QA scenario's ternary stopped every co-op
+functions mapped" and no level). What is checked: a keyword of the language used as a variable (2026-11-18: `in = ...` in a QA scenario, "script compile error, bad syntax"), a `?` outside strings and comments (GSC has no `a ? b : c`; 2026-11-17 a QA scenario's ternary stopped every co-op
 level from loading), and the bracket balance of each file. Run by tools/pr_checks.py.
 """
 import glob
@@ -43,9 +43,16 @@ def code_only(text):
     return "".join(out)
 
 
+KEYWORDS = "in if else for foreach while do switch case default break continue return wait waittill waittillframeend waittillmatch notify endon thread childthread true false undefined".split()
+KEYWORD_AS_VAR = re.compile(r"(?<![\w.\]])(" + "|".join(KEYWORDS) + r")\s*=(?!=)")  # (an assignment: `thread [[ fn ]]()` is a call)
+
+
 def check_text(name, text, bad, balance=True):
     code = code_only(text)
     for n, line in enumerate(code.split("\n"), 1):
+        m = KEYWORD_AS_VAR.search(line)
+        if m:
+            bad.append("%s:%d: the keyword '%s' used as a variable (bad syntax)" % (name, n, m.group(1)))
         if "?" in line:
             bad.append("%s:%d: '?' outside a string (GSC has no a ? b : c)" % (name, n))
     if balance:

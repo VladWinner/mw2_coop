@@ -298,6 +298,12 @@ main()
 		case "whbreach":
 			whbreach();
 			break;
+		case "breachstuck":
+			breachstuck();
+			break;
+		case "doomedcp":
+			doomedcp();
+			break;
 		case "weapdrop":
 			weapdrop();
 			break;
@@ -1869,6 +1875,198 @@ snapsave()
 		player SetOrigin( player.origin + ( 0, 0, 2 ) + AnglesToForward( player.angles ) * 150 );
 	report( "snapsave: checkpoint committed and the world changed; the session can end" );
 	wait 120;
+}
+
+// Just Like Old Times (af_caves, start "control"): the control room's slow-motion breach with both players in the door's volume and player 1 pressing Use for real
+// (owner: "one of the two players stays stuck in the door after the breach"). Reports where each player is let go and whether he is stuck there
+// (maps\_mw2coop::spot_stuck: no 8-unit step in any of four directions), then the same 5 s later, and whether player 1 can walk away (a real Forward press).
+// mw2coop_qa_nounstick 1: the fix (maps\_mw2coop::breach_unstick) does nothing, to see the breach as the game leaves the players.
+// mw2coop_qa_breachside 1: the players swap their places in the door's volume before the breach.
+breachstuck()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	p1 = level.player;
+	p2 = level.player2;
+	level.mw2coop_no_follow = true;
+	wait 3;
+	if ( level.script == "af_caves" )
+	{
+		flag_set( "player_approaching_breach" );	// (the hallway's trigger, which the start point's teleport skips: an enemy slams the door, then the breach can be used)
+		for ( t = 0; t < 15 && !flag( "breach_door_closed" ); t += 0.25 )
+			wait 0.25;
+		check( flag( "breach_door_closed" ), "the control room's door was slammed" );
+		wait 2;
+	}
+	best = undefined;
+	bestd = 1000000;
+	foreach ( ent in level.breach_groups )
+	{
+		if ( !isdefined( ent.door_volume ) || !isdefined( ent.lookat_triggers ) || !ent.lookat_triggers.size )
+			continue;
+		d = Distance( p1.origin, ent.door_volume.origin );
+		if ( d < bestd )
+		{
+			best = ent;
+			bestd = d;
+		}
+	}
+	check( isdefined( best ), "a breach near player 1 (" + bestd + " units)" );
+	if ( !isdefined( best ) )
+		return;
+	door = best.lookat_triggers[ 0 ].breach_origin;
+	vol = best.door_volume;
+	inward = VectorNormalize( ( door[ 0 ] - vol.origin[ 0 ], door[ 1 ] - vol.origin[ 1 ], 0 ) );
+	side = ( inward[ 1 ], inward[ 0 ] * -1, 0 );
+	if ( GetDvar( "mw2coop_qa_breachside" ) == "1" )
+		side = side * -1;
+	report( "breachstuck: door at " + door + ", its volume at " + vol.origin + ", " + int( bestd ) + " units from player 1" );
+	use_at = vol.origin;
+	if ( isdefined( best.trigger ) )
+		use_at = best.trigger.origin;
+	spots = [];
+	spots[ 0 ] = use_at + side * 14;
+	spots[ 1 ] = use_at - side * 14;
+	foreach ( n, player in level.players )
+	{
+		at = spots[ n ];
+		player SetOrigin( PhysicsTrace( at + ( 0, 0, 40 ), at - ( 0, 0, 120 ) ) );
+	}
+	wait 0.5;
+	foreach ( n, player in level.players )
+		player SetPlayerAngles( VectorToAngles( door - player GetEye() ) );
+	report( "breachstuck: player 1 in the door's volume " + p1 IsTouching( vol ) + ", player 2 " + p2 IsTouching( vol ) + "; player 1 in the use trigger " + ( isdefined( best.trigger ) && p1 IsTouching( best.trigger ) ) + ", " + int( Distance( p1.origin, door ) ) + " units from the door" );
+	level.mw2coop_qa_breach_done = undefined;
+	level thread breachstuck_watch();
+	wait 0.5;
+	p1 SetPlayerAngles( VectorToAngles( door - p1 GetEye() ) );
+	press( p1, "activate", 1500 );
+	for ( t = 0; t < 4 && !( isdefined( level.breaching ) && level.breaching ) && !isdefined( level.mw2coop_qa_breach_done ); t += 0.1 )
+		wait 0.1;
+	if ( !( isdefined( level.breaching ) && level.breaching ) && !isdefined( level.mw2coop_qa_breach_done ) && isdefined( best.trigger ) )
+	{
+		report( "breachstuck: player 1's Use did not start the breach: its trigger is notified for him" );
+		best.trigger notify( "trigger", p1 );
+	}
+	for ( t = 0; t < 30 && !isdefined( level.mw2coop_qa_breach_done ); t += 0.1 )
+		wait 0.1;
+	check( isdefined( level.mw2coop_qa_breach_done ), "the breach ran (player 1's Use)" );
+	if ( !isdefined( level.mw2coop_qa_breach_done ) )
+		return;
+	wait 0.1;
+	foreach ( n, player in level.players )
+		report( "breachstuck: let go, player " + ( n + 1 ) + " at " + player.origin + " linked " + player IsLinked() + " stuck " + maps\_mw2coop::spot_stuck( player.origin ) );
+	qa_shot( "bs-release" );
+	if ( GetDvar( "mw2coop_qa_nounstick" ) != "1" )
+	{
+		from = p1.origin;
+		press( p1, "forward", 3000 );	// (pushing against what holds him: the fix should see it and move him into the room)
+		wait 3;
+		report( "breachstuck: player 1 pushed forward after the breach, now " + int( Distance( from, p1.origin ) ) + " units from where he was let go" );
+	}
+	wait 5;
+	foreach ( n, player in level.players )
+	{
+		stuck = maps\_mw2coop::spot_stuck( player.origin );
+		report( "breachstuck: 5 s later, player " + ( n + 1 ) + " at " + player.origin + " stuck " + stuck );
+		check( !stuck, "player " + ( n + 1 ) + " can step after the breach" );
+	}
+	foreach ( k, yaw in StrTok( "0 90 180 270", " " ) )
+	{
+		from = p1.origin;
+		p1 SetPlayerAngles( ( 0, int( yaw ), 0 ) );
+		wait 0.2;
+		press( p1, "forward", 800 );
+		wait 1;
+		report( "breachstuck: player 1 walked " + int( Distance( from, p1.origin ) ) + " units on Forward, facing " + yaw + " (speed scale unknown, slow motion " + ( isdefined( level.breaching ) && level.breaching ) + ")" );
+	}
+	qa_shot( "bs-after" );
+	if ( GetDvar( "mw2coop_qa_nounstick" ) == "1" )
+	{
+		toward = VectorNormalize( ( p1.origin[ 0 ] - door[ 0 ], p1.origin[ 1 ] - door[ 1 ], 0 ) );
+		foreach ( remedy in StrTok( "clip speed breaching up8 room40", " " ) )
+		{
+			if ( remedy == "clip" )
+			{
+				clip = GetEnt( "breach_solid", "targetname" );
+				report( "breachstuck: the door's clip breach_solid " + isdefined( clip ) );
+				if ( isdefined( clip ) )
+					clip NotSolid();
+			}
+			else if ( remedy == "speed" )
+				p1 SetMoveSpeedScale( 1 );
+			else if ( remedy == "breaching" )
+				p1 DisableBreaching();
+			else if ( remedy == "up8" )
+				p1 SetOrigin( p1.origin + ( 0, 0, 8 ) );
+			else
+				p1 SetOrigin( PhysicsTrace( p1.origin + toward * 40 + ( 0, 0, 40 ), p1.origin + toward * 40 - ( 0, 0, 80 ) ) );
+			wait 0.3;
+			from = p1.origin;
+			p1 SetPlayerAngles( VectorToAngles( toward ) );
+			wait 0.2;
+			press( p1, "forward", 800 );
+			wait 1;
+			moved = int( Distance( from, p1.origin ) );
+			report( "breachstuck: after '" + remedy + "' player 1 walked " + moved + " units" );
+			if ( moved > 10 )
+				break;
+		}
+	}
+	if ( level.script == "af_caves" && !flag( "obj_door_controls_given" ) )
+	{
+		// the countdown on the control room's TVs (af_caves_backhalf breach_room_tvs: CinematicInGame): its draws are 3D quads the movie fitting must leave alone
+		// (owner's screenshot: vertical strips in both halves once the countdown runs)
+		flag_set( "obj_door_controls_given" );
+		wait 5;
+		room = best.room_volume.origin;	// (both look into the control room, at its TVs)
+		foreach ( player in level.players )
+			player SetPlayerAngles( VectorToAngles( ( room[ 0 ], room[ 1 ], player GetEye()[ 2 ] ) - player GetEye() ) );
+		wait 1;
+		qa_shot( "bs-countdown" );
+		wait 3;
+		qa_shot( "bs-countdown2" );
+		wait 2;
+		report( "breachstuck: the countdown runs on the TVs (frame bs-countdown)" );
+	}
+	report( "breachstuck: done" );
+}
+
+// A checkpoint that leads straight back to the failure (src/saves.c: the second load of the same checkpoint whose failure comes at the same game time restarts the
+// level at its start point). The checkpoint is committed with a thread in it that fails the mission 2 s later, so every load fails again at the same moment, as
+// Just Like Old Times' explosives did when they were shot a moment before a checkpoint (2026-11-18: twelve loads in a row). PASS when the level restarts at its start.
+doomedcp()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	if ( GetDvar( "mw2coop_qa_phase" ) == "doomed" )
+	{
+		SetDvar( "mw2coop_qa_phase", "doomed_done" );
+		check( true, "the level restarted at its start point after the checkpoint's failure came back" );
+		report( "doomedcp: done" );
+		return;
+	}
+	wait 4;
+	SetDvar( "mw2coop_qa_phase", "doomed" );
+	level thread doomedcp_fail();
+	wait 0.05;
+	saveId = SaveGameNoCommit( "qadoomed", maps\_autosave::getDescription() );
+	wait 0.05;
+	CommitSave( saveId );
+	report( "doomedcp: checkpoint committed at game time " + GetTime() + " with a thread that fails the mission 2 s later" );
+	wait 40;
+	check( false, "the level restarted at its start point within 40 s" );
+}
+
+doomedcp_fail()
+{
+	wait 2;
+	SetDvar( "ui_deadquote", "QA: the checkpoint's own failure" );
+	level thread maps\_mw2coop::mission_failed();
+}
+
+breachstuck_watch()
+{
+	level waittill( "sp_slowmo_breachanim_done" );
+	level.mw2coop_qa_breach_done = GetTime();
 }
 
 // whbreach (dc_whitehouse, run with MW2COOP_PRE "set start oval_office" for a restart there, or without it): the breach and the countdown. Reports the level's flags every 2 s for 16 s, then

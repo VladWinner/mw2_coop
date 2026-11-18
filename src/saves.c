@@ -20,6 +20,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "game.h"
@@ -155,6 +156,16 @@ static void hash_ranges_diff(void)
 // or it has none) both restart the level at its start point instead, and the host tells the client which it is ("mw2coop_retry load|restart", sent before its
 // fast_restart, whose coopRestart starts the client's). Owner, 2026-11-17: "what if the host loads its save and the client does not have it?"
 static char own_tag[64], partner_tag[64], host_decision[16];
+// A checkpoint that leads straight back to the failure (2026-11-18, Just Like Old Times: the owner shot the control room's explosives during the breach, a checkpoint was
+// taken a moment after the hit and before the failure; every load of it exploded again, and the mod loaded it again 3 s later: twelve times until the run ended). Such a
+// replay fails at the same game time each time; a player who dies again in a hard fight after a load does not. The second load of the same checkpoint whose failure came at
+// the same game time restarts the level at its start point instead (as with no checkpoint).
+static int restart_req_time, last_load_req_time;
+static char last_load_tag[64];
+void saves_note_restart_request(int game_time)
+{
+	restart_req_time = game_time;
+}
 static volatile DWORD host_decision_at;
 
 void saves_note_checkpoint(const char *tag)
@@ -203,6 +214,22 @@ static void fast_restart_cmd(void)
 		return;
 	}
 	const int network = *(base + XR(RVA_COOP_FLAG)) && !native_split_active();
+	const int doomed = restart_req_time && last_load_req_time && abs(restart_req_time - last_load_req_time) < 300 && !strcmp(last_load_tag, own_tag) &&
+			   (!network || game_peek(RVA_PARTY_IS_HOST, 1));
+	if (doomed) {
+		log_printf("saves: the mission failed again at the same moment (game time %d) after loading checkpoint %s: the checkpoint leads to the failure, the level restarts "
+			   "at its start point", restart_req_time, own_tag[0] ? own_tag : "(no tag)");
+		last_load_req_time = 0;
+		restart_req_time = 0;
+		if (network)
+			net_send_mod("mw2coop_retry restart");
+		game_cbuf_addtext("set mw2coop_retry \"\"\n");
+		fast_restart_orig();
+		return;
+	}
+	last_load_req_time = restart_req_time;
+	lstrcpynA(last_load_tag, own_tag, sizeof(last_load_tag));
+	restart_req_time = 0;
 	if (network && game_peek(RVA_PARTY_IS_HOST, 1)) {
 		const int same = !partner_tag[0] || strcmp(partner_tag, own_tag) == 0;
 		net_send_mod(same ? "mw2coop_retry load" : "mw2coop_retry restart");

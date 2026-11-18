@@ -1995,31 +1995,85 @@ sound_player( caller )
 	return level.player;
 }
 
-// maps\_slowmo_breach patch: right after a breach lets the players go. A player who cannot take a step (spot_stuck: inside the door, the charge, a wall) is put next
-// to the other one; checked for 3 s (the breach's slow motion and the door's pieces still move).
-breach_unstick()
+// maps\_slowmo_breach patch: right after a breach lets the players go (door: the breach's door post, room: the centre of the breached room's volume). Each player is
+// watched for 15 s or until he has walked away from where he was let go; one who is stuck is moved into the room. Stuck: he cannot take a step from where he stands
+// (spot_stuck: the world's geometry), or, near the door, he pushes his stick or keys for half a second of game time (about two seconds in the breach's slow motion)
+// and does not move at all. The second case is Just Like Old Times'
+// control room (owner: "one of the players stays stuck at the door after the breach"; QA breachstuck): the co-op animation of the player who set the charge
+// (breach_coop_player_1) ends in a solid area around the blown door that spot_stuck does not see (it traces the world only), and the spot beside the other player
+// that teleport_to_partner picked was inside it too; 40 units further into the room he walks (his speed, the breach state and the door's path clip were not it).
+// So he is moved 40 units into the room (towards the room's centre), again if he is still stuck, and only then next to the other player.
+breach_unstick( door, room )
 {
 	level endon( "mw2coop_level_end" );
-	moved = false;
-	for ( t = 0; t < 3 && !moved; t += 0.25 )
+	if ( GetDvar( "mw2coop_qa_nounstick" ) == "1" )	// QA breachstuck: the breach as the game leaves it, to see the stuck player himself
 	{
-		wait 0.25;
-		foreach ( player in level.players )
-		{
-			if ( moved || !IsAlive( player ) || player IsLinked() || is_downed( player ) || !spot_stuck( player.origin ) )
-				continue;
-			other = other_player( player );
-			if ( !isdefined( other ) || spot_stuck( other.origin ) )
-				continue;
-			who = "player 2";
-			if ( player == level.player )
-				who = "player 1";
-			state( "breach: " + who + " stuck after the breach at " + player.origin + ", put next to the other player" );
-			player thread teleport_to_partner_when_safe( other, 5 );
-			moved = true;
-		}
+		breach_objectives_back();
+		return;
 	}
+	foreach ( player in level.players )
+		player thread breach_unstick_watch( door, room );
 	breach_objectives_back();
+}
+
+breach_unstick_watch( door, room )
+{
+	self endon( "death" );
+	level endon( "mw2coop_level_end" );
+	start = self.origin;
+	last = self.origin;
+	pushed = 0;
+	moves = 0;
+	for ( t = 0; t < 15; t += 0.1 )
+	{
+		wait 0.1;
+		if ( !IsAlive( self ) || self IsLinked() || is_downed( self ) )
+		{
+			start = self.origin;
+			last = self.origin;
+			pushed = 0;
+			continue;
+		}
+		if ( Distance( start, self.origin ) > 48 + 40 * moves )
+			return;	// he walked away
+		reason = undefined;
+		if ( spot_stuck( self.origin ) )
+			reason = "inside the level's geometry";
+		near = !isdefined( door ) || Distance2D( self.origin, door ) < 160;
+		if ( near && Length( self GetNormalizedMovement() ) > 0.5 && Distance( last, self.origin ) < 0.3 )
+			pushed += 0.1;
+		else
+			pushed = 0;
+		last = self.origin;
+		if ( !isdefined( reason ) && pushed >= 0.5 )
+			reason = "pushes to move and does not move";
+		if ( !isdefined( reason ) )
+			continue;
+		who = "player 2";
+		if ( self == level.player )
+			who = "player 1";
+		if ( isdefined( door ) && isdefined( room ) && moves < 3 )
+		{
+			into = VectorNormalize( ( room[ 0 ] - door[ 0 ], room[ 1 ] - door[ 1 ], 0 ) );
+			to = self.origin + into * 40;
+			ground = PhysicsTrace( to + ( 0, 0, 40 ), to - ( 0, 0, 80 ) );
+			if ( !spot_stuck( ground ) && abs( ground[ 2 ] - self.origin[ 2 ] ) < 40 )
+			{
+				moves++;
+				state( "breach: " + who + " stuck after the breach at " + self.origin + " (" + reason + "), moved 40 units into the room (" + moves + ")" );
+				self SetOrigin( ground );
+				last = self.origin;
+				pushed = 0;
+				continue;
+			}
+		}
+		other = other_player( self );
+		if ( !isdefined( other ) || !IsAlive( other ) || spot_stuck( other.origin ) )
+			continue;
+		state( "breach: " + who + " stuck after the breach at " + self.origin + " (" + reason + "), put next to the other player" );
+		self thread teleport_to_partner_when_safe( other, 5 );
+		return;
+	}
 }
 
 // After a breach: the objectives' markers come back once its slow motion is over, whether or not its own thread got that far (see main()).

@@ -8,3 +8,5 @@ int saves_supported(void);
 void saves_note_checkpoint(const char *tag);
 // net.c: "mw2coop_cp" / "mw2coop_retry" from the partner; 1 if it was one
 int saves_on_packet(const char *buf, int len);
+// control.c: the scripts asked for the restart after a failed mission at this game time (maps\_mw2coop::mission_failed, "restart @<time>")
+void saves_note_restart_request(int game_time);

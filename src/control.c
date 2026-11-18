@@ -34,6 +34,7 @@
 #include "net.h"
 #include "party.h"
 #include "progress.h"
+#include "saves.h"
 #include "scrdebug.h"
 #include "settings.h"
 #include "enhopts.h"
@@ -119,6 +120,9 @@ static void script_request(const char *cmd)
 	if (!host)
 		return;
 	if (strncmp(cmd, "restart", 7) == 0) {
+		const char *at = strchr(cmd, '@');
+		if (at)
+			saves_note_restart_request(atoi(at + 1));
 		game_cbuf_addtext("fast_restart\n"); // SV_MapRestart sends coopRestart to the client; after a failed mission both load the last checkpoint (saves.c)
 	} else if (strncmp(cmd, "checkpoint ", 11) == 0) {
 		char map[64] = "", start[64] = "", spot[64] = "";
