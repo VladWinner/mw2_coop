@@ -1,9 +1,11 @@
 // Windows Firewall, the in-game way: the first time this PC hosts in a run, a hidden PowerShell
-// checks whether iw4sp.exe may receive traffic (mw2coop\mw2coop-firewall.ps1 -Check: an inbound
-// allow rule and no block rule; Windows adds a block rule when its own "Allow access?" prompt was
-// cancelled). If not, the game shows a yes/no popup (a copy of the quit popup); "Yes" runs the
-// script with administrator rights (one UAC prompt) to remove the block rules and add an allow
-// rule.
+// checks whether the game's exe may receive traffic (mw2coop\mw2coop-firewall.ps1 -Check: inbound
+// rules for that exe allow UDP on every network profile, Radmin VPN and the like being Public, and
+// none blocks it; Windows adds block rules when its own "Allow access?" prompt was cancelled). If
+// not, the game shows a yes/no popup (a copy of the quit popup); "Yes" runs the script with
+// administrator rights (one UAC prompt) to remove the block rules and add (or repair) the mod's
+// allow rule for this exe. What the script found (mw2coop\firewall-check.txt, firewall-apply.txt)
+// goes into mw2coop.log.
 #include <windows.h>
 #include <shellapi.h>
 #include <stdint.h>
@@ -52,16 +54,55 @@ static DWORD run_script(const char *mode, int elevated)
 	return code;
 }
 
+static void report_path(char *path, size_t size, const char *file)
+{
+	snprintf(path, size, "%smw2coop\\%s", game_dir, file);
+}
+
+// an old report is never logged as this run's
+static void drop_report(const char *file)
+{
+	char path[MAX_PATH + 64];
+	report_path(path, sizeof(path), file);
+	DeleteFileA(path);
+}
+
+// the script's report (one finding a line) into the log
+static void log_report(const char *file)
+{
+	char path[MAX_PATH + 64];
+	report_path(path, sizeof(path), file);
+	FILE *f = fopen(path, "rb");
+	if (!f)
+		return;
+	char line[400];
+	for (int n = 0; n < 40 && fgets(line, sizeof(line), f); n++) {
+		size_t len = strlen(line);
+		while (len && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+			line[--len] = 0;
+		if (len)
+			log_printf("firewall:   %s", line);
+	}
+	fclose(f);
+}
+
 static DWORD WINAPI check_thread(LPVOID fix)
 {
 	if (fix) {
+		drop_report("firewall-apply.txt");
 		DWORD r = run_script("-Apply", 1);
-		log_printf("firewall: fix %s", r == 0 ? "done" : "not done (administrator rights not given?)");
+		log_printf("firewall: fix %s", r == 0 ? "done" : r == (DWORD)-1 ? "not done (administrator rights not given?)" : "not done (the rule could not be made)");
+		if (r != (DWORD)-1)
+			log_report("firewall-apply.txt");
 	}
+	drop_report("firewall-check.txt");
 	DWORD code = run_script("-Check", 0);
 	InterlockedExchange(&check_state, code == 0 ? 2 : 3);
-	log_printf("firewall: %s", code == 0 ? "the game may receive co-op traffic" : "the game is blocked or has no rule");
-	if (code != 0 && !fix)
+	log_printf("firewall: %s", code == 0 ? "the game may receive co-op traffic"
+				   : code == 2 ? "the firewall could not be checked"
+					       : "the game is blocked or has no rule for every network");
+	log_report("firewall-check.txt");
+	if (code == 1 && !fix) // the popup only when the fix can help: not when the rules could not be read
 		InterlockedExchange(&popup_wanted, 1);
 	return 0;
 }
