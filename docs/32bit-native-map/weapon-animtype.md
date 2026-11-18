@@ -155,7 +155,9 @@ Events: `fireweapon` with hold plays `pt_hold_throw` / `pt_hold_prone_throw`; wi
 - `src/transplant.c` `turned_copy` makes `mw2coop_knife_held` from `weapon_commando_knife` (4 bones, 1 root: each child of the root turned, the root's vertices drawn
   by its first child) with that hold; `maps\_mw2coop::attach_weapon_model` attaches it to the body's `j_wrist_le`. Taken as it is, the blade came out of the little
   finger's side, pointing down: the body's wrist has the rig's axes turned 180 degrees about the forearm (the axis to the fingers agrees). The copy uses Rx(180) * R:
-  quaternion 0.3872 0.3968 -0.6979 -0.4532, offset 2.58 0.12 -1.33.
+  quaternion 0.3872 0.3968 -0.6979 -0.4532, offset 2.58 0.12 -1.33. Its point then looked toward the player himself (owner), so the knife is also turned 180 degrees
+  about its own side axis through the middle of its handle (2.5 units behind the guard): Rx(180) * R * Ry(180), quaternion 0.6979 -0.4532 0.3872 -0.3968, offset
+  4.025 -4.58 -0.425; the grip stays in the fist, the point goes away from him.
 - The body's own tags, checked with close-ups (QA `knifehand`, `knifevar`): `tag_inhand` is on the left hand (2.9 units from `j_wrist_le` by the server's tags), whose
   rifle-stance support grip is open; `tag_weapon_left` stands ahead of the hand and moves apart from it when walking; `tag_weapon_right` lay the knife sideways. The
   server's tag positions of a player do not match the drawn pose closely enough to place a model by them (a knife moved by them floated ahead of the hand).

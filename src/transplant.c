@@ -472,7 +472,10 @@ void *transplant_clone(const char *name, void *(*find)(int, const char *))
 //   the knife on the rig's TAG_WEAPON_LEFT in the fight (af_chase_knife_fight.gsc); on the rig that tag is fixed to the left wrist: QA knifeframe, seven times of
 //   player_afchase_ending_turnbuckle, the same 2.58 -0.12 1.33 from j_wrist_le and the blade along (-0.289 -0.940 0.181) of the wrist's axes. The body's wrist has
 //   the rig's axes turned 180 degrees about the forearm (the axis to the fingers is the same): taken as it is, the blade came out of the little finger's side, down;
-//   turned so (the rotation Rx(180) * R, the offset 2.58 0.12 -1.33), out of the thumb's side, ahead and up, as in first person. The co-op body's own tag_weapon_left
+//   turned so (the rotation Rx(180) * R, the offset 2.58 0.12 -1.33), out of the thumb's side, but its point toward the player himself (owner: "the blade looks
+//   toward the player, not away from him"); so the knife is also turned 180 degrees about its own side axis through the middle of its handle (2.5 units behind the
+//   guard, the model's origin): Rx(180) * R * Ry(180), the offset 2.58 0.12 -1.33 - 5 * the blade's axis = 4.025 -4.58 -0.425. The grip stays in the left fist,
+//   the point goes away from him (QA knifehand, beside the turn about the knife's up axis, which looked much the same). The co-op body's own tag_weapon_left
 //   is not on its hand (the knife hung ahead of it, walking above it), so the copy carries the hold and goes on the wrist (owner, 2026-11-18: "take a frame of the
 //   animation and put it in like that").
 static struct {
@@ -482,7 +485,7 @@ static struct {
 	uint8_t *model, *from;
 } turned[] = {
     {PICK_NAME, "weapon_ice_picker", {0, -0.70710678f, 0, 0.70710678f}, {-9.0f, 0, 0}, NULL, NULL},
-    {"mw2coop_knife_held", "weapon_commando_knife", {0.3872f, 0.3968f, -0.6979f, -0.4532f}, {2.58f, 0.12f, -1.33f}, NULL, NULL},
+    {"mw2coop_knife_held", "weapon_commando_knife", {0.6979f, -0.4532f, 0.3872f, -0.3968f}, {4.025f, -4.58f, -0.425f}, NULL, NULL},
 };
 #define TURNED_N (sizeof(turned) / sizeof(turned[0]))
 static int turned_index(const char *name)
