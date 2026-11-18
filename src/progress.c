@@ -120,12 +120,33 @@ static int read_save(const char *file, save_t *v)
 	return v->map[0] && is_name(v->map) && is_name(v->start);
 }
 
+// The save of this session (target) is changed and written by the control thread (progress_save) and the main thread (progress_snapshot_note at the game's
+// checkpoint): one at a time (audit 2026-11-18, PRG-1). A file is written next to itself and then put in place, so a crash mid-write never leaves it empty.
+static SRWLOCK save_lock = SRWLOCK_INIT;
+
+static FILE *open_temp(const char *file, char *temp, int size)
+{
+	snprintf(temp, size, "%s.tmp", file);
+	return fopen(temp, "w");
+}
+
+static int put_in_place(FILE *f, const char *temp, const char *file)
+{
+	int ok = fflush(f) == 0 && !ferror(f);
+	fclose(f);
+	if (!ok || !MoveFileExA(temp, file, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		DeleteFileA(temp);
+		return 0;
+	}
+	return 1;
+}
+
 static int write_save(const char *file, const save_t *v)
 {
-	char sub[MAX_PATH];
+	char sub[MAX_PATH], temp[MAX_PATH + 8];
 	snprintf(sub, sizeof(sub), "%sprogress", dir);
 	CreateDirectoryA(sub, NULL);
-	FILE *f = fopen(file, "w");
+	FILE *f = open_temp(file, temp, sizeof(temp));
 	if (!f) {
 		log_printf("progress: cannot write %s", file);
 		return 0;
@@ -138,7 +159,10 @@ static int write_save(const char *file, const save_t *v)
 	for (int i = 0; i < v->members; i++)
 		fprintf(f, "member %s %016llx %s\n", v->member[i].id[0] ? v->member[i].id : "-",
 			(unsigned long long)v->member[i].xuid, v->member[i].name);
-	fclose(f);
+	if (!put_in_place(f, temp, file)) {
+		log_printf("progress: cannot write %s", file);
+		return 0;
+	}
 	return 1;
 }
 
@@ -363,6 +387,7 @@ void progress_begin(int continuing, const char *id, uint64_t xuid, const char *n
 		if (!add_member)
 			v.members = 0;
 	}
+	AcquireSRWLockExclusive(&save_lock);
 	target = v;
 	from_legacy = have && is_legacy(file);
 	// a member who got a new id (player.ini lost) but is known by his Steam ID keeps his place
@@ -378,6 +403,7 @@ void progress_begin(int continuing, const char *id, uint64_t xuid, const char *n
 		lstrcpynA(m->name, name ? name : "", sizeof(m->name));
 		m->name[strcspn(m->name, "\r\n")] = 0;
 	}
+	ReleaseSRWLockExclusive(&save_lock);
 	log_printf("progress: this session saves to %s (%d member%s)", target_file + strlen(dir), target.members,
 		   target.members == 1 ? "" : "s");
 	char key[48], cmd[96];
@@ -415,10 +441,12 @@ void progress_snapshot_note(const char *key, const char *tag, const char *extra,
 	snprintf(sub, sizeof(sub), "%sprogress", dir);
 	CreateDirectoryA(sub, NULL);
 	snap_file(key, file);
-	FILE *f = fopen(file, "w");
+	char temp[MAX_PATH + 8];
+	AcquireSRWLockExclusive(&save_lock);
+	FILE *f = open_temp(file, temp, sizeof(temp));
 	if (f) {
 		fprintf(f, "%s\n%s", tag, extra ? extra : "");
-		fclose(f);
+		put_in_place(f, temp, file);
 	}
 	if (host && target_file[0]) {
 		lstrcpynA(target.snap, tag, sizeof(target.snap));
@@ -432,6 +460,7 @@ void progress_snapshot_note(const char *key, const char *tag, const char *extra,
 		}
 		write_save(target_file, &target);
 	}
+	ReleaseSRWLockExclusive(&save_lock);
 }
 
 int progress_snapshot_tag(const char *key, char *tag, int size)
@@ -487,12 +516,15 @@ int progress_chosen_snapshot(char *key, int key_size, char *tag, int tag_size)
 
 void progress_save(const char *map, const char *start, const char *spot)
 {
+	AcquireSRWLockExclusive(&save_lock);
 	if (!target_file[0]) // no lobby this run (mw2coop_continue from the console): a save of its own
 		new_save_file(target_file);
 	lstrcpynA(target.map, map, sizeof(target.map));
 	lstrcpynA(target.start, start, sizeof(target.start));
 	lstrcpynA(target.spot, spot ? spot : "", sizeof(target.spot));
-	if (!write_save(target_file, &target))
+	const int written = write_save(target_file, &target);
+	ReleaseSRWLockExclusive(&save_lock);
+	if (!written)
 		return;
 	log_printf("progress: saved map '%s' start '%s' to %s", map, start, target_file + strlen(dir));
 	if (from_legacy) {
@@ -520,7 +552,7 @@ static void continue_f(void)
 // Host dvars the client must match before the level loads (level scripts read them).
 static const char *const session_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
 							  "mw2coop_fall_damage", "mw2coop_jump_height", "mw2coop_gravity", "mw2coop_saves", "mw2coop_snapkey",
-							  "mw2coop_snapload"};
+							  "mw2coop_snapload", "mw2coop_museum"};
 #define SESSION_DVARS (int)(sizeof(session_dvars) / sizeof(session_dvars[0]))
 
 static const char *const skill_dvars[] = {"g_gameskill", "g_gameskill_player_1", "g_gameskill_player_2"};

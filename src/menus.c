@@ -1645,7 +1645,8 @@ static void split_specops_f(void)
 {
 	char map[64] = "";
 	game_dvar_raw("coop_mapName", map, sizeof(map));
-	if (!so_name(map))
+	// (the name goes into the command buffer: coop_mapName can come from an earlier host's coopAccept, so a plain name only, audit 2026-11-18, menus F12)
+	if (!so_name(map) || map[strspn(map, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")])
 		lstrcpynA(map, "so_killspree_trainer", sizeof(map)); // the lobby shows an op; the stale campaign mission of an earlier lobby is not one
 	InterlockedExchange(&split_pending, 1);
 	log_printf("menus: Special Ops split screen lobby on '%s'", map);
@@ -2248,9 +2249,11 @@ static void patch_lobby_mission(uint8_t *menu, int campaign)
 	{
 		// the game's mode dvar does not survive the way to the level (it reads empty there, issue 24: the Museum started the knife fight): the choice is kept in a dvar of the mod,
 		// which maps\_mw2coop_ending reads (and clears)
+		// Only the host's choice counts: the client takes it from the start packet (progress.c session_dvars). Each PC wrote its own, and in a network game
+		// the client played the knife fight's credits while the host walked the Museum (audit 2026-11-18, GSC F2).
 		char kept[8] = "";
 		game_dvar_raw("mw2coop_museum", kept, sizeof(kept));
-		if ((kept[0] == '1') != (museum != 0))
+		if (base[RVA_PARTY_IS_HOST] && (kept[0] == '1') != (museum != 0))
 			game_cbuf_addtext(museum ? "set mw2coop_museum 1\n" : "set mw2coop_museum 0\n");
 	}
 	const char *shown = museum ? "museum" : (strcmp(map, "ending") == 0 ? "af_chase" : map);
@@ -2402,6 +2405,26 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 		if (name)
 			*name++ = 0;
 		uint64_t xuid = strtoull(text, NULL, 16);
+		// Anybody on the network can answer a search, and the list shows these texts: the map is a plain name, and the host name loses control bytes and every
+		// '^' that is not a colour (the engine reads "^\x01" plus a few bytes as a picture and takes a material pointer from the text: audit 2026-11-18, menus F3).
+		for (char *s = map, *d = map; ; s++) {
+			if (!*s) {
+				*d = 0;
+				break;
+			}
+			if ((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '_')
+				*d++ = *s;
+		}
+		if (name)
+			for (char *s = name, *d = name; ; s++) {
+				if (!*s) {
+					*d = 0;
+					break;
+				}
+				if ((unsigned char)*s < 0x20 || (*s == '^' && !(s[1] >= '0' && s[1] <= '9')))
+					continue;
+				*d++ = *s;
+			}
 		EnterCriticalSection(&lobby_lock);
 		int known = 0;
 		for (int i = 0; i < lobby_count; i++)
@@ -3622,6 +3645,25 @@ static void tick_f(void)
 		host_lobby(split_return_map);
 		InterlockedExchange(&split_lobby_return_tick, (LONG)GetTickCount());
 		log_printf("menus: split campaign lobby listen retry %ld/3", attempt);
+	}
+	{
+		// Leaving a split screen lobby (Back, Esc) ended nothing of it: a network lobby joined later as the client had no Ready, took the split lobby's own
+		// difficulties and rows, and the device thread kept sending pad keys (audit 2026-11-18, menus F1). The party gone for 3 s with no split screen session
+		// starting or returning: the split lobby is over (split_skill_texts then empties its difficulties).
+		static DWORD party_gone_since;
+		if (InterlockedCompareExchange(&split_mode, 0, 0) && !base[RVA_PARTY_ACTIVE] && !native_split_active() &&
+		    !InterlockedCompareExchange(&split_lobby_returning, 0, 0) && !InterlockedCompareExchange(&split_pending, 0, 0)) {
+			if (!party_gone_since)
+				party_gone_since = GetTickCount() | 1;
+			else if (GetTickCount() - party_gone_since > 3000) {
+				party_gone_since = 0;
+				InterlockedExchange(&split_mode, 0);
+				devices_end();
+				update_texts();
+				log_printf("menus: the split screen lobby was left: its devices and difficulties are dropped");
+			}
+		} else
+			party_gone_since = 0;
 	}
 	if (InterlockedExchange(&campaign_main_return_pending, 0)) {
 		game_cbuf_addtext("openmenu main_text\n");

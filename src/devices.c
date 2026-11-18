@@ -112,7 +112,9 @@ void devices_begin_assigned(int player0, int player1)
 	LONG gen = InterlockedIncrement(&assign_gen);
 	InterlockedExchange(&assigned_dev[0], player0);
 	InterlockedExchange(&assigned_dev[1], player1);
-	CreateThread(NULL, 0, assign_thread, (LPVOID)(LONG_PTR)gen, 0, NULL);
+	HANDLE t = CreateThread(NULL, 0, assign_thread, (LPVOID)(LONG_PTR)gen, 0, NULL);
+	if (t)
+		CloseHandle(t); // (one handle a lobby was never closed, audit 2026-11-18)
 }
 
 void devices_begin(void)

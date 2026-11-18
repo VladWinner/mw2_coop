@@ -159,10 +159,21 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 #endif
 	// return addresses into the exe among the first stack slots (a rough call stack)
 	const uintptr_t *sp = (const uintptr_t *)CTX_SP(c);
+	// The scans stop at the top of the stack (the handler runs on the faulting thread): checking the memory every 64 slots read up to 63 slots past it, and a
+	// fault inside the handler lost the rest of the report and the dump (audit 2026-11-18, glue F2).
+	const uintptr_t *stack_end = sp;
+	{
+		NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+		MEMORY_BASIC_INFORMATION mbi;
+		if (tib && (uintptr_t)sp >= (uintptr_t)tib->StackLimit && (uintptr_t)sp < (uintptr_t)tib->StackBase)
+			stack_end = (const uintptr_t *)tib->StackBase;
+		else if (VirtualQuery(sp, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT)
+			stack_end = (const uintptr_t *)((uintptr_t)mbi.BaseAddress + mbi.RegionSize);
+	}
 	char line[512];
 	int n = 0, found = 0;
 	n += wsprintfA(line, "CRASH: stack rvas:");
-	for (int i = 0; i < 512 && found < 16; i++) {
+	for (int i = 0; i < 512 && sp + i < stack_end && found < 16; i++) {
 		MEMORY_BASIC_INFORMATION mbi;
 		if (i % 64 == 0 && (!VirtualQuery(sp + i, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT))
 			break;
@@ -179,7 +190,7 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 		uintptr_t list[17];
 		int nl = 0;
 		list[nl++] = rip;
-		for (int i = 0; i < 4096 && nl < 17; i++) {
+		for (int i = 0; i < 4096 && sp + i < stack_end && nl < 17; i++) {
 			MEMORY_BASIC_INFORMATION mbi;
 			if (i % 64 == 0 && (!VirtualQuery(sp + i, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT))
 				break;

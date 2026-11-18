@@ -2540,7 +2540,10 @@ static int clipboard_read(char *out, int size)
 		const wchar_t *src = (const wchar_t *)GlobalLock(data);
 		if (src) {
 			char tmp[INPUT_LEN * 4 + 1];
-			int n = WideCharToMultiByte(console_codepage(), 0, src, -1, tmp, sizeof(tmp), NULL, NULL);
+			// (a bounded length: with -1 a clipboard text longer than the buffer was not pasted at all, audit 2026-11-18, console C9)
+			int n = WideCharToMultiByte(console_codepage(), 0, src, (int)wcsnlen(src, INPUT_LEN), tmp, sizeof(tmp) - 1, NULL, NULL);
+			if (n > 0)
+				tmp[n] = 0;
 			if (n > 0) {
 				for (int i = 0; tmp[i] && written < size - 1; i++) {
 					unsigned char ch = (unsigned char)tmp[i];
@@ -5172,7 +5175,13 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 				edit_key(w);
 			return 0;
 		case WM_SYSKEYDOWN:
+			return 0;
 		case WM_SYSCHAR:
+		case WM_DEADCHAR:
+		case WM_SYSDEADCHAR:
+			// the key that opened the console can give these instead of WM_CHAR (Alt+`, a dead key on a German layout): they end the "ignore the next character"
+			// too, which otherwise ate the first character typed (audit 2026-11-18, console C6)
+			InterlockedExchange(&ignore_tilde, 0);
 			return 0;
 		case WM_CHAR: {
 			char translated;
@@ -5370,7 +5379,7 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 		case WM_NCRBUTTONUP:
 			return 0;
 		}
-	} else if (msg == WM_CHAR && ignore_tilde) {
+	} else if ((msg == WM_CHAR || msg == WM_SYSCHAR || msg == WM_DEADCHAR || msg == WM_SYSDEADCHAR) && ignore_tilde) {
 		InterlockedExchange(&ignore_tilde, 0);
 		return 0;
 	}
@@ -7004,8 +7013,12 @@ static void draw_panel(IDirect3DDevice9 *dev, int trace)
 			clock_tick = now;
 			InterlockedExchange(&dirty, 1);
 		}
-		if (InterlockedCompareExchange(&console_window_active, 0, 0) && ((now / 500) & 1))
+		// the caret blinks: one repaint when its phase changes (every frame of the "on" half second was a full repaint and texture upload, audit 2026-11-18, console C3)
+		static DWORD caret_phase = 2;
+		if (InterlockedCompareExchange(&console_window_active, 0, 0) && ((now / 500) & 1) != caret_phase) {
+			caret_phase = (now / 500) & 1;
 			InterlockedExchange(&dirty, 1);
+		}
 	}
 	repaint = InterlockedExchange(&dirty, 0) || !dib_bits || dib_w != w || dib_panel_h != panel_h || dib_h != panel_h;
 	if (repaint) {
@@ -7238,8 +7251,12 @@ int console_native_frame(unsigned back_width, unsigned back_height, void (*show)
 			clock_tick = now;
 			InterlockedExchange(&dirty, 1);
 		}
-		if (InterlockedCompareExchange(&console_window_active, 0, 0) && ((now / 500) & 1))
+		// the caret blinks: one repaint when its phase changes (every frame of the "on" half second was a full repaint and texture upload, audit 2026-11-18, console C3)
+		static DWORD caret_phase = 2;
+		if (InterlockedCompareExchange(&console_window_active, 0, 0) && ((now / 500) & 1) != caret_phase) {
+			caret_phase = (now / 500) & 1;
 			InterlockedExchange(&dirty, 1);
+		}
 	}
 	int repaint = InterlockedExchange(&dirty, 0) || !dib_bits || dib_w != w || dib_panel_h != panel_h || dib_h != panel_h;
 	if (repaint) {

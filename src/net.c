@@ -80,6 +80,16 @@ static int contains(const char *buf, int len, const char *word)
 	return 0;
 }
 
+// the text word followed by its NUL (a whole command: "coopAccept" is not found in "coopAcceptAck")
+static int contains_word(const char *buf, int len, const char *word)
+{
+	int wl = (int)strlen(word) + 1;
+	for (int i = 0; i + wl <= len; i++)
+		if (memcmp(buf + i, word, wl) == 0)
+			return 1;
+	return 0;
+}
+
 // every send of the game and of mw2coop: a Steam peer's virtual address goes through Steam
 static int send_to(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
 {
@@ -215,6 +225,10 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu && !game_peek(RVA_PARTY_IS_HOST, 1) &&
 	    contains(buf, len, "coopConnect"))
 		remember_peer(s, to);
+	// The host's partner is the one its game accepts (audit 2026-11-18, NET-A: a later connect let through by access.c, a Steam friend pressing Join during a
+	// mission or one forged packet in open mode, made its sender the partner, and the real partner's commands were then dropped as a stranger's).
+	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) && contains_word(buf, len, "coopAccept"))
+		remember_peer(s, to);
 	// The party resends coopLaunch until the client acks it; the start packet goes along each time.
 	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu && game_peek(RVA_PARTY_IS_HOST, 1) &&
 	    contains(buf, len, "coopLaunch")) {
@@ -340,8 +354,14 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 			if (reply_len > 0 && reply_len < (int)sizeof(reply))
 				send_to(s, reply, reply_len, 0, from, sizeof(struct sockaddr_in));
 		}
-		if (connect && !lobby) // (a refused connect is answered by access.c and consumed: lobby != 0)
-			remember_peer(s, from);
+		// (a refused connect is answered by access.c and consumed: lobby != 0). Once a partner is known, only the host's own coopAccept changes it (my_sendto).
+		if (connect && !lobby) {
+			EnterCriticalSection(&peer_lock);
+			const int known = peer_socket != INVALID_SOCKET;
+			LeaveCriticalSection(&peer_lock);
+			if (!known)
+				remember_peer(s, from);
+		}
 		int ours = lobby;
 		if (!ours && is_session_packet(buf, r)) {
 			// consumed either way: the game has nothing to do with it

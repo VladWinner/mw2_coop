@@ -1059,7 +1059,9 @@ snapshot_weapons( name )
 	players = [];
 	players[ 0 ] = level.player;
 	players[ 1 ] = level.player2;
-	SetDvar( "mw2coop_cp_wname", name );
+	// (the level is part of the name: start points of the same name are in several levels, and a loadout of another level was given back there, weapons the level never
+	// loaded among them: audit 2026-11-18, GSC F1)
+	SetDvar( "mw2coop_cp_wname", level.script + " " + name );
 	foreach ( n, player in players )
 	{
 		text = "";
@@ -1134,7 +1136,7 @@ restore_flags()
 restore_weapons()
 {
 	level endon( "mw2coop_level_end" );
-	if ( !isdefined( level.player2 ) || !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_wname" ) != level.start_point )
+	if ( !isdefined( level.player2 ) || !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_wname" ) != level.script + " " + level.start_point )
 		return;
 	wait 1;	// after the start's loadout and the first copy of sync_weapons
 	level.mw2coop_sync_hold = GetTime() + 1500;
@@ -1208,7 +1210,8 @@ snapshot_allies()
 		text += ally_name( ai ) + "|" + spot_int( ai.origin[ 0 ] ) + "_" + spot_int( ai.origin[ 1 ] ) + "_" + spot_int( ai.origin[ 2 ] ) + "_" + spot_int( angles[ 1 ] );
 		n++;
 	}
-	SetDvar( "mw2coop_cp_allies", text );
+	// (the level in front: the same start name in another level is not this checkpoint, audit 2026-11-18, GSC F1)
+	SetDvar( "mw2coop_cp_allies", level.script + "@" + text );
 }
 
 restore_ally_positions()
@@ -1217,6 +1220,10 @@ restore_ally_positions()
 	if ( !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_start" ) != level.start_point )
 		return;
 	text = GetDvar( "mw2coop_cp_allies" );
+	pre = level.script + "@";
+	if ( text.size < pre.size || GetSubStr( text, 0, pre.size ) != pre )
+		return;
+	text = GetSubStr( text, pre.size, text.size );
 	wait 3.5;
 	used = [];
 	moved = 0;

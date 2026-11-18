@@ -23,7 +23,10 @@ civ_loop( node, civ )
 		{
 			level.mw2fix_museum_civ_logged++;
 			generic = level.scr_anim[ "generic" ];
-			println( "museum: a civilian has no animation entry for '" + name + "' (generic has " + generic.size + " entries; stand_idle " + isdefined( generic[ "civilian_stand_idle" ] ) + " smoking_A " + isdefined( generic[ "civilian_smoking_A" ] ) + " directions_1_A " + isdefined( generic[ "civilian_directions_1_A" ] ) + " laptop_stand_idle " + isdefined( generic[ "laptop_stand_idle" ] ) + " sitting_talking_A_1 " + isdefined( generic[ "civilian_sitting_talking_A_1" ] ) + ")" );
+			shown = "(none)"; // (name can be undefined here: joining it to a text was a script error, audit 2026-11-18, GSC F8)
+			if ( isdefined( name ) )
+				shown = name;
+			println( "museum: a civilian has no animation entry for '" + shown + "' (generic has " + generic.size + " entries; stand_idle " + isdefined( generic[ "civilian_stand_idle" ] ) + " smoking_A " + isdefined( generic[ "civilian_smoking_A" ] ) + " directions_1_A " + isdefined( generic[ "civilian_directions_1_A" ] ) + " laptop_stand_idle " + isdefined( generic[ "laptop_stand_idle" ] ) + " sitting_talking_A_1 " + isdefined( generic[ "civilian_sitting_talking_A_1" ] ) + ")" );
 		}
 		return;
 	}

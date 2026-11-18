@@ -651,10 +651,14 @@ void localize_set_text(const char *alias, const char *text)
 	}
 }
 
-// Another text for one of the game's own strings (NULL puts the game's text back). Main thread only.
-static LocalizeEntry *override_entry;
-static const char *override_orig;
-static char override_text[256];
+// Another text for one of the game's own strings (NULL puts the game's text back). Main thread only. Each string has its own slot: with one slot for all, a
+// second override lost the first one's original text and both pointed at the shared buffer for good (audit 2026-11-18, menus F4).
+#define OVERRIDES 8
+static struct {
+	LocalizeEntry *entry;
+	const char *orig;
+	char text[256];
+} overrides[OVERRIDES];
 
 void localize_override(const char *name, const char *text)
 {
@@ -663,16 +667,26 @@ void localize_override(const char *name, const char *text)
 	LocalizeEntry *e = find_header(ASSET_TYPE_LOCALIZE_ENTRY, name);
 	if (!e || !e->value || !e->name || strcmp(e->name, name) != 0)
 		return;
+	int slot = -1, free_slot = -1;
+	for (int i = 0; i < OVERRIDES; i++) {
+		if (overrides[i].entry == e)
+			slot = i;
+		else if (!overrides[i].entry && free_slot < 0)
+			free_slot = i;
+	}
 	if (text) {
-		if (e != override_entry) {
-			override_entry = e;
-			override_orig = e->value;
+		if (slot < 0) {
+			if (free_slot < 0)
+				return; // (more strings overridden at once than slots: left as the game has it)
+			slot = free_slot;
+			overrides[slot].entry = e;
+			overrides[slot].orig = e->value;
 		}
-		lstrcpynA(override_text, text, sizeof(override_text));
-		e->value = override_text;
-	} else if (override_entry == e) {
-		e->value = override_orig;
-		override_entry = NULL;
+		lstrcpynA(overrides[slot].text, text, sizeof(overrides[slot].text));
+		e->value = overrides[slot].text;
+	} else if (slot >= 0) {
+		e->value = overrides[slot].orig;
+		overrides[slot].entry = NULL;
 	}
 }
 

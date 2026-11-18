@@ -407,12 +407,40 @@ int access_on_packet(const char *buf, int len, const uint8_t ip[4], uint16_t por
 	int al = (int)sizeof(auth) - 1;
 	if (len >= al && memcmp(buf, auth, al) == 0) {
 		if (hosting && access_mode == ACCESS_PASSWORD) {
+			// Guesses are limited (audit 2026-11-18, ACC-2: any number of guesses a second, each written to the log on the thread that reads the game's packets):
+			// after 5 wrong ones in a minute an address is not answered for a minute; the log says it once.
+			static struct {
+				uint8_t ip[4];
+				DWORD since;
+				int wrong;
+			} tries[8];
+			static int next_try;
+			const DWORD now = GetTickCount();
+			int t = -1;
+			for (int i = 0; i < 8; i++)
+				if (memcmp(tries[i].ip, ip, 4) == 0 && tries[i].since)
+					t = i;
+			if (t >= 0 && now - tries[t].since > 60000)
+				tries[t].since = 0, tries[t].wrong = 0, t = -1;
+			if (t >= 0 && tries[t].wrong >= 5)
+				return 1; // locked out for the rest of the minute
 			int n = len - al;
 			int ok = password[0] && n == (int)strlen(password) && memcmp(buf + al, password, n) == 0;
 			if (ok)
 				authorize(ip, port);
-			log_printf("access: %s password from %u.%u.%u.%u:%u", ok ? "right" : "wrong", ip[0], ip[1], ip[2],
-				   ip[3], port);
+			else {
+				if (t < 0) {
+					t = next_try;
+					next_try = (next_try + 1) % 8;
+					memcpy(tries[t].ip, ip, 4);
+					tries[t].since = now ? now : 1;
+					tries[t].wrong = 0;
+				}
+				tries[t].wrong++;
+			}
+			if (ok || tries[t].wrong <= 5)
+				log_printf("access: %s password from %u.%u.%u.%u:%u%s", ok ? "right" : "wrong", ip[0], ip[1], ip[2], ip[3], port,
+					   !ok && tries[t].wrong == 5 ? " (5 wrong in a minute: not answered for a minute)" : "");
 		}
 		return 1;
 	}

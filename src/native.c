@@ -1355,14 +1355,17 @@ static int bink_is_movie_quad(IDirect3DDevice9 *dev, UINT primitive, UINT primit
 {
 	if (!bink_d3d_is_active())
 		return 0;
+	// only an indexed quad of two triangles on a pixel stage can be the movie: everything else is passed by before 20 GetTexture calls (an in-game movie keeps
+	// Bink open in levels, and this ran for every draw without a depth test, audit 2026-11-18, native 9)
+	if (primitive != D3DPT_TRIANGLELIST || primitive_count != 2 || strcmp(api, "DrawIndexedPrimitive") != 0)
+		return 0;
 	// A full-screen movie is drawn by the 2D pass, with no depth test. A movie a level plays on things in the world (CinematicInGame: Just Like Old Times' control room
 	// TVs, the countdown) is drawn on 3D quads with the depth test on: those are not fitted (2026-11-18, owner's screenshot of the control room in split screen: each
 	// TV's draw narrowed the viewport to 4:3 and cleared the sides, vertical strips at 400 and 880 of a 1280x360 half), and their shaders are not learned as the movie's.
 	DWORD zenable = D3DZB_FALSE;
 	if (SUCCEEDED(IDirect3DDevice9_GetRenderState(dev, D3DRS_ZENABLE, &zenable)) && zenable != D3DZB_FALSE)
 		return 0;
-	static const DWORD sampler_stages[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-		D3DVERTEXTEXTURESAMPLER0, D3DVERTEXTEXTURESAMPLER1, D3DVERTEXTEXTURESAMPLER2, D3DVERTEXTEXTURESAMPLER3};
+	static const DWORD sampler_stages[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}; // (the vertex samplers never held the movie for a fit)
 	int movie_quad = 0;
 	for (size_t i = 0; i < sizeof(sampler_stages) / sizeof(sampler_stages[0]); i++) {
 		DWORD stage = sampler_stages[i];
@@ -2019,8 +2022,11 @@ static void vid_restart_hook(void)
 		comp_not_before = GetTickCount() + 4000;
 	}
 	vid_restart_original();
-	if (cfg("filmfit", 1))
-		CreateThread(NULL, 0, bink_device_hooks_thread, NULL, 0, NULL);
+	if (cfg("filmfit", 1)) {
+		HANDLE t = CreateThread(NULL, 0, bink_device_hooks_thread, NULL, 0, NULL);
+		if (t)
+			CloseHandle(t); // (one handle a vid_restart was never closed)
+	}
 }
 static void vid_restart_install(void)
 {
@@ -5595,6 +5601,8 @@ static void pad_key(int key, int down)
 static void (*key_event_original)(int, int, int, unsigned);
 static void pad_key(int key, int down)
 {
+	if (!key_event_original)
+		return; // (its hook is not in on this build: the install only logged it, audit 2026-11-18, native 6)
 	key_event_original(0, key, down, (unsigned)GetTickCount());
 	cbuf_run_now(); // (the key's binding went into the command buffer as text)
 }

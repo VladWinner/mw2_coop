@@ -453,9 +453,12 @@ static void w_45060(unsigned flags)
 		lstrcatA(path, ".bmp");
 		log_printf("shot: %s (native frame): %s", name, nat_save_scene_bmp(N.dev, path) ? "saved" : "not saved");
 	}
-	static int frame;
+	static int frame, scene_dumps = -1;
 	frame++;
-	if (frame == 300 || frame == 900 || frame == 1800 || frame == 3000 || (frame > 3000 && frame <= 24000 && frame % 1500 == 0)) {
+	if (scene_dumps < 0) // QA only (MW2COOP_SCENEDUMP): the bring-up's scene pictures were saved in every session, 18 full-size BMPs into mw2coop\native11 and a
+			     // stall at each (audit 2026-11-18, DX F4)
+		scene_dumps = GetEnvironmentVariableA("MW2COOP_SCENEDUMP", NULL, 0) != 0;
+	if (scene_dumps && (frame == 300 || frame == 900 || frame == 1800 || frame == 3000 || (frame > 3000 && frame <= 24000 && frame % 1500 == 0))) {
 		char path[MAX_PATH];
 		DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
 		while (n > 0 && path[n - 1] != 92)

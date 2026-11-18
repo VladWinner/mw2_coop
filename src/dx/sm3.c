@@ -253,7 +253,11 @@ static int parse(shader_t *sh, const uint32_t *t, size_t count, ctx_t *c)
 					sh->maxtemp = (int)p->num;
 				}
 				if (!p->is_dest && p->rtype == R_CONST) {
-					const int top = p->relative ? 255 : (int)p->num > 255 ? 255 : (int)p->num;
+					// the matrix of m4x4 / m4x3 / m3x4 / m3x3 / m3x2 (its third operand) is that many registers from num on: all of them are read
+					// (audit 2026-11-18, upscalers F6: Direct3D 12 declared only the first and the compiler refused the shader)
+					const int rows = in->nops != 3 ? 1 : (op == OP_M4x4 || op == OP_M3x4) ? 4 : (op == OP_M4x3 || op == OP_M3x3) ? 3 : op == OP_M3x2 ? 2 : 1;
+					const int last = (int)p->num + rows - 1;
+					const int top = p->relative ? 255 : last > 255 ? 255 : last;
 					if (top > sh->maxconst)
 						sh->maxconst = top;
 				}

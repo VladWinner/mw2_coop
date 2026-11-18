@@ -1,4 +1,6 @@
 #!/bin/sh
+# test copies never change the router: no UPnP forward (src/upnp.c); export MW2COOP_NOUPNP= (empty) to test UPnP itself, with the owner's yes
+export MW2COOP_NOUPNP=${MW2COOP_NOUPNP-1}
 # QA: the split screen started from the menu twice in one process (the second start used to crash): lobby, Start, play, quit to the main menu (disconnect), lobby, Start again.
 # Usage: tools/qa_restart.sh [seconds in each level, default 25]   (64-bit test copy mw2-64; MW2COOP_PAD player 2's pad, default 0)
 LEVEL_S=${1:-25}

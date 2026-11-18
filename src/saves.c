@@ -168,13 +168,21 @@ void saves_note_restart_request(int game_time)
 }
 static volatile DWORD host_decision_at;
 
+// The checkpoint tag and the failed mission's decision go once over plain UDP and nothing acknowledges them: a lost one made the two PCs differ (the host
+// restarting the level while the client loaded its checkpoint). Three copies; the handlers take a repeat as the same message (audit 2026-11-18, SAV-1).
+static void send_thrice(const char *text)
+{
+	for (int i = 0; i < 3; i++)
+		net_send_mod(text);
+}
+
 void saves_note_checkpoint(const char *tag)
 {
 	lstrcpynA(own_tag, tag, sizeof(own_tag));
 	if (!native_split_active() && *(base + XR(RVA_COOP_FLAG)) && !game_peek(RVA_PARTY_IS_HOST, 1)) {
 		char text[96];
 		snprintf(text, sizeof(text), "mw2coop_cp %s", GetEnvironmentVariableA("MW2COOP_QA_FAKETAG", NULL, 0) ? "qa_fake_net" : tag); // (QA: a client whose checkpoint differs)
-		net_send_mod(text);
+		send_thrice(text);
 	}
 }
 
@@ -186,16 +194,22 @@ int saves_on_packet(const char *buf, int len)
 		int n = len - ((int)sizeof(cp) - 1) < (int)sizeof(text) - 1 ? len - ((int)sizeof(cp) - 1) : (int)sizeof(text) - 1;
 		memcpy(text, buf + sizeof(cp) - 1, n);
 		text[n] = 0;
-		lstrcpynA(partner_tag, text, sizeof(partner_tag));
-		log_printf("saves: the partner's checkpoint %s (this PC's %s)", partner_tag, own_tag[0] ? own_tag : "none");
+		if (strcmp(partner_tag, text) != 0) { // (sent three times: logged once)
+			lstrcpynA(partner_tag, text, sizeof(partner_tag));
+			log_printf("saves: the partner's checkpoint %s (this PC's %s)", partner_tag, own_tag[0] ? own_tag : "none");
+		}
 		return 1;
 	}
 	if (len > (int)sizeof(retry) - 1 && memcmp(buf, retry, sizeof(retry) - 1) == 0) {
 		int n = len - ((int)sizeof(retry) - 1) < (int)sizeof(host_decision) - 1 ? len - ((int)sizeof(retry) - 1) : (int)sizeof(host_decision) - 1;
+		const DWORD before = host_decision_at;
+		char was[sizeof(host_decision)];
+		lstrcpynA(was, host_decision, sizeof(was));
 		memcpy(host_decision, buf + sizeof(retry) - 1, n);
 		host_decision[n] = 0;
 		host_decision_at = GetTickCount();
-		log_printf("saves: the host's failed mission: %s", host_decision);
+		if (strcmp(was, host_decision) != 0 || host_decision_at - before > 2000) // (sent three times: logged once)
+			log_printf("saves: the host's failed mission: %s", host_decision);
 		return 1;
 	}
 	return 0;
@@ -222,7 +236,7 @@ static void fast_restart_cmd(void)
 		last_load_req_time = 0;
 		restart_req_time = 0;
 		if (network)
-			net_send_mod("mw2coop_retry restart");
+			send_thrice("mw2coop_retry restart");
 		game_cbuf_addtext("set mw2coop_retry \"\"\n");
 		fast_restart_orig();
 		return;
@@ -232,7 +246,7 @@ static void fast_restart_cmd(void)
 	restart_req_time = 0;
 	if (network && game_peek(RVA_PARTY_IS_HOST, 1)) {
 		const int same = !partner_tag[0] || strcmp(partner_tag, own_tag) == 0;
-		net_send_mod(same ? "mw2coop_retry load" : "mw2coop_retry restart");
+		send_thrice(same ? "mw2coop_retry load" : "mw2coop_retry restart");
 		if (!same) {
 			log_printf("saves: the checkpoints differ (host %s, client %s): both restart the level at its start point", own_tag, partner_tag);
 			game_cbuf_addtext("set mw2coop_retry \"\"\n");

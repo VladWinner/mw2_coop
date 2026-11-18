@@ -1,4 +1,6 @@
 #!/bin/sh
+# test copies never change the router: no UPnP forward (src/upnp.c); export MW2COOP_NOUPNP= (empty) to test UPnP itself, with the owner's yes
+export MW2COOP_NOUPNP=${MW2COOP_NOUPNP-1}
 # Run one QA scenario with two game copies on this PC: host (mw2-64) + client (mw2-64-b).
 # Usage: tools/qa_pair.sh <scenario> [start point] [seconds in level] [map]
 #   start point "@continue": the host runs mw2coop_continue (mission and start point from its

@@ -37,6 +37,8 @@ static char local_ip[16];
 
 static int http_request(const char *host, uint16_t port, const char *request, char *reply, int reply_size)
 {
+	if (reply_size > 0)
+		reply[0] = 0; // a failed request leaves an empty reply, never the caller's uninitialised buffer (audit 2026-11-18)
 	struct addrinfo hints = {0}, *res = NULL;
 	char port_text[8];
 	snprintf(port_text, sizeof(port_text), "%u", port);
@@ -338,8 +340,14 @@ void upnp_want(int hosting)
 
 void upnp_install(void)
 {
+	// QA: test copies never change the router (MW2COOP_NOUPNP, set by tools/qa_pair.sh): a pair run on one PC needs no forward, and a real
+	// one is an outward-facing change on the owner's network
 	WSADATA wsa;
-	WSAStartup(MAKEWORD(2, 2), &wsa);
+	WSAStartup(MAKEWORD(2, 2), &wsa); // (kept either way: other parts may count on Winsock being up)
+	if (GetEnvironmentVariableA("MW2COOP_NOUPNP", NULL, 0)) {
+		log_printf("upnp: off (MW2COOP_NOUPNP)");
+		return;
+	}
 	wake = CreateEventA(NULL, FALSE, FALSE, NULL);
 	CloseHandle(CreateThread(NULL, 0, worker, NULL, 0, NULL));
 }

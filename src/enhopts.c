@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "enhopts.h"
+#include "addr.h"
 #include "game.h"
 #include "log.h"
 #include "menus_ui.h"
@@ -24,19 +25,21 @@
 #include "settings.h"
 
 #ifdef _WIN64
-#define RVA_DVAR_REGISTER_BOOL XR(0x26c930)  // dvar_t *(const char *name, bool value, unsigned flags, const char *description)
-#define RVA_DVAR_REGISTER_FLOAT XR(0x26cb90) // dvar_t *(const char *name, float value, float min, float max, unsigned flags, const char *description)
+#define REF_DVAR_REGISTER_BOOL 0x26c930  // dvar_t *(const char *name, bool value, unsigned flags, const char *description)
+#define REF_DVAR_REGISTER_FLOAT 0x26cb90 // dvar_t *(const char *name, float value, float min, float max, unsigned flags, const char *description)
 // multiDef_s (the data of a choice row, item type 12): const char *dvarList[32]; const char *dvarStr[32]; float dvarValue[32]; int count; int strDef;
 #define MULTI_VALUE 0x200
 #define MULTI_COUNT 0x280
 #define MULTI_SIZE 0x288
 #else
-#define RVA_DVAR_REGISTER_BOOL XR(0x866b0)
-#define RVA_DVAR_REGISTER_FLOAT XR(0x9f700)
+#define REF_DVAR_REGISTER_BOOL 0x866b0
+#define REF_DVAR_REGISTER_FLOAT 0x9f700
 #define MULTI_VALUE 0x100
 #define MULTI_COUNT 0x180
 #define MULTI_SIZE 0x188
 #endif
+#define RVA_DVAR_REGISTER_BOOL XR(REF_DVAR_REGISTER_BOOL)
+#define RVA_DVAR_REGISTER_FLOAT XR(REF_DVAR_REGISTER_FLOAT)
 #define UPSCALERS 3 // Off, FSR 3, DLSS (the row is in the 64-bit build only)
 #ifdef _WIN64
 #define ITEM_FONT 0xd0 // int fontEnum, then textAlignMode (int), textalignx and textaligny (float), as in menus.c
@@ -157,6 +160,12 @@ static void register_dvars(void)
 	if (!game_find_dvar("com_maxfps")) // the game's dvar table is not there yet
 		return;
 	registered = 1;
+	// on a build whose addresses moved, a register function that was not found is a `ret` block handing back no dvar: the options stay at their defaults, as
+	// padopts.c does (audit 2026-11-18, menus F6)
+	if (!addr_resolved(REF_DVAR_REGISTER_BOOL) || !addr_resolved(REF_DVAR_REGISTER_FLOAT)) {
+		log_printf("enhopts: the dvar register functions were not found in this build: the Enhanced options stay at their defaults");
+		return;
+	}
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	dvar_t *(*reg_bool)(const char *, int, unsigned, const char *) = (void *)(base + RVA_DVAR_REGISTER_BOOL);
 	dvar_t *(*reg_float)(const char *, float, float, float, unsigned, const char *) = (void *)(base + RVA_DVAR_REGISTER_FLOAT);

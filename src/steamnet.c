@@ -116,7 +116,7 @@ int steamnet_receive(char *buf, int len, struct sockaddr *from, int *fromlen)
 	uint32_t size = 0;
 	if (!net || !((char (THISCALL *)(void *, uint32_t *, int))VT(net, 1))(net, &size, CHANNEL) || !size)
 		return 0;
-	static char packet[2048];
+	char packet[2048]; // (on the stack: the game's reads and the briefing drain thread of net.c can both be here, audit 2026-11-18)
 	uint64_t id = 0;
 	uint32_t got = 0;
 	if (!((char (THISCALL *)(void *, void *, uint32_t, uint32_t *, uint64_t *, int))VT(net, 2))(net, packet, sizeof(packet), &got,

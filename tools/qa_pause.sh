@@ -1,4 +1,6 @@
 #!/bin/sh
+# test copies never change the router: no UPnP forward (src/upnp.c); export MW2COOP_NOUPNP= (empty) to test UPnP itself, with the owner's yes
+export MW2COOP_NOUPNP=${MW2COOP_NOUPNP-1}
 # QA: the pause menu in the native split screen started from the menu (player 1 on the keyboard, player 2 on a pad): ESC in the level, a frame of what is shown, ESC again.
 # Usage: tools/qa_pause.sh [seconds in the level before ESC, default 35]   (64-bit test copy mw2-64; frames mw2coop\shots\pause-*.bmp)
 LEVEL_S=${1:-35}

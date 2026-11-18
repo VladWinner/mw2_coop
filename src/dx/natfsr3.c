@@ -833,6 +833,11 @@ static int depth_pass(nat_device *d, nat_image *depth_img)
 	}
 	if (!S.dcopy)
 		return 0;
+	// the descriptors first: a full ring returned after the barriers below and left the images in states the next frame did not expect (audit 2026-11-18, upscalers F7)
+	D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+	D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+	if (!nat12_srv_alloc(d, 4, &cpu, &gpu))
+		return 0;
 	D3D12_RESOURCE_BARRIER b[4];
 	int n = 0;
 	nat12_image_transition(d, depth_img, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -844,10 +849,6 @@ static int depth_pass(nat_device *d, nat_image *depth_img)
 	barrier(b, &n, S.dcopy, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 	ID3D12GraphicsCommandList_ResourceBarrier(l, n, b);
 	S.dcopy_state = 1;
-	D3D12_CPU_DESCRIPTOR_HANDLE cpu;
-	D3D12_GPU_DESCRIPTOR_HANDLE gpu;
-	if (!nat12_srv_alloc(d, 4, &cpu, &gpu))
-		return 0;
 	nat12_set_heaps(d);
 	const UINT inc = ID3D12Device_GetDescriptorHandleIncrementSize(S.dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	D3D12_SHADER_RESOURCE_VIEW_DESC srv;
@@ -909,15 +910,15 @@ static int motion_pass(nat_device *d)
 	vals[18] = g_jit_x;
 	vals[19] = g_jit_y;
 	vals[20] = 1.0f;
+	D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+	D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+	if (!nat12_srv_alloc(d, 2, &cpu, &gpu))
+		return 0;
 	ID3D12GraphicsCommandList *l = nat12_list(d);
 	D3D12_RESOURCE_BARRIER b[2];
 	int n = 0;
 	barrier(b, &n, S.motion, S.motion_state ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	ID3D12GraphicsCommandList_ResourceBarrier(l, n, b);
-	D3D12_CPU_DESCRIPTOR_HANDLE cpu;
-	D3D12_GPU_DESCRIPTOR_HANDLE gpu;
-	if (!nat12_srv_alloc(d, 2, &cpu, &gpu))
-		return 0;
 	const UINT inc = ID3D12Device_GetDescriptorHandleIncrementSize(S.dev, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 	D3D12_SHADER_RESOURCE_VIEW_DESC srv;
 	memset(&srv, 0, sizeof(srv));
@@ -1171,8 +1172,9 @@ int natfsr3_upscale(nat_device *d, nat_image *color_img, nat_image *depth_img, n
 		rc = dlss_dispatch(l, nat12_image_res(color_img), g_jit_x, g_jit_y, dd.reset ? 1 : 0, dt_ms) ? FFX_API_RETURN_OK : FFX_API_RETURN_ERROR;
 	else
 		rc = S.dispatch(&S.ctx, &dd.header);
-	static int dlog;
-	if (dlog++ < 3 || rc != FFX_API_RETURN_OK)
+	static int dlog, dfail;
+	// (a failure that lasts was written every frame, a synchronous write on the render thread: the first 20, then one in 600, audit 2026-11-18, upscalers F3)
+	if (dlog++ < 3 || (rc != FFX_API_RETURN_OK && (dfail++ < 20 || dfail % 600 == 0)))
 		log_printf("natfsr3: %s -> %u (0 = OK), frame time %.1f ms, vectors %d, jitter %.3f,%.3f", settings_dlss() ? "DLSS evaluate" : "ffxDispatch", (unsigned)rc, dt_ms, mv_done, g_jit_x, g_jit_y);
 	{ // a status line now and then: how many frames had vectors, resets
 		static unsigned n_frames, n_mv, n_reset;

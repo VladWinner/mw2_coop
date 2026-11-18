@@ -155,8 +155,9 @@ static HRESULT STDMETHODCALLTYPE hook_viewport(IDirect3DDevice9 *dev, const D3DV
 
 static HRESULT STDMETHODCALLTYPE hook_shader(IDirect3DDevice9 *dev, IDirect3DVertexShader9 *vs)
 {
-	if (vs)
-		info_of(dev, vs); // reads the shader's constant table once (cached for hook_constants)
+	if (vs && log_on)
+		info_of(dev, vs); // the shader's constant table, for the log only: nothing else reads it, and without the log a search of up to 1024 shaders on every
+				  // SetVertexShader was spent for nothing (audit 2026-11-18, glue F6)
 	return vs_orig(dev, vs);
 }
 

@@ -116,8 +116,11 @@ ride_peace()
 	level.mw2coop_ride_peace = true;
 	old = GetDvar( "g_friendlyfireDamageScale" );
 	SetSavedDvar( "g_friendlyfireDamageScale", 0 );
-	foreach ( player in level.players )
-		player thread ride_give_back();
+	// with the lobby's friendly fire off every player already gets the partner's damage back (maps\_mw2coop::give_back_partner_damage): a second
+	// give-back healed the gunner by one for each of the passenger's bullets (audit 2026-11-18, GSC F6)
+	if ( GetDvar( "mw2coop_ff" ) != "0" )
+		foreach ( player in level.players )
+			player thread ride_give_back();
 	level waittill( "mw2coop_ride_ends" );
 	SetSavedDvar( "g_friendlyfireDamageScale", old );
 	level.mw2coop_ride_peace = undefined;

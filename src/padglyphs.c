@@ -299,7 +299,8 @@ __attribute__((used)) const char *padglyphs_text(const char *text, float x, floa
 	}
 #endif
 	char *out = buf[at ^= 1];
-	convert(text, out, sizeof(buf[0]), NULL);
+	if (convert(text, out, sizeof(buf[0]), NULL) < 0)
+		return text; // (too long: the text as it is, never the unterminated buffer, audit 2026-11-18)
 	return out;
 }
 

@@ -491,7 +491,11 @@ typedef struct {
 	int coop; // made for a co-op session (the other kind has the fixes only)
 	raw_file_t fake;
 } script_entry_t;
-static script_entry_t entries[320]; // (a script asked in both kinds of session has two)
+// Every script the client compiles has an entry (one with no text says "the zone's own"), and a campaign played level after level in one process asks for
+// more than the 320 the table first held: past them a patched script loaded unpatched and a module of ours was not found (audit 2026-11-18, glue F1).
+// Each entry is allocated on its own, so its address (handed to the game as a rawfile) never moves.
+#define MAX_ENTRIES 8192
+static script_entry_t *entries[MAX_ENTRIES]; // (a script asked in both kinds of session has two)
 static int entry_count;
 static CRITICAL_SECTION entries_lock;
 static volatile LONG lock_ready;
@@ -511,17 +515,20 @@ static script_entry_t *script_entry(const char *name, raw_file_t *raw)
 {
 	int coop = coop_session(); // single player: the zone's own text and the fixes that are no part of the co-op (an entry is kept for its kind of session)
 	for (int i = 0; i < entry_count; i++)
-		if (entries[i].coop == coop && strcmp(entries[i].name, name) == 0)
-			return &entries[i];
+		if (entries[i]->coop == coop && strcmp(entries[i]->name, name) == 0)
+			return entries[i];
 	int size;
 	char *own = coop || fix_script(name) ? read_mod_script(name, &size) : NULL;
 	if (!own && !raw)
 		return NULL;
-	if (entry_count >= (int)(sizeof(entries) / sizeof(entries[0]))) {
+	script_entry_t *e = entry_count < MAX_ENTRIES ? calloc(1, sizeof(script_entry_t)) : NULL;
+	if (!e) {
+		static int said;
+		if (!said++)
+			log_printf("scripts: no room for the entry of %s (%d entries): the zone's own script is used", name, entry_count);
 		free(own);
 		return NULL;
 	}
-	script_entry_t *e = &entries[entry_count];
 	lstrcpynA(e->name, name, sizeof(e->name));
 	e->coop = coop;
 	e->text = NULL;
@@ -545,7 +552,9 @@ static script_entry_t *script_entry(const char *name, raw_file_t *raw)
 	e->fake.name = e->name;
 	e->fake.len = e->n;
 	e->fake.buffer = e->text;
-	entry_count++;
+	entries[entry_count++] = e;
+	if (entry_count % 100 == 0)
+		log_printf("scripts: %d script entries (iw4x client)", entry_count);
 	return e;
 }
 

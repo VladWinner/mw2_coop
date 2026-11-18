@@ -49,6 +49,18 @@ int main(void)
 	PKT("coopLaunch with 255 players", 1, 1, 1, "\xff\xff\xff\xffR\x00\x01" "coopLaunch\x00\xff" "ending\x00\x00\x00\x00\x00\x00/N{\x0f\x00\x01\x01\x01\x02\x01");
 	PKT("coopLaunch without the key 2 (never ends)", 1, 1, 1, "\xff\xff\xff\xffR\x00\x01" "coopLaunch\x00\x02" "ending\x00\x00\x00\x00\x00\x00/N{\x0f\x00\x01\x01\x01\x01\x01");
 	PKT("coopLaunch cut inside the strings", 1, 1, 1, "\xff\xff\xff\xffR\x00\x01" "coopLaunch\x00\x02" "ending");
+	// the ways past the first version (audit 2026-11-18)
+	PKT("coopAccept with the slot 0 and a separator in the map", 1, 1, 1, "\xff\xff\xff\xffR\x00\x00" "coopAccept\x00\x00\x02" "x;quit\x00\x00\x00");
+	PKT("coopLaunch with 0 players and a separator in the map", 1, 1, 1, "\xff\xff\xff\xffR\x00\x01" "coopLaunch\x00\x00" "ending;quit\x00\x00\x00\x00\x00\x00/N{\x0f\x02");
+	PKT("a separator after 70 letters of map", 1, 1, 1, "\xff\xff\xff\xffR\x00\x01" "coopLaunch\x00\x02" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;quit\x00\x00\x00\x00\x00\x00/N{\x0f\x02");
+	PKT("a separator in the start point", 1, 1, 1, "\xff\xff\xff\xffR\x00\x01" "coopLaunch\x00\x02" "ending\x00\x00\x00\x00\x00" "x;quit\x00/N{\x0f\x02");
+	PKT("a good coopLaunch, then a bad one in the same packet", 1, 1, 1, "\xff\xff\xff\xffR\x00\x01" "coopLaunch\x00\x02" "ending\x00\x00\x00\x00\x00\x00/N{\x0f\x02\x01" "coopLaunch\x00\x02" "e;quit\x00\x00\x00\x00\x00\x00/N{\x0f\x02");
+	PKT("a stranger's coopConnect carrying a coopLaunch (partner known)", 1, 0, 1, "\xff\xff\xff\xffR\x00\x00" "coopConnect\x00\x1d-\xc8\x0e\x1b\x01\x00\x10\x01x\x00\x06\x01" "coopLaunch\x00\x02" "ending\x00\x00\x00\x00\x00\x00/N{\x0f\x02");
+	PKT("a coopConnect carrying a coopAccept (no partner yet)", 0, 0, 1, "\xff\xff\xff\xffR\x00\x00" "coopConnect\x00\x1d-\xc8\x0e\x1b\x01\x00\x10\x01x\x00\x06\x01" "coopAccept\x00\x01\x02" "ending\x00\x00\x00");
+	PKT("a 7-byte heartbeat", 1, 1, 1, "\xff\xff\xff\xff" "hb\x00");
+	PKT("RCON in capitals", 1, 1, 1, "\xff\xff\xff\xff" "RCON secret quit");
+	PKT("COOPLAUNCH from a stranger", 1, 0, 1, "\xff\xff\xff\xffR\x00\x01" "COOPLAUNCH\x00\x02" "ending\x00");
+	PKT("a stranger's plain coopConnect when a partner is known (the host answers it)", 1, 0, 0, "\xff\xff\xff\xffR\x00\x00" "coopConnect\x00\x1d-\xc8\x0e\x1b\x01\x00\x10\x01stxlvn\x00\x06");
 	printf(fails ? "%d FAILED\n" : "all passed\n", fails);
 	return fails != 0;
 }

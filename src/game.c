@@ -342,8 +342,9 @@ int game_command_exists(const char *name)
 	int guard = 0;
 	if (!ready || !RVA_CMD_FUNCTIONS || !name)
 		return 0;
-	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c && guard < 4000; c = c->next, guard++)
-		if (c->name && !strcmp(c->name, name))
+	// (the same guards as game_for_each_command: the console asks this while the list can change under it, audit 2026-11-18, glue F5)
+	for (cmd_function_t *c = *(cmd_function_t **)(base + RVA_CMD_FUNCTIONS); c && guard < 4000 && game_mem_readable(c, sizeof(*c)); c = c->next, guard++)
+		if (c->name && game_string_readable(c->name, 256) && !strcmp(c->name, name))
 			return 1;
 	return 0;
 }

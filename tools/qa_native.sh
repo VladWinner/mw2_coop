@@ -1,4 +1,6 @@
 #!/bin/sh
+# test copies never change the router: no UPnP forward (src/upnp.c); export MW2COOP_NOUPNP= (empty) to test UPnP itself, with the owner's yes
+export MW2COOP_NOUPNP=${MW2COOP_NOUPNP-1}
 # Native split screen QA (mode 11, docs/native-splitscreen-360.md): ONE copy, two players in one process, in 1920x1080 on the display named in local/test-display.txt.
 # Usage: tools/qa_native.sh [seconds in the level after the map command, default 200] [extra [native] lines, ";"-separated, e.g. "p1pad=0;entlog=1"]
 #   MW2COOP_MAP     the map (default trainer)

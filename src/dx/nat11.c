@@ -1080,6 +1080,8 @@ static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, 
 			ID3D10Blob_Release(msgs);
 		return NULL;
 	}
+	if (msgs) // (a compile with warnings hands them back too: released on success as well, audit 2026-11-18, DX F9)
+		ID3D10Blob_Release(msgs);
 	QueryPerformanceCounter(&t1);
 	nat_shader *s = calloc(1, sizeof(*s));
 	s->is_vs = is_vs;
