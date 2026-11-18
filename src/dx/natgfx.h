@@ -46,8 +46,6 @@ void ng_init(ng_state *s);
 // ng_weapon_k is NULL (off) unless the host sets it; it returns 0 when the weapon keeps the game's field of view.
 extern float (*ng_weapon_k)(void);
 void ng_weapon_viewport(ng_state *s, float min_z);
-// the split screen's scope lens fix (src/native.c t_scissor): called with every scissor rectangle the engine sets (top / bottom may be changed); rt_full: the target is as big as the scene
-extern void (*ng_scissor_hook)(int *top, int *bottom, int left, int right, int rt_full);
 // The split screen's mode 11 (src/native.c native_nat_clear_rect): each player is drawn in a renderer frame of his own into the one back buffer, and the clear of the screen at a frame's
 // start must stay in that player's half (Direct3D 9 path: t_clear, exp11clip). Asked for every clear of a target as big as the scene; returns 1 with the rectangle (left, top, right,
 // bottom, target pixels) to clear instead of the whole target, 0 for a normal clear. NULL: off.

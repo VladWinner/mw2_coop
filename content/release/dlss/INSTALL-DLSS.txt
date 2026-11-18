@@ -1,0 +1,37 @@
+DLSS for Modern Warfare 2 Enhanced {VERSION} (64-bit game, GeForce RTX card)
+https://github.com/stxlvn/mw2_enhanced
+
+=== По-русски ===
+
+DLSS (NVIDIA) увеличивает картинку, которую игра рисует в меньшем разрешении. Нужны: 64-битная игра с
+модом той же версии, видеокарта GeForce RTX и свежий драйвер NVIDIA. Работает на собственном рендерере
+DirectX 12 мода (экспериментально).
+
+1. Распакуйте этот архив в папку игры (рядом с iw4sp.exe): появится mw2coop\dlss\mw2coop_dlss.dll.
+2. Скачайте у NVIDIA файл nvngx_dlss.dll (DLSS SDK на GitHub, папка lib/Windows_x86_64/rel):
+   https://github.com/NVIDIA/DLSS/tree/9981c6350dc58c0ce21f024fd65e31e851c31689/lib/Windows_x86_64/rel
+   (мод проверен с этой версией, DLSS 310.9.16; SHA-256 файла:
+   d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e) и положите его туда же, в mw2coop\dlss.
+3. В игре: Настройки -> Enhanced -> Апскейлер: DLSS (версия DirectX сама станет 12), перезапустите игру.
+   Разрешение игры (Настройки -> Видео) — это разрешение, в котором она рисует; DLSS увеличивает картинку до
+   размера экрана.
+Если DLSS не запустился, строки mw2coop\mw2coop.log, начинающиеся с "dlss:", говорят почему. Другая папка для
+двух DLL: [display] dlss_dir=<папка> в mw2coop\settings.ini.
+Условия использования моста и частей NVIDIA: NOTICE-DLSS.txt.
+
+=== English ===
+
+DLSS (NVIDIA) upscales the picture the game draws at a lower resolution. Needs: the 64-bit game with the same
+version of the mod, a GeForce RTX card and a current NVIDIA driver. It runs on the mod's own DirectX 12
+renderer (experimental).
+
+1. Unzip this archive into the game folder (next to iw4sp.exe): it adds mw2coop\dlss\mw2coop_dlss.dll.
+2. Download NVIDIA's nvngx_dlss.dll (the DLSS SDK on GitHub, folder lib/Windows_x86_64/rel):
+   https://github.com/NVIDIA/DLSS/tree/9981c6350dc58c0ce21f024fd65e31e851c31689/lib/Windows_x86_64/rel
+   (the mod was checked with this version, DLSS 310.9.16; the file's SHA-256:
+   d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e) and put it into the same mw2coop\dlss.
+3. In the game: Settings -> Enhanced -> Upscaler: DLSS (the DirectX version becomes 12 by itself), restart the
+   game. The game's resolution (Settings -> Video) is the one it draws at; DLSS upscales it to the screen size.
+If DLSS does not start, the lines of mw2coop\mw2coop.log that begin with "dlss:" say why. Another folder for
+the two DLLs: [display] dlss_dir=<folder> in mw2coop\settings.ini.
+Terms for the bridge and NVIDIA's portions: NOTICE-DLSS.txt.

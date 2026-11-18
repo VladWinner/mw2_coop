@@ -224,163 +224,10 @@ void natboot_shot(const char *name)
 #endif
 	lstrcpynA(shot_name, name, sizeof(shot_name));
 }
-// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the split screen compositor
-// src/native.c (mode 10, one process, two local players) on the native renderers: the frame holds one player's view squeezed for a half; the 2D pass of the scene is drawn into a layer of its own
-// (one per half, cleared to transparent, the alpha rule of state11_layer_fix); at the frame's end the view is squeezed into the half's image, the layer's top rows are laid over it, and both halves
-// are put on the scene. The two frames of a pair are composed in turn; the first is not shown (natframe_skip_present).
-extern int natframe_skip_present;
-extern int native_nat_split_frame(int *half);
-extern int native_nat_pair_present(void);
-extern int native_nat_titles_wanted(void);
-static nat_image *cp_half[2], *cp_lay[2];
-static unsigned cp_w, cp_h;
-static int cp_have[2], cp_lay_have[2];
-static nat_image *cp_prev_rt, *cp_prev_ds;
+extern int natframe_skip_present; // natframe.c: the present of the frame being ended is skipped (the split screen: player 1's renderer frame, w_45060)
 
-static int cp_make(void)
-{
-	if (!N.created)
-		return 0;
-	unsigned w, h;
-	nat_get_size(N.dev, &w, &h);
-	if (cp_half[0] && cp_w == w && cp_h == h)
-		return 1;
-	for (int i = 0; i < 2; i++) {
-		nat_image_destroy(cp_half[i]);
-		nat_image_destroy(cp_lay[i]);
-		cp_half[i] = cp_lay[i] = NULL;
-		cp_have[i] = cp_lay_have[i] = 0;
-	}
-	cp_w = w;
-	cp_h = h;
-	for (int i = 0; i < 2; i++) {
-		nat_image_desc hd = {NAT_IMAGE_2D, w, h / 2, 1, 1, 21, NAT_RENDER_TARGET, 0};
-		nat_image_desc ld = {NAT_IMAGE_2D, w, h, 1, 1, 21, NAT_RENDER_TARGET, 0};
-		cp_half[i] = nat_image_create(N.dev, &hd);
-		cp_lay[i] = nat_image_create(N.dev, &ld);
-		if (!cp_half[i] || !cp_lay[i]) {
-			log_printf("native11: split screen: cannot make the half images (%ux%u)", w, h / 2);
-			return 0;
-		}
-	}
-	log_printf("native11: split screen compositor on (%s), %ux%u picture, two %ux%u halves", nat_backend_name(), w, h, w, h / 2);
-	return 1;
-}
-
-// the 2D pass goes into the layer of the half: begin (the layer is cleared to transparent unless `clear` is 0), end
-static void cp_layer_begin(int half, int clear)
-{
-	if (!N.created || !cp_lay[half & 1])
-		return;
-	half &= 1;
-	nd_get_targets(N.d, &cp_prev_rt, &cp_prev_ds);
-	nd_layer_scene_rt = cp_prev_rt;
-	nd_layer_scene_ds = cp_prev_ds;
-	nd_set_targets(N.d, cp_lay[half], ND_NO_DEPTH);
-	if (clear) {
-		const float c[4] = {0, 0, 0, 0};
-		nd_clear(N.d, 1, c, 1.0f, 0);
-	}
-	cp_lay_have[half] = 1;
-	nd_layer_mode = 1;
-}
-
-static void cp_layer_end(void)
-{
-	if (!N.created)
-		return;
-	nd_layer_mode = 0;
-	nd_set_targets(N.d, cp_prev_rt, cp_prev_ds);
-}
-
-// (what src/native.c calls: the copy of this file that belongs to the active back end does the work)
-#ifdef NAT_BACKEND_12
-#define DISPATCH12(call)
-#else
-#define DISPATCH12(call) if (settings_directx12()) { call; }
-#endif
-void natboot_scene_size(unsigned *w, unsigned *h)
-{
-#ifndef NAT_BACKEND_12
-	if (settings_directx12()) {
-		extern void b12_natboot_scene_size(unsigned *, unsigned *);
-		b12_natboot_scene_size(w, h);
-		return;
-	}
-#endif
-	*w = *h = 0;
-	if (N.created)
-		nat_get_size(N.dev, w, h);
-}
-int natboot_comp_make(void)
-{
-#ifndef NAT_BACKEND_12
-	if (settings_directx12()) {
-		extern int b12_natboot_comp_make(void);
-		return b12_natboot_comp_make();
-	}
-#endif
-	return cp_make();
-}
-void natboot_layer_begin(int half, int clear)
-{
-#ifndef NAT_BACKEND_12
-	if (settings_directx12()) {
-		extern void b12_natboot_layer_begin(int, int);
-		b12_natboot_layer_begin(half, clear);
-		return;
-	}
-#endif
-	cp_layer_begin(half, clear);
-}
-void natboot_layer_end(void)
-{
-#ifndef NAT_BACKEND_12
-	if (settings_directx12()) {
-		extern void b12_natboot_layer_end(void);
-		b12_natboot_layer_end();
-		return;
-	}
-#endif
-	cp_layer_end();
-}
-
-// the frame's end: the view into the half's image, its 2D layer over it, both halves onto the scene; 1 when both halves are there
-static int natboot_compose(int half)
-{
-	if (!cp_make())
-		return 0;
-	half &= 1;
-	const int w = (int)cp_w, h = (int)cp_h;
-	if (nd_stretch(N.d, NULL, NULL, cp_half[half], NULL, 1))
-		cp_have[half] = 1;
-	if (cp_lay_have[half] && cp_have[half]) {
-		const nd_rect top_rows = {0, 0, w, h / 2};
-		nd_overlay_premul(N.d, cp_lay[half], &top_rows, cp_half[half], NULL);
-	}
-	// the mission's title lines are drawn by context 0 with the full-screen 2D placement: the rows of its layer below its half hold them; they go over the bottom half
-	if (half == 1 && cp_have[1] && cp_lay_have[0] && native_nat_titles_wanted()) {
-		const nd_rect low_rows = {0, h / 2, w, h};
-		nd_overlay_premul(N.d, cp_lay[0], &low_rows, cp_half[1], NULL);
-	}
-	const nd_rect top = {0, 0, w, h / 2}, bottom = {0, h / 2, w, h};
-	nd_stretch(N.d, cp_half[0], NULL, NULL, &top, 0);
-	nd_stretch(N.d, cp_half[1], NULL, NULL, &bottom, 0);
-	return cp_have[0] && cp_have[1];
-}
-
-static void natboot_comp_frame(void)
-{
-	int half = -1;
-	if (!native_nat_split_frame(&half)) {
-		cp_have[0] = cp_have[1] = cp_lay_have[0] = cp_lay_have[1] = 0; // not a split frame: the halves of before are stale
-		return;
-	}
-	const int both = natboot_compose(half);
-	natframe_skip_present = native_nat_pair_present() && half == 0 && both;
-}
-
-// ---- FSR 1 with a crisp HUD on the native renderers: the 3D picture is upscaled when the engine starts its 2D passes, which then draw at the output resolution (natboot.c hud_begin)
+// ---- FSR 3 / DLSS with a crisp HUD on the native Direct3D 12 renderer: the 3D picture (with its late effects and the view's post passes) is upscaled when the frame's 2D list starts
+// (native.c native_final2d_entry), which then draws at the output resolution (nat_upscale_now is always NULL on Direct3D 11: it has no upscaler)
 static nat_image *hud_prev_rt, *hud_prev_ds;
 static int hud_active;
 static int hud_begin_impl(void)
@@ -502,7 +349,6 @@ static void w_45060(unsigned flags)
 		if (tf == from)
 			nat_log_hook("trace: ---- frame %d ----", tf);
 	}
-	natboot_comp_frame(); // the split screen (mode 10): the halves are composed before the console and the QA frames are on the picture
 	if (getenv("MW2COOP_NATCON")) { // QA: the console is opened at frame 5000 of the run and closed at 5500
 		static int f;
 		f++;
@@ -580,7 +426,7 @@ static void w_45060(unsigned flags)
 			}
 		}
 	}
-	{ // QA: a level script sets the dvar mw2coop_qa_frame to a new name: the picture is saved as that name (as the Direct3D 9 compositor's present does)
+	{ // QA: a level script sets the dvar mw2coop_qa_frame to a new name: the picture is saved as that name
 		static unsigned qa_n;
 		static char last[64];
 		extern int game_dvar_raw(const char *name, char *buf, int size);
@@ -1042,8 +888,6 @@ static void install_all(void)
 	{
 		extern float native_weapon_k(void);
 		ng_weapon_k = native_weapon_k; // [native] weaponfov on the native renderer
-		extern void native_nat_scissor(int *, int *, int, int, int);
-		ng_scissor_hook = native_nat_scissor; // the split screen's scope lens
 		extern int native_nat_clear_rect(unsigned, long *);
 		ng_clear_rect_hook = native_nat_clear_rect; // the split screen's mode 11: each player's frame clears its own half
 	}
@@ -1063,7 +907,7 @@ static void install_all(void)
 	N.frame.fn_211c0 = (void (*)(void *, void *))(exe + 0x211c0);
 	N.frame.fn_29070 = (void (*)(void))(exe + 0x29070);
 	N.frame.fn_b6e0 = (void (*)(int))(exe + 0xb6e0);
-	{ // the frame's 2D command list (rva 0x5c010): the native frame end calls it itself (the call site inside 0x453c0 is not run), so the split screen's layer hook wraps it here
+	{ // the frame's 2D command list (rva 0x5c010): the native frame end calls it itself (the call site inside 0x453c0 is not run), through native.c (the upscaled HUD)
 		extern void native_final2d_entry(void *);
 		N.frame.fn_5c010 = native_final2d_entry;
 	}

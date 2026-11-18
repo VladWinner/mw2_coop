@@ -47,23 +47,37 @@ Steam. Через VPN подключайтесь через ПРИСОЕДИНИ
 Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
 
 ЭКСПЕРИМЕНТАЛЬНО: встроенный разделённый экран (две половины одного окна, один ПК)
-Это пререлиз: кроме сетевой игры в нём есть режим "РАЗДЕЛЕНИЕ ЭКРАНА" для двух игроков на одном компьютере. Он новый
-и может падать; для обычной игры по сети он не нужен.
+Кроме сетевой игры в моде есть режим "РАЗДЕЛЕНИЕ ЭКРАНА" для двух игроков на одном компьютере, в кампании и в
+Спецоперациях. Он новее сетевой игры и может падать; для игры по сети он не нужен.
 Как запустить: Кампания -> РАЗДЕЛЕНИЕ ЭКРАНА. Откроется лобби с двумя карточками: Альфа (верхняя половина) и Браво
 (нижняя). Каждый игрок нажимает кнопку на том устройстве, на котором будет играть: клавишу или мышь для клавиатуры и
-мыши, любую кнопку геймпада (XInput) для геймпада. Backspace (клавиатура) или Back (геймпад) отменяет выбор. "Старт"
+мыши, любую кнопку геймпада для геймпада (Xbox через XInput; PlayStation, Switch и 8BitDo через SDL 3, mw2coop\SDL3.dll). Backspace (клавиатура) или Back (геймпад) отменяет выбор. "Старт"
 ждёт, пока выберут оба. Любой игрок может играть на любом устройстве: два геймпада или геймпад и клавиатура.
-Экран режется на верхнюю и нижнюю половины; при возврате в меню режим выключается сам.
+В лобби у каждого игрока своя строка сложности. Экран режется на верхнюю и нижнюю половины (Настройки -> Enhanced ->
+"Виды как на консоли (со сдвигом)" даёт консольную раскладку из двух смещённых окон); при возврате в меню режим
+выключается сам.
 Геймпад (раскладка консоли): левый стик — движение, правый — обзор, LT — прицел, RT — огонь, A — прыжок, B — стойка
 (удержание — лёжа), X — перезарядка (удержание — использовать), Y — следующее оружие, LB / RB — гранаты, LS — бег,
 RS — удар ножом, Back — задачи, Start — пауза, крестовина — слоты действий. Помощь в прицеливании и вибрация как на
 консоли, в подсказках кнопки геймпада вместо клавиш.
 Настройки для каждого игрока (чувствительность, инверсия, помощь в прицеливании, смена стиков, тактическая раскладка,
-вибрация): главное меню -> Настройки -> Управление -> Геймпад: Альфа / Геймпад: Браво. Второй игрок не управляет меню,
-только ставит паузу.
-Известные проблемы: геймпады проверены только имитацией;
-игра может не закрыться сама после выхода (закройте её в диспетчере задач). Старая 32-битная игра: архив
+вибрация): главное меню -> Настройки -> Управление -> Геймпад: Альфа / Геймпад: Браво. Start открывает меню паузы, геймпад
+второго игрока тоже управляет меню.
+Известные проблемы: геймпады PlayStation через SDL 3 с настоящим геймпадом ещё не пробовали. Старая 32-битная игра: архив
 mw2coop-<версия>-x86.zip (он же для клиента iw4x-sp). Если что-то не так, приложите mw2coop\mw2coop.log.
+
+ЭКСПЕРИМЕНТАЛЬНО: апскейлеры FSR 3 и DLSS (только 64-битная игра, собственный рендерер DirectX 12 мода)
+Игра рисует в меньшем разрешении (Настройки -> Видео), картинка увеличивается до размера экрана. Включается в
+Настройки -> Enhanced -> Апскейлер (версия DirectX сама станет 12). DLL производителей мод не поставляет:
+- FSR 3: amd_fidelityfx_loader_dx12.dll и amd_fidelityfx_upscaler_dx12.dll из FidelityFX SDK от AMD (проверено с
+  SDK 2.4.0) положите в папку mw2coop\fsr3:
+  https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/7539ae8b6568ad29ed78a753404351daf3b5cca7/Kits/FidelityFX/signedbin
+- DLSS (видеокарта GeForce RTX): мост мода mw2coop_dlss.dll — отдельный архив релиза mw2coop-dlss-<версия>.zip
+  (его INSTALL-DLSS.txt и NOTICE-DLSS.txt), и nvngx_dlss.dll из DLSS SDK от NVIDIA (проверено с DLSS 310.9.16);
+  оба файла в папку mw2coop\dlss:
+  https://github.com/NVIDIA/DLSS/tree/9981c6350dc58c0ce21f024fd65e31e851c31689/lib/Windows_x86_64/rel
+Другие папки: fsr3_dir / dlss_dir в [display] файла mw2coop\settings.ini. Почему апскейлер не запустился, пишут
+строки mw2coop\mw2coop.log, начинающиеся с "fsr3:" или "dlss:".
 
 === English ===
 
@@ -99,21 +113,36 @@ Over a VPN join through JOIN A GAME, not with the console command connect.
 Uninstall: delete winmm.dll and the mw2coop folder from the game folder. Problems: attach mw2coop\mw2coop.log from both players.
 
 EXPERIMENTAL: the built-in split screen (two halves of one window, one PC)
-This is a pre-release: besides online co-op it has a SPLIT SCREEN mode for two players on one computer. It is new
-and may crash; online play does not need it.
+Besides online co-op the mod has a SPLIT SCREEN mode for two players on one computer, in the campaign and in Spec
+Ops. It is newer than online co-op and may crash; online play does not need it.
 To start it: Campaign -> SPLIT SCREEN. The lobby opens with two cards, Alpha (the top half) and Bravo (the bottom half).
 Each player presses a button on the device they will play on: a key or the mouse for keyboard and mouse, any button on
-a gamepad (XInput) for a gamepad. Backspace (keyboard) or Back (gamepad) takes the choice back. Start waits until both
+a gamepad for a gamepad (Xbox pads through XInput; PlayStation, Switch and 8BitDo pads through SDL 3, mw2coop\SDL3.dll). Backspace (keyboard) or Back (gamepad) takes the choice back. Start waits until both
 have chosen. Either player can play on either device; two gamepads, or one gamepad and the keyboard, both work.
-The screen is cut into a top and a bottom half; the mode switches itself off when you are back in the menus.
+The lobby has a difficulty row for each player. The screen is cut into a top and a bottom half (Settings -> Enhanced ->
+"Console-style view boxes" gives the console's layout of two offset boxes); the mode switches itself off when you are
+back in the menus.
 Gamepad (the console layout): left stick move, right stick look, LT aim, RT fire, A jump, B stance (hold: prone),
 X reload (hold: use), Y next weapon, LB / RB grenades, LS sprint, RS melee, Back objectives, Start pause, d-pad the
 action slots. Aim assist and vibration work as on the console, and hints show the gamepad's buttons instead of keys.
 Per player options (look sensitivity, inverted look, aim assist, swapped sticks, tactical layout, vibration): Options ->
-Controls -> Gamepad: Alpha / Gamepad: Bravo in the main menu. The second player cannot work the menus, only pause.
-Known issues: the gamepad part is tested with simulated gamepads only; the game may not close by itself
-after quitting (end it in Task Manager). The older 32-bit game: the archive
+Controls -> Gamepad: Alpha / Gamepad: Bravo in the main menu. Start opens the pause menu, and the second player's
+gamepad works the menus too.
+Known issues: PlayStation pads through SDL 3 have not been tried with a real pad yet. The older 32-bit game: the archive
 mw2coop-<version>-x86.zip (it is also the one for the iw4x-sp client). If something is wrong, attach mw2coop\mw2coop.log.
+
+EXPERIMENTAL: the FSR 3 and DLSS upscalers (64-bit game only, the mod's own DirectX 12 renderer)
+The game draws at a lower resolution (Settings -> Video) and the picture is upscaled to the screen's size. Turn it on in
+Settings -> Enhanced -> Upscaler (the DirectX version becomes 12 by itself). The mod does not ship the vendors' DLLs:
+- FSR 3: put amd_fidelityfx_loader_dx12.dll and amd_fidelityfx_upscaler_dx12.dll from AMD's FidelityFX SDK (checked with
+  the SDK 2.4.0) into the folder mw2coop\fsr3:
+  https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/tree/7539ae8b6568ad29ed78a753404351daf3b5cca7/Kits/FidelityFX/signedbin
+- DLSS (a GeForce RTX card): the mod's bridge mw2coop_dlss.dll is the release's separate archive mw2coop-dlss-<version>.zip
+  (see its INSTALL-DLSS.txt and NOTICE-DLSS.txt), and nvngx_dlss.dll comes from NVIDIA's DLSS SDK (checked with DLSS
+  310.9.16); both files into the folder mw2coop\dlss:
+  https://github.com/NVIDIA/DLSS/tree/9981c6350dc58c0ce21f024fd65e31e851c31689/lib/Windows_x86_64/rel
+Other folders: fsr3_dir / dlss_dir under [display] in mw2coop\settings.ini. Why an upscaler did not start: the lines of
+mw2coop\mw2coop.log that begin with "fsr3:" or "dlss:".
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT
 licensed (LICENSE.txt). No game files are included.

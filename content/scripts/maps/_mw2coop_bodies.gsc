@@ -77,7 +77,7 @@ rider_model( body, skeleton )
 
 // Just Like Old Times' rope stand-in (maps\_mw2coop_cave::partner_view): Price's body in that level (character_hero_desert_price), whose skeleton
 // his rappel animations are made for. Here, not in the cave module: _mw2coop.gsc precaches it in every level, and a reference to the cave
-// module pulls in mapsf_caves_code, which only that level has (a script compile error everywhere else, QA 2026-11-17).
+// module pulls in maps\af_caves_code, which only that level has (a script compile error everywhere else, QA 2026-11-17).
 rope_skeleton()
 {
 	if ( level.script == "gulag" )	// the cellblock rope's stand-in (maps\_mw2coop_gulag::rope_partner_view): a SEAL soldier, whose rappel it plays

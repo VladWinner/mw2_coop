@@ -1,6 +1,6 @@
 // FSR 3 (AMD FidelityFX upscaler) on the native Direct3D 12 renderer ([display] fsr3=1 with directx12=1, fsr3_dir = the folder with AMD's amd_fidelityfx_loader_dx12.dll and its upscaler DLL).
 //
-// The picture the engine draws is at the game's size; when its 2D passes start (natboot.c hud_begin) nat_upscale_now calls natfsr3_upscale, which records on the renderer's own command list:
+// The picture the engine draws is at the game's size; when the frame's 2D list starts (native.c native_final2d_entry -> natboot.c hud_begin) nat_upscale_now calls natfsr3_upscale, which records on the renderer's own command list:
 //   1. the game's depth (multisampled, not readable) is copied and converted to an R32_FLOAT texture, mapped to 0..1 over the world viewport's depth range (a compute pass);
 //   2. the camera's motion vectors, from that depth and the matrix that takes this frame's clip space to the previous frame's (a compute pass);
 //   3. FSR 3's dispatch with the color (the resolved scene), the depth, the vectors, the camera's sub-pixel jitter and the frame time;
@@ -268,7 +268,7 @@ static const char rf_b_main[] = HLSL(
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ DLSS ([display] dlss=1)
 // NVIDIA's DLSS Super Resolution through mw2coop_dlss.dll (src/dlss: the mod's bridge, built apart from NVIDIA's SDK): the same inputs as FSR 3's (color, depth mapped to 0..1, motion vectors in
-// render pixels without jitter, the jitter) and the same output; everything before and after it is shared with FSR 3. The output is sharpened by RCAS (nat12.c) as src/fsr3.c does.
+// render pixels without jitter, the jitter) and the same output; everything before and after it is shared with FSR 3. The output is sharpened by RCAS (nat12.c) as src/fsr3.c does (natfsr3_dlss_sharpness).
 typedef void (*dl_log_t)(const char *);
 static struct {
 	HMODULE dll;
@@ -1066,6 +1066,18 @@ int natfsr3_wanted(void)
 int natfsr3_is_dlss(void)
 {
 	return settings_dlss() != 0;
+}
+
+// DLSS's sharpening (RCAS on its output, nat12.c): [display] fsr3_sharpness (0-100, the Settings > Enhanced slider: settings_set_fsr3_sharpness) mapped to RCAS's constant the way FSR 2 / 3
+// and src/fsr3.c do, 2 ^ -(2 - 2 * sharpness); 0 = no sharpening. (Until 2026-11-18 this pass took FSR 1's upscale_sharpness, which was removed with FSR 1.)
+float natfsr3_dlss_sharpness(void)
+{
+	const int pct = settings_fsr3_sharpness();
+	const float con = pct > 0 ? powf(2.0f, -(2.0f - 2.0f * (float)pct / 100.0f)) : 0.0f;
+	static int told;
+	if (!told++)
+		log_printf("dlss: the output is sharpened by RCAS: sharpness %d of 100 (constant %.3f; 0 = off), [display] fsr3_sharpness / Settings > Enhanced", pct, con);
+	return con;
 }
 
 // the upscale of the frame into `out_img` (the image of the output size the 2D passes draw into); 1 when it holds the upscaled picture

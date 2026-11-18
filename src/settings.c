@@ -56,7 +56,7 @@ static char fsr3_dir_buf[MAX_PATH];
 static char dlss_dir_buf[MAX_PATH];
 static char dlss_preset_buf[8];
 static char settings_path_buf[MAX_PATH];
-static int upscale_on, upscale_w, upscale_h, upscale_sharp = 25, fsr3_sharp = 60;
+static int upscale_w, upscale_h, fsr3_sharp = 60;
 static int fsr3_refine = 1;
 static int fsr3_bias_set;
 static float fsr3_bias;
@@ -189,20 +189,22 @@ void settings_load(void)
 #ifndef _WIN64
 	// AMD's FidelityFX DLLs (the FSR 3 loader and upscaler) exist only for 64-bit Windows, and a 32-bit game (the official
 	// 32-bit build, iw4x) cannot load a 64-bit DLL: LoadLibrary failed with error 193 and the log blamed fsr3_dir. FSR 3 is
-	// off in these builds, and it does not switch the Direct3D 12 layer on; FSR 1 ([display] upscale=1) works in them.
+	// off in these builds, and it does not switch the Direct3D 12 layer on: these builds have no upscaler.
 	// The same for DLSS: NVIDIA's bridge DLL is 64-bit only.
 	if (fsr3_on) {
-		log_printf("settings: [display] fsr3=1 / dlss=1 ignored: FSR 3 and DLSS work only in the 64-bit build (AMD's and NVIDIA's DLLs are 64-bit only); FSR 1 ([display] upscale=1) works in this build");
+		log_printf("settings: [display] fsr3=1 / dlss=1 ignored: FSR 3 and DLSS work only in the 64-bit build (AMD's and NVIDIA's DLLs are 64-bit only); this build has no upscaler");
 		fsr3_on = 0;
 		dlss_on = 0;
 	}
 #endif
-	upscale_on = GetPrivateProfileIntA("display", "upscale", 0, path) != 0;
+	// FSR 1 was removed from the mod (2026-11-18): an old settings.ini that still says upscale=1 starts as without it (FSR 3 and DLSS, fsr3=1 / dlss=1, are the upscalers)
+	if (GetPrivateProfileIntA("display", "upscale", 0, path))
+		log_printf("settings: [display] upscale=1 ignored: FSR 1 was removed from the mod (the upscalers are FSR 3 and DLSS: fsr3=1 / dlss=1, 64-bit build on DirectX 12)");
 	upscale_w = (int)GetPrivateProfileIntA("display", "upscale_width", 0, path);
 	upscale_h = (int)GetPrivateProfileIntA("display", "upscale_height", 0, path);
 	// An upscaler switched on without an output size (the options page can only switch it on): the desktop's size. Without folders for the upscalers' DLLs: mw2coop\fsr3 and
 	// mw2coop\dlss beside settings.ini, so dropping the DLLs there is enough.
-	if ((upscale_on || fsr3_on) && (upscale_w <= 0 || upscale_h <= 0)) {
+	if (fsr3_on && (upscale_w <= 0 || upscale_h <= 0)) {
 		upscale_w = GetSystemMetrics(SM_CXSCREEN);
 		upscale_h = GetSystemMetrics(SM_CYSCREEN);
 		log_printf("settings: no upscale_width / upscale_height: the desktop's %dx%d is the output size", upscale_w, upscale_h);
@@ -216,9 +218,6 @@ void settings_load(void)
 				lstrcpynA(slash + 1, k ? "dlss" : "fsr3", 8);
 		}
 	}
-	upscale_sharp = (int)GetPrivateProfileIntA("display", "upscale_sharpness", 25, path);
-	if (upscale_sharp < 0 || upscale_sharp > 300)
-		upscale_sharp = 25;
 	fonts_on = GetPrivateProfileIntA("display", "fonts", 1, path) != 0;
 	fontmip_on = GetPrivateProfileIntA("display", "fontmip", 1, path) != 0;
 	darktitle_on = GetPrivateProfileIntA("display", "darktitle", 1, path) != 0;
@@ -253,15 +252,15 @@ void settings_load(void)
 		if (d3d9ex_on || d3d9on12_on)
 			log_printf("settings: [display] directx%d=1: d3d9ex / d3d9on12 are ignored (they work on a Direct3D 9 device)", directx12_on ? 12 : 11);
 		if (directx11_on && !directx12_on && (fsr3_on || dlss_on))
-			log_printf("settings: [display] directx11=1: fsr3 / dlss are ignored (they need DirectX 12); FSR 1 (upscale=1) works");
-		d3d9ex_on = d3d9on12_on = 0; // (upscale = FSR 1 is done by the native renderer itself; fsr3 / dlss only by the native Direct3D 12 renderer)
+			log_printf("settings: [display] directx11=1: fsr3 / dlss are ignored (they need DirectX 12)");
+		d3d9ex_on = d3d9on12_on = 0; // (fsr3 / dlss are done by the native Direct3D 12 renderer itself)
 		if (!directx12_on)
 			fsr3_on = dlss_on = 0;
 	}
 	// FSR 3 and DLSS need Direct3D 12: the native Direct3D 12 renderer, or the Direct3D 9 on 12 layer (d3d9on12=1, the options page's "DirectX 12"). They are off on DirectX 11 and lower (plain DirectX 9, 9Ex,
-	// native DirectX 11); FSR 1 ([display] upscale) works everywhere.
+	// native DirectX 11), where the mod has no upscaler.
 	if ((fsr3_on || dlss_on) && !directx12_on && !d3d9on12_on) {
-		log_printf("settings: [display] fsr3 / dlss are ignored: they need DirectX 12 (directx12=1 or d3d9on12=1); FSR 1 ([display] upscale=1) works on every DirectX");
+		log_printf("settings: [display] fsr3 / dlss are ignored: they need DirectX 12 (directx12=1 or d3d9on12=1)");
 		fsr3_on = 0;
 		dlss_on = 0;
 	}
@@ -365,11 +364,6 @@ int settings_d3d9on12_adapter(void)
 	return d3d9on12_adapter;
 }
 
-int settings_upscale(void)
-{
-	return upscale_on;
-}
-
 int settings_upscale_width(void)
 {
 	return upscale_w;
@@ -378,11 +372,6 @@ int settings_upscale_width(void)
 int settings_upscale_height(void)
 {
 	return upscale_h;
-}
-
-int settings_upscale_sharpness(void)
-{
-	return upscale_sharp;
 }
 
 int settings_fsr3_sharpness(void)

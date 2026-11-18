@@ -24,7 +24,7 @@
 //   empinput - (dcemp, default start, pair) no input from the crash site to the street: origin, link and the movement input of both players every second
 //   crashwalk - (dcemp, default start, pair) real Forward/Back presses at the crash site once the scene lets the players move: can each player go back
 //   oilrigambush - (oilrig, start "heli", pair) hostages alive and the ambush flags every 2 s for 90 s
-//   framesevery - (any level and start) a frame of both players (a composed one in split screen) every second for 40 s: mw2coop\shotse-<n>.bmp, with both players' positions in the report
+//   framesevery - (any level and start) a frame of both players (a composed one in split screen) every second for 40 s: mw2coop\shots\fe-<n>.bmp, with both players' positions in the report
 //   failspin - (split screen, any level) 12 s in the mission is failed (maps\_mw2coop::mission_failed); after the restart a frame every second for 20 s with player 2's yaw: does his half turn by itself (testers: after a failed mission his camera spins)?
 //   weapnexttest - (pair, any level) the script asks for player 2's weapon key (dvar mw2coop_p2_weapnext): the client's DLL must press it, player 2's current weapon changes (issue 13)
 //   hop - (any level, split screen or pair) 15 s after the level starts the mission is completed (the next mission is started the way the game does it); the scenario goes on in the next level: a chain of missions without a lobby (memory and crashes across loads)
@@ -498,6 +498,9 @@ main()
 			break;
 		case "knifehand":
 			knifehand();
+			break;
+		case "knifelook":
+			knifelook();
 			break;
 		case "knifeframe":
 			knifeframe();
@@ -4291,6 +4294,53 @@ knifehand()
 	report( "knifehand: done" );
 }
 
+// Endgame after the wake-up as the campaign plays it (af_chase, start "wakeup"; nothing attached by the QA): once player 2 holds ending_knife, which models
+// hang on each body (the knife copy mw2coop_knife_held on j_wrist_le is the fix, ending_knife's own world model is a silenced pistol), then both face each
+// other for frames of both views. Owner, 2026-11-18: "where is the knife fix?" (the fix was only made for the level ending, where knifehand ran).
+knifelook()
+{
+	flag_wait( "player_standing" );
+	p1 = level.player;
+	p2 = level.player2;
+	level.mw2coop_no_follow = true;
+	for ( t = 0; t < 30 && p2 GetCurrentWeapon() != "ending_knife"; t += 0.5 )
+		wait 0.5;
+	wait 1;
+	foreach ( n, player in level.players )
+	{
+		list = "";
+		held = false;
+		for ( i = 0; i < player GetAttachSize(); i++ )
+		{
+			list = list + " " + player GetAttachModelName( i ) + "@" + player GetAttachTagName( i );
+			if ( player GetAttachModelName( i ) == "mw2coop_knife_held" )
+				held = true;
+		}
+		report( "knifelook: player " + ( n + 1 ) + " holds " + player GetCurrentWeapon() + ", attached:" + list );
+		check( player GetCurrentWeapon() != "ending_knife" || held, "player " + ( n + 1 ) + "'s body holds the knife copy, not the pistol model" );
+	}
+	foreach ( player in level.players )
+		player StopShellShock();	// (the frames show the knife, not the blur)
+	SetBlur( 0, 0 );
+	yaw = p1 GetPlayerAngles()[ 1 ];
+	fwd = AnglesToForward( ( 0, yaw, 0 ) );
+	left = AnglesToRight( ( 0, yaw, 0 ) ) * -1;
+	spots = [];
+	spots[ 0 ] = fwd * 60 + left * 10;
+	spots[ 1 ] = fwd * 45 - left * 30;
+	foreach ( k, spot in spots )
+	{
+		at = p1.origin + spot;
+		p2 SetOrigin( PhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) ) );
+		wait 0.3;
+		p1 SetPlayerAngles( VectorToAngles( p2 GetEye() - ( 0, 0, 24 ) - p1 GetEye() ) );
+		p2 SetPlayerAngles( VectorToAngles( p1 GetEye() - ( 0, 0, 24 ) - p2 GetEye() ) );
+		wait 0.6;
+		qa_shot( "kl-" + k );
+	}
+	report( "knifelook: done" );
+}
+
 // The knife in the left hand of the first-person rig, as the level holds it in the fight (af_chase_knife_fight.gsc: player_rig Attach( "weapon_commando_knife",
 // "TAG_WEAPON_LEFT" ), then the turn_buckle animation): the rig's left wrist and the knife's tag at several times of that animation (still), to hold the knife
 // the same way in a body's left hand
@@ -6214,7 +6264,7 @@ press( player, button, ms )
 // --------------------------------------------------------------------------------------------
 // Real input (any map): each player's own machine presses Forward, then Use (press()). He walks
 // forward, and the server sees his Use button held, not the other player's.
-// split screen (settings.ini [splitscreen], mw2coopakepad.txt): player 2's copy is driven by a pad (a QA pad file holds the
+// split screen (settings.ini [splitscreen], mw2coop\fakepad.txt): player 2's copy is driven by a pad (a QA pad file holds the
 // stick forward and turned); he walks and his view turns, player 1, driven by nobody, stays
 padwalk()
 {
@@ -7132,7 +7182,7 @@ p2fire()
 	report( "done" );
 }
 
-// A pad that drops while a button is held ([native] audit A3): the test harness holds player 2's right trigger through mw2coopakepad.txt, then deletes the file (his
+// A pad that drops while a button is held ([native] audit A3): the test harness holds player 2's right trigger through mw2coop\fakepad.txt, then deletes the file (his
 // pad is gone); his fire button must not stay pressed. Reports his attack button every second.
 padlost()
 {

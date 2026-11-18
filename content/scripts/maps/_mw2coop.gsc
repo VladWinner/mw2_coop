@@ -199,9 +199,9 @@ set_bodies()
 			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ] ) );
 			PrecacheModel( "mw2coop_pick_up" );
 		}
-		if ( level.script == "ending" )	// the knife in the bodies' left hands (attach_weapon_model; src/transplant.c turned_copy)
+		if ( knife_fight_level() )	// the knife in the bodies' left hands (attach_weapon_model; src/transplant.c turned_copy)
 			PrecacheModel( "mw2coop_knife_held" );
-		if ( level.script == "ending" && GetDvar( "mw2coop_qa" ) == "knifehand" )
+		if ( knife_fight_level() && GetDvar( "mw2coop_qa" ) == "knifehand" )
 			PrecacheModel( "mw2coop_knife_reverse" );
 		if ( level.script == "af_caves" || level.script == "gulag" )	// the stand-in on the rope (maps\_mw2coop_cave::partner_view, maps\_mw2coop_gulag::rope_partner_view)
 			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ], maps\_mw2coop_bodies::rope_skeleton() ) );
@@ -209,6 +209,14 @@ set_bodies()
 		player.mw2coop_head = models[ 1 ];
 		player maps\_mw2coop_bodies::give_body( ::body_model );
 	}
+}
+
+// The levels with Endgame's knife fight: af_chase in the campaign (the boat chase, the crash, the wake-up and the fight) and ending, whose zone
+// carries the same scripts (the QA scenarios of the knife ran there). Until 2026-11-18 only ending was named: in the campaign the partner held
+// ending_knife's world model, a silenced pistol (owner's screenshot of the wake-up in split screen: "where is the knife fix?").
+knife_fight_level()
+{
+	return level.script == "af_chase" || level.script == "ending";
 }
 
 // maps\_loadout::UpdateModel, for the current weapon's model (in the default case, attached to the
@@ -231,7 +239,7 @@ attach_weapon_model( weapon_model )
 	// it), so the DLL's copy mw2coop_knife_held carries the rig's hold (the knife's place and turn from the rig's left wrist, the same in
 	// every frame of the fight's animation) and goes on the body's left wrist. The body has no pose of its own for a held knife
 	// (mp/playeranim.script: only the throwing knife's pull-out and throw); docs/32bit-native-map/weapon-animtype.md.
-	if ( is_campaign_coop() && level.script == "ending" && weapon_model == GetWeaponModel( "ending_knife" ) )
+	if ( is_campaign_coop() && knife_fight_level() && weapon_model == GetWeaponModel( "ending_knife" ) )
 	{
 		self attach( "mw2coop_knife_held", "j_wrist_le", true );
 		return;

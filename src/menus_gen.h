@@ -64,7 +64,7 @@ static const char built_in_menu[] =
 	"}\n"
 	"\n"
 	"// ABOUT THE MOD, a page of its own (made by the mod from the game's main menu): the logo in the header, then the credits (the itemDefs without an action are lines of text,\n"
-	"// centered), then the four source links as icons (GitHub, Nexus Mods, PlayGround, Discord, left to right; the icons are the picture mw2coopbout-icons.tga; the itemDefs with\n"
+	"// centered), then the four source links as icons (GitHub, Nexus Mods, PlayGround, Discord, left to right; the icons are the picture mw2coop\\about-icons.tga; the itemDefs with\n"
 	"// an action are the clickable places over them; mw2coop_open_url opens the page of that number in the browser: 1 GitHub, 2 Nexus Mods, 3 PlayGround, 4 Discord), then Back.\n"
 	"menuDef {\n"
 	"	name \"mw2coop_about\"\n"

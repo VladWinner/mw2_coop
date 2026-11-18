@@ -1,9 +1,6 @@
-// Native split screen, experiment 1 (docs/native-splitscreen-plan.md, phase 3 first): can the renderer take two views in one frame?
-//
-// The cgame's draw-active-frame (rva 0xbca00, local client number first) builds the view and queues the 3D scene; the renderer's view setup (rva 0x7e40, from
-// rva 0x8150) reads the dvar r_subwindow, a vec4 (left, right, top, bottom: fractions of the picture), and corrects the projection for that rectangle. This
-// hook runs the draw twice per frame, the first with the top half as r_subwindow and the second with the bottom half. settings.ini [native] experiment=1
-// switches it on; with 2 the second view is turned around (yaw + 180) to show that the views are drawn separately. 64-bit only for now.
+// Native split screen (docs/native-splitscreen-360.md): one game process, two local players, each player's view drawn in a renderer frame of his own in every engine
+// frame, as the Xbox 360 does (mode 11). The cgame's draw-active-frame (rva 0xbca00, local client number first) builds the view and queues the 3D scene; player 2's
+// draw runs in a second client context (his client statics swapped in, see ctx_swap_mask).
 #define COBJMACROS
 #include <windows.h>
 #include <tlhelp32.h>
@@ -29,13 +26,11 @@
 #include "padopts.h"
 #include "gfxopts.h"
 #include "d3dcap.h"
-#include "upscale.h"
 #include "fsr3.h"
 #include "settings.h"
 #include "padglyphs.h"
 #include "rawinput.h"
 #include "weaponfov.h"
-#include "ctxdiff.h"
 #include "inputlog.h"
 #include "loadprof.h"
 #include "rumble.h"
@@ -102,7 +97,6 @@ static uint8_t *base;
 #define CL_BLOCK_PS 0x2018
 #define RVA_NOPREDICT_DVAR XR(0x51e028)
 #define RVA_FOV_DVAR XR(0x51e1a8)
-#define RVA_DRAWGUN_DVAR XR(0x51e120)
 #define RVA_WAIT_TYPE XR(0x300a0)
 #define RVA_CLIENT_INIT_A XR(0xb8830) // the per-client parts of the cgame init
 #define RVA_CLIENT_INIT_B XR(0xb87b0)
@@ -141,8 +135,6 @@ static uint8_t *base;
 #define RVA_RENDER_WIDTH XR(0x4113720) // the active render/backbuffer dimensions
 #define RVA_RENDER_HEIGHT XR(0x4113724)
 #define RVA_CG_ASPECT XR(0x43c640) // the cgame's aspect
-#define RVA_PIXEL_ASPECT XR(0x411373c) // the pixel aspect of the 2D
-#define RVA_VIDEO_ASPECT XR(0x4113738)
 #define RVA_WAIT_ALPHA_SITE XR(0x94039)
 #define RVA_ENT_FLAGS XR(0x52c300) // the bit set of entities the snapshot transition flagged for the cleanup
 #define RVA_CLIENT_DOBJ XR(0x1fece0) // DObj *(int entity): the client's DObj table
@@ -182,7 +174,6 @@ static uint8_t *base;
 #define CL_BLOCK_PS 0x1018
 #define RVA_NOPREDICT_DVAR XR(0x45e8e8)
 #define RVA_FOV_DVAR XR(0x45e968)
-#define RVA_DRAWGUN_DVAR XR(0x35efec)
 #define RVA_WAIT_TYPE XR(0x12ac60)
 #define RVA_CLIENT_INIT_A XR(0x1dfa0)
 #define RVA_CLIENT_INIT_B XR(0x956e0)
@@ -221,8 +212,6 @@ static uint8_t *base;
 #define RVA_RENDER_WIDTH XR(0x1c8ed9c) // the active render/backbuffer dimensions
 #define RVA_RENDER_HEIGHT XR(0x1c8eda0)
 #define RVA_CG_ASPECT XR(0x35f018)
-#define RVA_PIXEL_ASPECT XR(0x188edb8)
-#define RVA_VIDEO_ASPECT XR(0x188edb4)
 #define RVA_WAIT_ALPHA_SITE 0x15ef17 // (a call site: hook_calls32 translates it)
 #define RVA_ENT_FLAGS XR(0x46b280)
 #define RVA_CLIENT_DOBJ XR(0xf3c70)
@@ -360,20 +349,12 @@ static struct { uint32_t rva; LONG n[2]; } snd_callers[64]; // ([native] sndcoun
 #endif
 static int from_menu;
 static int menu_pad = -1, menu_pad0 = -1; // the lobby's devices of player 2 and player 1 (-1: the keyboard and mouse)
-// The split screen a menu start gets: mode 11 (each player in his own renderer frame, as the Xbox 360), on the 64-bit game with its own Direct3D 9 and with the mod's
-// native Direct3D 11 / 12 renderers (drawn there since 2026-11-17: both halves, checked on Trainer against the Direct3D 9 frame), and since 2026-11-17 on the 32-bit game and
-// the iw4x-sp client too (docs/32bit-native-map/mode11-*.md; mode 10 drew the Endgame wake-up with a second view over player 1's half and no hands in player 2's).
-// [native] experiment=10 or 11 in settings.ini still picks one.
-static int split_mode_default(void)
-{
-	return 11;
-}
 static int cfg(const char *key, int def)
 {
 	static const struct {
 		const char *key;
 		int value;
-	} shipped[] = {{"experiment", 10}, {"players", 2}, {"coopdvar", 1}, {"p1cmd", 1}, {"listplayers", 1}, {"p1yawdeg", 0}, {"p0turn", 0}, {"ctx", 1}};
+	} shipped[] = {{"players", 2}, {"coopdvar", 1}, {"p1cmd", 1}, {"listplayers", 1}, {"p1yawdeg", 0}, {"p0turn", 0}, {"ctx", 1}};
 	if (from_menu) {
 		if (!lstrcmpA(key, "p1pad"))
 			return menu_pad;
@@ -382,8 +363,6 @@ static int cfg(const char *key, int def)
 		for (size_t i = 0; i < sizeof(shipped) / sizeof(shipped[0]); i++)
 			if (!lstrcmpA(key, shipped[i].key))
 				def = shipped[i].value;
-		if (!lstrcmpA(key, "experiment"))
-			def = split_mode_default();
 	}
 	return (int)GetPrivateProfileIntA("native", key, def, settings_path);
 }
@@ -397,84 +376,8 @@ static float *subwindow(void)
 	return dvar ? (float *)(dvar + 0x10) : NULL;
 }
 
-// ---- the compositor (mode 2): one scene per frame, the two halves kept between frames
-// Each frame the cgame draws one player's view into one half of the picture (r_subwindow). The frame's end (EndScene of the game's device, on the render thread)
-// copies that half into a texture of its own and fills the other half from the other texture, so the picture always has both views whole.
 #define RVA_D3D_DEVICE XR64(0x410fd20)
-static volatile LONG ring[8];
-static volatile DWORD render_tid;
-static volatile LONG ring_head, ring_tail; // frames queued by the main thread, and the halves they were drawn into, in order
-// Mode 10 tells a frame's half on the render thread from the frame itself, not from a queue (a queue is off by one for good when a frame submitted before the split is still in flight
-// as the split starts: the halves swapped for the whole session): the scene struct holds the cgame's time of its frame at +0x180; the main thread notes (time, half) of every split frame
-// it draws, the render thread looks its frame's time up (the two contexts' times differ by a few ms and never match).
-static struct {
-	volatile int time;
-	volatile int half;
-} half_tbl[64];
-static volatile LONG half_tbl_head;
-static volatile int render_half = -1; // render thread only: the half of the frame being drawn, -1 when it is not a split frame
-static void half_note(int time, int half)
-{
-	LONG i = InterlockedIncrement(&half_tbl_head) & 63;
-	half_tbl[i].half = half;
-	half_tbl[i].time = time;
-}
-// A frame drawn while the picture is NOT split (a menu: the pause menu, the objectives) must not find a note: the game's time stands still in a pause, so its time matched the notes of the
-// last split frames and the menu went into whichever half was noted last (the pause menu showed in the bottom half, "player 2's", half the time). Called for every unsplit draw.
-static void half_forget(void)
-{
-	for (int i = 0; i < 64; i++)
-		half_tbl[i].time = (int)0x80000000;
-}
-static int half_find(int time)
-{
-	LONG head = half_tbl_head;
-	for (int k = 0; k < 64; k++) {
-		int i = (int)((head - k) & 63);
-		if (half_tbl[i].time == time)
-			return half_tbl[i].half;
-	}
-	return -1;
-}
-static IDirect3DDevice9 *comp_device;
-static IDirect3DTexture9 *comp_tex[2];
-static IDirect3DSurface9 *comp_surf[2];
-static int comp_have[2];
-static UINT comp_w, comp_h;
-// mode 10: the engine's 2D pass of the scene (rva 0x63680) is drawn into a layer of its own (one per half), cleared to transparent; the compositor lays the top rows of it over the squeezed view
-static IDirect3DTexture9 *lay_tex[2];
-static IDirect3DSurface9 *lay_surf[2];
-static int lay_have[2];
-static IDirect3DStateBlock9 *comp_sb;
-static volatile LONG layer_pass; // the render thread is inside the 2D pass
-static volatile DWORD scope_tick[2]; // per half: when a scope's lens rectangle was last seen
-static volatile int frame_scope; // render thread: a lens rectangle was set in the frame being drawn
-static volatile DWORD split_tick; // when the picture was last split (the intro's title lines have random glyphs, which no comparison can match: for the first seconds the bands are cut out whatever the layers hold)
-static IDirect3DPixelShader9 *dedupe_ps;
-static int dedupe_tried;
-
-static void comp_release(void)
-{
-	for (int i = 0; i < 2; i++) {
-		if (comp_surf[i])
-			IDirect3DSurface9_Release(comp_surf[i]);
-		if (comp_tex[i])
-			IDirect3DTexture9_Release(comp_tex[i]);
-		comp_surf[i] = NULL, comp_tex[i] = NULL, comp_have[i] = 0;
-		if (lay_surf[i])
-			IDirect3DSurface9_Release(lay_surf[i]);
-		if (lay_tex[i])
-			IDirect3DTexture9_Release(lay_tex[i]);
-		lay_surf[i] = NULL, lay_tex[i] = NULL, lay_have[i] = 0;
-	}
-	if (comp_sb)
-		IDirect3DStateBlock9_Release(comp_sb);
-	comp_sb = NULL;
-	if (dedupe_ps)
-		IDirect3DPixelShader9_Release(dedupe_ps);
-	dedupe_ps = NULL;
-	dedupe_tried = 0;
-}
+static volatile DWORD split_tick; // when the picture was last split
 
 // Observe Bink playback and identify its output quad through D3D resource identity.
 typedef struct {
@@ -656,368 +559,6 @@ static void bink_hooks_install(void)
 		log_printf("native: Bink 16:9 fitting unavailable: import hooks incomplete (Open %d, frame %d, Close %d)", open, frame + copy, close);
 }
 
-// The global texts (the objective, the subtitles, the title lines of an intro) are drawn by both contexts: in the bottom half they are left out where the two layers hold the same picture, in
-// a few bands of the screen where those texts live (a pixel shader compares the layers; the per-player parts of the HUD differ between the layers or lie outside the bands, the crosshair is
-// outside them). The shader is compiled from HLSL by the system's d3dcompiler_47.dll (target ps_2_0); without it the objective's strip is simply cut out.
-static void dedupe_make(IDirect3DDevice9 *dev)
-{
-	if (dedupe_tried)
-		return;
-	dedupe_tried = 1;
-	typedef HRESULT(WINAPI * compile_t)(const void *, SIZE_T, const char *, const void *, void *, const char *, const char *, UINT, UINT, void **, void **);
-	HMODULE m = LoadLibraryA("d3dcompiler_47.dll");
-	compile_t compile = m ? (compile_t)GetProcAddress(m, "D3DCompile") : NULL;
-	if (!compile) {
-		log_printf("native: no d3dcompiler, the global texts are only cut out of the bottom half in the objective's strip");
-		return;
-	}
-	static const char src[] =
-		"sampler2D A : register(s0);\n"
-		"sampler2D B : register(s1);\n"
-		"float4 band1 : register(c0);\n"
-		"float4 band2 : register(c1);\n"
-		"float4 band3 : register(c2);\n"
-		"float4 force : register(c3);\n"
-		"float4 fill : register(c4);\n"
-		"float core(float2 uv)\n"
-		"{\n"
-		"\tfloat4 t = tex2D(B, uv);\n"
-		"\treturn step(0.5, t.a) * step(0.4, max(t.r, max(t.g, t.b)));\n"
-		"}\n"
-		"float4 main(float2 uv : TEXCOORD0) : COLOR\n"
-		"{\n"
-		"\tfloat4 a = tex2D(A, uv);\n"
-		"\tfloat4 b = tex2D(B, uv);\n"
-		"\tfloat2 px = float2(1.0 / 1920.0, 1.0 / 1080.0);\n"
-		"\tfloat near = core(uv);\n"
-		"\tnear = max(near, core(uv + px * float2(-2, 0)));\n"
-		"\tnear = max(near, core(uv + px * float2(-1, 0)));\n"
-		"\tnear = max(near, core(uv + px * float2(1, 0)));\n"
-		"\tnear = max(near, core(uv + px * float2(2, 0)));\n"
-		"\tnear = max(near, core(uv + px * float2(0, -2)));\n"
-		"\tnear = max(near, core(uv + px * float2(0, -1)));\n"
-		"\tnear = max(near, core(uv + px * float2(0, 1)));\n"
-		"\tnear = max(near, core(uv + px * float2(0, 2)));\n"
-		"\tnear = max(near, core(uv + px * float2(-1, -1)));\n"
-		"\tnear = max(near, core(uv + px * float2(1, -1)));\n"
-		"\tnear = max(near, core(uv + px * float2(-1, 1)));\n"
-		"\tnear = max(near, core(uv + px * float2(1, 1)));\n"
-		"\tnear = max(near, core(uv + px * float2(-3, 0)));\n"
-		"\tnear = max(near, core(uv + px * float2(3, 0)));\n"
-		"\tfloat4 d = abs(a - b);\n"
-		"\tfloat equal = step(d.x + d.y + d.z + d.w, 0.06) * step(0.03, a.a) * step(0.03, b.a);\n"
-		"\tfloat solid = step(0.25, a.a);\n"
-		"\tfloat same = max(force.x * step(0.02, a.a), max(near * solid, equal));\n"
-		"\tfloat in1 = step(band1.x, uv.x) * step(uv.x, band1.y) * step(band1.z, uv.y) * step(uv.y, band1.w);\n"
-		"\tfloat in2 = step(band2.x, uv.x) * step(uv.x, band2.y) * step(band2.z, uv.y) * step(uv.y, band2.w);\n"
-		"\tfloat in3 = step(band3.x, uv.x) * step(uv.x, band3.y) * step(band3.z, uv.y) * step(uv.y, band3.w);\n"
-		"\tfloat kill = same * saturate(in1 + in2 + in3) * step(0.02, a.a);\n"
-		"\treturn a * (1.0 - kill) + float4(0, 0, 0, 1) * (kill * fill.x);\n"
-		"}\n";
-	void *code = NULL, *errors = NULL;
-	HRESULT hr = E_FAIL;
-	static const char *const targets[] = {"ps_2_b", "ps_2_a", "ps_2_0"};
-	for (int t = 0; t < 3 && (FAILED(hr) || !code); t++) {
-		hr = compile(src, sizeof(src) - 1, "dedupe", NULL, NULL, "main", targets[t], 0, 0, &code, &errors);
-		if (SUCCEEDED(hr) && code && FAILED(IDirect3DDevice9_CreatePixelShader(dev, (const DWORD *)((void *(*)(void *))(*(void ***)code)[3])(code), &dedupe_ps))) {
-			((ULONG(*)(void *))(*(void ***)code)[2])(code); // this device does not take that target: the next one
-			code = NULL;
-			hr = E_FAIL;
-		}
-	}
-	if (FAILED(hr) || !code) {
-		log_printf("native: the de-duplication shader did not compile (%08lx)", (unsigned long)hr);
-		if (errors) {
-			void **vt = *(void ***)errors;
-			log_printf("native: %s", (const char *)((void *(*)(void *))vt[3])(errors));
-			((ULONG(*)(void *))vt[2])(errors);
-		}
-		return;
-	}
-	void **vt = *(void ***)code;
-	if (!dedupe_ps) {
-		const DWORD *bytes = (const DWORD *)((void *(*)(void *))vt[3])(code);
-		if (FAILED(IDirect3DDevice9_CreatePixelShader(dev, bytes, &dedupe_ps)))
-			log_printf("native: the de-duplication shader was refused by the device");
-	}
-	if (dedupe_ps)
-		log_printf("native: de-duplication of the global texts on");
-	((ULONG(*)(void *))vt[2])(code);
-	if (errors) {
-		void **ev = *(void ***)errors;
-		((ULONG(*)(void *))ev[2])(errors);
-	}
-}
-
-// The mission's title lines are drawn by context 0 with the full-screen 2D placement (hudelem_hook): the rows of its layer below its half hold them, and they are laid over the bottom
-// half texture (once per frame of the bottom half, after its own 2D), so the lines come where and as big as they are in single player.
-static volatile DWORD title_tick; // when a title line was last drawn
-static void overlay_titles(IDirect3DDevice9 *dev)
-{
-	IDirect3DSurface9 *old_rt = NULL, *old_ds = NULL;
-	if (!comp_sb && FAILED(IDirect3DDevice9_CreateStateBlock(dev, D3DSBT_ALL, &comp_sb)))
-		return;
-	IDirect3DStateBlock9_Capture(comp_sb);
-	IDirect3DDevice9_GetRenderTarget(dev, 0, &old_rt);
-	IDirect3DDevice9_GetDepthStencilSurface(dev, &old_ds);
-	IDirect3DDevice9_SetRenderTarget(dev, 0, comp_surf[1]);
-	IDirect3DDevice9_SetDepthStencilSurface(dev, NULL);
-	D3DVIEWPORT9 vp = {0, 0, comp_w, comp_h / 2, 0.0f, 1.0f};
-	IDirect3DDevice9_SetViewport(dev, &vp);
-	if (SUCCEEDED(IDirect3DDevice9_BeginScene(dev))) {
-		static const struct {
-			D3DRENDERSTATETYPE s;
-			DWORD v;
-		} rs[] = {{D3DRS_ZENABLE, 0}, {D3DRS_ZWRITEENABLE, 0}, {D3DRS_CULLMODE, D3DCULL_NONE}, {D3DRS_ALPHATESTENABLE, 0}, {D3DRS_ALPHABLENDENABLE, 1},
-			  {D3DRS_SRCBLEND, D3DBLEND_ONE}, {D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA}, {D3DRS_SEPARATEALPHABLENDENABLE, 0}, {D3DRS_BLENDOP, D3DBLENDOP_ADD},
-			  {D3DRS_STENCILENABLE, 0}, {D3DRS_SCISSORTESTENABLE, 0}, {D3DRS_COLORWRITEENABLE, 0xf}, {D3DRS_FOGENABLE, 0}, {D3DRS_LIGHTING, 0}, {D3DRS_SRGBWRITEENABLE, 0}};
-		for (size_t i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
-			IDirect3DDevice9_SetRenderState(dev, rs[i].s, rs[i].v);
-		IDirect3DDevice9_SetVertexShader(dev, NULL);
-		IDirect3DDevice9_SetPixelShader(dev, NULL);
-		IDirect3DDevice9_SetFVF(dev, D3DFVF_XYZRHW | D3DFVF_TEX1);
-		IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)lay_tex[0]);
-		IDirect3DDevice9_SetTexture(dev, 1, NULL);
-		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
-		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
-		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-		IDirect3DDevice9_SetTextureStageState(dev, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
-		IDirect3DDevice9_SetTextureStageState(dev, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_SRGBTEXTURE, 0);
-		float w = (float)comp_w - 0.5f, h = (float)(comp_h / 2) - 0.5f;
-		float q[4][6] = {{-0.5f, -0.5f, 0, 1, 0, 0.5f}, {w, -0.5f, 0, 1, 1, 0.5f}, {-0.5f, h, 0, 1, 0, 1.0f}, {w, h, 0, 1, 1, 1.0f}}; // the bottom half of the layer
-		IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
-		IDirect3DDevice9_EndScene(dev);
-	}
-	IDirect3DDevice9_SetDepthStencilSurface(dev, old_ds);
-	IDirect3DDevice9_SetRenderTarget(dev, 0, old_rt);
-	IDirect3DStateBlock9_Apply(comp_sb);
-	if (old_rt)
-		IDirect3DSurface9_Release(old_rt);
-	if (old_ds)
-		IDirect3DSurface9_Release(old_ds);
-}
-
-// Lays the top half of a 2D layer (premultiplied alpha, see layer_fix) over the half texture with the fixed pipeline. Everything the game had set on the device is kept in a state block
-// and put back, so the engine's own state caching is not fooled.
-static int layer_full;
-static void overlay_layer(IDirect3DDevice9 *dev, int half)
-{
-	IDirect3DSurface9 *old_rt = NULL, *old_ds = NULL;
-	if (!comp_sb && FAILED(IDirect3DDevice9_CreateStateBlock(dev, D3DSBT_ALL, &comp_sb)))
-		return;
-	IDirect3DStateBlock9_Capture(comp_sb);
-	IDirect3DDevice9_GetRenderTarget(dev, 0, &old_rt);
-	IDirect3DDevice9_GetDepthStencilSurface(dev, &old_ds);
-	IDirect3DDevice9_SetRenderTarget(dev, 0, comp_surf[half]);
-	IDirect3DDevice9_SetDepthStencilSurface(dev, NULL);
-	D3DVIEWPORT9 vp = {0, 0, comp_w, comp_h / 2, 0.0f, 1.0f};
-	IDirect3DDevice9_SetViewport(dev, &vp);
-	if (SUCCEEDED(IDirect3DDevice9_BeginScene(dev))) {
-		static const struct {
-			D3DRENDERSTATETYPE s;
-			DWORD v;
-		} rs[] = {{D3DRS_ZENABLE, 0}, {D3DRS_ZWRITEENABLE, 0}, {D3DRS_CULLMODE, D3DCULL_NONE}, {D3DRS_ALPHATESTENABLE, 0}, {D3DRS_ALPHABLENDENABLE, 1},
-			  {D3DRS_SRCBLEND, D3DBLEND_ONE}, {D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA}, {D3DRS_SEPARATEALPHABLENDENABLE, 0}, {D3DRS_BLENDOP, D3DBLENDOP_ADD},
-			  {D3DRS_STENCILENABLE, 0}, {D3DRS_SCISSORTESTENABLE, 0}, {D3DRS_COLORWRITEENABLE, 0xf}, {D3DRS_FOGENABLE, 0}, {D3DRS_LIGHTING, 0}, {D3DRS_SRGBWRITEENABLE, 0}};
-		for (size_t i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
-			IDirect3DDevice9_SetRenderState(dev, rs[i].s, rs[i].v);
-		IDirect3DDevice9_SetVertexShader(dev, NULL);
-		IDirect3DDevice9_SetPixelShader(dev, NULL);
-		IDirect3DDevice9_SetFVF(dev, D3DFVF_XYZRHW | D3DFVF_TEX1);
-		IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)lay_tex[half]);
-		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
-		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
-		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-		IDirect3DDevice9_SetTextureStageState(dev, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
-		IDirect3DDevice9_SetTextureStageState(dev, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_SRGBTEXTURE, 0);
-		float w = (float)comp_w - 0.5f, h = (float)(comp_h / 2) - 0.5f;
-		float q[4][6] = {{-0.5f, -0.5f, 0, 1, 0, 0}, {w, -0.5f, 0, 1, 1, 0}, {-0.5f, h, 0, 1, 0, layer_full ? 1.0f : 0.5f}, {w, h, 0, 1, 1, layer_full ? 1.0f : 0.5f}}; // the top half of the layer (layerdebug=3: all of it)
-		static int dedupe = -1;
-		if (dedupe < 0)
-			dedupe = cfg("dedupe", 0); // off: the global texts are drawn by one context each now (msgwin_hook, hudelem_hook), and the comparison cut holes in what both halves hold the same (the intro's black screen)
-		DWORD now = GetTickCount();
-		int scoped = 0; // (a scope's black overlay is opaque behind the texts: what is cut out of such a layer is filled with black, not left transparent)
-		int one_scoped = now - scope_tick[0] < 400 || now - scope_tick[1] < 400; // somebody looks through a scope: the intro's title lines cannot be on screen, no forced cut-out
-		if (dedupe && !scoped && lay_have[1 - half])
-			dedupe_make(dev);
-		if (dedupe && !scoped && dedupe_ps && lay_have[1 - half]) {
-			// The global texts are drawn by both contexts and kept once: the objective (top left) in the top half, the subtitles and the intro's title lines (lower part of the screen) in the bottom half.
-			// Each half drops, inside its bands, the pixels its layer holds the same as the other half's layer.
-			static const float none[4] = {1.0f, 0.0f, 1.0f, 0.0f}; // an empty band
-			static const float objective[4] = {0.0f, 0.6f, 0.0f, 0.0375f};       // layer coordinates: a half is the top half of its layer, v up to 0.5
-			static const float subtitles[4] = {0.05f, 0.9f, 0.15f, 0.2375f};     // above the crosshair
-			static const float lower[4] = {0.05f, 0.80f, 0.35f, 0.475f};         // intro lines (bottom left) and subtitles (bottom centre); the ammo counter (bottom right) is outside
-			float bands[3][4];
-			memcpy(bands[0], half == 1 ? objective : none, sizeof(bands[0]));
-			memcpy(bands[1], none, sizeof(bands[1])); // (no known text lives above the crosshair: that band cut the scope lens)
-			(void)subtitles;
-			memcpy(bands[2], half == 0 ? lower : none, sizeof(bands[2]));
-			IDirect3DDevice9_SetPixelShader(dev, dedupe_ps);
-			IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, &bands[0][0], 3);
-			float force[4] = {GetTickCount() - split_tick < 14000 && !one_scoped && !title_tick ? 1.0f : 0.0f, 0, 0, 0}; // (not once the title lines go over the whole picture)
-			IDirect3DDevice9_SetPixelShaderConstantF(dev, 3, force, 1);
-			float fill[4] = {now - scope_tick[half] < 400 ? 1.0f : 0.0f, 0, 0, 0};
-			IDirect3DDevice9_SetPixelShaderConstantF(dev, 4, fill, 1);
-			IDirect3DDevice9_SetTexture(dev, 1, (IDirect3DBaseTexture9 *)lay_tex[1 - half]);
-			for (int i = 0; i < 2; i++) {
-				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MINFILTER, D3DTEXF_POINT);
-				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
-				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-				IDirect3DDevice9_SetSamplerState(dev, i, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-			}
-			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
-		} else if (half == 1 && dedupe && !scoped) {
-			// The objective text (top left) is global: both contexts draw it, the bottom one is left out. Two quads: the strip's rows without the left part, then the rest.
-			float ry = (float)(comp_h / 2) * 0.075f, rx = (float)comp_w * 0.6f, v = ry / (float)comp_h;
-			float a[4][6] = {{rx - 0.5f, -0.5f, 0, 1, rx / (float)comp_w, 0}, {w, -0.5f, 0, 1, 1, 0}, {rx - 0.5f, ry - 0.5f, 0, 1, rx / (float)comp_w, v}, {w, ry - 0.5f, 0, 1, 1, v}};
-			float b[4][6] = {{-0.5f, ry - 0.5f, 0, 1, 0, v}, {w, ry - 0.5f, 0, 1, 1, v}, {-0.5f, h, 0, 1, 0, 0.5f}, {w, h, 0, 1, 1, 0.5f}};
-			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, a, sizeof(a[0]));
-			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, b, sizeof(b[0]));
-		} else {
-			IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
-		}
-		IDirect3DDevice9_EndScene(dev);
-	}
-	IDirect3DDevice9_SetDepthStencilSurface(dev, old_ds);
-	IDirect3DDevice9_SetRenderTarget(dev, 0, old_rt);
-	IDirect3DStateBlock9_Apply(comp_sb);
-	if (old_rt)
-		IDirect3DSurface9_Release(old_rt);
-	if (old_ds)
-		IDirect3DSurface9_Release(old_ds);
-}
-
-static void compose(IDirect3DDevice9 *dev, int half)
-{
-	IDirect3DSurface9 *back = NULL;
-	D3DSURFACE_DESC d;
-	if (FAILED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back)))
-		return;
-	IDirect3DSurface9_GetDesc(back, &d);
-	if (dev != comp_device || d.Width != comp_w || d.Height != comp_h) {
-		comp_release();
-		comp_device = dev, comp_w = d.Width, comp_h = d.Height;
-		for (int i = 0; i < 2; i++) {
-			if (FAILED(IDirect3DDevice9_CreateTexture(dev, d.Width, d.Height / 2, 1, D3DUSAGE_RENDERTARGET, d.Format, D3DPOOL_DEFAULT, &comp_tex[i], NULL)) ||
-			    FAILED(IDirect3DTexture9_GetSurfaceLevel(comp_tex[i], 0, &comp_surf[i]))) {
-				log_printf("native: cannot make the half textures (%ux%u)", d.Width, d.Height / 2);
-				comp_release();
-				IDirect3DSurface9_Release(back);
-				return;
-			}
-		}
-		for (int i = 0; i < 2 && mode == 10; i++) {
-			if (FAILED(IDirect3DDevice9_CreateTexture(dev, d.Width, d.Height, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &lay_tex[i], NULL)) ||
-			    FAILED(IDirect3DTexture9_GetSurfaceLevel(lay_tex[i], 0, &lay_surf[i]))) {
-				log_printf("native: cannot make the 2D layers (%ux%u)", d.Width, d.Height);
-				comp_release();
-				IDirect3DSurface9_Release(back);
-				return;
-			}
-		}
-		log_printf("native: compositor on, %ux%u picture, two %ux%u halves", d.Width, d.Height, d.Width, d.Height / 2);
-	}
-	if (mode == 10) { // the squeezed view, with the top rows of the 2D layer laid over it
-		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, NULL, comp_surf[half], NULL, D3DTEXF_LINEAR)))
-			comp_have[half] = 1;
-		{
-			static int dbg = -1; // [native] layerdebug=1: the 3D alone, 2: the 2D layer alone on black
-			if (dbg < 0)
-				dbg = cfg("layerdebug", 0);
-			layer_full = dbg == 3;
-			if (dbg == 2 || dbg == 3) {
-				D3DRECT all = {0, 0, (LONG)comp_w, (LONG)(comp_h / 2)};
-				IDirect3DDevice9_ColorFill(dev, comp_surf[half], NULL, 0xff000000);
-				(void)all;
-			}
-			if (lay_have[half] && comp_have[half] && dbg != 1)
-				overlay_layer(dev, half);
-			// (not while player 1 looks through a scope: its black overlay fills his layer below his half as well, and the title elements are still drawn, faded
-			// out, long after the lines are gone: the bottom half went black whenever player 1 aimed with a scope)
-			if (half == 1 && comp_have[1] && lay_have[0] && GetTickCount() - title_tick < 500 && GetTickCount() - scope_tick[0] >= 400 && dbg != 1)
-				overlay_titles(dev);
-		}
-		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
-		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
-		// a half not composed yet (the split's first frame of the other context) is black: the back buffer's own rows there are this frame's whole view without its 2D,
-		// which flashed the level through the title's black screen for a frame
-		if (comp_have[0])
-			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
-		else
-			IDirect3DDevice9_ColorFill(dev, back, &top, 0xff000000);
-		if (comp_have[1])
-			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
-		else
-			IDirect3DDevice9_ColorFill(dev, back, &bottom, 0xff000000);
-		IDirect3DSurface9_Release(back);
-		return;
-	}
-	if (mode == 9) { // the top rows hold the view recorded for a half-height screen: they are copied 1:1 into the half texture
-		RECT rows = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
-		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &rows, comp_surf[half], NULL, D3DTEXF_NONE)))
-			comp_have[half] = 1;
-		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
-		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
-		if (comp_have[0])
-			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
-		if (comp_have[1])
-			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
-		IDirect3DSurface9_Release(back);
-		return;
-	}
-	if (mode == 7 || mode == 8) { // the whole frame, drawn for the shape of a half, is squeezed into the half texture
-		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, NULL, comp_surf[half], NULL, D3DTEXF_LINEAR)))
-			comp_have[half] = 1;
-		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
-		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
-		if (comp_have[0])
-			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
-		if (comp_have[1])
-			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
-		IDirect3DSurface9_Release(back);
-		return;
-	}
-	if (mode == 6) { // the drawn view is the middle band of the picture; it fills the whole half texture, and both halves are put on the picture
-		RECT band = {0, (LONG)(d.Height / 4), (LONG)d.Width, (LONG)(d.Height * 3 / 4)};
-		if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &band, comp_surf[half], NULL, D3DTEXF_LINEAR)))
-			comp_have[half] = 1;
-		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
-		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
-		if (comp_have[0])
-			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
-		if (comp_have[1])
-			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
-		IDirect3DSurface9_Release(back);
-		return;
-	}
-	RECT drawn = {0, half ? (LONG)(d.Height / 2) : 0, (LONG)d.Width, half ? (LONG)d.Height : (LONG)(d.Height / 2)};
-	RECT other = {0, half ? 0 : (LONG)(d.Height / 2), (LONG)d.Width, half ? (LONG)(d.Height / 2) : (LONG)d.Height};
-	if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &drawn, comp_surf[half], NULL, D3DTEXF_NONE)))
-		comp_have[half] = 1;
-	if (comp_have[1 - half])
-		IDirect3DDevice9_StretchRect(dev, comp_surf[1 - half], NULL, back, &other, D3DTEXF_NONE);
-	IDirect3DSurface9_Release(back);
-}
-
-static volatile LONG pops_total, pushes_total;
-static volatile LONG present_hits[3]; // device Present, device PresentEx, swap chain Present: which one the game calls
-static volatile LONG compose_via = -1;
-
 typedef HRESULT(STDMETHODCALLTYPE *present_t)(IDirect3DDevice9 *, const RECT *, const RECT *, HWND, const RGNDATA *);
 typedef HRESULT(STDMETHODCALLTYPE *present_ex_t)(IDirect3DDevice9 *, const RECT *, const RECT *, HWND, const RGNDATA *, DWORD);
 typedef HRESULT(STDMETHODCALLTYPE *sc_present_t)(IDirect3DSwapChain9 *, const RECT *, const RECT *, HWND, const RGNDATA *, DWORD);
@@ -1035,7 +576,7 @@ static volatile LONG present_hook_owner;
 static volatile LONG present_passthrough_count[3];
 
 // A graphics wrapper can call another Present route while our hook is active.
-// Only the outermost call may compose a frame or draw the console. Re-entry goes
+// Only the outermost call may draw the console. Re-entry goes
 // to the implementation captured before our hook was first installed.
 static int present_hook_enter(void)
 {
@@ -1054,20 +595,18 @@ static void present_log_passthrough(int via, int owner)
 {
 	LONG count = InterlockedIncrement(&present_passthrough_count[via]);
 	if (count == 1)
-		log_printf("native: %s Present via %d bypassed console/compositor re-entry (owner=%ld, thread=%lu)",
+		log_printf("native: %s Present via %d bypassed console re-entry (owner=%ld, thread=%lu)",
 			   owner == 0 ? "nested" : "parallel", via,
 			   (long)InterlockedCompareExchange(&present_hook_owner, 0, 0),
 			   (unsigned long)GetCurrentThreadId());
 }
 static const GUID iid_device9ex = {0xb18b10ce, 0x2649, 0x405a, {0x87, 0x0f, 0x95, 0xf7, 0x77, 0xd4, 0x31, 0x3a}};
 
-// before the picture is shown: the half this frame was drawn into is kept and the other one filled in (once per frame, whichever way the game presents)
 static void trace_present(void);
 static int skip_hud_mask;
 static int skip_ctx = 1; // [native] skipctx=<0|1>: the context whose HUD parts skiphud / skiprot drop
 // Diagnostics ([native] skiprot=<seconds>): the HUD part skipped in context 1 changes every <seconds> through the candidates, and a frame is saved ("rot<k>") before the next change
 static int split_on;
-static int qa_ctx1_buttons;
 static void skip_rotation(IDirect3DDevice9 *dev)
 {
 	static int rot = -1;
@@ -1075,7 +614,7 @@ static void skip_rotation(IDirect3DDevice9 *dev)
 	static int shot_win = -1;
 	if (rot < 0)
 		rot = cfg("skiprot", 0);
-	if (rot <= 0 || mode < 5 || !split_on)
+	if (rot <= 0 || mode != 11 || !split_on)
 		return;
 	DWORD now = GetTickCount();
 	if (!t0)
@@ -1123,7 +662,7 @@ static void exp11_cycle_shot(IDirect3DDevice9 *dev)
 	}
 }
 // [native] perflog=1: where a second of split screen goes (milliseconds, QueryPerformanceCounter): the waits for the renderer's workers, the copying of the contexts' ranges,
-// the two contexts' client frames, the gap between the engine's frames, and the compositor (render thread)
+// the two contexts' client frames, the gap between the engine's frames, and the Present hook's work (render thread)
 static LARGE_INTEGER perf_freq;
 static volatile LONGLONG perf_wait, perf_copy, perf_ctx[2], perf_comp, perf_gap_sum, perf_step, perf_aim, perf_sync;
 static volatile LONG perf_swaps, perf_ctx_n[2], perf_comp_n, perf_gap_n, perf_gap_long;
@@ -1131,9 +670,6 @@ static LONGLONG perf_gap_max;
 // smoothness ([native] perflog=1): how even the frames are. Buckets in ms: <2, <4, <6, <8, <12, <16, <24, <33, <50, more
 #define PERF_BUCKETS 10
 static volatile LONG perf_gap_hist[PERF_BUCKETS], perf_present_hist[PERF_BUCKETS];
-static volatile LONG perf_td_n[2], perf_td_big[2];
-static volatile LONGLONG perf_td_sum[2], perf_td_sq[2];
-static volatile int perf_td_min[2] = {1 << 30, 1 << 30}, perf_td_max[2];
 static int perf_bucket(double ms)
 {
 	static const double edge[PERF_BUCKETS - 1] = {2, 4, 6, 8, 12, 16, 24, 33, 50};
@@ -1160,7 +696,7 @@ static void perf_report(void)
 		return;
 	double sec = (double)(now - last) / (double)perf_freq.QuadPart, ms = 1000.0 / (double)perf_freq.QuadPart;
 	LONG n0 = perf_ctx_n[0], n1 = perf_ctx_n[1], nc = perf_comp_n, ng = perf_gap_n, sw = perf_swaps;
-	log_printf("native: perf per second: engine frames %.0f (gap %.2f ms), ctx0 frames %ld (%.2f ms each), ctx1 frames %ld (%.2f ms each), swaps %ld (waits %.1f ms, copies %.1f ms, per second in total), compositor %ld frames (%.2f ms each)",
+	log_printf("native: perf per second: engine frames %.0f (gap %.2f ms), ctx0 frames %ld (%.2f ms each), ctx1 frames %ld (%.2f ms each), swaps %ld (waits %.1f ms, copies %.1f ms, per second in total), present hook %ld frames (%.2f ms each)",
 		   ng / sec, ng ? (double)perf_gap_sum * ms / ng : 0.0, n0, n0 ? (double)perf_ctx[0] * ms / n0 : 0.0, n1, n1 ? (double)perf_ctx[1] * ms / n1 : 0.0, sw,
 		   (double)perf_wait * ms / sec, (double)perf_copy * ms / sec, nc, nc ? (double)perf_comp * ms / nc : 0.0);
 #ifdef _WIN64
@@ -1197,15 +733,6 @@ static void perf_report(void)
 		for (int i = 0; i < PERF_BUCKETS; i++)
 			n += snprintf(line + n, sizeof(line) - n, " %ld", (long)perf_present_hist[i]), perf_present_hist[i] = 0;
 		log_printf("%s", line);
-		for (int k = 0; k < 2; k++) {
-			LONG cnt = perf_td_n[k];
-			double mean = cnt ? (double)perf_td_sum[k] / cnt : 0, var = cnt ? (double)perf_td_sq[k] / cnt - mean * mean : 0;
-			log_printf("native: perf smoothness: view %d game time step per draw: mean %.2f ms, sd %.2f, min %d, max %d, steps over 12 ms %ld (of %ld)", k, mean, var > 0 ? sqrt(var) : 0.0,
-				   cnt ? perf_td_min[k] : 0, perf_td_max[k], (long)perf_td_big[k], (long)cnt);
-			perf_td_n[k] = perf_td_big[k] = 0;
-			perf_td_sum[k] = perf_td_sq[k] = 0;
-			perf_td_min[k] = 1 << 30, perf_td_max[k] = 0;
-		}
 	}
 	log_printf("native: perf per second, inside the client frames (ms per second in total): server steps %.1f, aim targets %.1f, body sync %.1f; longest frame %.1f ms, "
 		   "frames over 50 ms %ld", (double)perf_step * ms / sec, (double)perf_aim * ms / sec, (double)perf_sync * ms / sec, (double)perf_gap_max * ms, perf_gap_long);
@@ -1217,20 +744,15 @@ static void perf_report(void)
 	last = now;
 }
 
-// [native] pairpresent=1 (default): the picture is shown after the frame of the second view only. Each engine frame draws one view (the first one's, then the second's); showing both would
-// give each view half of the display's rate (the first view's picture is only half new), and with the display's synchronisation on (the engine waits for the refresh in every present)
-// 30 pictures a second per view on a 60 Hz screen. Both halves are composed in every frame anyway, so the picture after the second view's frame is whole and new in both.
 #ifdef _WIN64 // (natframe2.c is only built into the 64-bit DLL: no name to link to in the 32-bit one)
 extern int ngfr_trace_scene; // natframe2.c: the frame end's preconditions are logged while set (QA [native] tracescene=1)
 #endif
 static volatile int skip_this_present;
 static volatile int title_shot_req; // QA ([native] titleshot=1): a capture of the frame with the intro title lines (set in hudelem_hook)
-static void before_present_inner(int via, IDirect3DDevice9 *dev)
+static void before_present_inner(IDirect3DDevice9 *dev)
 {
 	trace_present();
-	InterlockedIncrement(&present_hits[via]);
-	render_tid = GetCurrentThreadId();
-	if (mode == 11 && split_on) { // QA of mode 11 (no compositor): [native] shot11=<present> saves the frame "m11-<n>.bmp", four of them shot11step (600) presents apart
+	if (mode == 11 && split_on) { // QA: [native] shot11=<present> saves the frame "m11-<n>.bmp", four of them shot11step (600) presents apart
 		static LONG n;
 		static int at = -2, step;
 		if (at == -2)
@@ -1283,107 +805,6 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 			perf_present_hist[perf_bucket((double)(c.QuadPart - prev) * 1000.0 / (double)f.QuadPart)]++;
 		prev = c.QuadPart;
 	}
-	{
-		static DWORD last_log;
-		DWORD now = GetTickCount();
-		if (now - last_log > 3000 && present_hits[0] + present_hits[1] + present_hits[2] > 0 && pushes_total > 0) {
-			last_log = now;
-			log_printf("native: present hits %ld/%ld/%ld, via %ld, pushes %ld, ring %ld-%ld", (long)present_hits[0], (long)present_hits[1], (long)present_hits[2], (long)compose_via,
-				   (long)pushes_total, (long)ring_tail, (long)ring_head);
-		}
-	}
-	if (compose_via < 0)
-		compose_via = via;
-	int half;
-	if (mode == 10) { // the frame knows its own half (see half_note)
-		if (compose_via != via)
-			return;
-		half = render_half;
-		render_half = -1;
-		if (half < 0) {
-			comp_have[0] = comp_have[1] = 0; // not a split frame: the halves of before are stale
-			lay_have[0] = lay_have[1] = 0;
-			return;
-		}
-		InterlockedExchange(&ring_tail, ring_head); // (the queue of the other modes is not used)
-	} else {
-		if (compose_via == via && ring_tail == ring_head)
-			comp_have[0] = comp_have[1] = 0; // not a split frame: the halves of before are stale
-		if (compose_via != via || ring_tail == ring_head)
-			return;
-		half = (int)ring[ring_tail & 7];
-		InterlockedIncrement(&ring_tail);
-	}
-	LONG pops = InterlockedIncrement(&pops_total);
-	{ // [native] hitchlog=1: a gap of more than 150 ms between two composed frames is logged (the stalls during the title's fade)
-		static int on = -1;
-		static LARGE_INTEGER freq, last;
-		static unsigned logged;
-		if (on < 0) {
-			on = cfg("hitchlog", 0);
-			if (on)
-				QueryPerformanceFrequency(&freq);
-		}
-		if (on) {
-			LARGE_INTEGER now;
-			QueryPerformanceCounter(&now);
-			if (last.QuadPart && logged < 100) {
-				double ms = (double)(now.QuadPart - last.QuadPart) * 1000.0 / (double)freq.QuadPart;
-				if (ms > 150.0)
-					logged++, log_printf("native: hitch %.0f ms before composed frame %ld (half %d)", ms, (long)pops, half);
-			}
-			last = now;
-		}
-	}
-	compose(dev, half);
-	skip_rotation(dev);
-	{
-		static int pair = -1;
-		if (pair < 0)
-			pair = cfg("pairpresent", 1);
-		skip_this_present = pair && half == 0 && mode == 10 && comp_have[0] && comp_have[1] ? 1 : 0;
-	}
-	static LONG seq_at = -1;
-	if (seq_at < 0)
-		seq_at = cfg("seqat", -1); // (QA: tools/qa_native.sh sets 3000; off for players: twelve 8 MB pictures per session)
-	static LONG seq_step = -1;
-	if (seq_step < 0)
-		seq_step = cfg("seqstep", 1);
-	if (seq_at >= 0 && pops >= seq_at && (pops - seq_at) % seq_step == 0 && (pops - seq_at) / seq_step < 12) { // the composed picture about once a second (QA of the experiment: "seq-<pops>.bmp")
-		char name[32];
-		snprintf(name, sizeof(name), "seq-%ld", (long)pops);
-		shot_save_now(dev, name);
-	}
-	{ // QA: [native] burstat=<pops>: frames in a row without a stall per frame, "b<k>-NN.bmp"; burstn (40) frames of the bottom half (burstfull=1: 30 whole frames),
-	  // burstcount (1) bursts, burstevery (600) composed frames apart. Counted in composed frames, so a slow level start does not move them.
-		static LONG burst_at = -2, every, count;
-		static int full;
-		if (burst_at == -2) {
-			burst_at = cfg("burstat", -1), every = cfg("burstevery", 600), count = cfg("burstcount", 1), full = cfg("burstfull", 0);
-			if (every < 1)
-				every = 1;
-		}
-		if (burst_at >= 0 && pops >= burst_at && (pops - burst_at) % every == 0 && (pops - burst_at) / every < count) {
-			char name[16];
-			snprintf(name, sizeof(name), "b%ld", (long)((pops - burst_at) / every));
-			if (full)
-				shot_burst_start(name, 30, 0, 0, (int)comp_w, (int)comp_h);
-			else
-				shot_burst_start(name, cfg("burstn", 40), 0, (int)(comp_h / 2), (int)comp_w, (int)(comp_h / 2));
-		}
-		shot_burst_tick(dev);
-	}
-	if (pops % 4 == 0) { // QA: a level script sets the dvar mw2coop_qa_frame to a new name: the composed picture (both halves) is saved as that name
-		static char last[64];
-		char name[64];
-		if (game_dvar_raw("mw2coop_qa_frame", name, sizeof(name)) && name[0] && strcmp(name, last)) {
-			lstrcpynA(last, name, sizeof(last));
-			shot_save_now(dev, name);
-		}
-	}
-	if (pops % 300 == 0)
-		log_printf("native: %ld frames composed via %d, presents %ld/%ld/%ld, %ld views queued, queue %ld", (long)pops, via, (long)present_hits[0],
-			   (long)present_hits[1], (long)present_hits[2], (long)pushes_total, (long)(ring_head - ring_tail));
 }
 
 // [native] presentlog=1: the real cadence of the picture: the time between two Present calls (render thread), 100 frames at a time: mean, sd, the longest, the shortest.
@@ -1575,14 +996,13 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 		present_stat();
 	d3dcap_on12_probe(dev);
 	LONGLONG t0 = on ? perf_now() : 0;
-	before_present_inner(via, dev);
+	before_present_inner(dev);
 	if (on) {
 		perf_comp += perf_now() - t0;
 		InterlockedIncrement(&perf_comp_n);
 	}
-	if (!skip_this_present) { // after the composed picture is made: the console and the QA frames are on what the player sees
-		upscale_present(dev); // the upscaled picture is what the console draws over
-		fsr3_present(dev);
+	if (!skip_this_present) { // the console and the QA frames are on what the player sees
+		fsr3_present(dev); // the upscaled picture is what the console draws over
 		console_present(via, dev);
 		shot_present_tick(dev);
 	}
@@ -1759,13 +1179,12 @@ static DWORD WINAPI slots_watch_thread(LPVOID unused)
 	return 0;
 }
 
-// Reset (vtable 16) fails while default-pool resources of ours are alive: the half textures are let go first (a lost device, a vid_restart, a change of the desktop: "DirectX error")
+// A device Reset (vtable 16: a lost device, a vid_restart, a change of the desktop): the hooks are taken out for it and put back after it (see above)
 typedef HRESULT(STDMETHODCALLTYPE *reset_t)(IDirect3DDevice9 *, void *);
 static reset_t reset_orig;
 static HRESULT STDMETHODCALLTYPE reset_hook(IDirect3DDevice9 *dev, void *params)
 {
-	log_printf("native: device reset: the half textures are released, the hooks taken out for it");
-	comp_release();
+	log_printf("native: device reset: the hooks are taken out for it");
 	reset_t call = reset_orig;
 	slots_log("before the Reset");
 	slots_take_out();
@@ -1782,8 +1201,7 @@ typedef HRESULT(STDMETHODCALLTYPE *reset_ex_t)(IDirect3DDevice9 *, void *, void 
 static reset_ex_t reset_ex_orig;
 static HRESULT STDMETHODCALLTYPE reset_ex_hook(IDirect3DDevice9 *dev, void *params, void *mode)
 {
-	log_printf("native: device reset (Ex): the half textures are released, the hooks taken out for it");
-	comp_release();
+	log_printf("native: device reset (Ex): the hooks are taken out for it");
 	reset_ex_t call = reset_ex_orig;
 	slots_log("before the Reset");
 	slots_take_out();
@@ -1797,67 +1215,9 @@ static HRESULT STDMETHODCALLTYPE reset_ex_hook(IDirect3DDevice9 *dev, void *para
 	return hr;
 }
 
-// Watchdog ([native] watchdog=1, default on): when the swap chain's Present has not been reached for 6 s while the main thread keeps queueing views, the render thread is stuck;
-// its instruction pointer and the return addresses on its stack are logged as module+offset (once), to see what it waits for.
-static DWORD WINAPI watchdog_thread(LPVOID unused)
-{
-	(void)unused;
-	LONG last = -1;
-	int stuck = 0;
-	for (;;) {
-		Sleep(2000);
-		LONG now = present_hits[2] + present_hits[0] + present_hits[1];
-		if (now == last && ring_head - ring_tail >= 5 && render_tid) {
-			if (++stuck == 3) {
-				HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, render_tid);
-				if (th && SuspendThread(th) != (DWORD)-1) {
-					CONTEXT ctx;
-					memset(&ctx, 0, sizeof(ctx));
-					ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
-					if (GetThreadContext(th, &ctx)) {
-						char line[1600];
-						int n = 0;
-						const uintptr_t *sp = (const uintptr_t *)CTX_SP(ctx);
-						uintptr_t addrs[1 + 400];
-						int na = 0;
-						addrs[na++] = CTX_IP(ctx);
-						for (int i = 0; i < 400 && na < 41; i++) {
-							uintptr_t v = 0;
-							if (!ReadProcessMemory(GetCurrentProcess(), sp + i, &v, sizeof(v), NULL))
-								break;
-							MEMORY_BASIC_INFORMATION mbi;
-							if (v > 0x10000 && VirtualQuery((void *)v, &mbi, sizeof(mbi)) && mbi.Type == MEM_IMAGE && (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
-								addrs[na++] = v;
-						}
-						n += snprintf(line + n, sizeof(line) - n, "native: WATCHDOG render thread %lu stuck, rip + stack:", (unsigned long)render_tid);
-						for (int i = 0; i < na && n < (int)sizeof(line) - 80; i++) {
-							HMODULE m = NULL;
-							char name[MAX_PATH] = "?";
-							if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)(uintptr_t)addrs[i], &m) && m) {
-								GetModuleFileNameA(m, name, sizeof(name));
-								const char *slash = strrchr(name, '\\');
-								n += snprintf(line + n, sizeof(line) - n, " %s+%llx", slash ? slash + 1 : name, (unsigned long long)(addrs[i] - (uintptr_t)m));
-							}
-						}
-						log_printf("%s", line);
-					}
-					ResumeThread(th);
-				}
-				if (th)
-					CloseHandle(th);
-			}
-		} else {
-			stuck = 0;
-		}
-		last = now;
-	}
-	return 0;
-}
-
 // ---- diagnostics ([native] d3dtrace=1): the render thread's calls of one frame (render targets, viewports, clears, stretches, draw counts), to see where the 3D ends and the 2D begins
 static int trace_on;
 static char trace_buf[400000];
-static int trace_layer = -1; // [native] tracelayer=1: only the 2D pass's draws are traced
 static int trace_len, trace_draws;
 static IDirect3DDevice9 *trace_dev;
 static char trace_key[192], trace_key_last[192], trace_stack[160], trace_stack_last[160];
@@ -1873,10 +1233,6 @@ static void trace_draw(IDirect3DDevice9 *dev)
 {
 	IDirect3DVertexShader9 *vs = NULL;
 	IDirect3DPixelShader9 *ps = NULL;
-	if (trace_layer < 0)
-		trace_layer = cfg("tracelayer", 0);
-	if (trace_layer && !layer_pass)
-		return;
 	DWORD z = 0, zw = 0, ab = 0, sb = 0, db = 0, sep = 0, sba = 0, dba = 0, cw = 0, sc = 0;
 	IDirect3DDevice9_GetVertexShader(dev, &vs);
 	IDirect3DDevice9_GetPixelShader(dev, &ps);
@@ -1898,9 +1254,8 @@ static void trace_draw(IDirect3DDevice9 *dev)
 		trace_on = 1;
 	}
 	bb_draws++;
-	snprintf(trace_key, sizeof(trace_key), "vs=%p ps=%p z=%lu zw=%lu blend=%lu %lu/%lu sep=%lu %lu/%lu cw=%lx sc=%lu%s", (void *)vs, (void *)ps, (unsigned long)z, (unsigned long)zw,
-		 (unsigned long)ab, (unsigned long)sb, (unsigned long)db, (unsigned long)sep, (unsigned long)sba, (unsigned long)dba, (unsigned long)cw, (unsigned long)sc,
-		 layer_pass ? " LAYER" : "");
+	snprintf(trace_key, sizeof(trace_key), "vs=%p ps=%p z=%lu zw=%lu blend=%lu %lu/%lu sep=%lu %lu/%lu cw=%lx sc=%lu", (void *)vs, (void *)ps, (unsigned long)z, (unsigned long)zw,
+		 (unsigned long)ab, (unsigned long)sb, (unsigned long)db, (unsigned long)sep, (unsigned long)sba, (unsigned long)dba, (unsigned long)cw, (unsigned long)sc);
 	if (vs)
 		IDirect3DVertexShader9_Release(vs);
 	if (ps)
@@ -1947,116 +1302,6 @@ static const char *trace_surf(IDirect3DDevice9 *dev, IDirect3DSurface9 *s)
 	snprintf(out, sizeof(out), "%p %ux%u fmt%d%s", (void *)s, d.Width, d.Height, (int)d.Format, s && s == back ? " BACKBUFFER" : "");
 	return out;
 }
-// In the 2D layer the engine's alpha blending (source alpha, inverse source alpha) leaves the colour premultiplied by the alpha and the alpha squared; asking for "source alpha one,
-// inverse source alpha" for the alpha channel alone makes the layer a proper premultiplied picture (blending states 206-208 are ones the engine never sets itself).
-// The engine draws alpha-tested things (names, compass markers, the soft shadows of texts) with alpha to coverage ("r_aaAlpha dither", the 'ATOC' value of D3DRS_ADAPTIVETESS_Y, set at
-// rva 0x44db7 and 0x50576) and counts on its multisampled back buffer to turn the coverage into soft edges. The 2D layer is a plain texture: coverage there is a hard cut, every
-// semi-transparent pixel on or off (1-bit opacity). A draw that asks for it is made an ordinary alpha blended one while it is drawn, and the states are put back after it.
-#define D3DRS_ATOC_STATE 181 // D3DRS_ADAPTIVETESS_Y
-#define ATOC_VALUE 0x434f5441
-static struct {
-	int active;
-	DWORD on, src, dst, test;
-	int mute;
-	DWORD cw;
-} atoc_saved;
-static void layer_unfix(IDirect3DDevice9 *dev)
-{
-	if (atoc_saved.mute) {
-		atoc_saved.mute = 0;
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_COLORWRITEENABLE, atoc_saved.cw);
-	}
-	if (!atoc_saved.active)
-		return;
-	atoc_saved.active = 0;
-	IDirect3DDevice9_SetRenderState(dev, D3DRS_ADAPTIVETESS_Y, ATOC_VALUE);
-	IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHABLENDENABLE, atoc_saved.on);
-	IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLEND, atoc_saved.src);
-	IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLEND, atoc_saved.dst);
-	IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHATESTENABLE, atoc_saved.test);
-}
-static void layer_fix(IDirect3DDevice9 *dev)
-{
-	DWORD on = 0, src = 0, dst = 0, cw = 0xf, atoc = 0;
-	IDirect3DDevice9_GetRenderState(dev, D3DRS_ADAPTIVETESS_Y, &atoc);
-	if (CFG_ONCE("layerstates", 0)) { // QA: every distinct combination of states the 2D layer's draws come with (blend, colour write, alpha test, alpha to coverage, sRGB)
-		static char seen[64][96];
-		static int nseen;
-		DWORD b = 0, sb = 0, db = 0, cw2 = 0, at = 0, ar = 0, af = 0, srgb = 0, sep = 0, sba = 0, dba = 0, bop = 0, ssrgb = 0;
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &b);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &sb);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &db);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_BLENDOP, &bop);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_COLORWRITEENABLE, &cw2);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHATESTENABLE, &at);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHAREF, &ar);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHAFUNC, &af);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRGBWRITEENABLE, &srgb);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, &sep);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLENDALPHA, &sba);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLENDALPHA, &dba);
-		IDirect3DDevice9_GetSamplerState(dev, 0, D3DSAMP_SRGBTEXTURE, &ssrgb);
-		IDirect3DPixelShader9 *ps = NULL;
-		IDirect3DDevice9_GetPixelShader(dev, &ps);
-		char key[96];
-		snprintf(key, sizeof(key), "blend %lu %lu/%lu op%lu cw%lx at%lu ref%lu fn%lu srgbw%lu sep%lu %lu/%lu srgbtex%lu atoc%lx ps%d", (unsigned long)b, (unsigned long)sb, (unsigned long)db, (unsigned long)bop,
-			 (unsigned long)cw2, (unsigned long)at, (unsigned long)ar, (unsigned long)af, (unsigned long)srgb, (unsigned long)sep, (unsigned long)sba, (unsigned long)dba, (unsigned long)ssrgb,
-			 (unsigned long)atoc, ps ? 1 : 0);
-		if (ps)
-			IDirect3DPixelShader9_Release(ps);
-		int k = 0;
-		for (; k < nseen; k++)
-			if (!strcmp(seen[k], key))
-				break;
-		if (k == nseen && nseen < 64) {
-			strcpy(seen[nseen++], key);
-			log_printf("native: layer states: %s", key);
-		}
-	}
-	if (CFG_ONCE("layerexp", 0) == 2) { // QA experiment: the additive (source alpha, one) draws of the layer are not drawn, to see what they make
-		DWORD sb2 = 0, db2 = 0, b2 = 0, cw3 = 0xf;
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &b2);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &sb2);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &db2);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_COLORWRITEENABLE, &cw3);
-		if (b2 && sb2 == D3DBLEND_SRCALPHA && db2 == D3DBLEND_ONE && cw3 == 0xf) {
-			atoc_saved.mute = 1, atoc_saved.cw = cw3;
-			IDirect3DDevice9_SetRenderState(dev, D3DRS_COLORWRITEENABLE, 0);
-		}
-	}
-	if (atoc == ATOC_VALUE && CFG_ONCE("layeratoc", 1)) {
-		atoc_saved.active = 1;
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &atoc_saved.on);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &atoc_saved.src);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &atoc_saved.dst);
-		IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHATESTENABLE, &atoc_saved.test);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_ADAPTIVETESS_Y, 0);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHATESTENABLE, 0);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHABLENDENABLE, 1);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
-		static int logged;
-		if (!logged++)
-			log_printf("native: layer: a draw with alpha to coverage became an alpha blended one (blend was %lu %lu/%lu)", (unsigned long)atoc_saved.on, (unsigned long)atoc_saved.src,
-				   (unsigned long)atoc_saved.dst);
-	}
-	IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &on);
-	IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &src);
-	IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &dst);
-	IDirect3DDevice9_GetRenderState(dev, D3DRS_COLORWRITEENABLE, &cw);
-	if (!on || !(cw & 7)) { // a draw that writes alpha alone builds a mask for the next ones (the compass: a rectangle, multiplied by its round edge, then the map drawn by that
-		// destination alpha): its own blending must reach the alpha, or the multiply is lost and the map covers the whole rectangle (a dark square around the compass)
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 0);
-	} else if (dst == D3DBLEND_INVSRCALPHA && (src == D3DBLEND_SRCALPHA || src == D3DBLEND_ONE)) { // "over": the alpha of the layer accumulates as coverage
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 1);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLENDALPHA, D3DBLEND_ONE);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLENDALPHA, D3DBLEND_INVSRCALPHA);
-	} else { // additive glows, multiplies and the like add or change colour only: they must not make the layer opaque (that was a black box behind the speaker's name)
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 1);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLENDALPHA, D3DBLEND_ZERO);
-		IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLENDALPHA, D3DBLEND_ONE);
-	}
-}
 typedef HRESULT(STDMETHODCALLTYPE *set_rt_t)(IDirect3DDevice9 *, DWORD, IDirect3DSurface9 *);
 typedef HRESULT(STDMETHODCALLTYPE *clear_t)(IDirect3DDevice9 *, DWORD, const D3DRECT *, DWORD, D3DCOLOR, float, DWORD);
 typedef HRESULT(STDMETHODCALLTYPE *stretch_t)(IDirect3DDevice9 *, IDirect3DSurface9 *, const RECT *, IDirect3DSurface9 *, const RECT *, D3DTEXTUREFILTERTYPE);
@@ -2076,10 +1321,6 @@ static viewport_t viewport_orig;
 static dip_t dip_orig;
 static dp_t dp_orig;
 static scissor_t scissor_orig;
-// Mode 10, the scope: the engine clips the lens' 3D with a scissor rectangle worked out from the 2D placement (made for a half: a square of half the picture's height, centred in the half);
-// the 3D itself is drawn over the whole picture and squeezed 2:1 into the half, so the rows of that rectangle are doubled for every full-size target but the 2D layer's (whose own
-// pixels are the half's), and the lens comes out as the square it is in the half. A lens rectangle is recognised as one that lies in the upper half of a full-size target.
-static volatile LONG rt_full; // the current render target (stage 0) is as big as the picture
 static int bink_track_video_texture(IDirect3DBaseTexture9 *texture, const D3DSURFACE_DESC *desc)
 {
 	if (!texture || !desc)
@@ -2225,21 +1466,6 @@ static int bink_clear_movie_bars(IDirect3DDevice9 *dev, const D3DVIEWPORT9 *full
 
 static HRESULT STDMETHODCALLTYPE t_scissor(IDirect3DDevice9 *dev, const RECT *r)
 {
-	RECT fixed;
-	if (r && mode == 10 && native_active && split_on && CFG_ONCE("scissorlog", 0)) { // QA: the scissor rectangles of split frames
-		static LONG logged;
-		if (!layer_pass && rt_full && comp_h && r->bottom <= (LONG)(comp_h / 2) && r->right - r->left > 64 && InterlockedIncrement(&logged) < 400)
-			log_printf("native: scissor %ld,%ld %ld,%ld layer %ld full %d", (long)r->left, (long)r->top, (long)r->right, (long)r->bottom, layer_pass, (int)rt_full);
-	}
-	if (r && mode == 10 && native_active && split_on && !layer_pass && rt_full && comp_h && r->bottom <= (LONG)(comp_h / 2) && r->right - r->left > 64 &&
-	    CFG_ONCE("lensfix", 1)) {
-		if (r->right - r->left < (LONG)(comp_w / 2))
-			frame_scope = 1; // a lens rectangle: the frame being drawn looks through a scope (its half is known once the scene's 2D pass is reached)
-		fixed = *r;
-		fixed.top *= 2;
-		fixed.bottom *= 2;
-		r = &fixed;
-	}
 	if (trace_on && r)
 		trace_event("SetScissorRect %ld,%ld %ld,%ld", (long)r->left, (long)r->top, (long)r->right, (long)r->bottom);
 	return scissor_orig(dev, r);
@@ -2248,95 +1474,20 @@ static dpup_t dpup_orig;
 static dipup_t dipup_orig;
 static scene_t begin_scene_orig, end_scene_orig;
 static int comp_hook(IDirect3DDevice9 *hint);
-// Mode 10: the scene's last pass (rva 0x63680, see scene2d_hook) also draws 3D things with the depth test on: effects, particles, the glass and the dot of a red dot
-// sight (the dot is a bone of the gun's model, tag_reticle_red_dot). Into the layer they came out where the half's 2D is laid out (the dot below the layer's rows,
-// the glass and the snow as a veil over the top half), so a depth-tested draw of that pass goes to the half's picture with the 3D instead ([native] layer3d=0: as before)
-static IDirect3DSurface9 *layer_scene_rt, *layer_rt;
-static int layer_to_scene(IDirect3DDevice9 *dev)
-{
-	// (the originals of SetRenderTarget and SetViewport are known once the full device hooks are in (trace_install); the 16:9 cinematics hooks put the draw hook in first,
-	// so for a moment the layer pass can run without them: a call through the null pointer crashed the render thread, 2026-11-09, Museum load on a 2560 x 1080 screen)
-	if (!set_rt_orig || !viewport_orig || !layer_scene_rt || !layer_rt || !CFG_ONCE("layer3d", 1))
-		return 0;
-	DWORD z = 0;
-	IDirect3DDevice9_GetRenderState(dev, D3DRS_ZENABLE, &z);
-	if (!z)
-		return 0;
-	D3DVIEWPORT9 vp;
-	IDirect3DDevice9_GetViewport(dev, &vp);
-	set_rt_orig(dev, 0, layer_scene_rt);
-	viewport_orig(dev, &vp);
-	return 1;
-}
-static void layer_back(IDirect3DDevice9 *dev)
-{
-	if (!set_rt_orig || !viewport_orig)
-		return;
-	D3DVIEWPORT9 vp;
-	IDirect3DDevice9_GetViewport(dev, &vp);
-	set_rt_orig(dev, 0, layer_rt);
-	viewport_orig(dev, &vp);
-}
-#ifndef _WIN64
-// The iw4x-sp client writes its name ("AlterWare IW4x-SP", faint and large) over the view, as one 512x64 DXT1 picture drawn at the end of the scene. In split screen that scene is
-// squeezed into the half, so the name comes out flat and cut off at the top of both halves: it is left out ([native] watermark=1 keeps it).
-static int watermark_draw(IDirect3DDevice9 *dev, UINT nv, UINT pc)
-{
-	static int hide = -1;
-	if (hide < 0)
-		hide = !cfg("watermark", 0);
-	if (!hide || layer_pass || nv != 24 || pc != 16 || mode != 10 || !native_active || !split_on)
-		return 0;
-	IDirect3DBaseTexture9 *t = NULL;
-	int hit = 0;
-	IDirect3DDevice9_GetTexture(dev, 0, &t);
-	if (t) {
-		D3DSURFACE_DESC sd;
-		if (IDirect3DBaseTexture9_GetType(t) == D3DRTYPE_TEXTURE && SUCCEEDED(IDirect3DTexture9_GetLevelDesc((IDirect3DTexture9 *)t, 0, &sd)) && sd.Width == 512 && sd.Height == 64 &&
-		    sd.Format == D3DFMT_DXT1)
-			hit = 1;
-		IDirect3DBaseTexture9_Release(t);
-	}
-	if (hit) {
-		static LONG shown;
-		if (InterlockedIncrement(&shown) < 4)
-			log_printf("native: the iw4x watermark left out");
-	}
-	return hit;
-}
-#endif
 static HRESULT STDMETHODCALLTYPE t_dpup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT pc, const void *v, UINT st)
 {
-	int moved = layer_pass ? layer_to_scene(dev) : 0;
-	if (layer_pass && !moved)
-		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
-	HRESULT hr = dpup_orig(dev, t, pc, v, st);
-	layer_unfix(dev);
-	if (moved)
-		layer_back(dev);
-	return hr;
+	return dpup_orig(dev, t, pc, v, st);
 }
 static HRESULT STDMETHODCALLTYPE t_dipup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT mi, UINT nv, UINT pc, const void *i, D3DFORMAT f, const void *v, UINT st)
 {
-	int moved = layer_pass ? layer_to_scene(dev) : 0;
-	if (layer_pass && !moved)
-		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
-	HRESULT hr = dipup_orig(dev, t, mi, nv, pc, i, f, v, st);
-	layer_unfix(dev);
-	if (moved)
-		layer_back(dev);
-	return hr;
+	return dipup_orig(dev, t, mi, nv, pc, i, f, v, st);
 }
 static HRESULT STDMETHODCALLTYPE t_set_rt(IDirect3DDevice9 *dev, DWORD i, IDirect3DSurface9 *s)
 {
-	if (i == 0) {
-		D3DSURFACE_DESC d;
-		InterlockedExchange(&rt_full, s && comp_w && SUCCEEDED(IDirect3DSurface9_GetDesc(s, &d)) && d.Width == comp_w && d.Height == comp_h);
-	}
 	if (trace_on && i == 0) {
 		const char *d = trace_surf(dev, s);
 		trace_event("SetRenderTarget %s", d);
@@ -2419,9 +1570,6 @@ static HRESULT STDMETHODCALLTYPE t_viewport(IDirect3DDevice9 *dev, const D3DVIEW
 }
 static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, INT bv, UINT mi, UINT nv, UINT si, UINT pc)
 {
-	int moved = layer_pass ? layer_to_scene(dev) : 0;
-	if (layer_pass && !moved)
-		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
 	if (trace_on && CFG_ONCE("traceprims", 0)) { // QA: every indexed draw with its geometry (is a mesh drawn twice with two skins?)
@@ -2437,12 +1585,6 @@ static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t
 			IDirect3DVertexShader9_Release(vs);
 	}
 	int movie_quad = bink_is_movie_quad(dev, (UINT)t, pc, "DrawIndexedPrimitive");
-#ifndef _WIN64
-	if (game_is_iw4x() && watermark_draw(dev, nv, pc)) {
-		layer_unfix(dev);
-		return D3D_OK;
-	}
-#endif
 	D3DVIEWPORT9 movie_viewport, fitted_viewport;
 	int viewport_changed = movie_quad && bink_fit_movie_viewport(dev, &movie_viewport, &fitted_viewport);
 	HRESULT hr = dip_orig(dev, t, bv, mi, nv, si, pc);
@@ -2461,23 +1603,13 @@ static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t
 				log_printf("native: Bink 16:9 fit applied (%ux%u)", (unsigned)movie_w, (unsigned)movie_h);
 		}
 	}
-	layer_unfix(dev);
-	if (moved)
-		layer_back(dev);
 	return hr;
 }
 static HRESULT STDMETHODCALLTYPE t_dp(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT sv, UINT pc)
 {
-	int moved = layer_pass ? layer_to_scene(dev) : 0;
-	if (layer_pass && !moved)
-		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
-	HRESULT hr = dp_orig(dev, t, sv, pc);
-	layer_unfix(dev);
-	if (moved)
-		layer_back(dev);
-	return hr;
+	return dp_orig(dev, t, sv, pc);
 }
 static HRESULT STDMETHODCALLTYPE t_begin(IDirect3DDevice9 *dev)
 {
@@ -2525,7 +1657,7 @@ static int bink_fit_install(IDirect3DDevice9 *dev)
 		bink_fit_device = dev;
 	return ok;
 }
-// called at each Present of the render thread: the frame after the 900th composed one is traced
+// called at each Present of the render thread: in the split screen the frame after [native] tracepops (600) presents is traced
 static void trace_present(void)
 {
 	static int armed = -1;
@@ -2551,144 +1683,15 @@ static void trace_present(void)
 			log_printf("native: D3D TRACE of one frame written to %s (%d bytes)", path, trace_len);
 		}
 		armed = 0;
-	} else if (mode == 11) { // mode 11 (no compositor): the frame after tracepops presents of the split screen
+	} else if (mode == 11) { // the frame after tracepops presents of the split screen
 		static int n11;
 		if (split_on && ++n11 == cfg("tracepops", 600)) {
 			trace_len = 0, trace_draws = 0, bb_pass = 0, bb_pass_done = 0, bb_draws = 0;
 			trace_on = 1;
 		}
-	} else if (pops_total >= cfg("tracepops", 600) && (mode == 10 ? render_half >= 0 && 1 - render_half == cfg("tracehalf", 0) : ring_head - ring_tail >= 2 && (int)ring[(ring_tail + 1) & 7] == cfg("tracehalf", 0))) { // the frame after this one is the wanted half's (the halves alternate)
-		trace_len = 0, trace_draws = 0, bb_pass = 0, bb_pass_done = 0, bb_draws = 0;
-		trace_on = 1;
 	}
 }
 
-// Mode 10: the scene function's last pass (rva 0x63680, called at 0x5c5bf: the 2D texts and signs) draws into the half's layer instead of the picture, so the picture keeps the view alone
-// (the glow and blur that follow work on it) and the 2D, laid out by the client for a half-height screen, stays whole.
-#ifdef _WIN64
-static void (*scene2d_original)(void *);
-#else
-// 32 bits: the scene's 2D pass and the frame's 2D command list take the scene in ESI
-static void *scene2d_target, *final2d_target;
-static void scene2d_original(void *vp)
-{
-	__asm__ volatile("call *%1" : "+S"(vp) : "r"(scene2d_target) : "eax", "ecx", "edx", "memory", "cc");
-}
-static void final2d_original(void *vp)
-{
-	__asm__ volatile("call *%1" : "+S"(vp) : "r"(final2d_target) : "eax", "ecx", "edx", "memory", "cc");
-}
-#endif
-static void scene2d_hook(void *vp)
-{
-	{ // diagnostics ([native] scenescan=1): which dwords of the scene struct look like the cgame's time (rva 0x422434), to find a per-frame identity the render thread can read
-		static int armed = -1, n;
-		if (armed < 0)
-			armed = cfg("scenescan", 0);
-		if (armed && split_on && ++n >= 200 && n < 206) {
-			int t = *(int *)(base + XR64(0x422434));
-			char line[900];
-			int len = snprintf(line, sizeof(line), "native: scenescan %p t=%d half %d:", vp, t, ring_head != ring_tail ? (int)ring[ring_tail & 7] : -1);
-			const int *d = (const int *)vp;
-			for (int i = 0; i < 0x800 && len < (int)sizeof(line) - 30; i++)
-				if (d[i] > t - 400 && d[i] < t + 400)
-					len += snprintf(line + len, sizeof(line) - len, " +%x=%d", i * 4, d[i] - t);
-			log_printf("%s", line);
-		}
-	}
-	IDirect3DDevice9 *dev = the_device;
-	render_half = mode == 10 && native_active ? half_find(*(int *)((uint8_t *)vp + 0x180)) : -1;
-	if (render_half >= 0 && frame_scope)
-		scope_tick[render_half & 1] = GetTickCount();
-	frame_scope = 0;
-	if (mode == 10 && native_active && split_on) { // how often a split frame's half is not found (the notes are late, or the frame has another time)
-		static LONG seen, lost;
-		static DWORD last;
-		seen++;
-		if (render_half < 0)
-			lost++;
-		DWORD now = GetTickCount();
-		if (now - last > 10000) {
-			last = now;
-			log_printf("native: frames whose half was not found: %ld of %ld", (long)lost, (long)seen);
-		}
-	}
-#ifdef _WIN64 // (the native renderers are 64-bit only)
-	{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== scene2d begin"); }
-#endif
-	if (natboot_active() && !(mode == 10 && native_active && split_on) && natboot_hud_begin()) { // upscaled picture: the HUD is drawn at the output resolution
-		scene2d_original(vp);
-		natboot_hud_end();
-		return;
-	}
-	if (natboot_active()) { // the native renderers: the 2D pass goes into the half's layer (natboot.c)
-		if (mode == 10 && render_half >= 0 && natboot_comp_make()) {
-			natboot_layer_begin(render_half, 1);
-			layer_pass = 1;
-			scene2d_original(vp);
-			layer_pass = 0;
-			natboot_layer_end();
-		} else {
-			scene2d_original(vp);
-		}
-		return;
-	}
-	if (mode != 10 || !dev || render_half < 0 || !lay_surf[0] || !lay_surf[1]) {
-		scene2d_original(vp);
-		return;
-	}
-	int half = render_half;
-	IDirect3DSurface9 *old = NULL;
-	IDirect3DDevice9_GetRenderTarget(dev, 0, &old);
-	IDirect3DDevice9_SetRenderTarget(dev, 0, lay_surf[half]);
-	IDirect3DDevice9_Clear(dev, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
-	lay_have[half] = 1;
-	layer_scene_rt = old, layer_rt = lay_surf[half];
-	layer_pass = 1;
-	scene2d_original(vp);
-	layer_pass = 0;
-	layer_scene_rt = layer_rt = NULL;
-	IDirect3DDevice9_SetRenderTarget(dev, 0, old);
-	if (old)
-		IDirect3DSurface9_Release(old);
-}
-
-// The second 2D source: the frame's 2D command list (function 0x5c010, called at rva 0x4545b after the glow and blur): global texts, fades, the intro's title lines. It goes into the same
-// layer (not cleared again).
-#ifdef _WIN64
-static void (*final2d_original)(void *);
-#endif
-static void final2d_hook(void *vp)
-{
-	IDirect3DDevice9 *dev = the_device;
-	if (natboot_active()) {
-		if (mode == 10 && render_half >= 0 && natboot_comp_make()) {
-			natboot_layer_begin(render_half, 0);
-			layer_pass = 1;
-			final2d_original(vp);
-			layer_pass = 0;
-			natboot_layer_end();
-		} else {
-			final2d_original(vp);
-		}
-		return;
-	}
-	if (mode != 10 || !dev || render_half < 0 || !lay_surf[0] || !lay_surf[1]) {
-		final2d_original(vp);
-		return;
-	}
-	int half = render_half;
-	IDirect3DSurface9 *old = NULL;
-	IDirect3DDevice9_GetRenderTarget(dev, 0, &old);
-	IDirect3DDevice9_SetRenderTarget(dev, 0, lay_surf[half]);
-	lay_have[half] = 1;
-	layer_pass = 1;
-	final2d_original(vp);
-	layer_pass = 0;
-	IDirect3DDevice9_SetRenderTarget(dev, 0, old);
-	if (old)
-		IDirect3DSurface9_Release(old);
-}
 
 // [native] weaponfov on the native renderers (src/dx/natgfx.c ng_weapon_viewport): tan(view fov / 2) / tan(weapon fov / 2), 0 when the weapon keeps the game's field of view
 static float weaponfov_base_tan(void);
@@ -2704,40 +1707,6 @@ float native_weapon_k(void)
 	return vt > 0 && wt > 0 ? vt / wt : 0;
 }
 
-// the native renderers' frame end (natboot.c): is this frame one half of a split frame, and which; the first frame of a pair is composed but not shown
-int native_nat_split_frame(int *half);
-int native_nat_split_frame(int *half)
-{
-	if (mode != 10 || !native_active || !split_on)
-		return 0;
-	const int h = render_half;
-	render_half = -1;
-	if (h < 0)
-		return 0;
-	*half = h;
-	return 1;
-}
-// the split screen's scope lens on the native renderers (see t_scissor): a lens rectangle in the upper half of a full-size target is doubled in height (the 3D is squeezed 2:1 into the half)
-void native_nat_scissor(int *top, int *bottom, int left, int right, int rt_full);
-void native_nat_scissor(int *top, int *bottom, int left, int right, int rt_full)
-{
-	unsigned w = 0, h = 0;
-	natboot_scene_size(&w, &h);
-	if (mode != 10 || !native_active || !split_on || layer_pass || !rt_full || !h || *bottom > (int)(h / 2) || right - left <= 64 || !CFG_ONCE("lensfix", 1))
-		return;
-	if (right - left < (int)(w / 2))
-		frame_scope = 1;
-	*top *= 2;
-	*bottom *= 2;
-}
-
-// (the intro's title lines go over the bottom half for half a second after a line was drawn, not while player 1 looks through a scope)
-int native_nat_titles_wanted(void);
-int native_nat_titles_wanted(void)
-{
-	const DWORD now = GetTickCount();
-	return now - title_tick < 500 && now - scope_tick[0] >= 400;
-}
 #ifdef _WIN64
 // Mode 11 on the native renderers. Player 1's renderer frame ends with the show bit for the back end (its post-process composite and its HUD), but it is not presented
 // (be_end_hook, exp11p1show): natboot's frame end (w_45060) leaves out the present and the console / QA work of a shown frame while this says so.
@@ -2764,34 +1733,26 @@ int native_nat_clear_rect(unsigned flags, long rect[4])
 	return 1;
 }
 #endif
-int native_nat_pair_present(void);
-int native_nat_pair_present(void)
-{
-	static int pair = -1;
-	if (pair < 0)
-		pair = cfg("pairpresent", 1);
-	return pair;
-}
 
-// the native frame end (natframe2.c ngfr_453c0) calls the frame's 2D command list through this: the split screen's layer pass (final2d_hook) when the hook is in, the engine's function otherwise
-void native_hud_install(void);
+// the native frame end (natframe2.c ngfr_453c0) calls the frame's 2D command list (rva 0x5c010) through this
+// The frame's 2D command list (rva 0x5c010: the HUD, texts, fades), called by the native renderers. With an upscaled picture the upscale is made here, when the 2D starts,
+// and the 2D draws at the output resolution. Until 2026-11-18 it was made earlier, at the scene's last pass (rva 0x63680, called at 0x5c5bf), which draws the late 3D
+// effects with the depth test on (dust, smoke, sparks; MW2COOP_TRACEFRAME: all its draws have z 1, the 2D list's have z 0): those then went to the output-sized picture
+// with no depth buffer and were drawn over everything nearer (owner: the partner looked see-through in the dust, only with an upscaler), and the view's post passes after
+// that pass (the glow) went into the 1280x720 picture after it had been upscaled.
 void native_final2d_entry(void *vp);
 void native_final2d_entry(void *vp)
 {
-	native_hud_install();
 #ifdef _WIN64 // (the native renderers are 64-bit only)
 	{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== final2d begin"); }
 	{ extern int ngfr_trace_scene; static LONG f2; if (ngfr_trace_scene && (InterlockedIncrement(&f2) % 50) == 1) log_printf("native: final2d reached #%ld vp %p", (long)f2, vp); }
 #endif
-	if (!(mode == 10 && native_active && split_on) && natboot_hud_begin()) { // upscaled picture: the 2D list (fades, texts) is drawn at the output resolution
+	if (natboot_hud_begin()) { // upscaled picture: the 2D list (fades, texts) is drawn at the output resolution
 		((void (*)(void *))(base + XR64(0x5c010)))(vp);
 		natboot_hud_end();
 		return;
 	}
-	if (final2d_original)
-		final2d_hook(vp);
-	else
-		((void (*)(void *))(base + XR64(0x5c010)))(vp);
+	((void (*)(void *))(base + XR64(0x5c010)))(vp);
 }
 
 // the native renderers' movie letterboxing (src/dx/natfilm.h): the size of the Bink movie being played
@@ -2803,21 +1764,6 @@ int native_nat_film_size(unsigned *w, unsigned *h)
 	return *w && *h;
 }
 
-// [display] upscale on the native renderers: the scene's 2D pass hook is needed outside the split screen too (the HUD is drawn after the upscale)
-void native_hud_install(void);
-void native_hud_install(void)
-{
-	static int done;
-	if (done || !base || !natboot_active() || !(settings_upscale() || settings_fsr3()))
-		return;
-	done = 1;
-	if (scene2d_original)
-		return;
-	if (*(base + XR64(0x5c5bf)) == 0xe8 && jhook_call(base + XR64(0x5c5bf), (void *)scene2d_hook, (void **)&scene2d_original))
-		log_printf("native: the scene's 2D pass is hooked (the HUD is drawn after the upscale)");
-	else
-		log_printf("native: unexpected code at the scene's 2D pass: the HUD is upscaled with the picture");
-}
 
 static DWORD comp_not_before; // GetTickCount: the device hooks are not (re)installed before it (after a vid_restart the Steam overlay hooks the new device first)
 // tan(fov / 2) of the field of view the game draws the world with when nothing zooms: cg_fov times cg_fovScale (the first-person weapon's own field of view is set against it)
@@ -2916,11 +1862,9 @@ static int comp_hook(IDirect3DDevice9 *hint)
 			GetModuleFileNameA(m2, n2, sizeof(n2));
 		log_printf("native: device Present in %s, swap chain Present in %s", n1, n2);
 	}
-	if (mode == 10 || cfg("d3dtrace", 0))
+	if (cfg("d3dtrace", 0))
 		trace_install(dev);
 	log_printf("native: Present hooks set (device %p, Ex %s)", (void *)dev, present_ex_orig ? "yes" : "no");
-	if (cfg("watchdog", 1))
-		CreateThread(NULL, 0, watchdog_thread, NULL, 0, NULL);
 	InterlockedExchange(&present_hooks_pending, 0);
 	InterlockedExchange(&comp_hook_busy, 0);
 	return 1;
@@ -3062,7 +2006,6 @@ static void vid_restart_hook(void)
 	zones_pools_reset(); // the restart initialises the asset database again: the raised pool sizes of the co-op levels must not be what it builds from
 	if (the_device || bink_fit_device) {
 		log_printf("native: vid_restart: the device hooks are taken out, they go back on the new device");
-		comp_release();
 		slots_take_out();
 		nslots = 0;
 		the_device = NULL;
@@ -3269,7 +2212,7 @@ static void scene_clear_hook(void *dev, int flags, void *rgba, float depth, int 
 // The renderer's local player (rva 0x51deb8, written by CG_DrawActiveFrame 0xbca00 from its argument; the 360's 0x8244b424, set by its CG_DrawActiveFrame 0x82113110).
 // The scene set-up (0x5160) and its helpers (0x4780, 0x17740, 0x19000, 0x1b9b0, 0x1bee0, 0x38cc0) keep per-player view data in a block that still has room for 4 players
 // (0x4812878 + lc * 0x2b8: sun shadow and cull planes), and run the once-per-frame steps only for player 0 (0xdb4d0 "lc == 0": the effects' time step 0x208a10).
-// Mode 11 draws player 2 through the cgame as player 0 (the PC client arrays have one element: experiment 3), so both scenes shared player 0's slot and the effects stepped
+// Mode 11 draws player 2 through the cgame as player 0 (the PC client arrays have one element), so both scenes shared player 0's slot and the effects stepped
 // twice a frame. As on the 360, player 2's R_RenderScene runs as renderer player 1; the two cgame callbacks inside it that index one-element cgame arrays
 // (0xbd3d0 shellshock at 0x82dd, 0x93ac0 at 0x6356: 0x51e330 + lc * 0x2cd0) still get 0. [native] exp11lc=0 turns it off.
 static void (*render_scene_original)(void *refdef, uintptr_t scene, uintptr_t c, uintptr_t d); // R_RenderScene(refdef, scene number): every register argument passed on
@@ -3591,8 +2534,6 @@ static void begin_frame_hook(void)
 
 static unsigned cg_draw_count, hook_counts[8]; // QA counters: snapshot take, ps publish, server step, usercmd step, snapshot msg, server cmds
 static int ctx_on;
-static float cg_aspect_saved;
-static int cg_aspect_have;
 
 // The engine's r_aspectRatio dvar selects a small set of display ratios. The cgame's FOV calculation
 // instead needs the actual active render dimensions, including arbitrary window sizes and ultrawide modes.
@@ -3635,10 +2576,8 @@ static void cg_aspect_apply_full_window(void)
 		log_printf("native: full-window cgame aspect %.4f from %dx%d", (double)aspect, width, height);
 	}
 }
-static float asp_saved[2];
-static int asp_have;
 static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the intro is over; before that there is one picture
-static int frame_bottom; // mode 5: this client frame is context 1's (the bottom half)
+static int frame_bottom; // this client frame is context 1's (player 2's client logic, client_frame_inner)
 static int ctx1_clc_synced; // ctx1_deliver_commands: the ring of context 1 has been made equal (nothing pending) since its init
 static void ctx_swap(int to);
 #ifdef _WIN64
@@ -4383,22 +3322,9 @@ static void fs_pace(void)
 #endif
 static const char *vision_name_of(int ctx);
 static void npc_log(void);
-// The picture's size for the split screen's layout and aspect (comp_w / comp_h): the Direct3D 9 compositor fills them in at its first frame; the native renderers have no such frame, the scene's size is it
-static void native_comp_size(void)
-{
-	if (natboot_active()) {
-		unsigned w = 0, h = 0;
-		natboot_scene_size(&w, &h);
-		if (w && h) {
-			comp_w = w;
-			comp_h = h;
-		}
-	}
-}
 
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
-	native_comp_size();
 #ifdef _WIN64
 	if (fs_on)
 		fs_draw0 = fs_qpc();
@@ -4662,22 +3588,12 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		seq++;
 	}
 	int full_window = !mode || (native_active && (!split_on || !sw));
-	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
-		if (mode >= 5 && !split_on)
-			half_forget();
+	if (!mode || !sw || second_pass || !split_on) {
 		if (mode == 11 && !split_on) { // back to one picture: player 1's view rectangle covers the screen again
 			int *cvr = (int *)(base + M11_CG_VIEWRECT);
 			const int sw_px = *(int *)(base + M11_DISP_W), sh_px = *(int *)(base + M11_DISP_H);
 			if (sw_px > 0 && sh_px > 0 && (cvr[2] != sw_px || cvr[3] != sh_px))
 				cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px;
-		}
-		if ((mode == 8 || mode == 10) && cg_aspect_have) { // back from the split: the cgame's aspect as it was
-			*(float *)(base + RVA_CG_ASPECT) = cg_aspect_saved;
-			cg_aspect_have = 0;
-		}
-		if (mode == 7 && asp_have) { // back from the split: the video aspect as the game had it
-			memcpy(base + RVA_VIDEO_ASPECT, asp_saved, sizeof(asp_saved));
-			asp_have = 0;
 		}
 		if (full_window)
 			cg_aspect_apply_full_window();
@@ -4688,8 +3604,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	}
 	if (mode == 11) { // both views in this frame: the per-player view rectangle (rva 0x3bd808, what 0xbd520 returns) top for player 1, bottom for player 2 (context 1, drawn
 			  // as local client 0 with its statics swapped in); the second draw skips begin-frame (second_pass) and its static model chunks go to our buffers
-		// The Present hooks, as mode 10 puts them in (comp_hook): player 1's frame is ended with the show bit and marked 0x80, and the back end skips its Present only through
-		// them (be_skip_present). Mode 11 never called this: the hooks came only with the developer console open or [native] presentkeep=1, so a player's session presented
+		// The Present hooks (comp_hook): player 1's frame is ended with the show bit and marked 0x80, and the back end skips its Present only through them
+		// (be_skip_present). Without this call the hooks came only with the developer console open or [native] presentkeep=1, so a player's session presented
 		// both renderer frames of an engine frame (2026-11-17, found porting mode 11 to the 32-bit build).
 		comp_hook(NULL);
 		float *vrect = (float *)(base + M11_VIEWRECT);
@@ -4702,7 +3618,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		const float aspect_was = *aspect;
 		const int sw_px = *(int *)(base + M11_DISP_W), sh_px = *(int *)(base + M11_DISP_H); // the picture's size (the renderer's display globals)
 		if (sw_px > 0 && sh_px > 0 && CFG_ONCE("exp11aspect", 1))
-			*aspect = exp11_aspect(0, sw_px, sh_px); // a half's shape: the cgame builds the field of view for it (as mode 10 does)
+			*aspect = exp11_aspect(0, sw_px, sh_px); // a half's shape: the cgame builds the field of view for it
 		int *cvr = (int *)(base + M11_CG_VIEWRECT); // the cgame's view rectangle in pixels (x, y, w, h; the refdef's, copied by 0xbe710; set at the level start by 0xa6680): one per context
 		exp11_view(0, vrect);
 		if (sw_px > 0 && sh_px > 0)
@@ -4920,186 +3836,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 1;
 		*aspect = aspect_was;
-		return;
 	}
-	if (full_window)
-		cg_aspect_apply_full_window();
-	float saved[4];
-	memcpy(saved, sw, sizeof(saved));
-	if (mode >= 2 && mode <= 10) { // alternate frames: one scene per frame, the top half on even frames and the bottom half on odd ones
-		static unsigned frame;
-		int bottom = mode >= 5 ? frame_bottom : (int)(frame++ & 1); // modes 5 and 6: the client frame (below) says whose frame it is
-		sw[0] = 0, sw[1] = 1, sw[2] = bottom ? 0.5f : 0, sw[3] = bottom ? 1 : 0.5f;
-		if (mode == 6) // the middle band of the full view in both halves: right proportions, half the vertical field
-			sw[2] = 0.25f, sw[3] = 0.75f;
-		if (mode == 9) // the views are recorded for a half-height screen: the whole viewport, in the top rows
-			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
-		if (mode == 8 || mode == 10) { // the console's way: the whole view, built for the shape of a half with the cgame's own aspect (rva RVA_CG_ASPECT, read by CG_CalcFov), drawn over the full frame and squeezed into the half
-			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
-			if (comp_w && comp_h) {
-				float *aspect = (float *)(base + RVA_CG_ASPECT);
-				if (!cg_aspect_have) {
-					cg_aspect_saved = *aspect;
-					cg_aspect_have = 1;
-				}
-				*aspect = (float)comp_w / ((float)comp_h * 0.5f);
-			}
-			{ // [native] pixelaspect=<f>: the pixel aspect the 2D is laid out with (rva RVA_PIXEL_ASPECT); the squeeze of the frame into its half flattens text 2:1, a factor of 2 or 0.5 here
-			  // pre-stretches it. Kept while the picture is split.
-				static float want = -1;
-				float *pa = (float *)(base + RVA_PIXEL_ASPECT);
-				if (want < 0) {
-					char v[32];
-					GetPrivateProfileStringA("native", "pixelaspect", "0", v, sizeof(v), settings_path);
-					want = (float)atof(v);
-				}
-				if (want > 0)
-					*pa = want;
-			}
-		}
-		if (mode == 7) { // the whole view, built for the shape of a half (wide), drawn over the full frame: the compositor squeezes it into the half (rva RVA_VIDEO_ASPECT: aspect, RVA_PIXEL_ASPECT: pixel aspect)
-			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
-			if (comp_w && comp_h) {
-				float *aspect = (float *)(base + RVA_VIDEO_ASPECT);
-				if (!asp_have) {
-					memcpy(asp_saved, aspect, sizeof(asp_saved));
-					asp_have = 1;
-				}
-				aspect[0] = (float)comp_w / ((float)comp_h * 0.5f);
-				aspect[1] = 1.0f;
-			}
-		}
-		comp_hook(NULL);
-		{
-			static DWORD last_log;
-			static unsigned draws;
-			draws++;
-			DWORD now = GetTickCount();
-			if (now - last_log > 3000) {
-				last_log = now;
-				log_printf("native: split draws %u, device %p, pushes %ld, ring %ld-%ld, bottom %d", draws, (void *)the_device, (long)pushes_total, (long)ring_tail, (long)ring_head, bottom);
-				if (ring_tail == 0 && draws > 100) { // no frame has ever been composed: are our hooks still in the tables?
-					for (int i = 0; i < nslots; i++)
-						log_printf("native: slot %d (%p): in %d, now %p, hook %p", i, (void *)slots[i].slot, slots[i].in, *slots[i].slot, slots[i].hook);
-				}
-			}
-		}
-		if (the_device && ring_head - ring_tail < 6) { // the half this frame is drawn into: the frame's end composes it
-			ring[ring_head & 7] = bottom;
-			InterlockedIncrement(&ring_head);
-			InterlockedIncrement(&pushes_total);
-		}
-		if (mode == 4 && bottom && ctx1_ready) { // mode 4: the odd frames run the cgame in context 1 (the client statics swapped), as local client 0
-			ctx_swap(1);
-			cg_draw_vis(0, a, b);
-			ctx_swap(0);
-		} else {
-			cg_draw_vis(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
-		}
-		half_note(*(int *)(base + RVA_CG_TIME), bottom);
-		if (CFG_ONCE("perflog", 0)) { // the step of the game time between two draws of the same view
-			static int last_t[2];
-			int t = *(int *)(base + RVA_CG_TIME), k = bottom ? 1 : 0;
-			if (last_t[k] && t >= last_t[k]) {
-				int d = t - last_t[k];
-				perf_td_n[k]++, perf_td_sum[k] += d, perf_td_sq[k] += (LONGLONG)d * d;
-				if (d < perf_td_min[k])
-					perf_td_min[k] = d;
-				if (d > perf_td_max[k])
-					perf_td_max[k] = d;
-				if (d > 12)
-					perf_td_big[k]++;
-			}
-			last_t[k] = t;
-		}
-		memcpy(sw, saved, sizeof(saved));
-		if (ctx_on)
-			ctx_after_draw();
-		return;
-	}
-	{ // [native] lccount=2 (phase A test): the engine's "how many local players" (rva 0x7ac10, mov eax,1; ret) answers 2, as the 360's does with two players
-		static int done;
-		const int want = CFG_ONCE("lccount", 0);
-		uint8_t *imm = base + XR(0x7ac10);
-		if (!done && want > 0 && imm[0] == 0xb8 && imm[5] == 0xc3) {
-			DWORD old;
-			VirtualProtect(imm, 6, PAGE_EXECUTE_READWRITE, &old);
-			*(int32_t *)(imm + 1) = want;
-			VirtualProtect(imm, 6, old, &old);
-			FlushInstructionCache(GetCurrentProcess(), imm, 6);
-			log_printf("native: phase A: the local player count answers %d", want);
-		}
-		done = 1;
-	}
-	float *vrect = (float *)(base + XR(0x3bd808)); // the per-player view rectangle (rva 0xbd520 returns it; normalised x, y, w, h): the 360 has one per local player
-	const int byrect = CFG_ONCE("exp1rect", 1);
-	if (byrect) {
-		sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
-		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 0.5f;
-	} else
-		sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 0.5f; // the top half
-	cg_draw_original(local_client, a, b);
-	if (byrect)
-		vrect[0] = 0, vrect[1] = 0.5f, vrect[2] = 1, vrect[3] = 0.5f;
-	else
-		sw[2] = 0.5f, sw[3] = 1; // the bottom half
-	if (CFG_ONCE("exp1smc", 1)) { // phase A: the second view's static model draw data goes to buffers of ours (the frame data has room for one view's, see split_smc_redirect)
-		uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
-		if (fd)
-			split_smc_redirect(fd);
-	}
-	{
-		uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
-		static int n1;
-		if (fd && n1++ < 5)
-			log_printf("native: exp1 after draw 1: scenes %d views %d | viewport static %d %d %d %d / %g %g %g %g", *(int *)(fd + 0x41a34), *(int *)(fd + 0x419e8),
-				   ((int *)(base + XR(0x3bd808)))[0], ((int *)(base + XR(0x3bd808)))[1], ((int *)(base + XR(0x3bd808)))[2], ((int *)(base + XR(0x3bd808)))[3],
-				   (double)((float *)(base + XR(0x3bd808)))[0], (double)((float *)(base + XR(0x3bd808)))[1], (double)((float *)(base + XR(0x3bd808)))[2], (double)((float *)(base + XR(0x3bd808)))[3]);
-	}
-	second_pass = 1;
-	cg_draw_original(local_client, a, b);
-	second_pass = 0;
-	{
-		uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
-		static int n2;
-		if (fd && (n2++ % 600) == 0)
-			log_printf("native: exp1 after draw 2: scenes %d views %d | region b7f80 used 0x%x, region d2f80 used 0x%x", *(int *)(fd + 0x41a34), *(int *)(fd + 0x419e8),
-				   *(int *)(fd + 0x41964), *(int *)(fd + 0x41968));
-	}
-	static int fdprobe_on = -1;
-	if (fdprobe_on < 0) {
-		fdprobe_on = cfg("fdprobe", 0);
-		log_printf("native: fdprobe %d", fdprobe_on);
-	}
-	if (fdprobe_on) { // phase A: the highest written byte of each frame data set between +0xd2f80 and +0x1096a8, and of +0xb7f80..+0xd2f80
-		static unsigned hi_d, hi_b, n;
-		uint8_t *fd = *(uint8_t **)(base + XR64(0x410fd00));
-		if (fd) {
-			for (unsigned o = 0x1096a8; o > 0xd2f80; o -= 8)
-				if (*(uint64_t *)(fd + o - 8)) {
-					if (o - 0xd2f80 > hi_d)
-						hi_d = o - 0xd2f80;
-					break;
-				}
-			for (unsigned o = 0xd2f80; o > 0xb7f80; o -= 8)
-				if (*(uint64_t *)(fd + o - 8)) {
-					if (o - 0xb7f80 > hi_b)
-						hi_b = o - 0xb7f80;
-					break;
-				}
-			if ((n++ % 600) == 0)
-				log_printf("native: fdprobe frame data %p: +0xd2f80 region written up to +0x%x, +0xb7f80 region up to +0x%x", (void *)fd, hi_d, hi_b);
-		}
-	}
-	memcpy(sw, saved, sizeof(saved));
-	if (byrect)
-		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 1;
-	static int logged;
-	if (!logged++)
-		log_printf("native: the first frame was drawn twice (top and bottom half)");
 }
 
-// ---- experiment 4: the engine's own local-players configuration (docs/native-splitscreen-plan.md, "Packet flow")
+// ---- the engine's own local-players configuration (docs/native-splitscreen-plan.md, "Packet flow")
 // G_InitGame stores the number of local players (rva 0x3c3eb0) as the immediate 1 of `mov dword [rip+x], 1` (c7 05 <rel32> 01 00 00 00 at rva 0x1714a6) when the co-op byte is 0.
 // settings.ini [native] players=2 makes it 2: the server then makes two clients and two player entities, with no network and no co-op session. The client side has one
 // element of each array, so this only shows what the server side does alone.
@@ -5160,7 +3900,7 @@ static void cbuf_hook(int lc, const char *text)
 	cbuf_original(lc, text);
 }
 
-// ---- experiment 5: a second client context (docs/native-splitscreen-plan.md): the engine's client code runs for local client 1 as local client 0, with the client statics swapped
+// ---- a second client context (docs/native-splitscreen-plan.md): the engine's client code runs for local client 1 as local client 0, with the client statics swapped
 // The arrays of the client side (cl, clc, cls, the cgame's cg/cgs) have one element, so the loops over the local clients (i < number of local players) would write local client 1's
 // state over unrelated statics. Each call site of such a loop is redirected to a wrapper: for client 1 it swaps the client statics to context 1's copy, calls the function as
 // client 0, and swaps back. The ranges are the first guess (cgame block, snapshots, cl, clc, cls, input); the ones the experiments show missing are added.
@@ -5270,9 +4010,6 @@ static void render_wait_idle(void)
 #endif
 }
 #define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)
-// The cgame's aspect lies inside the cgame range (0) in the 64-bit build only: in 32 bits it is below it (VA 0x75f018 against the range's 0x75f280, mode11-frame.md), and the
-// copy into context 1's block wrote 0x268 bytes before that block (mode 10 since the 32-bit port; found 2026-11-17)
-#define CG_ASPECT_IN_RANGE0 (RVA_CG_ASPECT >= RANGE_RVA(0) && RVA_CG_ASPECT + 4 <= RANGE_RVA(0) + ranges[0].size)
 static uint8_t *ctx_store[2][NRANGES];
 static int ctx_current;
 int native_log_ctx(void) { return native_active ? ctx_current : 0; } // (for the script debug log of the 32-bit builds)
@@ -5599,7 +4336,7 @@ static void lcnum_pins_install(void)
 static void fxbody_install(void)
 {
 	uint8_t *c = base + XR(0x11c65f), *d = base + XR(0x119382);
-	if (!cfg("fxbodyown", 1) || !cfg("fxsplit", mode == 11 ? 0 : 1))
+	if (!cfg("fxbodyown", 1) || !cfg("fxsplit", 0))
 		return;
 	if (c[0] == 0xe8 && c + 5 + *(int32_t *)(c + 1) == base + XR(0x1e5de0) && d[0] == 0xe8 && d + 5 + *(int32_t *)(d + 1) == base + XR(0x1e5f40) &&
 	    jhook_call(c, (void *)fxbody_create_hook, (void **)&fxbody_create_original) && jhook_call(d, (void *)fxbody_destroy_hook, (void **)&fxbody_destroy_original))
@@ -5629,7 +4366,7 @@ static void ctx_swap_mask(int to, unsigned mask)
 	if (fx_on < 0) // mode 11: one effects system for both views, as the 360 has (it steps the effects of player 0 only, 0x82141e70): with a copy for player 2 the effects a level's
 		       // scripts start (PlayFX: a temporary entity whose event only context 0 handles; the exploders' smoke) were in player 1's half only (owner, Gulag fly-in: "when the
 		       // first player sees the smoke, the other doesn't"; checked: with the copy the smoke column in one half only, without it in both). [native] fxsplit=1 the copy again
-		fx_on = cfg("fxsplit", mode == 11 ? 0 : 1);
+		fx_on = cfg("fxsplit", 0);
 #ifdef RANGE_FX
 	// EXPERIMENT, off ([native] fxphyswait=1 on): ctx_wait_workers leaves out worker type 19, "fx physics" (the names at rva 0x370340), whose jobs may write the live
 	// effects system; this waits for it too before the effects range moves. Tried 2026-11-17 against the Gulag "cafe" crashes with fxseed (0x11b0d9: a trail list of
@@ -5812,14 +4549,14 @@ static void ctx_seed_cgame(void)
 	fxbody_reset();
 #endif
 #ifdef _WIN64
-	// EXPERIMENT, off ([native] fxseed=1 on): context 1's own effects system (fxsplit, mode 10) starts EMPTY, made by the game's FX_InitSystem (rva 0x119a00), instead of as
+	// EXPERIMENT, off ([native] fxseed=1 on): context 1's own effects system (fxsplit=1) starts EMPTY, made by the game's FX_InitSystem (rva 0x119a00), instead of as
 	// a copy of context 0's. Why it was tried: the Gulag's start "cafe" crashes 3 s after the split began, every run (rva 0x2713ee, read of -1 taking a node from the shared
 	// physics pool, 0x2713e0); with fxsplit=0 no crash in 160 s. The copy holds context 0's live effects, and with them the physics objects of their debris, which both
 	// systems then free. With the empty start that crash is gone, but the game crashed later in all 7 runs (38-90 s: 0x11b0d9, a trail list of context 1's system looping
 	// in FX_UpdateEffect 0x11afd0; 0xfd0d5, context 0's spot light pointing at a freed effect), and effects started before the split (the Gulag's helicopter spot light,
 	// PlayFXOnTag) are missing in player 2's view. Likely why: the copied cgame state of context 1 (its entities) still points at effects of context 0's system, which the
 	// empty system does not have. FX_InitSystem also resets the impact marks (globals rva 0xbc6280..0xbc72e0, pools 0xb7ac00 + 0x4b000), shared by both views: they are kept.
-	if (cfg("fxsplit", mode == 11 ? 0 : 1) && cfg("fxseed", 0)) {
+	if (cfg("fxsplit", 0) && cfg("fxseed", 0)) {
 		const size_t fx_size = ranges[RANGE_FX].size, marks_g = 0xbc72e0 - 0xbc6280, marks_p = 0x4b000;
 		uint8_t *fx_live = base + RANGE_RVA(RANGE_FX), *mg = base + XR(0xbc6280), *mp = base + XR(0xb7ac00);
 		uint8_t *keep = VirtualAlloc(NULL, fx_size + marks_g + marks_p, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -7435,63 +6172,6 @@ static void pad_frame_player(int pl, int play)
 	p->lt = lt;
 }
 
-// Mode 9: the engine is told the screen is a half (width x height/2) while the client frame records its views and its 2D: its viewport, the 2D placement and the text are made for the
-// half (nothing is squeezed afterwards), drawn into the top rows of the frame; the compositor copies those rows into the half of the picture. Video globals (rva): 0x4113724 height,
-// 0x411372c and 0x4358e84 the window height again, RVA_VIDEO_ASPECT aspect, RVA_PIXEL_ASPECT pixel aspect (= height * aspect / width), the cgame's own aspect RVA_CG_ASPECT.
-static float video_saved_f[3];
-static int video_saved_i[3];
-static int video_pushed;
-// Mode 10: the engine's 2D screen placements (rva 0x5e0b80, three of 0x70 bytes: scaleVirtualToReal, scaleVirtualToFull, scaleRealToVirtual, viewport position and size, the viewable and the
-// adjustable rectangles; the console's split screen sets the per-client one to the half it draws into) are given the half: a 1920 x height/2 viewport with the scale of that height, so the
-// client lays its 2D out for a half and the text keeps its shape (the virtual canvas becomes wider, as on a 16:9 screen).
-#ifdef _WIN64
-#define PLACE_RVA XR(0x5e0b80)
-#define PLACE_SIZE 0x70
-#define PLACE_PTR(n) ((float *)(base + PLACE_RVA + (n) * PLACE_SIZE))
-#else
-// 32 bits: the three placements are not a regular array (docs/32bit-native-map/render.md): VA 0x937500 (the view's), 0x937578, 0x9375e8
-static const uint32_t place_rvas32[3] = {0x537500, 0x537578, 0x5375e8};
-#define PLACE_PTR(n) ((float *)(base + XR(place_rvas32[n])))
-#endif
-static float place_saved[3][28];
-static int place_pushed;
-static void place_push(void)
-{
-	if (!comp_w || !comp_h)
-		return;
-	float w = (float)comp_w, h = (float)(comp_h / 2), s = h / 480.0f, vw = w / s;
-	for (int n = 0; n < 3; n++) {
-		float *p = PLACE_PTR(n);
-		if (!place_pushed) {
-			if (p[8] != w || p[9] != (float)comp_h) {
-				log_printf("native: screen placement %d is not the one expected (viewport %g x %g)", n, p[8], p[9]);
-				return;
-			}
-		}
-	}
-	for (int n = 0; n < 3; n++) {
-		float *p = PLACE_PTR(n);
-		if (!place_pushed)
-			memcpy(place_saved[n], p, sizeof(place_saved[n]));
-		int safe = place_saved[n][10] > 0; // the two with a safe-area margin keep it (7.5 %)
-		float m = safe ? 0.075f : 0.0f;
-		p[0] = p[1] = s;
-		p[2] = w / 640.0f, p[3] = s;
-		p[4] = p[5] = 1.0f / s;
-		p[6] = p[7] = 0;
-		p[8] = w, p[9] = h;
-		p[10] = m * vw, p[11] = m * 480.0f;
-		p[12] = vw - m * vw, p[13] = 480.0f - m * 480.0f;
-		p[14] = m * w, p[15] = m * h;
-		p[16] = w - m * w, p[17] = h - m * h;
-		p[18] = 0, p[19] = 0, p[20] = vw, p[21] = 480.0f;
-		p[22] = 0, p[23] = 0, p[24] = w, p[25] = h;
-	}
-	static int logged; // (once: hudelem_hook pops and pushes them around each title line, every frame)
-	if (!place_pushed && !logged++)
-		log_printf("native: the 2D placements are made for a %gx%g half (scale %g)", w, h, s);
-	place_pushed = 1;
-}
 // The HUD laid out as in the console's split screen. The Xbox 360 game draws a half's HUD with split screen versions of its HUD menus (ui/hud_splitscreen.txt:
 // compassv2_ss, weaponinfo_ss, ...): the ammo, the grenades and the compass sit further in from the corner, the hints nearer the cross hair, the low ammo warning
 // bigger, right of the cross hair. The PC game ships that menu list empty and its code never reads the split screen dvars, so while the picture is split the
@@ -7792,7 +6472,7 @@ static void hud_hint_single_tick(void)
 }
 static void hud_layout_tick(int split)
 {
-	if (split && (mode == 10 || mode == 11) && CFG_ONCE("hudss", 1)) {
+	if (split && mode == 11 && CFG_ONCE("hudss", 1)) {
 		if (!hud_applied)
 			hud_apply();
 		hud_write();
@@ -7839,76 +6519,6 @@ static void hud_layout_tick(int split)
 	}
 }
 
-static void place_pop(void)
-{
-	if (!place_pushed)
-		return;
-	for (int n = 0; n < 3; n++)
-		memcpy(PLACE_PTR(n), place_saved[n], sizeof(place_saved[n]));
-	place_pushed = 0;
-}
-
-static void video_push(void)
-{
-	if (mode == 10) {
-		place_push();
-		return;
-	}
-	if (mode != 9 || !comp_w || !comp_h)
-		return;
-	int *h1 = (int *)(base + XR64(0x4113724)), *h2 = (int *)(base + XR64(0x411372c)), *h3 = (int *)(base + XR64(0x4358e84));
-	float *a = (float *)(base + RVA_VIDEO_ASPECT), *pa = (float *)(base + RVA_PIXEL_ASPECT), *ca = (float *)(base + RVA_CG_ASPECT);
-	int half = (int)(comp_h / 2);
-	if (!video_pushed) { // the first time: what the engine had, to give back when the picture is not split any more
-		video_saved_i[0] = *h1, video_saved_i[1] = *h2, video_saved_i[2] = *h3;
-		video_saved_f[0] = *a, video_saved_f[1] = *pa, video_saved_f[2] = *ca;
-		video_pushed = 1;
-		log_printf("native: the engine's screen is %ux%d while the picture is split (was %d)", comp_w, half, video_saved_i[0]);
-	}
-	// kept as long as the picture is split, every frame (the render thread reads them later than the client frame ends, and a video restart writes them again)
-	*h1 = *h2 = *h3 = half;
-	*a = (float)comp_w / (float)half;
-	*pa = 1.0f;
-	*ca = *a;
-	if (ctx_current == 0 && ctx_store[1][0] && CG_ASPECT_IN_RANGE0) // context 1's cgame block holds its own copy of the cgame's aspect (64 bits; in 32 bits it is outside the block)
-		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - RANGE_RVA(0))) = *a;
-}
-static void video_pop(void)
-{
-	place_pop();
-	if (!video_pushed)
-		return;
-	*(int *)(base + XR64(0x4113724)) = video_saved_i[0];
-	*(int *)(base + XR64(0x411372c)) = video_saved_i[1];
-	*(int *)(base + XR64(0x4358e84)) = video_saved_i[2];
-	*(float *)(base + RVA_VIDEO_ASPECT) = video_saved_f[0];
-	*(float *)(base + RVA_PIXEL_ASPECT) = video_saved_f[1];
-	*(float *)(base + RVA_CG_ASPECT) = video_saved_f[2];
-	if (ctx_store[1][0] && CG_ASPECT_IN_RANGE0)
-		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - RANGE_RVA(0))) = video_saved_f[2];
-	video_pushed = 0;
-}
-
-// Mode 5: the engine's whole client frame (rva 0xd5b00, called once per engine frame from the main loop at rva 0x1fc331) runs for context 0 on even frames and for context 1 on odd ones, so
-// everything the client does in a frame (time, snapshot use, usercmds, the cgame draw, the 2D) happens in the right context. One scene per frame, as the renderer needs.
-#ifdef _WIN64
-// QA ([native] ctxdiff=1): is this rva inside a range the contexts swap?
-static int ctxdiff_swapped(uint32_t rva)
-{
-	for (size_t i = 0; i < NRANGES; i++)
-		if (rva >= RANGE_RVA(i) && rva < RANGE_RVA(i) + ranges[i].size)
-			return 1;
-	return 0;
-}
-static void ctxdiff_arm(void)
-{
-	static int armed_once;
-	if (!armed_once++ && cfg("ctxdiff", 0))
-		ctxdiff_start(base, ctxdiff_swapped);
-}
-#else
-static void ctxdiff_arm(void) {}
-#endif
 // Diagnostics ([native] inputlog=1): a row about the state of the input at the start of each context's client frame (4 a second per context) and the four XInput pads once a second
 static void inputlog_frame(int ctx)
 {
@@ -7940,7 +6550,6 @@ static void inputlog_frame(int ctx)
 	}
 }
 static void (*client_frame_original)(void);
-static unsigned make_cmd_calls[3]; // QA (padlog): calls of the usercmd maker per context
 // [native] scrwatch=1 (iw4x-sp only, diagnostics): the script variable table (159 image VA 0x16c7480, 0x22000 entries of 16 bytes) should change only while the server
 // frame runs the scripts. A copy is taken when a server step ends and compared at the next points outside it (the client frame's begin and end, the next step's start): every
 // 16-byte entry that differs there was written by something that is not the server step, and is logged with its old and new bytes and the window it was found in.
@@ -8007,7 +6616,6 @@ static void client_frame_hook(void)
 }
 static void client_frame_inner(void)
 {
-	static unsigned frame;
 	static int fov = -1; // shared by the fixed-fov and fov-scale paths below; never reread settings.ini per frame
 	{
 		static int seen;
@@ -8111,11 +6719,10 @@ static void client_frame_inner(void)
 	if (nopredict < 0)
 		nopredict = cfg("nopredict", 0);
 	uint8_t *np_dvar = *(uint8_t **)(base + RVA_NOPREDICT_DVAR); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
-	{ // [native] fov=<degrees>: the cg_fov (rva 0x51e1a8 holds the dvar; the angle across a 4:3 picture, 65 by default) while the picture is split: each half is a band of the full
-	  // view (mode 6), so the field is widened to make up for the half height
+	{ // [native] fov=<degrees>: the cg_fov (rva 0x51e1a8 holds the dvar; the angle across a 4:3 picture, 65 by default) while the picture is split
 		static float fov_saved = -1;
 		if (fov < 0)
-			fov = cfg("fov", (mode >= 8) ? 0 : 85); // 0 (mode 8 and up): the console's way, cg_fovScale 0.75 (below)
+			fov = cfg("fov", 0); // 0: the console's way, cg_fovScale 0.75 (below)
 		uint8_t *d = *(uint8_t **)(base + RVA_FOV_DVAR);
 		if (fov > 0 && d) {
 			float *v = (float *)(d + 0x10);
@@ -8129,7 +6736,7 @@ static void client_frame_inner(void)
 			}
 		}
 	}
-	if (mode >= 8) { // the console's split screen field of view: cg_fovScale 0.75 (maps/_load.gsc), which the game multiplies into every view's angle (cg_fov, a weapon's sight zoom, a script's lerp),
+	if (mode == 11) { // the console's split screen field of view: cg_fovScale 0.75 (maps/_load.gsc), which the game multiplies into every view's angle (cg_fov, a weapon's sight zoom, a script's lerp),
 			 // where writing cg_fov itself (what [native] fov=<degrees> does) leaves the sights' zoom and the scripts' angles as for the full screen. [native] fovscale=<percent> (default 75); the
 			 // game's own scripts write the dvar at each level load (1 when IsSplitScreen() is false), so it is held here
 		static int fovscale = -1;
@@ -8150,11 +6757,6 @@ static void client_frame_inner(void)
 			}
 		}
 	}
-	static int nogun = -1;
-	if (nogun < 0)
-		nogun = cfg("nogun", 0);
-	uint8_t *gun_dvar = *(uint8_t **)(base + RVA_DRAWGUN_DVAR); // cg_drawGun
-	const unsigned view_run = CFG_ONCE("viewrun", 1) < 1 ? 1u : (unsigned)CFG_ONCE("viewrun", 1);
 	if (mode == 11 && ctx1_ready && split_on) { // the 360's way (docs/native-splitscreen-360.md, phase C): player 2's client logic every frame, without its own screen update (the
 						     // screen update's busy flag, rva 0x5db410, makes 0xd5b00 return); player 1's frame below draws both views (cg_draw_hook_inner, mode 11)
 		frame_bottom = 1;
@@ -8177,54 +6779,9 @@ static void client_frame_inner(void)
 			perf_ctx[1] += perf_now() - perf_start;
 			perf_ctx_n[1]++;
 		}
-	} else if (mode >= 5 && mode != 11 && ctx1_ready && split_on && (((frame++) / view_run) & 1)) { // [native] viewrun=<n>: each view is drawn n engine frames in a row (diagnostics: does the renderer reuse the last frame's data?)
-		frame_bottom = 1;
-		if (nogun && gun_dvar)
-			*(int *)(gun_dvar + 0x10) = 0; // test: context 1 without the view model
-		if (nopredict && np_dvar)
-			*(int *)(np_dvar + 0x10) = 1;
-		ctx_swap(1);
-		{ // QA: [native] qa_ads1=<ms>: player 1 (the bottom half) aims down the sights that long after the split
-			static int ads1_at = -2, ads1_state;
-			if (ads1_at == -2)
-				ads1_at = cfg("qa_ads1", -1);
-			if (ads1_at >= 0 && !ads1_state && GetTickCount() - split_tick >= (DWORD)ads1_at) {
-				pad_binding("speed_throw", 1);
-				qa_ctx1_buttons = 1;
-				ads1_state = 1;
-				log_printf("native: qa: player 1 aims down the sights");
-			}
-		}
-		pad_frame_player(1, 1);
-		if (CFG_ONCE("padlog", 0)) {
-			static unsigned frames1;
-			static DWORD at1;
-			frames1++;
-			if (GetTickCount() - at1 >= 1000) {
-				at1 = GetTickCount();
-				log_printf("native: padlog ctx1 frames %u | make_cmd calls ctx0 %u ctx1 %u other %u | pad p2: dev %d active %d forward %d right %d", frames1, make_cmd_calls[0], make_cmd_calls[1], make_cmd_calls[2], pad_dev[1], pads[1].active,
-					   pads[1].forward, pads[1].right);
-			}
-		}
-		if (split_on)
-			video_push();
-		inputlog_frame(1);
-		ctxdiff_arm();
-		ctxdiff_before(1);
-		client_frame_original();
-		ctxdiff_after(1);
-		native_unswap_entities();
-		ctx_swap(0);
-		if (perf_on) {
-			perf_ctx[1] += perf_now() - perf_start;
-			perf_ctx_n[1]++;
-		}
-		return;
 	}
 	if (nopredict && np_dvar)
 		*(int *)(np_dvar + 0x10) = 0;
-	if (nogun && gun_dvar)
-		*(int *)(gun_dvar + 0x10) = 1;
 	pad_frame_player(0, 1);
 	if (CFG_ONCE("perflog", 0)) {
 		LONGLONG t0 = perf_now();
@@ -8253,16 +6810,10 @@ static void client_frame_inner(void)
 			gfxopts_tick();
 		}
 	}
-	if (!(mode >= 5 && ctx1_ready && split_on))
+	if (!(mode == 11 && ctx1_ready && split_on))
 		pad_frame_player(1, 0); // one picture: player 2's pad still works the menus
-	if (split_on && ctx1_ready)
-		video_push();
-	else if (!split_on)
-		video_pop();
 	inputlog_frame(0);
-	ctxdiff_before(0);
 	client_frame_original();
-	ctxdiff_after(0);
 	if (perf_on) {
 		perf_ctx[0] += perf_now() - perf_start;
 		perf_ctx_n[0]++;
@@ -8385,7 +6936,6 @@ static uint8_t *make_cmd_original(uint8_t *out, int lc);
 static volatile int qa_c0_fwd, qa_c0_fire; // QA (console mw2coop_qa_move <forward 0|1> <fire 0|1>): player 0's movement and trigger set straight in his usercmds
 static uint8_t *make_cmd_hook(uint8_t *out, int a)
 {
-	make_cmd_calls[ctx_current >= 0 && ctx_current < 2 ? ctx_current : 2]++;
 	uint8_t *cmd = make_cmd_original(out, a);
 	if (ctx_current == 0 && cmd && (qa_c0_fwd || qa_c0_fire)) {
 		if (qa_c0_fwd)
@@ -8399,16 +6949,14 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 		if (GetTickCount() - at[k] >= 1000) {
 			at[k] = GetTickCount();
 			const pad_player_t *q = &pads[ctx_current == 1 ? 1 : 0];
-			log_printf("native: padlog make_cmd ctx %d lc %d | pad_dev %d active %d forward %d right %d kb_player %d qa_ctx1_buttons %d | cmd fwd %d right %d", ctx_current, a, pad_dev[ctx_current == 1 ? 1 : 0], q->active, q->forward, q->right, kb_player(),
-				   (int)qa_ctx1_buttons, (int)(int8_t)cmd[0x1a], (int)(int8_t)cmd[0x1b]);
+			log_printf("native: padlog make_cmd ctx %d lc %d | pad_dev %d active %d forward %d right %d kb_player %d | cmd fwd %d right %d", ctx_current, a, pad_dev[ctx_current == 1 ? 1 : 0], q->active, q->forward, q->right, kb_player(),
+				   (int)(int8_t)cmd[0x1a], (int)(int8_t)cmd[0x1b]);
 		}
 	}
 	if ((ctx_current == 0 || ctx_current == 1) && cmd && native_active) {
 		int pl = ctx_current;
 		pad_player_t *p = &pads[pl];
-		if (pl == 1 && qa_ctx1_buttons) { // QA ([native] qa_ads1): the buttons the QA pressed for player 2 reach the server although he has no pad
-			cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0;
-		} else if (pad_dev[pl] >= 0 && p->active && (p->forward || p->right || kb_player() != pl)) {
+		if (pad_dev[pl] >= 0 && p->active && (p->forward || p->right || kb_player() != pl)) {
 			cmd[0x1a] = (uint8_t)(int8_t)p->forward; // usercmd_s: forwardmove +0x1a, rightmove +0x1b, upmove +0x1c, downmove +0x1d
 			cmd[0x1b] = (uint8_t)(int8_t)p->right;
 		} else if (pl == 1 && kb_player() != 1 && !(pad_dev[1] >= 0 && p->active)) { // player 2 with no device: still
@@ -8907,8 +7455,8 @@ static unsigned local_slot_hook(unsigned lc)
 	}
 }
 
-// Mode 10: the game message windows (rva 0x52f348, outside the swapped ranges: one set, local client 0's) are drawn by both contexts, so their texts came in both halves and
-// the layer comparison left a ghost of them. The HUD's draw of a game message window (rva 0xcb4f0: local client, window, x, y, ...) draws window 2 (console channel
+// The game message windows (rva 0x52f348, outside the swapped ranges: one set, local client 0's) are drawn by both contexts (both views of a frame), so their texts came in
+// both halves. The HUD's draw of a game message window (rva 0xcb4f0: local client, window, x, y, ...) draws window 2 (console channel
 // "subtitle") in the bottom half only, window 0 ("gamenotify obituary", top left) in the top half only ([native] subonce=0 off).
 // Like the Xbox 360 game (its subtitles_ss menu is visible for local player 0 only, at y 375 of 480 of that view) the subtitles are in the top half; [native] subtop=0 puts them back in the bottom half.
 static const uint8_t msgwin_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x70};
@@ -8920,7 +7468,7 @@ static void msgwin_hook(int lc, int window, int x, int y, int horz, int vert, vo
 		on = cfg("subonce", 1);
 		sub_top = cfg("subtop", 1);
 	}
-	const int once = on && (mode == 10 || mode == 11) && native_active && split_on && ((window == 2 && ctx_current == (sub_top ? 1 : 0)) || (window == 0 && ctx_current == 1)); // (mode 11 too: both views of a frame draw these windows)
+	const int once = on && mode == 11 && native_active && split_on && ((window == 2 && ctx_current == (sub_top ? 1 : 0)) || (window == 0 && ctx_current == 1));
 	if (CFG_ONCE("msglog", 0) && mode == 11 && split_on) { // QA: how many times each context's draw reaches each message window, and how many of those calls are dropped, every 5 s
 		static unsigned calls[2][4], dropped[2][4];
 		static DWORD last;
@@ -9024,9 +7572,8 @@ static void name_self_install(void)
 }
 #endif
 
-// The mission's title lines (maps\_introscreen patch: sort 1.0078125 instead of 1) are drawn once, over the whole picture and as big as in single player: the HUD element draw
-// (rva 0xa3b80: local client, element; the sort at +0x88) leaves them out in context 1 and draws them in context 0 with the full-screen 2D placement, into the rows of its layer
-// below its half, which overlay_titles lays over the bottom half. So the split can come while the title is still on screen without cutting it in two ([native] titles=0 off).
+// The HUD element draw (rva 0xa3b80: local client, element; the sort at +0x88): the mission's title lines (maps\_introscreen patch: sort 1.0078125 instead of 1) are laid out
+// for the whole screen, and the scripted HUD elements keep the half's own scale (below; [native] titles=0: the hook is not put in).
 static const uint8_t hudelem_bytes[] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0x68, 0xfc, 0xff, 0xff, 0x48, 0x81, 0xec, 0x98, 0x04, 0x00, 0x00};
 static void (*hudelem_original)(int, void *);
 #ifdef _WIN64
@@ -9057,20 +7604,8 @@ static void hudelem_hook(int lc, void *e)
 		}
 	}
 #endif
-	if (mode == 10 && native_active && split_on && *(const float *)((const uint8_t *)e + 0x88) == 1.0078125f) {
-		if (ctx_current == 1)
-			return;
-		int pushed = place_pushed;
-		if (pushed)
-			place_pop();
-		hudelem_original(lc, e);
-		if (pushed)
-			place_push();
-		title_tick = GetTickCount();
-		return;
-	}
 	if (mode == 11 && native_active && split_on && CFG_ONCE("exp11titles", 1) && e && !IsBadReadPtr(e, TITLE_BYTES) && *(const float *)((const uint8_t *)e + 0x88) == 1.0078125f) {
-		// The title lines (maps\_introscreen patch: sort 1.0078125) are laid out for the whole screen, as in single player (mode 10 drew them once over the whole picture), and each half's
+		// The title lines (maps\_introscreen patch: sort 1.0078125) are laid out for the whole screen, as in single player, and each half's
 		// 2D shows its part: a half's 2D is placed relative to its own viewport, so the whole-screen placement is set for the call and player 2's copy is moved up by half the screen
 		// (240 virtual units, whatever the resolution: half the height over a scale of height / 480). One copy across the boundary ([native] exp11titles=0: each half's own title).
 		uint8_t tmp[TITLE_BYTES];
@@ -10129,8 +8664,7 @@ __asm__(".text\n.globl snd_count_stub\nsnd_count_stub:\n"
 	);
 // The entity events of the shared snapshot ran in both contexts (each context keeps its own "last event" mark, cent+0x194, while both see the same entities), so every
 // event sound of the world (shots, explosions, impacts, the AI's footsteps, the scripted one-shot sounds) started twice in the one mixer: measured on Wolverines! with
-// sndcount=2, every alias as often in context 1 as in context 0 (e.g. aagun_fire_skyburst 13 / 13 a second). In mode 10 context 1 reaches the events on its own frames, a
-// moment later: an echo of the world (Vlad, Spec Ops snowmobiles: "player 2's sound overlaps with a half-second delay"). The Xbox 360 runs each event once (its last-event
+// sndcount=2, every alias as often in context 1 as in context 0 (e.g. aagun_fire_skyburst 13 / 13 a second). The Xbox 360 runs each event once (its last-event
 // mark is in its one shared entity table, 0x820f1658) and plays it to the listeners of both players. Context 1's event checks (rva 0x9f840 and 0x9f940, called at
 // 0x9c924 / 0x9c954) now start no sound; their effects still run in his view. His own gun and steps come from his playerstate's events (other calls), untouched.
 // [native] evsnd1=0 off.
@@ -10189,8 +8723,8 @@ static void ev_check_hook1(int lc, uint8_t *cent)
 	ev_check_run(1, lc, cent);
 }
 // The sounds of effects (an explosion's debris, fire, sparks: the effects system's sound elements, 0x11be20 -> 0xa6280) go into the engine's queue of pending sounds
-// (rva 0x237a70: up to 32 entries of alias, entity, origin at 0x1a2d270, count 0x1a2cf58), played and emptied by each draw (0x23a1f0 from 0xbca00). In mode 10 each
-// context runs its own effects system, so every effect's sound was queued twice (measured: the queue played 33 / 36 sounds a second in the two contexts). Context 1's are
+// (rva 0x237a70: up to 32 entries of alias, entity, origin at 0x1a2d270, count 0x1a2cf58), played and emptied by each draw (0x23a1f0 from 0xbca00). With an effects
+// system of its own in each context ([native] fxsplit=1) every effect's sound was queued twice (measured: the queue played 33 / 36 sounds a second in the two contexts). Context 1's are
 // not queued (evsnd1). The function is replaced whole (its first instruction is rip-relative): the same ten lines otherwise.
 static void fx_sound_queue_hook(void *alias, int ent, const uint8_t *origin)
 {
@@ -10331,7 +8865,7 @@ static void ent_clean_hook(void)
 	// The cleanup also carries the effects attached to an entity over to its new DObj (a weapon change makes a new one) or kills them: rva 0x115110 saves the old DObj's models and tags
 	// before the old one is freed, rva 0x1151d0 re-attaches (or kills) afterwards, in the live effects system, which is context 0's. Context 1 has a system of its own (fxsplit) that
 	// never got this: the muzzle flash of a body whose weapon was changed stayed on it for ever in the other half. The same two calls are made for context 1's system.
-	if (native_active && ctx1_ready && ctx_store[1][RANGE_FX] && CFG_ONCE("fxsplit", mode == 11 ? 0 : 1) && CFG_ONCE("fxentfix", 1)) {
+	if (native_active && ctx1_ready && ctx_store[1][RANGE_FX] && CFG_ONCE("fxsplit", 0) && CFG_ONCE("fxentfix", 1)) {
 		struct {
 			uint8_t buf[528];
 			int ent, flag;
@@ -10912,16 +9446,6 @@ static void list_players_install(void)
 }
 
 void *n32_vm_blend_target;
-void n32_scene2d_hook(void *vp);
-void n32_final2d_hook(void *vp);
-void n32_scene2d_hook(void *vp)
-{
-	scene2d_hook(vp);
-}
-void n32_final2d_hook(void *vp)
-{
-	final2d_hook(vp);
-}
 unsigned n32_dobj_make_hook(void *info, void *dobj_info);
 unsigned n32_dobj_make_hook(void *info, void *dobj_info)
 {
@@ -10945,20 +9469,8 @@ __asm__(".text\n"
 	"	cmpl $0, (%esi)\n"
 	"	je 2f\n"
 	"1:	jmp *_n32_vm_blend_target\n"
-	"2:	ret\n"
-	".globl _n32_scene2d_stub\n"
-	"_n32_scene2d_stub:\n"
-	"	pushl %esi\n"
-	"	call _n32_scene2d_hook\n"
-	"	addl $4, %esp\n"
-	"	ret\n"
-	".globl _n32_final2d_stub\n"
-	"_n32_final2d_stub:\n"
-	"	pushl %esi\n"
-	"	call _n32_final2d_hook\n"
-	"	addl $4, %esp\n"
-	"	ret\n");
-extern char n32_dobj_make_stub[], n32_vm_blend_stub[], n32_scene2d_stub[], n32_final2d_stub[];
+	"2:	ret\n");
+extern char n32_dobj_make_stub[], n32_vm_blend_stub[];
 
 static int hook_calls32(const uint32_t *sites, size_t n, void *hook, void **original, const char *what)
 {
@@ -11244,12 +9756,10 @@ static int hooks_apply32_contexts(void)
 		if (!hook_calls32(snd_listener_site, 1, snd_listener_hook, (void **)&snd_listener_original, "sound listener"))
 			log_printf("native: the sound listener stays shared");
 	}
-	if (cfg("experiment", 0) >= 8) { // the console's way (mode 8 / 10): the 2D of the scene goes into layers of its own
-		static const uint32_t scene2d_site[] = {0x1536fc}, final2d_site[] = {0x1537ae}, wait_site[] = {RVA_WAIT_ALPHA_SITE};
-		if (!hook_calls32(scene2d_site, 1, n32_scene2d_stub, &scene2d_target, "scene 2D pass") || !hook_calls32(final2d_site, 1, n32_final2d_stub, &final2d_target, "frame 2D list") ||
-		    !hook_calls32(wait_site, 1, wait_alpha_hook, (void **)&wait_alpha_original, "wait alpha"))
+	{ // the alpha of the co-op "waiting for the other player" text (diagnostics, wait_alpha_hook)
+		static const uint32_t wait_site[] = {RVA_WAIT_ALPHA_SITE};
+		if (!hook_calls32(wait_site, 1, wait_alpha_hook, (void **)&wait_alpha_original, "wait alpha"))
 			return 0;
-		log_printf("native: 32-bit 2D layer hooks on");
 	}
 	swap_entities = cfg("swapent", 0);
 	skip_entity = cfg("skipent", 1);
@@ -11498,7 +10008,7 @@ static void hooks_apply32_mode11(void);
 static DWORD WINAPI coop_dvar_thread(LPVOID unused);
 #endif
 #ifndef _WIN64
-// The 32-bit port, step 1 (docs/32bit-native-map/): mode 2 only, the alternate frames and the compositor with the one player in both halves: [native] experiment=2 in settings.ini.
+// The 32-bit hooks (docs/32bit-native-map/)
 static int hooks_apply32(void)
 {
 	if (hooks_installed)
@@ -11510,12 +10020,11 @@ static int hooks_apply32(void)
 		log_printf("native: unexpected code at the cgame draw or its begin-frame call, the 32-bit split screen is off");
 		return 0;
 	}
-	if (cfg("experiment", 0) >= 5 && cfg("ctx", 1) && !hooks_apply32_contexts())
+	if (cfg("ctx", 1) && !hooks_apply32_contexts())
 		return 0;
 	if (mode == 11)
 		hooks_apply32_mode11();
-	if (cfg("experiment", 0) >= 5)
-		CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
+	CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
 	hooks_ok = 1;
 	return 1;
 }
@@ -11673,10 +10182,6 @@ static int hooks_apply(void)
 		log_printf("native: unexpected code at the cgame draw or begin frame, the split screen is off");
 		return 0;
 	}
-	if (!scene2d_original && (*(base + XR(0x5c5bf)) != 0xe8 || !jhook_call(base + XR(0x5c5bf), (void *)scene2d_hook, (void **)&scene2d_original))) {
-		log_printf("native: unexpected code at the scene's 2D pass, mode 10 is off");
-		return 0;
-	}
 	if (*(base + XR(0x5c484)) != 0xe8 || !jhook_call(base + XR(0x5c484), (void *)scene_clear_hook, (void **)&scene_clear_original))
 		log_printf("native: unexpected code at the scene pass's clear (0x5c484)");
 	if (*(base + XR(0x456ee)) != 0xe8 || !jhook_call(base + XR(0x456ee), (void *)scene3d_hook, (void **)&scene3d_original))
@@ -11749,10 +10254,6 @@ static int hooks_apply(void)
 		log_printf("native: unexpected code at R_RenderScene's call (0xca523) or its cgame calls (0x82dd, 0x6356): player 2 renders as player 0");
 	if (mode == 11)
 		shock_sect_install();
-	if (*(base + XR(0x4545b)) != 0xe8 || !jhook_call(base + XR(0x4545b), (void *)final2d_hook, (void **)&final2d_original)) {
-		log_printf("native: unexpected code at the frame's 2D command list, mode 10 is off");
-		return 0;
-	}
 	CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
 	hooks_ok = 1;
 	return 1;
@@ -11780,12 +10281,10 @@ static void session_reset(void)
 	draws_after_init = 0;
 	split_on = 0;
 	frame_bottom = 0;
-	place_pop();
-	video_pop();
 }
 
 // The split screen swaps whole ranges of the game's memory between two client contexts and draws through the game's device pointer. On a build whose addresses were looked up (addr.c), an address
-// that was not found stands in as a private block of zeros: a swap of such a range would silently copy nothing, and the compositor would find no device. The split screen is refused instead
+// that was not found stands in as a private block of zeros: a swap of such a range would silently copy nothing, and the Present hooks would find no device. The split screen is refused instead
 // (docs/address-resolution.md). Nothing changes on the known build or a build with its layout (addr_mode() 0: every address resolves to itself).
 static int split_addresses_ok(void)
 {
@@ -11802,7 +10301,7 @@ static int split_addresses_ok(void)
 				log_printf("native: the split screen needs the range at reference rva 0x%x, which was not found in this build", ranges[i].rva);
 		}
 #ifdef _WIN64
-	if (!addr_resolved(0x410fd20)) { // the game's device pointer (RVA_D3D_DEVICE): the compositor draws through it
+	if (!addr_resolved(0x410fd20)) { // the game's device pointer (RVA_D3D_DEVICE): the Present hooks are put on it
 		bad++;
 		log_printf("native: the split screen needs the game's device pointer (reference rva 0x410fd20), which was not found in this build");
 	}
@@ -11821,12 +10320,8 @@ static int activate(int players)
 	if (!split_addresses_ok())
 		return 0;
 	cfg_gen++;
-	mode = cfg("experiment", 10);
+	mode = 11;
 	p0_tail_on = cfg("p0tail", 1);
-#ifndef _WIN64
-	if (mode != 5 && mode != 10 && mode != 11)
-		mode = 5; // 32 bits: modes 5, 10 and 11 (the others are experiments of the 64-bit port's history)
-#endif
 	if (!hooks_apply() || !players_apply(players)) {
 		mode = 0;
 		return 0;
@@ -12025,21 +10520,12 @@ void native_install(void)
 	} else {
 		log_printf("native: Bink 16:9 movie fitting disabled by settings");
 	}
-#ifndef _WIN64
-	// the 32-bit port is switched on piece by piece: experiment=2 (alternate frames, compositor), then players=2 with experiment=5 (two client contexts)
-	if (cfg("players", 0) < 2 && cfg("experiment", 0) == 2) {
-		mode = 2;
-		hooks_apply32();
-		log_printf("native: 32-bit experiment 2 %s", hooks_ok ? "on" : "failed");
-		return;
-	}
-#endif
 	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
 		game_add_command(&native_commands[i]);
 	inputlog_open();
 	padglyphs_install(text_pad_player);
 #ifdef _WIN64
-	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0) || cfg("presentlog", 0) || settings_upscale() || settings_fsr3()) // presentlog: the frame cadence of the plain game too (QA: FSR against native)
+	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0) || cfg("presentlog", 0) || settings_fsr3()) // presentlog: the frame cadence of the plain game too (QA: FSR against native)
 		CreateThread(NULL, 0, device_hooks_thread, NULL, 0, NULL);
 #endif
 #ifndef _WIN64
@@ -12057,20 +10543,6 @@ void native_install(void)
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + XR(0x2bb0), dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");
 #endif
-	if (cfg("smoothlog", 0) && cfg("players", 0) < 2 && cfg("experiment", 0) < 2) { // plain game, for comparison: only the hooks, no session
-		mode = 0;
-		hooks_apply();
-#ifdef _WIN64
-		if (cfg("framelog", 0))
-			fs_install();
-		if (cfg("slicelog", 0))
-			slice_install();
-		if (cfg("entring", 0))
-			entring_install();
-#endif
-		log_printf("native: smoothlog in the plain game");
-		return;
-	}
 	// the QA runs: settings.ini [native] players=2 starts the session at once (the menu's button does it later, native_split_start)
 	int players = cfg("players", 0);
 	if (players >= 2)

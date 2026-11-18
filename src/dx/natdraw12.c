@@ -294,15 +294,6 @@ void nd_get_targets(nd *d, nat_image **color, nat_image **depth)
 	*color = d->rt;
 	*depth = d->ds;
 }
-int nd_target_is_full(nd *d)
-{
-	if (!d->rt)
-		return 1;
-	unsigned w, h, s, sw, sh;
-	nat_image_size(d->rt, &w, &h, &s);
-	nat_get_size(d->dev, &sw, &sh);
-	return w == sw && h == sh;
-}
 void nd_set_viewport(nd *d, float x, float y, float w, float h, float min_z, float max_z)
 {
 	d->vp[0] = x;
@@ -714,10 +705,8 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	}
 	state11_t st;
 	state11_decode(g->word0, g->word1, &st);
-	if (nd_layer_mode && !nd_layer_reroute)
-		state11_layer_fix(&st);
 	st.a2c = 0;
-	if (nd_atoc && st.alpha_test_enable && !nd_layer_mode) { // alpha to coverage on a multisampled target
+	if (nd_atoc && st.alpha_test_enable) { // alpha to coverage on a multisampled target
 		unsigned rw, rh, rs = 1;
 		if (d->rt)
 			nat_image_size(d->rt, &rw, &rh, &rs);
@@ -916,21 +905,6 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 			}
 		}
 	}
-	if (nd_layer_mode) {
-		state11_t st;
-		state11_decode(g->word0, g->word1, &st);
-		if (st.z_enable && st.z_func != 8) { // (a depth test that always passes is a 2D draw)
-			nat_image *rt = d->rt, *ds = d->ds;
-			d->rt = nd_layer_scene_rt;
-			d->ds = nd_layer_scene_ds;
-			nd_layer_reroute = 1;
-			const int r = nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
-			nd_layer_reroute = 0;
-			d->rt = rt;
-			d->ds = ds;
-			return r;
-		}
-	}
 	return nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
 }
 
@@ -972,7 +946,7 @@ static ID3D12PipelineState *blit_pso(nd *d, DXGI_FORMAT rtvf, unsigned samples, 
 	D3D12_RENDER_TARGET_BLEND_DESC *rb = &pd.BlendState.RenderTarget[0];
 	rb->RenderTargetWriteMask = 15;
 	rb->LogicOp = D3D12_LOGIC_OP_NOOP;
-	rb->SrcBlend = alpha == 1 ? D3D12_BLEND_SRC_ALPHA : D3D12_BLEND_ONE; // (alpha 2: premultiplied colour)
+	rb->SrcBlend = alpha == 1 ? D3D12_BLEND_SRC_ALPHA : D3D12_BLEND_ONE;
 	rb->DestBlend = alpha ? D3D12_BLEND_INV_SRC_ALPHA : D3D12_BLEND_ZERO;
 	rb->BlendOp = D3D12_BLEND_OP_ADD;
 	rb->SrcBlendAlpha = D3D12_BLEND_ONE;
@@ -1101,14 +1075,6 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	ID3D12GraphicsCommandList_IASetPrimitiveTopology(d->list, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	ID3D12GraphicsCommandList_DrawInstanced(d->list, 3, 1, 0, 0);
 	return 1;
-}
-
-int nd_overlay_premul(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const nd_rect *dr)
-{
-	d->blit_alpha = 2;
-	const int ok = nd_stretch(d, src, sr, dst, dr, 0);
-	d->blit_alpha = 0;
-	return ok;
 }
 
 int nd_overlay(nd *d, nat_image *src)

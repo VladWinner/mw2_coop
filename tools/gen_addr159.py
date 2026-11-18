@@ -1,5 +1,5 @@
 """Writes src/addr159.c: the table that turns the addresses of the official 32-bit build into those of the 1.0.159 iw4sp.exe (iw4x-sp profile). The addresses are
-collected from the source: XR(0x..) / XV(0x..) in src/*.c, and the tables of the 32-bit native code (ranges, probes, aim_dvar_rvas32, place_rvas32, server_n_sites32,
+collected from the source: XR(0x..) / XV(0x..) in src/*.c, and the tables of the 32-bit native code (ranges, probes, aim_dvar_rvas32, server_n_sites32,
 *_site(s) arrays, the context hook table); tools/map159.py maps each by byte signatures. tools/addr159_manual.txt holds what it cannot find:
   0x525c34 -> 0x529a74        (official RVA -> 159 RVA)
   0x525c34 = 0x525bc0 + 0x74  (derived from another address of the table)
@@ -108,7 +108,7 @@ def collect():
         m = re.search(r'range_t ranges\[\] = \{(.*?)\};', w32, re.S)
         for e in re.finditer(r'\{\s*(%s)\s*,' % HEX, m.group(1)):
             add(int(e.group(1), 16), 'ranges')
-        for name in ('probes', 'aim_dvar_rvas32', 'place_rvas32'):
+        for name in ('probes', 'aim_dvar_rvas32'):
             m = re.search(r'\b%s\[[^\]]*\]\s*=\s*\{(.*?)\};' % name, w32, re.S)
             for h in re.findall(HEX, m.group(1)):
                 add(int(h, 16), name)

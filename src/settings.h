@@ -33,7 +33,7 @@ const char *settings_ini_path(void);
 // so the render thread does not stop and a co-op partner is not left waiting. Not in the iw4x-sp profile (it has its own r_useD3D9Ex).
 int settings_d3d9ex(void);
 // settings.ini [display] directx11 (default 0, experimental): the game's own Direct3D 9 back end is replaced by the mod's native Direct3D 11 one (src/dx/natboot.c); no Direct3D 9 device
-// exists then, so what needs one (the mod's console overlay, screenshots, FSR 1 / FSR 3 / DLSS, the split screen compositor) is off. MW2COOP_NATIVE11=1 does the same for a test.
+// exists then, so what needs one (the mod's console overlay, screenshots, FSR 3 / DLSS) is off. MW2COOP_NATIVE11=1 does the same for a test.
 int settings_directx11(void);
 // settings.ini [display] directx12 (default 0, experimental): the same with the mod's native Direct3D 12 renderer (src/dx/nat12.c; MW2COOP_NATIVE12=1 for a test)
 int settings_directx12(void);
@@ -62,7 +62,7 @@ int settings_dlss(void);
 const char *settings_dlss_dir(void);
 // dlss_preset (empty by default: NVIDIA's own choice, the transformer model K for the quality mode): the DLSS model, a letter J, K, L or M.
 const char *settings_dlss_preset(void);
-// fsr3_sharpness (0-100, default 60): the sharpening FSR 3 applies to its output (0 = off).
+// fsr3_sharpness (0-100, default 60): the sharpening FSR 3 applies to its output, and the mod's RCAS pass to DLSS's (0 = off).
 int settings_fsr3_sharpness(void);
 void settings_set_fsr3_sharpness(int percent);
 // fsr3_refine (default 1): how FSR 3 gets motion for what moves on its own (soldiers, the weapon): 0 = the camera's motion only, 1 = strict image-based correction (near, clearly
@@ -70,12 +70,10 @@ void settings_set_fsr3_sharpness(int percent);
 int settings_fsr3_refine(void);
 // fsr3_lodbias (empty by default: AMD's log2(render / output) - 1): the texture LOD bias of the world pass with FSR 3; 1 and the value when set.
 int settings_fsr3_lodbias(float *bias);
-// settings.ini [display] upscale (default 0): the game renders at the size of its own video settings and is upscaled to upscale_width x upscale_height (FSR 1, upscale.c);
-// upscale_sharpness: the sharpening in hundredths of a stop of reduction (default 25; 0 = the strongest).
-int settings_upscale(void);
+// settings.ini [display] upscale_width / upscale_height: the output size of FSR 3 and DLSS (the game renders at the size of its own video settings and is upscaled to this, upscale.c);
+// the desktop's size when one of them is on and the keys are not set. ([display] upscale, FSR 1, was removed on 2026-11-18: an old upscale=1 is ignored.)
 int settings_upscale_width(void);
 int settings_upscale_height(void);
-int settings_upscale_sharpness(void);
 // settings.ini [display] d3d9on12_adapter (default -1: the adapter with the primary display attached): the graphics adapter index the Direct3D 12 device is made on.
 int settings_d3d9on12_adapter(void);
 // settings.ini [display] borderless (default 1): the game's exclusive full screen is made a window of the whole screen without a border (d3dcap.c).

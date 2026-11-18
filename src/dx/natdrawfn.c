@@ -81,9 +81,7 @@ void ngf_set_streams(ngf *f, void *state, void *buffer, int offset, int stride)
 static void apply_scissor(ngf *f, void *state)
 {
 	const int left = RD_I32(state, 0xb78);
-	int top = RD_I32(state, 0xb7c), bottom = top + RD_I32(state, 0xb84);
-	if (ng_scissor_hook)
-		ng_scissor_hook(&top, &bottom, left, left + RD_I32(state, 0xb80), nd_target_is_full(f->d));
+	const int top = RD_I32(state, 0xb7c), bottom = top + RD_I32(state, 0xb84);
 	nd_set_scissor_rect(f->d, left, top, left + RD_I32(state, 0xb80), bottom);
 }
 

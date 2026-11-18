@@ -1,5 +1,7 @@
 # Native split screen (one process, two local players): plan
 
+> **State (2026-11-18).** This is the first design and its history. The split screen now draws each player in a renderer frame of his own, as the Xbox 360 does (mode 11, [native-splitscreen-360.md](native-splitscreen-360.md)); it is the default in the 64-bit game, on the mod's DirectX 11 / 12 renderers, in the 32-bit game and on the iw4x-sp client. The modes 1-10 described here (alternate frames composed into two halves) were removed from the code on 2026-11-18 (owner); mode 11 is the only split screen, and `[native] experiment` is no longer read.
+
 Decision of the owner (2026-10-26): the two-process split screen (the old `src/splitscreen.c`, `src/instance.c`) is dropped as the way forward; a split
 screen inside the game itself is built. 2026-11-01: the two-process code is removed from the repo (it is in the git history); `src/devices.c` keeps the
 lobby's device choice, and the menu's Split screen button opens the lobby directly (no window or video mode change).

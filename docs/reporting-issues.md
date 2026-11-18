@@ -15,7 +15,7 @@ Before you write: look at the [known issues](../README.md#known-issues), the [ch
 7. **A video or screenshot** if the bug is something you see (a missing texture, a body in the wrong place, a stuck camera). Seconds before and after the problem help most.
 8. **Your setup**, if it could matter: Windows version, graphics card, windowed or full screen, a pad or keyboard and mouse.
 
-A crash: also say what was on screen and whether the game window closed or froze. The log of a crash holds the address of the fault; do not delete it.
+A crash: also say what was on screen and whether the game window closed or froze. The log of a crash holds the address of the fault; do not delete it. A crash also leaves `mw2coop\crash.dmp` (a dump of the process): attach it too (zip it if it is large).
 
 ## What to remove before you post
 

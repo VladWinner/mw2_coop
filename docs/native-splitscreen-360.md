@@ -1,5 +1,7 @@
 # Split screen the way the Xbox 360 game does it: study and plan (2026-11-14)
 
+> **State (2026-11-18).** Built: mode 11 (each player's renderer frame, both shown in one present) is the only split screen in every build (the older modes 1-10, mentioned below as `experiment=<n>`, were removed from the code on 2026-11-18); the console's own view boxes are an option (`[native] viewlayout=1`); Spec Ops takes the console game's split-screen branches; per view since: the shell shock's saved screen, the camera shakes, the hide marks, the effects; sounds are started once. The sections below are the study and the work log in order.
+
 Owner's request (2026-11-14): study how the Xbox 360 version does split screen and build the mod's the same way, instead of fixing the current design
 problem by problem. Reference: the owner's own disc (Ghidra project `local/ghidra-proj-x360`, read-only; nothing from it goes into the mod), and the PC
 exe. Earlier notes: [native-splitscreen-plan.md](native-splitscreen-plan.md) (the current design and its history).

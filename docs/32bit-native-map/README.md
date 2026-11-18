@@ -1,8 +1,28 @@
 # 32-bit port of the native split screen: where everything is
 
-`src/native.c` (4,400 lines) is written against the 64-bit build: about 230 addresses and many structure offsets. The 32-bit official build
+`src/native.c` (4,400 lines when the port started; about 12,000 now) is written against the 64-bit build: about 230 addresses and many structure offsets then. The 32-bit official build
 (`FC9E4843...52D7`, image base 0x400000) is the same engine compiled again, so every function and structure has a counterpart. This folder holds what
-was found for each one, a file per work package, so `native.c` can be given an address table for both builds.
+was found for each one, a file per work package, so `native.c` can be given an address table for both builds. The port is done (the 32-bit build and the iw4x-sp
+client run the split screen in mode 11 since 2026-11-17); the later files are notes of single fixes made for both builds.
+
+## Files
+
+| File | What |
+|---|---|
+| [aimrumble.md](aimrumble.md) | aim assist, rumble, player state fields and session control |
+| [clientctx.md](clientctx.md) | the second client context and the frame |
+| [entities.md](entities.md) | entities, DObjs and animation |
+| [inputui.md](inputui.md) | input, pads, text and menus |
+| [render.md](render.md) | the renderer and the compositor of the first split screen mode |
+| [mode11-frame.md](mode11-frame.md) | mode 11: each player's renderer frame and the back end |
+| [mode11-cgame.md](mode11-cgame.md) | mode 11: the cgame per player |
+| [mode11-hud.md](mode11-hud.md) | mode 11: the 2D, the HUD and the view rectangles |
+| [sound-once.md](sound-once.md) | world event sounds and effect sounds started once in split screen |
+| [shock-savedscreen.md](shock-savedscreen.md) | the shell shock's saved screen per view (2026-11-18) |
+| [weapon-animtype.md](weapon-animtype.md) | the third-person knife pose and the knife hand of Endgame (2026-11-18) |
+
+Address independence of what is mapped here: [../address-resolution.md](../address-resolution.md) (the signature files cover the 32-bit addresses; the iw4x-sp
+1.0.159 exe has its own table, `src/addr159.c`).
 
 ## How to find the 32-bit counterpart of a 64-bit function
 

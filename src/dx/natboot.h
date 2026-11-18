@@ -7,12 +7,7 @@ void *natboot_trap_device(void);
 int natboot_active(void);
 // QA / the console command !shot: the next presented frame goes to <game>\mw2coop\shots\<name>.bmp (name already cleaned)
 void natboot_shot(const char *name);
-// the split screen's 2D layers on the native renderers (natboot.c): the images exist (1), the scene's 2D pass is drawn into the layer of a half (begin / end)
-void natboot_scene_size(unsigned *w, unsigned *h); // the scene's size (0 before the device exists)
-int natboot_comp_make(void);
-void natboot_layer_begin(int half, int clear);
-void natboot_layer_end(void);
-// FSR 1 with a crisp HUD: begin upscales the 3D picture and points the 2D draws at the output-size image (1 when it did), end puts the targets back
+// FSR 3 / DLSS with a crisp HUD (native Direct3D 12): begin upscales the 3D picture and points the 2D draws at the output-size image (1 when it did), end puts the targets back
 int natboot_hud_begin(void);
 void natboot_hud_end(void);
 // textures of the active native renderer for the mod's own code (src/modtex.c)
@@ -24,10 +19,6 @@ void natboot_tex_release(void *img);
 #else
 static inline int natboot_active(void) { return 0; } // the native renderer is 64-bit only
 static inline void natboot_shot(const char *name) { (void)name; }
-static inline void natboot_scene_size(unsigned *w, unsigned *h) { *w = *h = 0; }
-static inline int natboot_comp_make(void) { return 0; }
-static inline void natboot_layer_begin(int half, int clear) { (void)half; (void)clear; }
-static inline void natboot_layer_end(void) {}
 static inline int natboot_hud_begin(void) { return 0; }
 static inline void natboot_hud_end(void) {}
 static inline void *natboot_tex_create(unsigned w, unsigned h, unsigned levels, unsigned d3dfmt) { (void)w; (void)h; (void)levels; (void)d3dfmt; return 0; }

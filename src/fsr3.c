@@ -1,6 +1,6 @@
 // FSR 3 (AMD FidelityFX upscaler) on the game's frame, through Windows' Direct3D 9 on Direct3D 12 layer (settings.ini [display] d3d9on12, switched on by fsr3=1).
 //
-// What runs at each Present (after the mod's compositor, before the console):
+// What runs at each Present (before the console):
 //   1. the back buffer (a Direct3D 9 surface) is unwrapped to its Direct3D 12 resource (IDirect3DDevice9On12::UnwrapUnderlyingResource) and copied into a texture of ours;
 //   2. FSR 3 is dispatched on a command list of ours with that texture as the color, a depth and a motion vector texture, a jitter, and an output texture;
 //   3. the output is copied back into the back buffer, the resource is returned to Direct3D 9 with a fence, so Direct3D 9 waits for it on the GPU.
@@ -761,8 +761,15 @@ static const char compose_cs[] =
 // The sharpening pass for DLSS. DLSS Super Resolution has no sharpening of its own any more (NVIDIA removed it), and its output measured about a third softer than the game's own picture
 // and than FSR 3 with its sharpening (mean luminance gradient 12-14 against 18-20, 2026-11-08). FSR 3 sharpens inside its dispatch with RCAS; the same RCAS runs here on DLSS's output,
 // with the same setting ([display] fsr3_sharpness, 0-100) and the same mapping to RCAS's constant as FSR 2/3 use (2 ^ -(2 - 2 * sharpness)).
-// A port of RCAS from AMD's FidelityFX FSR 1 header (ffx_fsr1.h, MIT license, Copyright (C) Advanced Micro Devices, Inc.; the full notice is in src/upscale.c, whose Direct3D 9 port
-// this follows: exact divisions kept finite, no noise detection).
+// A port of RCAS from AMD's FidelityFX FSR 1 header (ffx_fsr1.h, FidelityFX SDK, MIT license, Copyright (C) Advanced Micro Devices, Inc.): exact divisions kept finite, no noise
+// detection (off in AMD's default). The same port, as a pixel shader, sharpens DLSS's output on the native Direct3D 12 renderer (src/dx/nat12.c RCAS_PS). The license's notice:
+//   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without
+//   restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+//   Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+//   the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+//   PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+//   TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+// (FSR 1 itself, the Direct3D 9 port of EASU + RCAS in src/upscale.c that this followed, was removed on 2026-11-18.)
 static const char sharpen_cs[] =
 	"cbuffer C : register(b0) { uint w; uint h; float con; uint pad; };\n"
 	"Texture2D<float4> src : register(t0);\n"

@@ -55,7 +55,7 @@ nat_query *ngfr_issue_next(ngfr *r, void **slot)
 	return q;
 }
 
-int natframe_skip_present; // the split screen compositor (natboot.c): the first frame of a pair is composed but not shown
+int natframe_skip_present; // the split screen (natboot.c w_45060): player 1's renderer frame is drawn but not shown
 
 int ngfr_present_and_issue(ngfr *r)
 {

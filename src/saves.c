@@ -271,7 +271,7 @@ static DWORD WINAPI fast_restart_wait(LPVOID unused)
 static const uint32_t commit_write_sites[] = {RVA_COMMIT_SITE_1, RVA_COMMIT_SITE_2, RVA_COMMIT_SITE_3, RVA_COMMIT_SITE_4};
 #endif
 // (32 bits: the function itself, from its 13th byte: the iw4x-sp exe reached it from another place than the two calls of the official one, and the level's autosaves
-// went to players\saveutosave there; QA 2026-11-17)
+// went to players\save\autosave there; QA 2026-11-17)
 static uintptr_t (*commit_write_orig)(void *); // (32 bits: cdecl, the slot pushed)
 
 // ---- snapshots: the co-op checkpoint on disk, for "Continue" in a later session

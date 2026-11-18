@@ -8,9 +8,6 @@
 #include <dxgi.h>
 #include "natswap.h"
 #include <dxgi1_6.h>
-#include "natup.h"
-#define BW(d) ((d)->p.out_width ? (d)->p.out_width : (d)->p.width)
-#define BH(d) ((d)->p.out_height ? (d)->p.out_height : (d)->p.height)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,16 +40,8 @@ struct nat_device {
 	// HDR: the swap chain is scRGB (R16G16B16A16_FLOAT, linear, 1.0 = 80 nits) and the present is a pass that converts the scene into it
 	int hdr_on;
 	ID3D11RenderTargetView *back_rtv;
-	nat_shader *hdr_vs, *hdr_ps, *easu_ps, *rcas_ps;
+	nat_shader *hdr_vs, *hdr_ps;
 	ID3D11SamplerState *hdr_smp;
-	int up_on; // the picture is upscaled (FSR 1) from the scene size to the swap chain's
-	struct up_img {
-		ID3D11Texture2D *tex;
-		ID3D11RenderTargetView *rtv;
-		ID3D11ShaderResourceView *srv;
-	} up_a, up_b;
-	nat_image *up_out; // the upscaled picture (output size): the RCAS target, then the 2D passes' target
-	int up_done; // this frame's upscale was done by nat_upscale_now
 	ID3D11Buffer *hdr_cb;
 	ID3D11RasterizerState *hdr_rs;
 	ID3D11DepthStencilState *hdr_ds;
@@ -86,17 +75,6 @@ static void release_targets(nat_device *d)
 	REL(d->depth);
 	REL(d->backbuffer);
 	REL(d->back_rtv);
-	REL(d->up_a.rtv);
-	REL(d->up_a.srv);
-	REL(d->up_a.tex);
-	REL(d->up_b.rtv);
-	REL(d->up_b.srv);
-	REL(d->up_b.tex);
-	if (d->up_out) {
-		nat_image_destroy(d->up_out);
-		d->up_out = NULL;
-	}
-	d->up_done = 0;
 }
 
 static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size);
@@ -124,12 +102,12 @@ static void hdr_setup(nat_device *d)
 	if (FAILED(IUnknown_QueryInterface((IUnknown *)d->swap, &IID_IDXGISwapChain3, (void **)&s3)) || !s3)
 		return;
 	// (the support is asked for the swap chain's current format: the buffers become half float first, and go back when scRGB is not available)
-	const HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, BW(d), BH(d), DXGI_FORMAT_R16G16B16A16_FLOAT, ns_swap_flags(d->tearing));
+	const HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, d->p.width, d->p.height, DXGI_FORMAT_R16G16B16A16_FLOAT, ns_swap_flags(d->tearing));
 	const HRESULT hc = SUCCEEDED(hr) ? IDXGISwapChain3_CheckColorSpaceSupport(s3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, &support) : hr;
 	if (SUCCEEDED(hc) && (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) && SUCCEEDED(IDXGISwapChain3_SetColorSpace1(s3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)))
 		d->hdr_on = 1;
 	else if (SUCCEEDED(hr))
-		IDXGISwapChain_ResizeBuffers(d->swap, 0, BW(d), BH(d), DXGI_FORMAT_B8G8R8A8_UNORM, ns_swap_flags(d->tearing));
+		IDXGISwapChain_ResizeBuffers(d->swap, 0, d->p.width, d->p.height, DXGI_FORMAT_B8G8R8A8_UNORM, ns_swap_flags(d->tearing));
 	if (nat_log_hook)
 		nat_log_hook("native11: HDR: ResizeBuffers %lx, colour space support %lx / %x -> %s", (unsigned long)hr, (unsigned long)hc, support, d->hdr_on ? "scRGB on" : "off");
 	IDXGISwapChain3_Release(s3);
@@ -150,7 +128,7 @@ static const char HDR_PS[] =
 	"  return float4(lin * e * k.x, 1.0);\n"
 	"}\n";
 
-// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the final passes (FSR 1, HDR)
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the final pass (HDR)
 static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size);
 
 // one full-screen pass: the shader's texture t0 is `srv`, its constants (up to four float4) are k, the target is `rtv` of w x h pixels
@@ -205,106 +183,25 @@ static int pass11(nat_device *d, nat_shader *ps, ID3D11ShaderResourceView *srv, 
 	return 1;
 }
 
-// a render target texture of the output size (RGBA8) and its views, for the passes' intermediate pictures
-static int up_target(nat_device *d, struct up_img *u)
-{
-	if (u->tex)
-		return 1;
-	D3D11_TEXTURE2D_DESC td = {0};
-	td.Width = BW(d);
-	td.Height = BH(d);
-	td.MipLevels = 1;
-	td.ArraySize = 1;
-	td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	td.SampleDesc.Count = 1;
-	td.Usage = D3D11_USAGE_DEFAULT;
-	td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
-	if (FAILED(ID3D11Device_CreateTexture2D(d->dev, &td, NULL, &u->tex)))
-		return 0;
-	ID3D11Device_CreateRenderTargetView(d->dev, (ID3D11Resource *)u->tex, NULL, &u->rtv);
-	ID3D11Device_CreateShaderResourceView(d->dev, (ID3D11Resource *)u->tex, NULL, &u->srv);
-	return u->rtv && u->srv;
-}
-
-// the upscale: the scene (resolved when multisampled) -> EASU -> RCAS into up_out (output size); 0 when it cannot be done
-static int up_stage(nat_device *d)
-{
-	char err[160];
-	if (!d->up_on)
-		return 0;
-	if (!d->easu_ps) {
-		char *e = nu_shader(0), *r = nu_shader(1);
-		d->easu_ps = shader_from_hlsl(d, e, 0, err, sizeof(err));
-		d->rcas_ps = shader_from_hlsl(d, r, 0, err, sizeof(err));
-		free(e);
-		free(r);
-		if (!d->easu_ps || !d->rcas_ps) {
-			if (nat_log_hook)
-				nat_log_hook("native11: FSR 1 shaders failed: %s", err);
-			d->up_on = 0;
-			return 0;
-		}
-	}
-	if (!d->up_out) {
-		nat_image_desc ud = {NAT_IMAGE_2D, BW(d), BH(d), 1, 1, 21, NAT_RENDER_TARGET, 0};
-		d->up_out = nat_image_create(d, &ud);
-	}
-	if (!up_target(d, &d->up_a) || !d->up_out)
-		return 0;
-	nat_scene_resolve(d);
-	const float fin_w = (float)d->p.width, fin_h = (float)d->p.height, fout_w = (float)BW(d), fout_h = (float)BH(d);
-	const float con[16] = {
-		fin_w / fout_w, fin_h / fout_h, 0.5f * fin_w / fout_w - 0.5f, 0.5f * fin_h / fout_h - 0.5f,
-		1.0f / fin_w, 1.0f / fin_h, 1.0f / fin_w, -1.0f / fin_h,
-		-1.0f / fin_w, 2.0f / fin_h, 1.0f / fin_w, 2.0f / fin_h,
-		0.0f, 4.0f / fin_h, 0.0f, 0.0f,
-	};
-	if (!pass11(d, d->easu_ps, d->scene_srv, con, 4, d->up_a.rtv, BW(d), BH(d)))
-		return 0;
-	float sharp = 1.0f;
-	for (int i = 0; i < d->p.up_sharp; i++)
-		sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
-	const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
-	if (!pass11(d, d->rcas_ps, d->up_a.srv, k0, 1, (ID3D11RenderTargetView *)nat_image_rtv(d->up_out, 0), BW(d), BH(d)))
-		return 0;
-	d->up_done = 1;
-	return 1;
-}
-
+// No upscaler on Direct3D 11 (FSR 1, its only one, was removed on 2026-11-18; FSR 3 and DLSS need Direct3D 12): the picture is always the window's size.
 nat_image *nat_upscale_now(nat_device *d)
 {
-	if (!d->up_on || d->up_done)
-		return d->up_done ? d->up_out : NULL;
-	return up_stage(d) ? d->up_out : NULL;
+	(void)d;
+	return NULL;
 }
 
-// the present of an upscaled and / or HDR picture: scene -> (EASU -> RCAS: already done when the 2D passes drew into it) -> (HDR conversion) -> the back buffer; 0 when it could not be done
+// the present of an HDR picture: scene -> HDR conversion -> the back buffer; 0 when it could not be done
 static int final_passes(nat_device *d)
 {
 	char err[160];
-	if (!d->back_rtv)
+	if (!d->back_rtv || !d->hdr_on)
 		return 0;
-	ID3D11ShaderResourceView *src;
-	if (d->up_on) {
-		if (!d->up_done && !up_stage(d))
-			return 0;
-		src = (ID3D11ShaderResourceView *)nat_image_srv(d->up_out, 0);
-	} else {
-		nat_scene_resolve(d);
-		src = d->scene_srv;
-	}
-	if (d->hdr_on) {
-		if (!d->hdr_ps)
-			d->hdr_ps = shader_from_hlsl(d, HDR_PS, 0, err, sizeof(err));
-		const float white = (float)(d->p.hdr_white > 0 ? d->p.hdr_white : 200), peak = (float)(d->p.hdr_peak > 0 ? d->p.hdr_peak : 600);
-		const float k[4] = {white / 80.0f, peak > white ? peak / white : 1.0f, 0, 0};
-		return pass11(d, d->hdr_ps, src, k, 1, d->back_rtv, BW(d), BH(d));
-	}
-	if (d->up_on) { // the upscaled picture (with its 2D) is the frame
-		ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)d->backbuffer, (ID3D11Resource *)nat_image_resource(d->up_out));
-		return 1;
-	}
-	return 0;
+	nat_scene_resolve(d);
+	if (!d->hdr_ps)
+		d->hdr_ps = shader_from_hlsl(d, HDR_PS, 0, err, sizeof(err));
+	const float white = (float)(d->p.hdr_white > 0 ? d->p.hdr_white : 200), peak = (float)(d->p.hdr_peak > 0 ? d->p.hdr_peak : 600);
+	const float k[4] = {white / 80.0f, peak > white ? peak / white : 1.0f, 0, 0};
+	return pass11(d, d->hdr_ps, d->scene_srv, k, 1, d->back_rtv, d->p.width, d->p.height);
 }
 
 static int build_targets(nat_device *d, char *err, size_t err_size)
@@ -314,7 +211,7 @@ static int build_targets(nat_device *d, char *err, size_t err_size)
 		set_err(err, err_size, "swap chain buffer: %lx", (unsigned long)hr);
 		return 0;
 	}
-	if (d->hdr_on || d->up_on)
+	if (d->hdr_on)
 		ID3D11Device_CreateRenderTargetView(d->dev, (ID3D11Resource *)d->backbuffer, NULL, &d->back_rtv);
 	D3D11_TEXTURE2D_DESC td = {0};
 	td.Width = d->p.width;
@@ -467,8 +364,8 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	IDXGIDevice_Release(dxdev);
 	d->samples = pick_samples(d, p->msaa);
 	DXGI_SWAP_CHAIN_DESC sc = {0};
-	sc.BufferDesc.Width = BW(d);
-	sc.BufferDesc.Height = BH(d);
+	sc.BufferDesc.Width = d->p.width;
+	sc.BufferDesc.Height = d->p.height;
 	sc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	sc.SampleDesc.Count = 1;
 	sc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -486,7 +383,6 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	}
 	d->waitable = ns_waitable((IUnknown *)d->swap, d->p.low_latency ? 1 : 2);
 	IDXGIFactory_MakeWindowAssociation(d->factory, d->hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER); // the game handles Alt+Enter itself
-	d->up_on = d->p.out_width != 0 && (d->p.out_width != d->p.width || d->p.out_height != d->p.height);
 	if (d->p.hdr)
 		hdr_setup(d);
 	if (!build_targets(d, err, err_size)) {
@@ -542,13 +438,13 @@ int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size)
 		d->fullscreen_set = 0;
 	}
 	DXGI_MODE_DESC m = {0};
-	m.Width = BW(d);
-	m.Height = BH(d);
+	m.Width = d->p.width;
+	m.Height = d->p.height;
 	m.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	IDXGISwapChain_ResizeTarget(d->swap, &m);
 	if (p->fullscreen && !d->fullscreen_set && SUCCEEDED(IDXGISwapChain_SetFullscreenState(d->swap, TRUE, NULL)))
 		d->fullscreen_set = 1;
-	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, BW(d), BH(d), d->hdr_on ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
+	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, d->p.width, d->p.height, d->hdr_on ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
 	if (FAILED(hr)) {
 		set_err(err, err_size, "ResizeBuffers: %lx", (unsigned long)hr);
 		return 0;
@@ -562,7 +458,7 @@ void nat_scene_resolve(nat_device *d)
 		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->resolved, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
 }
 
-// QA: MW2COOP_DUMPBACK=<n>: the back buffer (B8G8R8A8) of the n-th present is written to mw2coop\native11\back.bmp (what the upscaling passes made)
+// QA: MW2COOP_DUMPBACK=<n>: the back buffer (B8G8R8A8) of the n-th present is written to mw2coop\native11\back.bmp (what the final pass made)
 static void dump_back(nat_device *d, unsigned n)
 {
 	D3D11_TEXTURE2D_DESC td;
@@ -605,18 +501,15 @@ static void dump_back(nat_device *d, unsigned n)
 
 int nat_present(nat_device *d)
 {
-	if ((d->hdr_on || d->up_on) && final_passes(d)) {
+	if (d->hdr_on && final_passes(d)) {
 		static unsigned n_present;
 		if (getenv("MW2COOP_DUMPBACK") && ns_dump_wanted(++n_present))
 			dump_back(d, n_present);
 	}
-	else if (BW(d) != d->p.width || BH(d) != d->p.height)
-		; // (upscaling failed: there is nothing to copy 1:1)
 	else if (d->samples > 1)
 		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->backbuffer, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
 	else
 		ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)d->backbuffer, (ID3D11Resource *)d->scene);
-	d->up_done = 0;
 	HRESULT hr = IDXGISwapChain_Present(d->swap, d->p.vsync ? 1 : 0, ns_present_flags(d->tearing, d->p.vsync, d->fullscreen_set));
 	if (d->waitable) // the next frame starts when the swap chain can take it (at most the set number of frames are queued: lower input latency)
 		WaitForSingleObjectEx(d->waitable, 100, TRUE);

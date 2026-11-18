@@ -1,5 +1,5 @@
 #!/bin/sh
-# Native split screen QA (docs/native-splitscreen-plan.md): ONE copy, two players in one process, in 1920x1080 on the display named in local/test-display.txt.
+# Native split screen QA (mode 11, docs/native-splitscreen-360.md): ONE copy, two players in one process, in 1920x1080 on the display named in local/test-display.txt.
 # Usage: tools/qa_native.sh [seconds in the level after the map command, default 200] [extra [native] lines, ";"-separated, e.g. "p1pad=0;entlog=1"]
 #   MW2COOP_MAP     the map (default trainer)
 #   MW2COOP_PRE     extra console commands before the map, ";"-separated
@@ -30,17 +30,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	if [ -z "${MW2COOP_MENU:-}" ] && [ -z "${MW2COOP_LOBBY:-}" ] && [ -z "${MW2COOP_PLAIN:-}" ]; then
 		echo "players=2"
 		echo "coopdvar=1"
-		echo "experiment=${MW2COOP_MODE:-10}"
-		# The split's modes are only meaningful on the mod's own renderer: warn loudly when a run asks for one without a [display] section, which would
-		# silently run the game's Direct3D 9 instead (and, for mode 11, not even the mode asked for).
-		case "${MW2COOP_MODE:-10}" in
-		11) [ -z "${MW2COOP_DISPLAY:-}" ] && echo "WARNING: MW2COOP_MODE=${MW2COOP_MODE:-10} without MW2COOP_DISPLAY: the run uses the game's Direct3D 9 and the native path is not installed" >&2 ;;
-		esac
 		echo "fov=${MW2COOP_FOV:-49}"
 		echo "p1cmd=1"
 		echo "listplayers=1"
 	fi
-	echo "seqat=${MW2COOP_SEQAT:-3000}" # twelve composed frames from composed frame 3000 on (the newest becomes local/scratch/native-last.png); off in the game itself
+	echo "shot11=${MW2COOP_SHOT11:-3000}" # four frames of the window from present 3000 on, 600 apart ("m11-<n>.bmp"; the newest becomes local/scratch/native-last.png); off in the game itself
 	[ -n "$EXTRA" ] && echo "$EXTRA" | tr ';' '\n'
 } > "$A/mw2coop/settings.ini"
 {
@@ -87,12 +81,12 @@ CFG=$A/players/config.cfg
 sed -i 's/^seta r_mode .*/seta r_mode "'"$RES"'"/; s/^seta r_customMode .*/seta r_customMode "'"$RES"'"/; s/^seta r_fullscreen .*/seta r_fullscreen "${MW2COOP_R_FULLSCREEN:-0}"/; s/^seta vid_xpos .*/seta vid_xpos "'"${MW2COOP_XPOS:-0}"'"/; s/^seta vid_ypos .*/seta vid_ypos "0"/' "$CFG"
 # MW2COOP_DISPLAYMODE: "fullscreen", "windowed (no border)" (borderless: the monitor's rectangle) or "windowed" (the default of these runs)
 sed -i 's/^seta r_displayMode .*/seta r_displayMode "'"${MW2COOP_DISPLAYMODE:-windowed}"'"/' "$CFG"
-rm -f "$A/mw2coop/mw2coop.log" "$A/mw2coop"/shots/seq-*.bmp
+rm -f "$A/mw2coop/mw2coop.log" "$A/mw2coop"/shots/m11-*.bmp
 # the QA fake pads (a stick value stays until it is changed: an old fakepad0.txt made player 1 walk forward in every run with p0pad=0): both stand still unless the caller set them
 [ -n "${MW2COOP_KEEP_FAKEPAD:-}" ] || { echo "0 0 0 0 0 0 0" > "$A/mw2coop/fakepad0.txt"; echo "0 0 0 0 0 0 0" > "$A/mw2coop/fakepad.txt"; }
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/run_test.ps1" -Tag native -Timeout ${MW2COOP_TIMEOUT:-$((LEVEL_S + 50))} -TestRoot "$(cygpath -w "$ROOT")" -Dirs "$(cygpath -w "$A")" | tail -2
-grep -a -E "CRASH: exc|split view|device reset|compositor on" "$A/mw2coop/mw2coop.log" | sed 's/^\([0-9:.]*\) \[[ 0-9]*\] /\1 /' | cut -c1-120
-LAST=$(ls "$A"/mw2coop/shots/seq-*.bmp 2>/dev/null | tail -1)
+grep -a -E "CRASH: exc|split view|device reset|split screen session on" "$A/mw2coop/mw2coop.log" | sed 's/^\([0-9:.]*\) \[[ 0-9]*\] /\1 /' | cut -c1-120
+LAST=$(ls -t "$A"/mw2coop/shots/m11-*.bmp 2>/dev/null | head -1)
 if [ -n "$LAST" ]; then
 	OUT=$(cygpath -w "$(cd "$HERE/../.." && pwd)/scratch/native-last.png")
 	mkdir -p "$(dirname "$(cygpath -u "$OUT")")"

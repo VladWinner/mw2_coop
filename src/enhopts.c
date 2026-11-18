@@ -9,7 +9,8 @@
 //   - a dvar that mirrors settings.ini: read from the file when the page is made, written back when the player changes it. Some take effect at once (the upscaler's sharpening,
 //     the HUD text sizes: settings.c has setters for them); the rest are read while the graphics device is created, so a change of one of them opens a pop-up that suggests
 //     restarting the game (owner, 2026-11-11: no "(restart)" in the rows' names, a pop-up instead).
-// The upscalers are one row with a choice (owner: "make switchable, Upscaler FSR1 FSR3 DLSS"): Off, FSR 1, FSR 3, DLSS; it writes the three keys upscale / fsr3 / dlss.
+// The upscalers are one row with a choice (owner: "make switchable, Upscaler FSR1 FSR3 DLSS"): Off, FSR 3, DLSS; it writes the two keys fsr3 / dlss. FSR 1 (its key was
+// "upscale") was removed on 2026-11-18 (owner: "remove FSR1 altogether"): a file that still switches it on shows Off. 64-bit build only: the 32-bit builds have no upscaler, so no row.
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,15 +30,14 @@
 #define MULTI_VALUE 0x200
 #define MULTI_COUNT 0x280
 #define MULTI_SIZE 0x288
-#define UPSCALERS 4 // Off, FSR 1, FSR 3, DLSS
 #else
 #define RVA_DVAR_REGISTER_BOOL XR(0x866b0)
 #define RVA_DVAR_REGISTER_FLOAT XR(0x9f700)
 #define MULTI_VALUE 0x100
 #define MULTI_COUNT 0x180
 #define MULTI_SIZE 0x188
-#define UPSCALERS 2 // Off, FSR 1 (FSR 3 and DLSS need the 64-bit build)
 #endif
+#define UPSCALERS 3 // Off, FSR 3, DLSS (the row is in the 64-bit build only)
 #ifdef _WIN64
 #define ITEM_FONT 0xd0 // int fontEnum, then textAlignMode (int), textalignx and textaligny (float), as in menus.c
 #else
@@ -67,7 +67,7 @@ typedef struct {
 	const char *label;	   // the row's text (a localized reference, src/localize.c)
 	int kind;
 	float lo, hi, def;
-	const char *section, *key; // settings.ini: where the value is kept; NULL: the game's config keeps the dvar (K_UPSCALER: three keys, see upscaler_write)
+	const char *section, *key; // settings.ini: where the value is kept; NULL: the game's config keeps the dvar (K_UPSCALER: two keys, see upscaler_write)
 	int own;		   // 1: registered here; 0: the game's own dvar
 	int live;		   // what a change does at once
 	int restart;		   // it takes effect when the game starts next: a change opens the pop-up
@@ -78,8 +78,8 @@ typedef struct {
 static const opt_t opts[] = {
     {"mw2coop_opt_fov", "@MW2COOP_ENH_FOV", K_SLIDER, 65, 120, 65, NULL, NULL, 1, LIVE_FOV, 0, "Enhanced: field of view in degrees (65: the game's own)", GROUP_PICTURE},
     {"com_maxfps", "@MW2COOP_ENH_MAXFPS", K_SLIDER, 0, 300, 0, NULL, NULL, 0, LIVE_NONE, 0, NULL, GROUP_PICTURE},
-    {"mw2coop_opt_upscaler", "@MW2COOP_ENH_UPSCALER", K_UPSCALER, 0, UPSCALERS - 1, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: the upscaler, 0 off, 1 FSR 1, 2 FSR 3, 3 DLSS (next start)", GROUP_UPSCALING},
 #ifdef _WIN64
+    {"mw2coop_opt_upscaler", "@MW2COOP_ENH_UPSCALER", K_UPSCALER, 0, UPSCALERS - 1, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: the upscaler, 0 off, 1 FSR 3, 2 DLSS (next start)", GROUP_UPSCALING},
     {"mw2coop_opt_sharp", "@MW2COOP_ENH_SHARP", K_SLIDER, 0, 100, 60, "display", "fsr3_sharpness", 1, LIVE_SHARP, 0, "Enhanced: sharpening of FSR 3 and DLSS, 0-100", GROUP_UPSCALING},
 #endif
     {"mw2coop_opt_hudtext", "@MW2COOP_ENH_HUDTEXT", K_SLIDER, 20, 200, 50, "display", "hudtextscale", 1, LIVE_HUDTEXT, 0, "Enhanced: size of the objective labels, percent", GROUP_HUD},
@@ -121,26 +121,23 @@ static float value_of(int o)
 	return d->current.value;
 }
 
-// the upscaler in settings.ini: three switches (dlss wins over fsr3, fsr3 over upscale, as settings.c reads them)
+// the upscaler in settings.ini: two switches (dlss wins over fsr3, as settings.c reads them). FSR 1's key (removed on 2026-11-18) is not read: a file with only that one on shows Off.
 static int upscaler_read(const char *path)
 {
 	int v = 0;
-	if (GetPrivateProfileIntA("display", "upscale", 0, path))
+	if (GetPrivateProfileIntA("display", "fsr3", 0, path))
 		v = 1;
-	if (UPSCALERS > 2 && GetPrivateProfileIntA("display", "fsr3", 0, path))
+	if (GetPrivateProfileIntA("display", "dlss", 0, path))
 		v = 2;
-	if (UPSCALERS > 3 && GetPrivateProfileIntA("display", "dlss", 0, path))
-		v = 3;
 	return v;
 }
 
 static void upscaler_write(const char *path, int v)
 {
-	int ok = WritePrivateProfileStringA("display", "upscale", v == 1 ? "1" : "0", path);
-	ok &= WritePrivateProfileStringA("display", "fsr3", v == 2 ? "1" : "0", path);
-	ok &= WritePrivateProfileStringA("display", "dlss", v == 3 ? "1" : "0", path);
+	int ok = WritePrivateProfileStringA("display", "fsr3", v == 1 ? "1" : "0", path);
+	ok &= WritePrivateProfileStringA("display", "dlss", v == 2 ? "1" : "0", path);
 	if (ok)
-		log_printf("enhopts: settings.ini [display] upscale=%d fsr3=%d dlss=%d (the upscaler: %s)", v == 1, v == 2, v == 3, v == 1 ? "FSR 1" : v == 2 ? "FSR 3" : v == 3 ? "DLSS" : "off");
+		log_printf("enhopts: settings.ini [display] fsr3=%d dlss=%d (the upscaler: %s)", v == 1, v == 2, v == 1 ? "FSR 3" : v == 2 ? "DLSS" : "off");
 	else
 		log_printf("enhopts: settings.ini could not be written (the upscaler, error %lu)", GetLastError());
 }
@@ -222,13 +219,13 @@ static void hold_fov(void)
 }
 
 // FSR 3 and DLSS run on the Direct3D 12 layer (settings.c switches it on for them, fsr3.c does nothing without it). The two rows follow that: choosing FSR 3 or DLSS sets DirectX to 12,
-// choosing DirectX 9 while one of them is on turns the upscaler off (FSR 1 and the plain game need no layer). The one that was changed last decides.
+// choosing DirectX 9 while one of them is on turns the upscaler off (the plain game needs no layer). The one that was changed last decides.
 static void keep_upscaler_and_directx(int changed_upscaler, int changed_directx)
 {
 	const int iu = opt_index("mw2coop_opt_upscaler"), id = opt_index("mw2coop_opt_directx");
 	if ((!changed_upscaler && !changed_directx) || iu < 0 || id < 0 || !dvars[iu] || !dvars[id])
 		return;
-	if (value_of(iu) < 1.5f || value_of(id) > 2.5f) // (12 is what FSR 3 and DLSS need: with 9, 9Ex or 11 chosen the two rows disagree)
+	if (value_of(iu) < 0.5f || value_of(id) > 2.5f) // (Off needs nothing; 12 is what FSR 3 and DLSS need: with 9, 9Ex or 11 chosen the two rows disagree)
 		return;
 	if (changed_directx && !changed_upscaler) {
 		game_cbuf_addtext("set mw2coop_opt_upscaler 0\n");
@@ -388,7 +385,7 @@ static void append_on_close(uint8_t *menu, const char *script)
 	*(ev_set_t **)(menu + MENU_ON_CLOSE) = set;
 }
 
-// The sharpening row (control, label, number) is drawn dimmed while the upscaler is Off or FSR 1: it only does something for FSR 3 and DLSS (Vlad, 2026-11-13)
+// The sharpening row (control, label, number) is drawn dimmed while the upscaler is Off: it only does something for FSR 3 and DLSS (Vlad, 2026-11-13)
 // The same for the rows that only the native DirectX 11 / 12 renderers read (MSAA, anisotropy, HDR, low frame delay): dimmed while the DirectX version is 9 or 9Ex, where they do nothing.
 static uint8_t *grey_items[OPTS][3];
 static float grey_alpha[OPTS][3];
@@ -455,7 +452,7 @@ static void add_page(void)
 				*(void **)(control + ITEM_TYPE_DATA) = field;
 			} else {
 				if (t->kind == K_UPSCALER || t->kind == K_DIRECTX) {
-					static const char *const upscaler_names[4] = {"@MW2COOP_ENH_OFF", "FSR 1", "FSR 3", "DLSS"};
+					static const char *const upscaler_names[UPSCALERS] = {"@MW2COOP_ENH_OFF", "FSR 3", "DLSS"};
 					static const char *const directx_names[4] = {"DirectX 9", "DirectX 9Ex", "DirectX 11", "DirectX 12"};
 					control = t->kind == K_UPSCALER ? choice_item(menu, upscaler_names, UPSCALERS) : choice_item(menu, directx_names, 4);
 					if (!control) {
@@ -630,7 +627,7 @@ static void patch_options(void)
 	}
 }
 
-// dims a row that does nothing with the current choices (its alpha goes to 40 %); it works again the moment they change: the sharpening row needs FSR 3 or DLSS (not Off or FSR 1), the
+// dims a row that does nothing with the current choices (its alpha goes to 40 %); it works again the moment they change: the sharpening row needs FSR 3 or DLSS (not Off), the
 // native renderers' rows need the DirectX version 11 or 12 (not 9 or 9Ex)
 static void dim_rows(void)
 {
@@ -640,7 +637,7 @@ static void dim_rows(void)
 		const char *d = opts[o].dvar;
 		if (!strcmp(d, "mw2coop_opt_sharp")) {
 			known = iu >= 0 && dvars[iu];
-			dim = known && value_of(iu) < 1.5f;
+			dim = known && value_of(iu) < 0.5f;
 		} else if (!strcmp(d, "mw2coop_opt_msaa") || !strcmp(d, "mw2coop_opt_aniso") || !strcmp(d, "mw2coop_opt_hdr") || !strcmp(d, "mw2coop_opt_lowlat")) {
 			known = id >= 0 && dvars[id];
 			dim = known && value_of(id) < 1.5f;

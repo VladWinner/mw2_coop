@@ -1,5 +1,9 @@
 # Upscalers (DLSS, FSR 3) for MW2 Enhanced: what is known, what is missing
 
+> **State (2026-11-18).** FSR 1 was removed from every build (owner: "superfluous"; `upscale=1` is ignored). FSR 3 and DLSS (64-bit) now run on the mod's own DirectX 12 renderer ([native-dx-plan.md](native-dx-plan.md)); choosing one in Settings > Enhanced sets DirectX 12. DLSS was checked on an RTX 3060 Laptop (Trainer, 2026-11-17). The Direct3D 9 on 12 layer below (`d3d9on12=1`) still works from the file. On the native renderers the picture is upscaled when the frame's 2D list starts (after the late 3D
+> effects and the view's post passes: the partner looked see-through in dust while it was done at the scene's last pass). Where players get the vendors' DLLs: README, `INSTALL.txt`;
+> the DLSS bridge is a separate release archive (`tools/make_dlss_archive.sh`). The status below is of 2026-11-08.
+
 Status 2026-11-08. Everything under "Verified" was run; everything under "Missing" is not built.
 
 ## The constraint

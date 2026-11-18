@@ -16,7 +16,6 @@
 #include "natcache.h"
 #include "natswap.h"
 #include <dxgi1_6.h>
-#include "natup.h"
 #define BW(d) ((d)->p.out_width ? (d)->p.out_width : (d)->p.width)
 #define BH(d) ((d)->p.out_height ? (d)->p.out_height : (d)->p.height)
 
@@ -140,7 +139,7 @@ struct nat_device {
 	int fullscreen_set;
 	int tearing; // the swap chain allows tearing
 	HANDLE waitable; // the frame latency waitable object
-	int hdr_on, hdr_failed, up_on; // HDR: scRGB swap chain, the present is a conversion pass; up_on: FSR 1 from the scene size to the swap chain's
+	int hdr_on, hdr_failed, up_on; // HDR: scRGB swap chain, the present is a conversion pass; up_on: FSR 3 / DLSS from the scene size to the swap chain's
 	ID3D12RootSignature *hdr_rs;
 	struct {
 		int kind;
@@ -1380,6 +1379,45 @@ static const char HDR_PS[] =
 	"  float e = 1.0 + (k.y - 1.0) * pow(smoothstep(0.55, 1.0, m), 2.0);\n"
 	"  return float4(lin * e * k.x, 1.0);\n"
 	"}\n";
+// RCAS (robust contrast adaptive sharpening) on DLSS's output, which has no sharpening of its own: a port of RCAS from AMD's FidelityFX FSR 1 header (ffx_fsr1.h, MIT license,
+// Copyright (C) Advanced Micro Devices, Inc.; the full notice is in src/fsr3.c, whose compute version for the Direct3D 9 on 12 path this is the pixel shader twin of: exact divisions kept
+// finite, no noise detection). k0.x: the sharpness constant (natfsr3_dlss_sharpness), k0.yz: 1 / the size. The texture is read with the point sampler s0 at texel centres.
+static const char RCAS_PS[] =
+	"Texture2D tx : register(t0);\n"
+	"SamplerState sm : register(s0);\n"
+	"cbuffer K : register(b0) { float4 k0; };\n"
+	"float3 Ld(float2 ip, float2 o) { return tx.SampleLevel(sm, (ip + o + 0.5) * k0.yz, 0).rgb; }\n"
+	"float4 main(float4 sv : SV_Position) : SV_Target\n"
+	"{\n"
+	"  float2 ip = floor(sv.xy);\n"
+	"  float3 b = Ld(ip, float2(0.0, -1.0));\n"
+	"  float3 d = Ld(ip, float2(-1.0, 0.0));\n"
+	"  float3 e = Ld(ip, float2(0.0, 0.0));\n"
+	"  float3 f = Ld(ip, float2(1.0, 0.0));\n"
+	"  float3 h = Ld(ip, float2(0.0, 1.0));\n"
+	"  float bL = b.b * 0.5 + (b.r * 0.5 + b.g);\n"
+	"  float dL = d.b * 0.5 + (d.r * 0.5 + d.g);\n"
+	"  float eL = e.b * 0.5 + (e.r * 0.5 + e.g);\n"
+	"  float fL = f.b * 0.5 + (f.r * 0.5 + f.g);\n"
+	"  float hL = h.b * 0.5 + (h.r * 0.5 + h.g);\n"
+	"  float3 mn4 = min(min(min(b, d), f), h);\n"
+	"  float3 mx4 = max(max(max(b, d), f), h);\n"
+	"  float lowerLimiter = saturate(eL / max(min(min(min(bL, dL), fL), hL), 1e-6));\n"
+	"  float3 hitMin = mn4 * (1.0 / max(4.0 * mx4, 1e-6)) * lowerLimiter;\n"
+	"  float3 hitMax = (1.0 - mx4) * (1.0 / min(4.0 * mn4 - 4.0, -1e-6));\n"
+	"  float3 lobeV = max(-hitMin, hitMax);\n"
+	"  float lobe = max(-(0.25 - (1.0 / 16.0)), min(max(lobeV.x, max(lobeV.y, lobeV.z)), 0.0)) * k0.x;\n"
+	"  float rcpL = 1.0 / (4.0 * lobe + 1.0);\n"
+	"  float3 pix = (lobe * b + lobe * d + lobe * h + lobe * f + e) * rcpL;\n"
+	"  return float4(pix, 1.0);\n"
+	"}\n";
+// the frame when FSR 3 / DLSS did not upscale it (their DLLs are missing, a pass failed): the picture stretched to the output size (bilinear, the linear sampler s1), so it is not black.
+// k.xy: 1 / the output size.
+static const char STRETCH_PS[] =
+	"Texture2D t : register(t0);\n"
+	"SamplerState lin : register(s1);\n"
+	"cbuffer C : register(b0) { float4 k; };\n"
+	"float4 main(float4 sv : SV_Position) : SV_Target { return float4(t.SampleLevel(lin, sv.xy * k.xy, 0).rgb, 1.0); }\n";
 
 // a pipeline state per pass shader and target format (the root signature is one: 16 constants and a texture)
 static ID3D12PipelineState *pass_pso(nat_device *d, int kind, DXGI_FORMAT fmt)
@@ -1400,13 +1438,16 @@ static ID3D12PipelineState *pass_pso(nat_device *d, int kind, DXGI_FORMAT fmt)
 		rp[1].DescriptorTable.NumDescriptorRanges = 1;
 		rp[1].DescriptorTable.pDescriptorRanges = &range;
 		rp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-		D3D12_STATIC_SAMPLER_DESC ss = {0}; // (the FSR 1 shaders read their texture with a point sampler at s0)
-		ss.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
-		ss.AddressU = ss.AddressV = ss.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-		ss.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
-		ss.MaxLOD = D3D12_FLOAT32_MAX;
-		ss.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-		D3D12_ROOT_SIGNATURE_DESC rd = {2, rp, 1, &ss, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+		D3D12_STATIC_SAMPLER_DESC ss[2] = {{0}}; // (RCAS reads its texture with a point sampler at s0, the stretch with a linear one at s1)
+		ss[0].Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;
+		ss[0].AddressU = ss[0].AddressV = ss[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+		ss[0].ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+		ss[0].MaxLOD = D3D12_FLOAT32_MAX;
+		ss[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+		ss[1] = ss[0];
+		ss[1].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+		ss[1].ShaderRegister = 1;
+		D3D12_ROOT_SIGNATURE_DESC rd = {2, rp, 2, ss, D3D12_ROOT_SIGNATURE_FLAG_NONE};
 		ID3DBlob *blob = NULL, *errs = NULL;
 		if (FAILED(D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1_0, &blob, &errs)) ||
 			FAILED(ID3D12Device_CreateRootSignature(d->dev, 0, ID3D10Blob_GetBufferPointer(blob), ID3D10Blob_GetBufferSize(blob), &IID_ID3D12RootSignature, (void **)&d->hdr_rs))) {
@@ -1417,11 +1458,8 @@ static ID3D12PipelineState *pass_pso(nat_device *d, int kind, DXGI_FORMAT fmt)
 	}
 	if (!d->pass_vs)
 		d->pass_vs = nat_shader_from_hlsl(d, HDR_VS, 1, err, sizeof(err));
-	if (!d->pass_ps[kind]) {
-		char *text = kind >= 2 ? NULL : nu_shader(kind);
-		d->pass_ps[kind] = nat_shader_from_hlsl(d, kind == 2 ? HDR_PS : kind == 3 ? COPY_PS : text, 0, err, sizeof(err));
-		free(text);
-	}
+	if (!d->pass_ps[kind])
+		d->pass_ps[kind] = nat_shader_from_hlsl(d, kind == 0 ? STRETCH_PS : kind == 1 ? RCAS_PS : kind == 2 ? HDR_PS : COPY_PS, 0, err, sizeof(err));
 	if (!d->pass_vs || !d->pass_ps[kind]) {
 		d->hdr_failed = 1;
 		return NULL;
@@ -1455,7 +1493,7 @@ static ID3D12PipelineState *pass_pso(nat_device *d, int kind, DXGI_FORMAT fmt)
 
 static void barrier_res(nat_device *d, ID3D12Resource *r, D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b);
 
-// one full-screen pass of kind 0 (EASU), 1 (RCAS) or 2 (HDR): the picture `src` is the shader's texture, k (nk float4) its constants, the target a render target image or (dst == NULL) the back buffer
+// one full-screen pass of kind 0 (the stretch when FSR 3 / DLSS did not run), 1 (RCAS on DLSS's output), 2 (HDR) or 3 (a copy): the picture `src` is the shader's texture, k (nk float4) its constants, the target a render target image or (dst == NULL) the back buffer
 static int pass12(nat_device *d, int kind, nat_image *src, const float *k, unsigned nk, nat_image *dst, ID3D12Resource *back, UINT bi, DXGI_FORMAT fmt, unsigned w, unsigned h)
 {
 	ID3D12PipelineState *pso = pass_pso(d, kind, fmt);
@@ -1503,7 +1541,10 @@ static int pass12(nat_device *d, int kind, nat_image *src, const float *k, unsig
 	return 1;
 }
 
-// the upscale: the scene (resolved when multisampled) -> EASU -> up_img[0] -> RCAS -> up_img[1] (output size); 0 when it cannot be done
+// the upscale: the scene (resolved when multisampled) -> FSR 3 or DLSS (natfsr3.c, with the game's depth and the camera) -> up_img[1] (output size), the picture the 2D passes draw into.
+// DLSS has no sharpening of its own: its output goes to up_img[0] and RCAS sharpens it into up_img[1] with [display] fsr3_sharpness, as src/fsr3.c does (0 = no RCAS).
+// When neither ran (their DLLs are missing, a pass failed) the picture is stretched (bilinear) into up_img[1], so the frame is not black. (Until 2026-11-18 that fallback was FSR 1,
+// EASU + RCAS, which was removed.) 0 when nothing could be done.
 static int up_stage(nat_device *d)
 {
 	if (!d->up_on)
@@ -1523,20 +1564,12 @@ static int up_stage(nat_device *d)
 			if (!d->up_img[i])
 				return 0;
 		}
-	const float fin_w = (float)d->p.width, fin_h = (float)d->p.height, fout_w = (float)ow, fout_h = (float)oh;
-	const float con[16] = {
-		fin_w / fout_w, fin_h / fout_h, 0.5f * fin_w / fout_w - 0.5f, 0.5f * fin_h / fout_h - 0.5f,
-		1.0f / fin_w, 1.0f / fin_h, 1.0f / fin_w, -1.0f / fin_h,
-		-1.0f / fin_w, 2.0f / fin_h, 1.0f / fin_w, 2.0f / fin_h,
-		0.0f, 4.0f / fin_h, 0.0f, 0.0f,
-	};
-	float sharp = 1.0f;
-	for (int i = 0; i < d->p.up_sharp; i++)
-		sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
-	const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
-	if (natfsr3_wanted()) { // FSR 3 / DLSS (natfsr3.c) with the game's depth and the camera; DLSS's output is sharpened (RCAS) into the picture the 2D passes draw into
-		if (natfsr3_is_dlss()) {
-			if (natfsr3_upscale(d, src, d->depth, d->up_img[0]) && pass12(d, 1, d->up_img[0], k0, 1, d->up_img[1], NULL, 0, DXGI_FORMAT_B8G8R8A8_UNORM, ow, oh)) {
+	const DXGI_FORMAT ifmt = DXGI_FORMAT_B8G8R8A8_UNORM;
+	if (natfsr3_wanted()) {
+		const float sharp = natfsr3_is_dlss() ? natfsr3_dlss_sharpness() : 0.0f;
+		if (sharp > 0.0f) {
+			const float k0[4] = {sharp, 1.0f / (float)ow, 1.0f / (float)oh, 0.0f};
+			if (natfsr3_upscale(d, src, d->depth, d->up_img[0]) && pass12(d, 1, d->up_img[0], k0, 1, d->up_img[1], NULL, 0, ifmt, ow, oh)) {
 				d->up_done = 1;
 				return 1;
 			}
@@ -1545,8 +1578,11 @@ static int up_stage(nat_device *d)
 			return 1;
 		}
 	}
-	const DXGI_FORMAT ifmt = DXGI_FORMAT_B8G8R8A8_UNORM;
-	if (!pass12(d, 0, src, con, 4, d->up_img[0], NULL, 0, ifmt, ow, oh) || !pass12(d, 1, d->up_img[0], k0, 1, d->up_img[1], NULL, 0, ifmt, ow, oh))
+	static int told;
+	if (!told++ && nat_log_hook)
+		nat_log_hook("native12: FSR 3 / DLSS did not upscale the frame (see the natfsr3 / dlss lines): the %ux%u picture is stretched to %ux%u (bilinear) instead", d->p.width, d->p.height, ow, oh);
+	const float k[4] = {1.0f / (float)ow, 1.0f / (float)oh, 0.0f, 0.0f};
+	if (!pass12(d, 0, src, k, 1, d->up_img[1], NULL, 0, ifmt, ow, oh))
 		return 0;
 	d->up_done = 1;
 	return 1;

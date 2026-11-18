@@ -34,6 +34,8 @@ void nat12_invalidate_state(nat_device *d);
 // FSR 3 (natfsr3.c): wanted by the settings; the upscale of a frame into `out_img` (1 = done); the end of the frame
 int natfsr3_wanted(void);
 int natfsr3_is_dlss(void);
+// DLSS: the constant of the RCAS pass nat12.c runs on its output ([display] fsr3_sharpness, as src/fsr3.c maps it); 0 = no sharpening
+float natfsr3_dlss_sharpness(void);
 int natfsr3_upscale(nat_device *d, nat_image *color_img, nat_image *depth_img, nat_image *out_img);
 void natfsr3_frame_end(void);
 

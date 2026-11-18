@@ -12,7 +12,7 @@ AT=${MW2COOP_TOUR_AT:-1500}
 STEP=${MW2COOP_TOUR_STEP:-1500}
 for L in "$@"; do
 	rm -f "$A"/mw2coop/shots/m11-*.bmp
-	MW2COOP_MODE=11 MW2COOP_MAP=$L MW2COOP_MIDAT=15 MW2COOP_RES=${MW2COOP_RES:-1280x720} MW2COOP_TIMEOUT=$((S + 30)) MW2COOP_PRE='set mw2coop_native_split 1' MW2COOP_MID='mw2coop_briefskip' \
+	MW2COOP_MAP=$L MW2COOP_MIDAT=15 MW2COOP_RES=${MW2COOP_RES:-1280x720} MW2COOP_TIMEOUT=$((S + 30)) MW2COOP_PRE='set mw2coop_native_split 1' MW2COOP_MID='mw2coop_briefskip' \
 		sh "$HERE/qa_lock.sh" sh "$HERE/qa_native.sh" $S "presentkeep=1;presentlog=1;shot11=$AT;shot11step=$STEP;hudelemlog=1" > "$OUT/$L.run.txt" 2>&1
 	LOG="$A/mw2coop/mw2coop.log"
 	cp "$LOG" "$OUT/$L.log" 2>/dev/null

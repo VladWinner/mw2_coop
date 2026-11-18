@@ -106,3 +106,4 @@
 0xd07b0 -> 0xa9140    # the animation calc into the DObj's matrices (official VA 0x4d07b0; map159 code 0+64)
 0x1f630 -> 0xd5bf0    # DObjGetBoneIndex (official VA 0x41f630; map159 code 0+64)
 0x75dc0 -> 0x52b90    # SL_GetString: "mov eax,[esp+4]; push 1; push eax; call; add esp,8; ret", the call after "push j_spine4" in the const init (159 VA 0x47761b)
+0x537500 -> 0x53aa88    # M11_PLACE_CLIENT, the per-client 2D placement (VA 0x937500): +0x3588 as the data around it (0x531ee0, 0x534480); found as data between 0x531ee0 and 0x537578 while the old split screen modes' placement table (0x537578, 0x5375e8) was in the source

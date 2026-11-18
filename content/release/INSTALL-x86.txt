@@ -5,7 +5,8 @@ https://github.com/stxlvn/mw2_enhanced
 
 Это сборка для старой 32-битной версии MW2 из Steam (до сентябрьского обновления 2026, iw4sp.exe
 32-бит). Для актуальной 64-битной версии берите обычный архив mw2coop-<версия>.zip, клиент iw4x-sp тоже
-работает с этим архивом. На любой другой сборке игры мод сам выключается и ничего не делает.
+работает с этим архивом. На другой сборке игры мод ищет свои адреса по сигнатурам и работает, если нашёл 95%
+из них ([native] movedbuilds в mw2coop\settings.ini); иначе сам выключается и ничего не делает.
 
 Установка (у обоих игроков): в папку игры (рядом с iw4sp.exe) положите winmm.dll и папку mw2coop из этого архива.
 Ничего из игры не заменяется. Остальное (лобби, вход, сохранения, брандмауэр, разделённый экран) как в обычном
@@ -13,22 +14,29 @@ https://github.com/stxlvn/mw2_enhanced
 Удаление: удалите winmm.dll и папку mw2coop.
 
 Что есть: сетевой кооператив, разделённый экран на одном ПК (Кампания -> РАЗДЕЛЕНИЕ ЭКРАНА) со всем, что есть в
-64-битной версии (лобби с выбором устройства, геймпады, помощь в прицеливании, вибрация, настройки геймпада),
-ретрансляция Steam.
-Проверено ботами: сетевой кооператив двух копий на одном ПК, пара "хост 64-бит + клиент 32-бит" на тренировке,
-разделённый экран на тренировке и в "Скалолазе". Не проверено: игра через интернет между двумя ПК на этой сборке,
-кампания целиком, настоящие геймпады.
-Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
+64-битной версии (лобби с выбором устройства, геймпады, помощь в прицеливании, вибрация, настройки геймпада;
+каждый игрок рисуется в своём кадре рендерера, как на Xbox 360), ретрансляция Steam. Улучшений графики здесь нет
+(апскейлеры FSR 3 и DLSS и собственные рендереры DirectX 11 / 12 есть только в 64-битной версии; FSR 1 убран).
+Контрольные точки: официальный 32-битный exe закрывается, когда загружает сохранение с модом (его собственная проверка
+целостности), поэтому на нём проваленная миссия начинается заново с участка уровня; клиент iw4x-sp загружает
+последнюю контрольную точку игры, как 64-битная версия.
+Проверено ботами: сетевой кооператив двух копий на одном ПК, пара "хост 64-бит + клиент 32-бит" на тренировке;
+разделённый экран на тренировке, на пробуждении в "Endgame", от "Just Like Old Times" до музея и цепочкой из
+19 уровней подряд от тренировки до музея (без падений). В разделённый экран на клиенте iw4x-sp играли разработчик
+с другом. Не проверено: игра через интернет между двумя ПК на этой сборке.
+Проблемы: приложите mw2coop\mw2coop.log обоих игроков (и mw2coop\crash.dmp, если игра упала).
 
 Клиент iw4x-sp: этот архив работает и с ним. Положите winmm.dll и папку mw2coop рядом с iw4sp.exe и iw4x-sp.exe (iw4sp.exe версии 1.0.159) и запускайте игру через iw4x-sp.exe как
 обычно; мод сам узнаёт клиент. iw4x-sp по умолчанию зовёт всех "Unknown Soldier": задайте свой ник командой name <ник> в консоли.
-Проверено ботами на клиенте iw4x-sp: сетевой кооператив двух копий на одном ПК (тренировка) и разделённый экран на тренировке.
+Проверено ботами на клиенте iw4x-sp: сетевой кооператив двух копий на одном ПК (тренировка), разделённый экран
+(тренировка, от "Just Like Old Times" до музея), контрольные точки после проваленной миссии.
 
 === English ===
 
 This is the build for the older 32-bit Modern Warfare 2 on Steam (before the September 2026 update, 32-bit
 iw4sp.exe). For the current 64-bit game use the normal archive mw2coop-<version>.zip, the iw4x-sp client works with
-this archive too. On any other build of the game the mod switches itself off.
+this archive too. On another build of the game the mod looks its addresses up by signatures and runs when it finds
+95% of them ([native] movedbuilds in mw2coop\settings.ini); otherwise it switches itself off.
 
 Install (both players): the game folder (next to iw4sp.exe) <- winmm.dll and the mw2coop folder from this archive.
 Nothing of the game is replaced. The rest (lobby, joining, saves, firewall, split screen) works as in the normal
@@ -36,15 +44,22 @@ archive: see its INSTALL.txt and the README on GitHub. Both players need the SAM
 Uninstall: delete winmm.dll and the mw2coop folder.
 
 What it has: online co-op, the split screen on one PC (Campaign -> SPLIT SCREEN) with everything of the 64-bit build
-(lobby with the device choice, gamepads, aim assist, vibration, gamepad options), the Steam relay.
-Checked with bots: online co-op of two copies on one PC, a 64-bit host with a 32-bit client on the Trainer, the split
-screen on the Trainer and Cliffhanger. Not checked: playing over the internet between two PCs on this build, the whole
-campaign, real gamepads.
-Problems: attach mw2coop\mw2coop.log from both players.
+(lobby with the device choice, gamepads, aim assist, vibration, gamepad options; each player drawn in a renderer frame
+of his own, as on the Xbox 360), the Steam relay. No graphics options here (the FSR 3 and DLSS upscalers and the native
+DirectX 11 / 12 renderers are in the 64-bit build only; FSR 1 was removed).
+Checkpoints: the official 32-bit exe quits when it loads a save with the mod in (its own integrity check), so on it a
+failed mission starts again at the level's section; the iw4x-sp client loads the game's last checkpoint like the 64-bit
+build.
+Checked with bots: online co-op of two copies on one PC, a 64-bit host with a 32-bit client on the Trainer; the split
+screen on the Trainer, Endgame's wake-up, Just Like Old Times to the Museum and a chain of 19 levels in a row from the
+Trainer to the Museum (no crash). The developer and a friend played the split screen on the iw4x-sp client. Not
+checked: playing over the internet between two PCs on this build.
+Problems: attach mw2coop\mw2coop.log from both players (and mw2coop\crash.dmp if the game crashed).
 
 The iw4x-sp client: this archive works with it too. Put winmm.dll and the mw2coop folder next to iw4sp.exe and iw4x-sp.exe (the 1.0.159 iw4sp.exe) and start the game through
 iw4x-sp.exe as usual; the mod recognises the client by itself. iw4x-sp calls everybody "Unknown Soldier" by default: set your own name with name <nick> in the console.
-Checked with bots on the iw4x-sp client: online co-op of two copies on one PC (the Trainer) and the split screen on the Trainer.
+Checked with bots on the iw4x-sp client: online co-op of two copies on one PC (the Trainer), the split screen (the
+Trainer, Just Like Old Times to the Museum), the checkpoints after a failed mission.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT licensed (LICENSE.txt).
 No game files are included.

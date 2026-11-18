@@ -1,0 +1,42 @@
+mw2coop_dlss.dll: the DLSS bridge of Modern Warfare 2 Enhanced
+https://github.com/stxlvn/mw2_enhanced
+
+This DLL is the mod's own bridge code (source: src/dlss in the repository above, MIT) built together with
+object code of NVIDIA's DLSS / NGX SDK (nvsdk_ngx_s.lib), which is copyright NVIDIA Corporation and is
+licensed under the NVIDIA RTX SDKs License (https://github.com/NVIDIA/DLSS/blob/main/LICENSE.txt). It is
+distributed only as a part of Modern Warfare 2 Enhanced. By using it you agree to these terms for the NVIDIA
+portions:
+
+- Use them only together with Modern Warfare 2 Enhanced.
+- Do not copy, sell, rent, sublicense, transfer, distribute or modify them on their own, and do not use them
+  in a way that would make them subject to an open source license.
+- Do not reverse engineer, decompile or disassemble them, and do not bypass, disable or circumvent any
+  technical limitation, encryption, security or authentication mechanism in them.
+- They are provided AS IS, without any warranty; NVIDIA and the mod's authors are not liable for any damage
+  that comes from using them.
+- Modern Warfare 2 Enhanced is not sponsored or endorsed by NVIDIA. NVIDIA and DLSS are trademarks of NVIDIA
+  Corporation.
+
+NVIDIA's runtime nvngx_dlss.dll is not in this archive: take it from NVIDIA (see INSTALL-DLSS.txt), under
+NVIDIA's own terms.
+
+---
+
+mw2coop_dlss.dll: мост DLSS для Modern Warfare 2 Enhanced
+
+Эта DLL — собственный код моста мода (исходники: src/dlss в репозитории выше, MIT), собранный вместе с
+объектным кодом DLSS / NGX SDK от NVIDIA (nvsdk_ngx_s.lib). Права на него принадлежат NVIDIA Corporation,
+он распространяется по лицензии NVIDIA RTX SDKs License (ссылка выше) и только как часть Modern Warfare 2
+Enhanced. Используя её, вы принимаете для частей NVIDIA эти условия:
+
+- Используйте их только вместе с Modern Warfare 2 Enhanced.
+- Не копируйте, не продавайте, не сдавайте в аренду, не сублицензируйте, не передавайте, не распространяйте
+  и не изменяйте их отдельно от мода и не используйте так, чтобы на них распространилась лицензия открытого ПО.
+- Не дизассемблируйте, не декомпилируйте и не исследуйте их обратной разработкой, не обходите и не отключайте
+  их технические ограничения, шифрование, защиту и проверку подлинности.
+- Они предоставляются «как есть», без каких-либо гарантий; NVIDIA и авторы мода не отвечают за ущерб от их
+  использования.
+- Modern Warfare 2 Enhanced не спонсируется и не одобряется NVIDIA. NVIDIA и DLSS — товарные знаки NVIDIA
+  Corporation.
+
+Библиотеки NVIDIA nvngx_dlss.dll в архиве нет: возьмите её у NVIDIA (см. INSTALL-DLSS.txt) на условиях NVIDIA.

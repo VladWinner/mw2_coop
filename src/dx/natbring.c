@@ -340,19 +340,17 @@ int nbr_start(nbr *n, uint8_t *p)
 		log_printf("native11: MSAA %d off: FSR 3 anti-aliases the picture", np.msaa);
 		np.msaa = 1;
 	}
-	{ // FSR 1 upscaling (settings.ini [display] upscale): the game renders at its own size, the swap chain and the window have the output size
+#ifdef NAT_BACKEND_12
+	{ // FSR 3 / DLSS (settings.ini [display] fsr3 / dlss with directx12): the game renders at its own size, the swap chain and the window have the output size (upscale_width / upscale_height).
+	  // (The Direct3D 11 renderer has no upscaler: FSR 1 was removed on 2026-11-18; it always renders at the window's size.)
 		int ow = 0, oh = 0;
 		if (upscale_native_sizes((int)np.width, (int)np.height, &ow, &oh)) {
 			np.out_width = (unsigned)ow;
 			np.out_height = (unsigned)oh;
-			np.up_sharp = settings_upscale_sharpness();
 			upscale_device_made((HWND)np.hwnd);
-			{
-				extern void native_hud_install(void);
-				native_hud_install();
-			}
 		}
 	}
+#endif
 	char err[160] = "";
 	RD_I32(e, G_DEPTH_FMT) = 0x4b;
 	log_printf("native11: nbr_start: window %p, %ux%u, mode %d, refresh %u, samples %d", np.hwnd, np.width, np.height, RD_I32(p, 0xc), np.refresh, np.msaa);

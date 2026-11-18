@@ -1,5 +1,7 @@
 # Native DirectX 9Ex / 11 / 12 for the game (plan and survey, 2026-11-11)
 
+> **State (2026-11-18).** Option B is built: the mod's own Direct3D 11 and Direct3D 12 renderers (64-bit only; experimental, off by default; Settings > Enhanced > DirectX version or `[display] directx11=1` / `directx12=1`), checked with bots on 8 campaign maps each. FSR 3 and DLSS run on the DirectX 12 one (FSR 1, on both, was removed on 2026-11-18 with `natup.h`; DirectX 11 has no upscaler now); the split screen runs on both in mode 11 (the mode 10 compositor described further down was removed with the old split screen modes on 2026-11-18). On a game build other than the reference they stay off (`natboot_install`).
+
 Owner's wish (2026-11-11): the DirectX choice on Settings > Enhanced should be DirectX 9 (original), 9Ex, 11 and 12, with the game itself drawing through each, **no compatibility layer** between the game and the API (no DXVK, no Windows' `d3d9on12`). Vlad's list was the same four.
 
 ## What exists today
@@ -64,7 +66,7 @@ A `vid_restart` on 9Ex works once, like the plain device. A second restart ends 
 
 ### Step 2 started: the shader translator (`tools/sm3_to_hlsl.py`)
 
-- **Dump:** `MW2COOP_DUMPSHADERS=1` makes the game's device write every vertex and pixel shader it is given (the bytecode of the materials) to `<game dir>\mw2coop\shaderss_<hash>.bin` / `ps_<hash>.bin` (src/d3dcap.c, QA only; the files are the game's data and stay in the test copy). The main menu and the Trainer give 2730 distinct shaders (244 vertex, 2486 pixel, 11 MB).
+- **Dump:** `MW2COOP_DUMPSHADERS=1` makes the game's device write every vertex and pixel shader it is given (the bytecode of the materials) to `<game dir>\mw2coop\shaders\vs_<hash>.bin` / `ps_<hash>.bin` (src/d3dcap.c, QA only; the files are the game's data and stay in the test copy). The main menu and the Trainer give 2730 distinct shaders (244 vertex, 2486 pixel, 11 MB).
 - **Translator:** a Python module and CLI: version token, DCL / DEF / DEFI / DEFB, about 50 opcodes (ALU, texld / texldl / texldd with projection and bias, cmp, lit, sincos, dsx / dsy, texkill, if / ifc / else / rep / loop / break, relative constant addressing, the matrix ops), source and result modifiers, vPos / vFace; the output is HLSL for shader model 5. Not translated: call / label subroutines, predication (they raise `Unsupported` and are counted); none occurs in the 2730.
 - **Compile check:** `python -I tools/sm3_to_hlsl.py --check <dir>` runs each translation through `D3DCompile` (d3dcompiler_47.dll): **2730 of 2730 compile** (ps_5_0 / vs_5_0). That shows the translations are valid HLSL, not that they compute the same as Direct3D 9.
 - **Not done:** the semantic check (run a shader on a Direct3D 9 device and the translation on a Direct3D 11 WARP device with the same constants and compare the numbers; the legacy rules that differ: `mul` 0 * inf = 0, `rcp` / `rsq` of 0, `pow`, `lit`, `exp` / `log`), the shadow-map samplers (a comparison sampler depends on the bound texture), the constant table names (the CTAB comments give them), shaders of more levels (the other zones may use call / label or predication), and the cbuffer layout the backend fills.

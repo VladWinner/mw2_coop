@@ -13,7 +13,7 @@ LEVELS="$*"
 S=${MW2COOP_SWEEP_S:-40}
 for L in $LEVELS; do
 	START=$(date +%s)
-	MW2COOP_MODE=${MW2COOP_MODE:-11} MW2COOP_MAP=$L MW2COOP_MIDAT=15 MW2COOP_RES=${MW2COOP_RES:-1280x720} MW2COOP_TIMEOUT=$((S + 30)) MW2COOP_PRE='set specialops 1' MW2COOP_MID='mw2coop_briefskip' \
+	MW2COOP_MAP=$L MW2COOP_MIDAT=15 MW2COOP_RES=${MW2COOP_RES:-1280x720} MW2COOP_TIMEOUT=$((S + 30)) MW2COOP_PRE='set specialops 1' MW2COOP_MID='mw2coop_briefskip' \
 		sh "$HERE/qa_lock.sh" sh "$HERE/qa_native.sh" $S "presentkeep=1;presentlog=1" > "$OUT/$L.run.txt" 2>&1
 	END=$(date +%s)
 	LOG="$A/mw2coop/mw2coop.log"

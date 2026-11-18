@@ -178,3 +178,11 @@ Events: `fireweapon` with hold plays `pt_hold_throw` / `pt_hold_prone_throw`; wi
   -Z. The knife copy puts its handle there: blade out of the thumb's side (-Z), quaternion 0.7071 0 -0.7071 0, the handle's middle at 3.5 0.5 0.5 (`mw2coop_knife_held`);
   the reverse grip (blade out of the little finger's side) is `mw2coop_knife_reverse`, QA only. The owner picked the forward grip.
 - Checked: 64-bit, 32-bit and iw4x-sp split screen (QA `knifehand`: close-ups from the left, the front-left and the right, walking). Not checked: a network pair.
+
+### In the campaign: af_chase (2026-11-18, later)
+
+- The owner's screenshot of the wake-up (split screen, `af_chase`, start `wakeup`) showed the partner with a silenced pistol: `ending_knife`'s world model. The copy
+  and the hook above were only used on the level `ending` (`attach_weapon_model` and the precache named it), where QA `knifehand` and `knifeframe` ran; the campaign's
+  wake-up and fight are in `af_chase`, whose zone carries the same knife fight scripts. `_mw2coop.gsc` `knife_fight_level()` names both now.
+- QA `knifelook` (no attach by the QA): on `af_chase` both bodies carry `mw2coop_knife_held@j_wrist_le` once they hold `ending_knife` (64-bit and 32-bit PASS, frames),
+  and the knife hand hook logs its turn on the iw4x-sp client in the same scene.

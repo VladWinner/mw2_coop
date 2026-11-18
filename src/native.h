@@ -1,7 +1,7 @@
 #pragma once
 
 // Native split screen (src/native.c): one game process, two local players, the picture cut top and bottom. 64-bit build only.
-//   settings.ini [native] players=2 experiment=10 ...   QA: the session starts with the game
+//   settings.ini [native] players=2 ...                 QA: the session starts with the game
 //   native_split_start() / native_split_stop()          the menu's split screen lobby: the session starts with its Start and ends when the game is back in the menus
 void native_install(void);
 // a new level's zones are loading: client 1's last server command of the previous level is cleared

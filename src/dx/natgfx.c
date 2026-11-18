@@ -22,7 +22,6 @@ void ng_init(ng_state *s)
 }
 
 float (*ng_weapon_k)(void);
-void (*ng_scissor_hook)(int *top, int *bottom, int left, int right, int rt_full);
 int (*ng_clear_rect_hook)(unsigned flags, long rect[4]);
 int ng_skip_reset_2d;
 void (*ng_vp_hook)(float x, float y, float w, float h, float minz, float maxz);

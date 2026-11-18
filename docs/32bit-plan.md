@@ -1,5 +1,7 @@
 # 32-bit support: plan and state
 
+> **State (2026-11-18).** The 32-bit build ships in every release as `mw2coop-<version>-x86.zip`, for the official 32-bit exe and the iw4x-sp client (one DLL; the client's 1.0.159 exe has its own address table, `src/addr159.c`). The split screen runs in mode 11 there since 2026-11-17. The game's checkpoints work on the iw4x-sp client; the official exe quits when it loads a save with the mod in (its code check, below), so they stay off there. Another 32-bit build is handled by `addresses-x86.txt` ([address-resolution.md](address-resolution.md)).
+
 The mod was made for the 64-bit build of Modern Warfare 2 (2009) that Steam moved the game to in September 2026.
 The build before that (32-bit, `iw4sp.exe` linked 2010-02-10) is what most existing mods and many players still use.
 Same design (a `winmm.dll` proxy that patches script text in memory and hooks the engine), other addresses and other

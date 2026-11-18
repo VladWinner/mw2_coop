@@ -129,7 +129,6 @@ void nd_decl_destroy(nd_decl *d)
 	free(d);
 }
 
-int nd_layer_mode;
 float nd_hud_scale[2];
 int nd_atoc = 1;
 int nd_aniso_override; // [display] aniso: 0 = the game's own, 2..16 = forced for mipmapped textures
@@ -240,7 +239,7 @@ struct nd {
 	nat_shader *blit_vs, *blit_ps;
 	ID3D11Buffer *blit_cb;
 	ID3D11SamplerState *blit_smp[2];
-	ID3D11BlendState *blit_blend, *blit_blend_alpha, *blit_blend_premul;
+	ID3D11BlendState *blit_blend, *blit_blend_alpha;
 	int blit_alpha; // nd_overlay: the blit blends by the source's alpha
 	ID3D11RasterizerState *blit_rs;
 	ID3D11DepthStencilState *blit_ds;
@@ -323,15 +322,6 @@ void nd_get_targets(nd *d, nat_image **color, nat_image **depth)
 {
 	*color = d->rt;
 	*depth = d->ds;
-}
-int nd_target_is_full(nd *d)
-{
-	if (!d->rt)
-		return 1;
-	unsigned w, h, s, sw, sh;
-	nat_image_size(d->rt, &w, &h, &s);
-	nat_get_size(d->dev, &sw, &sh);
-	return w == sw && h == sh;
 }
 void nd_set_viewport(nd *d, float x, float y, float w, float h, float min_z, float max_z)
 {
@@ -711,9 +701,6 @@ static void trace_target(nd *d, char *out, size_t n)
 
 static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count);
 
-int nd_layer_reroute;
-nat_image *nd_layer_scene_rt, *nd_layer_scene_ds;
-
 static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
 {
 	d->err[0] = 0;
@@ -863,10 +850,8 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	}
 	state11_t st;
 	state11_decode(g->word0, g->word1, &st);
-	if (nd_layer_mode && !nd_layer_reroute)
-		state11_layer_fix(&st);
 	st.a2c = 0;
-	if (nd_atoc && st.alpha_test_enable && !nd_layer_mode) { // alpha to coverage on a multisampled target
+	if (nd_atoc && st.alpha_test_enable) { // alpha to coverage on a multisampled target
 		unsigned rw, rh, rs = 1;
 		if (d->rt)
 			nat_image_size(d->rt, &rw, &rh, &rs);
@@ -984,21 +969,6 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 			}
 		}
 	}
-	if (nd_layer_mode) {
-		state11_t st;
-		state11_decode(g->word0, g->word1, &st);
-		if (st.z_enable && st.z_func != 8) { // (a depth test that always passes is a 2D draw)
-			nat_image *rt = d->rt, *ds = d->ds;
-			d->rt = nd_layer_scene_rt;
-			d->ds = nd_layer_scene_ds;
-			nd_layer_reroute = 1;
-			const int r = nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
-			nd_layer_reroute = 0;
-			d->rt = rt;
-			d->ds = ds;
-			return r;
-		}
-	}
 	return nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
 }
 
@@ -1089,8 +1059,6 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 		bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
 		bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 		ID3D11Device_CreateBlendState(d->d3d, &bd, &d->blit_blend_alpha);
-		bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE; // premultiplied colour
-		ID3D11Device_CreateBlendState(d->d3d, &bd, &d->blit_blend_premul);
 		D3D11_RASTERIZER_DESC rd = {0};
 		rd.FillMode = D3D11_FILL_SOLID;
 		rd.CullMode = D3D11_CULL_NONE;
@@ -1109,7 +1077,7 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	D3D11_VIEWPORT vp = {(float)dr->left, (float)dr->top, (float)(dr->right - dr->left), (float)(dr->bottom - dr->top), 0, 1};
 	ID3D11DeviceContext_RSSetViewports(x, 1, &vp);
 	ID3D11DeviceContext_RSSetState(x, d->blit_rs);
-	ID3D11DeviceContext_OMSetBlendState(x, d->blit_alpha == 2 && d->blit_blend_premul ? d->blit_blend_premul : d->blit_alpha && d->blit_blend_alpha ? d->blit_blend_alpha : d->blit_blend, NULL, 0xffffffffu);
+	ID3D11DeviceContext_OMSetBlendState(x, d->blit_alpha && d->blit_blend_alpha ? d->blit_blend_alpha : d->blit_blend, NULL, 0xffffffffu);
 	ID3D11DeviceContext_OMSetDepthStencilState(x, d->blit_ds, 0);
 	ID3D11DeviceContext_IASetInputLayout(x, NULL);
 	ID3D11DeviceContext_IASetPrimitiveTopology(x, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1123,14 +1091,6 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	ID3D11ShaderResourceView *none = NULL;
 	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &none);
 	return 1;
-}
-
-int nd_overlay_premul(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const nd_rect *dr)
-{
-	d->blit_alpha = 2;
-	const int ok = nd_stretch(d, src, sr, dst, dr, 0);
-	d->blit_alpha = 0;
-	return ok;
 }
 
 int nd_overlay(nd *d, nat_image *src)

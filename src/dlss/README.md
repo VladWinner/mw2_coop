@@ -11,7 +11,11 @@ when NVIDIA's binaries are passed on (2c). So:
 - nothing from NVIDIA's SDK is in this repository, and the main `winmm.dll` has no NVIDIA code in it: it only loads `mw2coop_dlss.dll` at run time (`dlss_dir`);
 - `dlss_bridge.cpp` and `msvc_shims.c` here are the mod's own code (MIT) and include NVIDIA's headers only at build time, from a local copy of the SDK;
 - the GitHub nightly build does not build the bridge (it has no SDK);
-- the bridge DLL and `nvngx_dlss.dll` are not part of the default release archives. Whoever passes them on has to follow NVIDIA's license (its distribution requirements, 2a-2d).
+- the bridge DLL is not part of the default release archives: it is a separate archive of the release, `mw2coop-dlss-<version>.zip` (owner, 2026-11-18), made on the developer's PC by
+  `tools/make_dlss_archive.sh <version>` with `content/release/dlss/INSTALL-DLSS.txt` and `NOTICE-DLSS.txt`. The bridge links NVIDIA's static library, so the archive follows the
+  license's distribution requirements (2a-2d): it is distributed only as a part of the mod (never as the SDK on its own, 4b), `NOTICE-DLSS.txt` gives the players terms at least as
+  protective as NVIDIA's for its portions (2c: use with the mod only, no reverse engineering, no separate distribution, no open source license, as is, no endorsement by NVIDIA), and
+  NVIDIA's `nvngx_dlss.dll` is never packed: players take it from NVIDIA (`lib/Windows_x86_64/rel` of https://github.com/NVIDIA/DLSS).
 
 ## Build (needs the SDK on the machine)
 
@@ -26,7 +30,8 @@ thread-safe statics support, `operator new` / `delete` and two STL failure helpe
 
 ## Use
 
-Put `mw2coop_dlss.dll` and NVIDIA's `nvngx_dlss.dll` (from the SDK's `lib/Windows_x86_64/rel`) into one folder and set in `settings.ini`:
+Put `mw2coop_dlss.dll` and NVIDIA's `nvngx_dlss.dll` (from the SDK's `lib/Windows_x86_64/rel`) into `mw2coop\dlss` in the game folder (the default `dlss_dir`), or into another
+folder and set in `settings.ini`:
 
 ```ini
 [display]

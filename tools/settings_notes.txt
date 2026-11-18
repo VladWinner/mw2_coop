@@ -7,8 +7,6 @@ console.window_top_pct Saved top edge of the console window, 0-10000 (hundredths
 console.window_width_pct Saved width of the console window, 1-10000 (hundredths of a percent of the screen); -1 = not set. Used only with window_custom=1; written by the console.
 console.window_height_pct Saved height of the console window, 1-10000 (hundredths of a percent of the screen); -1 = not set. Used only with window_custom=1; written by the console.
 display.fsr3_sharpness FSR 3's sharpening, 0-100 (0 = off); a value outside the range becomes 60. See the [display] comments in settings.ini.
-native.burstevery With burstat: the number of composed frames between two bursts of screenshots (default 600). QA.
-native.burstn With burstat: how many frames each burst saves (default 40). QA.
 native.padmovedead Gamepad left stick dead zone in percent (default 18), for the split screen's pads.
 native.paddead Gamepad right (look) stick dead zone in percent (default 22), for the split screen's pads.
 native.padcurve Gamepad stick response curve in percent (default 160 = the curve exponent 1.6), for the split screen's pads.
@@ -18,9 +16,12 @@ native.p1name Name tag of player 1 in the split screen (empty = Alpha).
 native.p2name Name tag of player 2 in the split screen (empty = Bravo).
 native.p1cmd 1: a start value is written into the view angle accumulators of context 1 (player 2), see p1yawdeg. QA.
 native.p1yawdeg With p1cmd=1: the yaw in degrees written into context 1's view angle accumulator (default 60). QA.
-native.nogun 1: the weapon model is hidden in both views through the game's cg_drawGun dvar (testing).
 native.nopredict 1: player 2's view shows the server's player state as it is, without the client's own prediction (the dvar cg_nopredict; testing).
 native.sites Bit mask of which of the split screen's hook sites to install (default 0x7fffffff = all). Testing; a missing bit leaves that part of the game unpatched.
-native.seqstep With seqat: draw the composed picture every this many frames (default 1). QA.
 native.swapsites 1: notes the call sites of the context swap in the log (testing).
 native.timelogskip With timelog=1: the number of draws to skip before the 6000 logged ones. Testing.
+native.msecsplit 1 (default): each player in split screen keeps his own "time the usercmds were last made", so player 2's frame_msec is not 0 and his mouse turns his view (Big Brother, 2026-11-18). 0: the time is shared again (player 2's mouse look does nothing). Off by itself on a game build where the address was not found.
+native.shockslot 1 (default): player 2's shell shock blend and saved screen use the game's second timer slot, so the two players' dazed views do not share one (Endgame's wake-up, 2026-11-18). 0: one slot, as the game has it.
+native.shocksect 1 (default): the shell shock's saved screen copies only the rectangle of the view being drawn, not the whole back buffer (64-bit: a patch of the game's copy; 32-bit: the copy is made by the mod). 0: the whole screen, which smears player 2's half.
+native.qa_mouse1dx QA: a steady mouse movement fed to player 2 in split screen, in counts per frame (no real cursor is moved): checks that his view turns. 0 (default): off.
+native.cmdlog1 QA: logs player 2's usercmd angles, the key catchers, frame_msec and his mouse reads, 4 times a second (64-bit; Big Brother's gunner). 0 (default): off.
