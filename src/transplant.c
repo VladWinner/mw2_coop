@@ -359,8 +359,7 @@ static int put_surfaces(uint8_t *target, uint8_t *donor, const char *target_name
 // PrecacheModel and SetModel take it like any model. Made once per pair while the level's zones
 // are loaded, made again when the next level loads new models under the same names (a level's
 // zones free and refill the pools, the entry included).
-#define PICK_NAME "mw2coop_pick_up" // see upright_pick
-static uint8_t *pick_model, *pick_source;
+#define PICK_NAME "mw2coop_pick_up" // see turned_copy
 #define CLONE_NAME "mw2coop_rider" // model and dvar: the dvar holds "<skeleton> <mesh>"
 #ifdef _WIN64
 #define RVA_POOLS XR(0x3bfe00) // void *[43]: { free list head; entries[] } (see zones.c)
@@ -413,17 +412,14 @@ static uint8_t *pool_entry(uint8_t *model_a, uint8_t *model_b, size_t *size)
 	return entry;
 }
 
-static float pick_grip_back(void)
-{
-	return -9.0f;
-}
-
-static void *upright_pick(void *(*find)(int, const char *));
+static void *turned_copy(size_t ti, void *(*find)(int, const char *));
+static int turned_index(const char *name);
 
 void *transplant_clone(const char *name, void *(*find)(int, const char *))
 {
-	if (strcmp(name, PICK_NAME) == 0)
-		return upright_pick(find);
+	const int ti = turned_index(name);
+	if (ti >= 0)
+		return turned_copy((size_t)ti, find);
 	if (strcmp(name, CLONE_NAME) != 0)
 		return NULL;
 	char req[160], skel_name[64], mesh_name[64];
@@ -468,55 +464,101 @@ void *transplant_clone(const char *name, void *(*find)(int, const char *))
 	return model;
 }
 
-// "mw2coop_pick_up": Cliffhanger's ice pick (weapon_ice_picker) standing upright in the hand that
-// holds it. A co-op body holds it in the pistol grip, where the pick stuck out ahead of the fist
-// like a pistol (owner, 2026-10-24: "turn them upright, right into his hands"); Attach takes no
-// angles, and models linked to the hands followed the server's pose of the body and floated
-// beside them. The copy's geometry hangs off its second bone (the pick's head tag) instead of the
-// root, and that bone is turned 90 degrees up about the grip: the pick turns with it.
-
-static void *upright_pick(void *(*find)(int, const char *))
+// Turned copies of a held model, for a hand whose tag holds it the wrong way (Attach takes no angles, and models linked to the hands followed the server's pose of
+// the body and floated beside them). The copy's geometry hangs off its second bone instead of the root, and that bone is turned about the grip: the model turns with it.
+// - "mw2coop_pick_up": Cliffhanger's ice pick (weapon_ice_picker) standing upright in the hand that holds it. A co-op body holds it in the pistol grip, where the pick
+//   stuck out ahead of the fist like a pistol (owner, 2026-10-24: "turn them upright, right into his hands"): 90 degrees about Y (ahead becomes up), then 9 units back.
+// A model with more bones under its one root turns as a whole (each child of the root is turned). Tried 2026-11-18 on Endgame's knife (4 bones) in the body's "hold" set;
+// the knife went to a hand without a turn in the end (maps\_mw2coop::attach_weapon_model).
+static struct {
+	const char *name, *source;
+	float r[4];     // the turn, a quaternion x y z w
+	float back[3];  // then this offset (model units)
+	uint8_t *model, *from;
+} turned[] = {
+    {PICK_NAME, "weapon_ice_picker", {0, -0.70710678f, 0, 0.70710678f}, {-9.0f, 0, 0}, NULL, NULL},
+};
+#define TURNED_N (sizeof(turned) / sizeof(turned[0]))
+static int turned_index(const char *name)
 {
-	uint8_t *src = find(4, "weapon_ice_picker");
-	if (!src || src[M_BONES] != 2 || src[M_ROOTS] != 1)
+	for (size_t i = 0; name && i < TURNED_N; i++)
+		if (strcmp(name, turned[i].name) == 0)
+			return (int)i;
+	return -1;
+}
+
+static void *turned_copy(size_t ti, void *(*find)(int, const char *))
+{
+	const char *copy_name = turned[ti].name;
+	uint8_t *src = find(4, turned[ti].source);
+	if (!src || src[M_BONES] < 2 || src[M_BONES] > 32 || src[M_ROOTS] != 1) {
+		static uint32_t told;
+		if (src && !(told & (1u << ti))) {
+			told |= 1u << ti;
+			log_printf("transplant: %s: %s has %u bones (%u roots), a turned copy needs 2 to 32 with 1 root", copy_name, turned[ti].source, src[M_BONES], src[M_ROOTS]);
+		}
 		return NULL;
-	if (pick_model && pick_source == src)
-		return pick_model;
+	}
+	if (turned[ti].model && turned[ti].from == src)
+		return turned[ti].model;
 	size_t size = 0;
 	uint8_t *model = pool_entry(src, src, &size);
 	if (!model) {
-		log_printf("transplant: %s: no XModel pool entry", PICK_NAME);
+		log_printf("transplant: %s: no XModel pool entry", copy_name);
 		return NULL;
 	}
 	memcpy(model, src, size);
-	*(const char **)model = PICK_NAME;
-	// bone 1 (the only one not a root, the pick's head tag): local rotation as short[4] x y z w
-	// (* 32767) at +0x38, offset float[3] at +0x40; its base pose (DObjAnimMat at +0x50) stays. A
-	// vertex is drawn as bone * inverse(base pose) * vertex, so the bone is set to R * its base
-	// pose, R being 90 degrees about Y (ahead becomes up) about the grip: the rotation R * q, the
-	// offset R * t. Overwriting q (it is not the identity: -0.31 0.63 0.63 0.31) lost the pick.
-	const int16_t *q0 = *(const int16_t **)(src + M_QUATS);
-	const float *t0 = *(const float **)(src + M_TRANS);
-	float bx = q0[0] / 32767.0f, by = q0[1] / 32767.0f, bz = q0[2] / 32767.0f, bw = q0[3] / 32767.0f;
-	const float ra = -0.70710678f, rc = 0.70710678f; // R = (0, ra, 0, rc)
-	float q[4];
-	q[0] = rc * bx + ra * bz;
-	q[1] = rc * by + ra * bw;
-	q[2] = rc * bz - ra * bx;
-	q[3] = rc * bw - ra * by;
-	int16_t *quats = bag_add(malloc(8));
-	for (int k = 0; k < 4; k++)
-		quats[k] = (int16_t)(q[k] * 32767.0f + (q[k] < 0 ? -0.5f : 0.5f));
+	*(const char **)model = copy_name;
+	// The non-root bones (the pick: its head tag; the knife: three tags): local rotation as short[4] x y z w (* 32767) per bone at +0x38, offset float[3] at +0x40,
+	// the parent as "index minus the parent's" per bone at +0x30; the base poses (DObjAnimMat at +0x50) stay. A vertex is drawn as bone * inverse(base pose) * vertex,
+	// so each child of the root is set to R * its base pose, R the copy's turn about the grip (the rotation R * q, the offset R * t), its own children follow, and the
+	// root's vertices are drawn by its first child. Overwriting q (the pick's is not the identity: -0.31 0.63 0.63 0.31) lost the pick.
+	const int bones = src[M_BONES], nb = bones - 1;
+	const int16_t *q0all = *(const int16_t **)(src + M_QUATS);
+	const float *t0all = *(const float **)(src + M_TRANS);
+	const uint8_t *parents = *(const uint8_t **)(src + M_PARENTS);
+	const float rx = turned[ti].r[0], ry = turned[ti].r[1], rz = turned[ti].r[2], rw = turned[ti].r[3];
+	int16_t *quats = bag_add(malloc((size_t)nb * 8));
+	float *trans = bag_add(malloc((size_t)nb * 3 * sizeof(float)));
+	memcpy(quats, q0all, (size_t)nb * 8);
+	memcpy(trans, t0all, (size_t)nb * 3 * sizeof(float));
+	int first_child = 0;
+	for (int b = 1; b < bones; b++) {
+		if (!parents || b - parents[b - 1] != 0) // (not a child of the root: it follows its parent)
+			continue;
+		if (!first_child)
+			first_child = b;
+		const int16_t *q0 = q0all + 4 * (b - 1);
+		const float *t0 = t0all + 3 * (b - 1);
+		const float bx = q0[0] / 32767.0f, by = q0[1] / 32767.0f, bz = q0[2] / 32767.0f, bw = q0[3] / 32767.0f;
+		float q[4];
+		q[0] = rw * bx + rx * bw + ry * bz - rz * by;
+		q[1] = rw * by - rx * bz + ry * bw + rz * bx;
+		q[2] = rw * bz + rx * by - ry * bx + rz * bw;
+		q[3] = rw * bw - rx * bx - ry * by - rz * bz;
+		for (int k = 0; k < 4; k++)
+			quats[4 * (b - 1) + k] = (int16_t)(q[k] * 32767.0f + (q[k] < 0 ? -0.5f : 0.5f));
+		// R t = t + 2 r x (r x t + w t), then the copy's offset (the pick: back toward the wrist, its origin is ahead of the fist: QA frame, upright but 8 to 10 units ahead)
+		const float cx = ry * t0[2] - rz * t0[1] + rw * t0[0], cy = rz * t0[0] - rx * t0[2] + rw * t0[1], cz = rx * t0[1] - ry * t0[0] + rw * t0[2];
+		float *t = trans + 3 * (b - 1);
+		t[0] = t0[0] + 2.0f * (ry * cz - rz * cy) + turned[ti].back[0];
+		t[1] = t0[1] + 2.0f * (rz * cx - rx * cz) + turned[ti].back[1];
+		t[2] = t0[2] + 2.0f * (rx * cy - ry * cx) + turned[ti].back[2];
+	}
+	if (!first_child) {
+		log_printf("transplant: %s: %s has no child of its root", copy_name, turned[ti].source);
+		return NULL; // (the pool entry stays taken: a level's zones refill the pools)
+	}
 	*(int16_t **)(model + M_QUATS) = quats;
-	float *trans = bag_add(malloc(3 * sizeof(float)));
-	// R: x' = -z, z' = x; then back toward the wrist: the model's origin is ahead of the fist
-	// (QA frame: upright, but 8 to 10 units ahead of it)
-	trans[0] = -t0[2] + pick_grip_back();
-	trans[1] = t0[1];
-	trans[2] = t0[0];
 	*(float **)(model + M_TRANS) = trans;
-	// every LOD's surfaces: copies drawn by bone 1
-	int map[2] = {1, 1};
+	// every LOD's surfaces: copies whose root vertices are drawn by the root's first child
+	int map[32];
+	for (int b = 0; b < 32; b++)
+		map[b] = b;
+	map[0] = first_child;
+	int32_t all_bits[6] = {0};
+	for (int b = 0; b < bones; b++)
+		all_bits[b / 32] |= (int32_t)(0x80000000u >> (b % 32));
 	for (int l = 0; l < 4; l++) {
 		uint8_t *lod = model + MODEL_LODS + LOD_SIZE * l;
 		int n = *(uint16_t *)(lod + 4);
@@ -524,7 +566,8 @@ static void *upright_pick(void *(*find)(int, const char *))
 		if (!n || !from)
 			continue;
 		uint8_t *surfs = bag_add(calloc((size_t)n, SURF_SIZE));
-		int32_t bits[6] = {(int32_t)0xc0000000u, 0, 0, 0, 0, 0}; // bones 0 and 1
+		int32_t bits[6];
+		memcpy(bits, all_bits, sizeof(bits)); // every bone of the model (the pick: 0 and 1)
 		for (int i = 0; i < n; i++) {
 			uint8_t *sf = surfs + SURF_SIZE * i;
 			memcpy(sf, from + SURF_SIZE * i, SURF_SIZE);
@@ -542,7 +585,7 @@ static void *upright_pick(void *(*find)(int, const char *))
 				memcpy(lists, *(uint8_t **)(sf + S_LISTS), VL_SIZE * nlists);
 				*(uint8_t **)(sf + S_LISTS) = lists;
 			}
-			struct remap_ctx rc = {map, 2, 0};
+			struct remap_ctx rc = {map, bones, 0};
 			each_bone(sf, blend, lists, remap_cb, &rc);
 			memcpy(sf + S_PARTBITS, bits, sizeof(bits));
 		}
@@ -557,9 +600,9 @@ static void *upright_pick(void *(*find)(int, const char *))
 			*(uint8_t **)(lod + L_MSURFS) = copy;
 		}
 	}
-	pick_model = model;
-	pick_source = src;
-	log_printf("transplant: %s made in the XModel pool (entry of %u bytes)", PICK_NAME, (unsigned)size);
+	turned[ti].model = model;
+	turned[ti].from = src;
+	log_printf("transplant: %s made in the XModel pool (entry of %u bytes, %s turned by %.3f %.3f %.3f %.3f)", copy_name, (unsigned)size, turned[ti].source, rx, ry, rz, rw);
 	return model;
 }
 
@@ -620,8 +663,11 @@ static char is_default(unsigned type, const char *name)
 	if (game_is_iw4x() && type == 0x24 && name && scripts_is_override(name)) // a script of ours (scripts.c): the rawfile exists
 		return 0;
 #endif
-	if (type == 4 && name && strcmp(name, PICK_NAME) == 0 && pick_model)
-		return 0;
+	if (type == 4 && name) {
+		const int ti = turned_index(name);
+		if (ti >= 0 && turned[ti].model)
+			return 0;
+	}
 	if (type == 4 && name && strcmp(name, CLONE_NAME) == 0)
 		for (int i = 0; i < 4; i++)
 			if (clones[i].model)

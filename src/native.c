@@ -3406,10 +3406,163 @@ static void render_scene_hook(void *refdef, uintptr_t scene, uintptr_t c, uintpt
 		return;
 	*rlc = saved;
 }
+// The shell shock's saved screen ("$savedscreen", docs/32bit-native-map/shock-savedscreen.md). The cgame's shock pass (the call above) writes render commands: a save of
+// the screen (type 2: +4 the timer slot, = the local client), a blend of the saved picture over the view (type 0x12: +0x18 the slot; the flashed blend 0x13 has none).
+// The back end's save handler copies the WHOLE current target into the one $savedscreen and stamps savedTime[slot] with the view's time. In mode 11 both players' commands
+// carried slot 0: player 2's save was skipped as done (the same time), and player 1's copy of the whole back buffer put a stale picture in player 2's half, so his blend
+// smeared it over his view (owner's screenshot of the Endgame wake-up). The Xbox 360 gives each player his own slot (his local client) and copies only his rectangle (its
+// type 3 handler 0x823a9d30 resolves the player's rect of the target). The same here: player 2's commands get slot 1 (shock_slot_rewrite), and the save copies the view's
+// own pixel rectangle (64-bit: the rectangle the save's StretchRect is given; 32-bit: its own copy). [native] shockslot=0 / shocksect=0 off.
+static size_t shock_list_used(uint8_t **cmds)
+{
+#ifdef _WIN64
+	const uintptr_t *list = *(uintptr_t **)(base + XR(0x458fab0)); // the frame's command list: +0 the buffer, +8 the bytes used (rva 0xe530 writes the save command)
+	*cmds = list ? (uint8_t *)list[0] : NULL;
+	return list ? (size_t)list[1] : 0;
+#else
+	const uint32_t *list = *(uint32_t **)(base + XR(0x1893268)); // VA 0x1c93268: +0 the buffer, +4 the bytes used (VA 0x50eeb0 writes the save command)
+	*cmds = list ? (uint8_t *)(uintptr_t)list[0] : NULL;
+	return list ? (size_t)list[1] : 0;
+#endif
+}
+static void shock_slot_rewrite(size_t from)
+{
+	uint8_t *cmds;
+	const size_t used = shock_list_used(&cmds);
+	static int logged;
+	for (size_t at = from; cmds && at + 4 <= used;) { // {u16 type, u16 size} each
+		const unsigned type = *(const uint16_t *)(cmds + at), size = *(const uint16_t *)(cmds + at + 2);
+		if (size < 4)
+			break;
+		int *slot = type == 2 && size >= 8 ? (int *)(cmds + at + 4) : type == 3 && size >= 0x18 ? (int *)(cmds + at + 0x14) : type == 0x12 && size >= 0x1c ? (int *)(cmds + at + 0x18) : NULL;
+		if (slot) {
+			if (logged < 6) {
+				logged++;
+				log_printf("native: shock: player 2's command type 0x%x gets timer slot 1 (was %d)", type, *slot);
+			}
+			*slot = 1;
+		}
+		at += size;
+	}
+}
 static void rs_shock_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
 {
+	uint8_t *cmds;
+	const size_t used0 = rs_player1 ? shock_list_used(&cmds) : 0;
 	rs_shock_original(rs_player1 ? 0 : lc, b, c, d);
+	if (rs_player1 && CFG_ONCE("shockslot", 1))
+		shock_slot_rewrite(used0);
 }
+#ifdef _WIN64
+// 64 bits: the save handler (rva 0x41160, the handler table's type 2 entry at rva 0x3705c0) gives its StretchRect (`call [r10+0x110]` at 0x41214, which the native
+// renderers turn into their own StretchRect) no rectangles: `xor r8d,r8d` at 0x411d1 and `mov qword [rsp+20h],0` at 0x411ee. Those 38 bytes are rewritten with the same
+// instructions plus `mov r8,[rip+x]; mov [rsp+20h],r8`, x a pointer in a page near the exe: 0 (the whole target, as the game does) except while the hook below runs the handler
+// for a split view, when it points at the view's pixel rectangle (the 2D state at 0x4358e78: x, y, w, h, set by the back end for the view whose list runs).
+static uint64_t *shock_rect_page;
+static void (*save_screen_original)(uint8_t **cmd);
+static void save_screen_hook(uint8_t **cmd)
+{
+	if (mode == 11 && native_active && split_on && shock_rect_page) {
+		const int *vr = (const int *)(base + XR(0x4358e78));
+		if (vr[2] > 0 && vr[3] > 0) {
+			RECT *r = (RECT *)(shock_rect_page + 2);
+			r->left = vr[0], r->top = vr[1], r->right = vr[0] + vr[2], r->bottom = vr[1] + vr[3];
+			shock_rect_page[0] = (uint64_t)(uintptr_t)r;
+			static int logged;
+			if (logged < 4) {
+				logged++;
+				log_printf("native: shock: the saved screen copies the view's rectangle %ld %ld %ld %ld (slot %d)", r->left, r->top, r->right, r->bottom, *(const int *)(*cmd + 4));
+			}
+		}
+	}
+	save_screen_original(cmd);
+	if (shock_rect_page)
+		shock_rect_page[0] = 0;
+}
+static void shock_sect_install(void)
+{
+	static const uint8_t expect[38] = {0x45, 0x33, 0xc0, 0x48, 0x8b, 0x5c, 0x24, 0x50, 0x66, 0x0f, 0x73, 0xd8, 0x08, 0x4c, 0x8b, 0xcb, 0x66, 0x48, 0x0f, 0x7e, 0xc0,
+					   0xc7, 0x44, 0x24, 0x28, 0x02, 0x00, 0x00, 0x00, 0x48, 0xc7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00};
+	uint8_t *site = base + XR(0x411d1);
+	uint8_t **entry = (uint8_t **)(base + XR(0x3705c0));
+	if (!CFG_ONCE("shocksect", 1))
+		return;
+	if (memcmp(site, expect, sizeof(expect)) || *entry != base + XR(0x41160)) {
+		log_printf("native: unexpected code at the saved screen's handler (0x41160 / 0x411d1): the shell shock's saved screen is copied whole (shocksect)");
+		return;
+	}
+	if (!shock_rect_page) {
+		shock_rect_page = (uint64_t *)hook_page_near(site); // read-write, never run: only read by the rewritten handler
+		if (!shock_rect_page) {
+			log_printf("native: no page near the exe for the saved screen's rectangle (shocksect)");
+			return;
+		}
+	}
+	shock_rect_page[0] = 0;
+	uint8_t code[38];
+	memcpy(code, expect + 3, 26); // mov rbx,[rsp+50h]; psrldq xmm0,8; mov r9,rbx; movq rax,xmm0; mov dword [rsp+28h],2
+	const int64_t disp = (int64_t)(intptr_t)shock_rect_page - (int64_t)(intptr_t)(site + 33);
+	if (disp > INT32_MAX || disp < INT32_MIN)
+		return;
+	const int32_t d32 = (int32_t)disp;
+	code[26] = 0x4c, code[27] = 0x8b, code[28] = 0x05; // mov r8,[rip+d32]
+	memcpy(code + 29, &d32, 4);
+	code[33] = 0x4c, code[34] = 0x89, code[35] = 0x44, code[36] = 0x24, code[37] = 0x20; // mov [rsp+20h],r8
+	DWORD old;
+	j_save(site, sizeof(code));
+	VirtualProtect(site, sizeof(code), PAGE_EXECUTE_READWRITE, &old);
+	memcpy(site, code, sizeof(code));
+	VirtualProtect(site, sizeof(code), old, &old);
+	FlushInstructionCache(GetCurrentProcess(), site, sizeof(code));
+	save_screen_original = (void (*)(uint8_t **))(void *)(base + XR(0x41160));
+	j_save((uint8_t *)entry, sizeof(*entry));
+	VirtualProtect(entry, sizeof(*entry), PAGE_READWRITE, &old);
+	*entry = (uint8_t *)(void *)save_screen_hook;
+	VirtualProtect(entry, sizeof(*entry), old, &old);
+	log_printf("native: the shell shock's saved screen is copied per view (shocksect)");
+}
+#else
+// 32 bits: the save handler (VA 0x536330) calls its copy helper at VA 0x53636f (VA 0x5340c0: EAX the $savedscreen GfxImage *, two stack words of the back end, the
+// second its state: device +0x90, current target +0xb14, the targets' surfaces at VA 0x244a304 + target * 0x14), which StretchRects the whole target. In a split view
+// the copy is made here, of the view's pixel rectangle (state - 0x34: x, y, w, h); the 32-bit game draws with its own Direct3D 9 device only.
+static void *save_help_target;
+void n32_save_help(uint8_t **img, uint32_t a1, uint8_t *state);
+__asm__(".text\n"
+	".globl _n32_save_help_stub\n"
+	"_n32_save_help_stub:\n"
+	"	pushl 8(%esp)\n"
+	"	pushl 8(%esp)\n"
+	"	pushl %eax\n"
+	"	call _n32_save_help\n"
+	"	addl $12, %esp\n"
+	"	ret\n");
+extern char n32_save_help_stub[];
+void n32_save_help(uint8_t **img, uint32_t a1, uint8_t *state)
+{
+	if (mode == 11 && native_active && split_on && CFG_ONCE("shocksect", 1) && img && state) {
+		const int *vr = (const int *)(state - 0x34); // (VA 0x2163b1c with the state at VA 0x2163b50 on the official build; one struct, so the iw4x-sp exe needs no address of it)
+		IDirect3DDevice9 *dev = *(IDirect3DDevice9 **)(state + 0x90);
+		const int cur = *(const int *)(state + 0xb14);
+		IDirect3DSurface9 *src = cur >= 0 && cur < 16 ? *(IDirect3DSurface9 **)(base + XR(0x204a304) + cur * 0x14) : NULL;
+		IDirect3DTexture9 *tex = *(IDirect3DTexture9 **)img;
+		IDirect3DSurface9 *dst = NULL;
+		if (vr[2] > 0 && vr[3] > 0 && dev && src && tex && SUCCEEDED(IDirect3DTexture9_GetSurfaceLevel(tex, 0, &dst)) && dst) {
+			RECT r = {vr[0], vr[1], vr[0] + vr[2], vr[1] + vr[3]};
+			const HRESULT hr = IDirect3DDevice9_StretchRect(dev, src, &r, dst, &r, D3DTEXF_LINEAR);
+			IDirect3DSurface9_Release(dst);
+			static int logged;
+			if (logged < 4) {
+				logged++;
+				log_printf("native: shock: the saved screen copies the view's rectangle %ld %ld %ld %ld (hr %08lx)", r.left, r.top, r.right, r.bottom, (unsigned long)hr);
+			}
+			if (SUCCEEDED(hr))
+				return;
+		}
+	}
+	uint8_t **eax = img;
+	__asm__ volatile("pushl %3\n\tpushl %2\n\tcall *%1\n\taddl $8, %%esp" : "+a"(eax) : "r"(save_help_target), "r"(a1), "r"(state) : "ecx", "edx", "memory", "cc");
+}
+#endif
 // The effects clock advances once per engine frame as on the 360 (its 0x82141e70 steps the effects of player 0 only). In mode 11 the second renderer
 // frame runs the same cgame step, so 0xbccdf called the step a second time for the same effects system: smoke and muzzle flashes lived one frame ahead
 // in the other half (owner's report, 2026-11-15). [native] fxclock=0 off.
@@ -5049,6 +5202,10 @@ static const range_t ranges[] = {
                                      // next bytes are the weapon definition table). One state for both players: in the Spec Ops snowmobile races both cameras made the same turns, neither
                                      // with its own sled (Vlad: "camera turns do not work, strong jitter for both"; QA 2026-11-17: both view yaws on one curve while the sleds' yaws
                                      // differed). Each context keeps its own. [native] ridesplit=0 off
+    {0x52fb70, 8},                   // frame_msec and the time the usercmds were last made (CL_CreateNewCommands rva 0xcf800: msec = com_frameTime - that time, then that time = now):
+                                     // with one pair the context made second in a frame always got msec 0, and CL_MouseMove (0xcfcf0) does nothing at 0: player 2 on the keyboard
+                                     // and mouse could not turn his view at all (Vlad, Big Brother "reverse": the minigun's camera did not turn; QA cmdlog1: frame_msec 0, no mouse
+                                     // read in context 1). Each context keeps its own. [native] msecsplit=0 off
 };
 #define RANGE_FX 9
 #define RANGE_VIEW 10
@@ -5057,6 +5214,7 @@ static const range_t ranges[] = {
 #define RANGE_CTL 13
 #define RANGE_SHAKE 14
 #define RANGE_RIDE 15
+#define RANGE_MSEC 16
 #define SUNSPLIT_DEFAULT 1
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
@@ -5079,11 +5237,14 @@ static const range_t ranges[] = {
     {0x204a260, 0x28},               // the sun's blind and glare state of local client 0 (VA 0x244a260 + local client * 40, read by VA 0x543290 and its callees): see the 64-bit range
                                      // ([native] sunsplit=0 off)
     {0x341230, 0x1c},                // the screen blur of local client 0 (VA 0x741230 + local client * 0x1c; clear_blur is VA 0x4a5690): see the 64-bit range ([native] blursplit=0 off)
+    {0x4889a0, 8},                   // the time the usercmds were last made and frame_msec (CL_CreateNewCommands VA 0x579bb0; CL_MouseMove VA 0x578fe0 does nothing at msec 0): see the
+                                     // 64-bit range ([native] msecsplit=0 off)
 };
 #define RANGE_FX 10
 #define RANGE_VIEW 11
 #define RANGE_SUN 12
 #define RANGE_BLUR 13
+#define RANGE_MSEC 14
 #define SUNSPLIT_DEFAULT 1 // (with the wait for the frame in flight, see sunwait in ctx_swap_mask)
 #endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
@@ -5514,6 +5675,8 @@ static void ctx_swap_mask(int to, unsigned mask)
 		if (i == RANGE_RIDE && !CFG_ONCE("ridesplit", 1))
 			continue;
 #endif
+		if (i == RANGE_MSEC && !CFG_ONCE("msecsplit", 1))
+			continue;
 		uint8_t *live = base + RANGE_RVA(i);
 #if defined(_WIN64) && defined(RANGE_FX)
 		if (i == RANGE_FX)
@@ -8137,6 +8300,8 @@ static void *mouse_read_target, *mouse_read2_target;
 static void mouse_read_original(intptr_t state, float *x, float *y);
 static void mouse_read2_original(intptr_t state, float *x, float *y);
 #endif
+static unsigned mouse1_reads; // QA (cmdlog1): player 2's mouse reads and their sum since the last log line
+static float mouse1_sum[2];
 static void mouse_read_hook(intptr_t state, float *x, float *y)
 {
 	if (ctx_current != (native_active ? kb_player() : 0) || (ctx_current == 1 && CFG_ONCE("mouse1off", 0))) { // not the mouse's player (left unread: it stays for his context); QA mouse1off: player 2 never reads it
@@ -8147,6 +8312,11 @@ static void mouse_read_hook(intptr_t state, float *x, float *y)
 	mouse_read_original(state, x, y);
 	if (ctx_current == 1 && CFG_ONCE("qa_mouse1dx", 0)) // QA: a steady mouse move for player 2 (no real cursor is moved): does his view turn? (Big Brother's gunner)
 		*x += (float)CFG_ONCE("qa_mouse1dx", 0);
+	if (ctx_current == 1) { // (for the QA log cmdlog1: how often player 2's mouse was read and how far it went)
+		mouse1_reads++;
+		mouse1_sum[0] += *x;
+		mouse1_sum[1] += *y;
+	}
 	if (inputlog_on() && (*x != 0 || *y != 0))
 		inputlog("MOUSE,%d,%d,%d,%.3f,%.3f", ctx_current, 1, native_active ? kb_player() : 0, *x, *y);
 }
@@ -8258,6 +8428,15 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 			at = GetTickCount();
 			log_printf("native: cmdlog1 time %d buttons %08x angles %d %d %d (short units) remote %d %d pm_flags %08x kb_player %d", *(int *)cmd, *(int *)(cmd + 4), *(int *)(cmd + 8), *(int *)(cmd + 12),
 				   *(int *)(cmd + 16), (int)(int8_t)cmd[0x3c], (int)(int8_t)cmd[0x3d], *(unsigned *)(base + RVA_PM_FLAGS), kb_player());
+#ifdef _WIN64
+			// what CL_CreateCmd (rva 0xd03a0) and CL_MouseMove (0xcfcf0) test before the mouse turns the view: the key catchers (8 with the cgame word 0x4225f4 set: the mouse
+			// moves the cgame's cursor 0x4320c8.. in 0xd09d0 instead), frame_msec (0x52fb70; 0: no mouse look), the accumulators, the mouse reads of player 2 since the last line
+			const float *acc = (const float *)(base + RVA_ACC_PITCH);
+			log_printf("native: cmdlog1 catchers %08x cgword %08x frame_msec %d acc %.2f %.2f mouse reads %u sum %.1f %.1f", *(unsigned *)(base + RVA_KEY_CATCHERS),
+				   *(unsigned *)(base + XR(0x422440) + 0x1b4), *(int *)(base + RVA_KEY_CATCHERS - 0x4140), (double)acc[0], (double)acc[1], mouse1_reads, (double)mouse1_sum[0], (double)mouse1_sum[1]);
+			mouse1_reads = 0;
+			mouse1_sum[0] = mouse1_sum[1] = 0;
+#endif
 		}
 	}
 	if (inputlog_on() && cmd && native_active && (ctx_current == 0 || ctx_current == 1)) { // the usercmd as it leaves the maker (about 20 a second per context)
@@ -11432,6 +11611,8 @@ static void hooks_apply32_mode11(void)
 	ok += m11_call32(base + XR(0xf319a), base + XR(0x15e7d0), (void *)friend_hook, (void **)&friend_original, "HUD's popup friendly name");
 	ok += m11_call32(base + XR(0x496b7), base + XR(0x107b10), (void *)render_scene_hook, (void **)&render_scene_original, "R_RenderScene");
 	ok += m11_call32(base + XR(0x107b70), base + XR(0xa31e0), (void *)rs_shock_hook, (void **)&rs_shock_original, "R_RenderScene's shellshock");
+	if (CFG_ONCE("shocksect", 1))
+		ok += m11_call32(base + XR(0x13636f), base + XR(0x1340c0), (void *)n32_save_help_stub, (void **)&save_help_target, "saved screen's copy");
 	ok += m11_call32(base + XR(0x106b3c), base + XR(0xf3020), (void *)rs_cgents_hook, (void **)&rs_cgents_original, "R_RenderScene's cgame 2D");
 	if (CFG_ONCE("exp11p1show", 1)) {
 		int be = m11_call32(base + XR(0x1399a6), base + XR(0x1397e0), (void *)be_frame_hook, (void **)&be_frame_original, "render thread's back-end frame (1)");
@@ -11470,7 +11651,7 @@ static void hooks_apply32_mode11(void)
 		}
 		log_printf("native: mode 11: %d of %d local player reads pinned to player 0", pinned, (int)(sizeof(pins) / sizeof(pins[0])));
 	}
-	log_printf("native: mode 11 (32-bit): %d of %d calls hooked%s", ok, CFG_ONCE("exp11p1show", 1) ? 11 : 8, be_end_installed ? "" : " (player 1's frame is not shown with its own 2D: the back end's frame is not wrapped)");
+	log_printf("native: mode 11 (32-bit): %d of %d calls hooked%s", ok, (CFG_ONCE("exp11p1show", 1) ? 11 : 8) + (CFG_ONCE("shocksect", 1) ? 1 : 0), be_end_installed ? "" : " (player 1's frame is not shown with its own 2D: the back end's frame is not wrapped)");
 }
 #endif
 
@@ -11566,6 +11747,8 @@ static int hooks_apply(void)
 	    !jhook_call(base + XR(0x82dd), (void *)rs_shock_hook, (void **)&rs_shock_original) ||
 	    !jhook_call(base + XR(0x6356), (void *)rs_cgents_hook, (void **)&rs_cgents_original))
 		log_printf("native: unexpected code at R_RenderScene's call (0xca523) or its cgame calls (0x82dd, 0x6356): player 2 renders as player 0");
+	if (mode == 11)
+		shock_sect_install();
 	if (*(base + XR(0x4545b)) != 0xe8 || !jhook_call(base + XR(0x4545b), (void *)final2d_hook, (void **)&final2d_original)) {
 		log_printf("native: unexpected code at the frame's 2D command list, mode 10 is off");
 		return 0;

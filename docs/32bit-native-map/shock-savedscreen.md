@@ -91,3 +91,17 @@ Names in brackets are IW names for orientation, not symbols from the exe.
    32 `jg` 0x56ddb9 in the shared 0x56ddb0.) Native DX11/12: `ngfr_stretch_current_to_saved` needs the same rect (nd_stretch takes one).
 3. No s/t hook: they come from vrect. Timing: the save sits right after 0x17 and the blend in each view's list, which runs after that view's composite and before its HUD,
    so each half of $savedscreen holds its own player's last frame without HUD, and the other half is not touched (as single player and as the 360).
+
+## Implemented (2026-11-18, `src/native.c`, next to `rs_shock_hook`)
+
+- **Timer slot 1 for player 2** (`shock_slot_rewrite`, `[native] shockslot`): after player 2's shock pass the commands it appended to the frame's list get slot 1 (type 2 `+4`,
+  type 3 `+0x14`, type 0x12 `+0x18`). 64-bit list `[0x458fab0]` {+0 buffer, +8 used}, 32-bit `[VA 0x1c93268]` {+0, +4}.
+- **Section capture** (`[native] shocksect`):
+  - 64-bit: the handler table's type 2 entry (0x3705c0) points at `save_screen_hook`, which runs the game's 0x41160 with a rectangle: the 38 bytes 0x411d1..0x411f6 are
+    the same instructions plus `mov r8,[rip+x]; mov [rsp+20h],r8`, `x` a pointer in a page near the exe (0, the whole target, except while the hook runs for a split view:
+    then the view's pixel rectangle from 0x4358e78). The game's StretchRect call (0x41214) stays, so the native renderers' bridge (natboot.c `s_stretch_rect`) takes the
+    rectangle as Direct3D 9 does.
+  - 32-bit: the handler's helper call at VA 0x53636f is hooked (`n32_save_help`): in a split view it copies the view's rectangle itself (the state argument - 0x34 is the
+    2D state's x, y, w, h: VA 0x2163b1c with the state at VA 0x2163b50), else it calls the helper. iw4x-sp: the helper call maps to 159 rva 0x136a9f (same bytes around).
+- Checked (QA frames of Endgame's wake-up, `m11-*` / `e*`): before (both off), player 2's half grey with layered hands; after, his own picture: 64-bit Direct3D 9 and
+  Direct3D 11, 32-bit official, iw4x-sp. The log shows the views' rectangles (`0 0 1280 360` for player 1) and player 2's commands taking slot 1.

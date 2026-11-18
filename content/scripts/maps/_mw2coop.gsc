@@ -220,10 +220,14 @@ attach_weapon_model( weapon_model )
 		return;
 	}
 	// Endgame's knife (ending_knife) is never seen in third person in single player: its world model is a silenced pistol, and the
-	// partner saw player 1 walk to Shepherd with a gun (owner, 2026-11-14). The players' knife of that scene is shown instead.
+	// partner saw player 1 walk to Shepherd with a gun (owner, 2026-11-14). The players' knife of that scene is shown instead, on the
+	// tag the multiplayer knife takes (tag_inhand): in the body's rifle stance (ending_knife is an smg to the body's animations) that is
+	// the right palm, the knife's grip in the fist and its blade ahead. On the weapon tag the knife lay sideways across the chest, and
+	// in the "hold" set (claymore, C4) tag_inhand is between the two fists, where the knife hung in the air (owner, 2026-11-18;
+	// QA knifevar, docs/32bit-native-map/weapon-animtype.md).
 	if ( is_campaign_coop() && level.script == "ending" && weapon_model == GetWeaponModel( "ending_knife" ) )
 	{
-		self attach( "weapon_commando_knife", "tag_weapon_right", true );
+		self attach( "weapon_commando_knife", "tag_inhand", true );
 		return;
 	}
 	self attach( weapon_model, "tag_weapon_right", true );

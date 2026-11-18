@@ -487,6 +487,12 @@ main()
 		case "knife2":
 			knife();
 			break;
+		case "knifepose":
+			knifepose();
+			break;
+		case "knifevar":
+			knifevar();
+			break;
 		case "body":
 			body();
 			break;
@@ -4144,6 +4150,118 @@ nrend()
 // zones): the bot strikes through player.mw2coop_qa_melee, holds the crawl and Use buttons
 // through player.mw2coop_qa_hold and throws with the "throw" notify. Only the striker is moved
 // (to Shepherd); the other player is left where he got up.
+// Endgame after the wake-up: both hold the knife; player 2 is put in front of player 1, each looks at the other: frames of both views
+// (the partner's third-person knife: the body's "hold" set and the knife on tag_inhand)
+knifepose()
+{
+	flag_wait( "player_standing" );
+	wait 4;
+	p1 = level.player;
+	p2 = level.player2;
+	fwd = AnglesToForward( ( 0, p1.angles[ 1 ], 0 ) );
+	right = AnglesToRight( ( 0, p1.angles[ 1 ], 0 ) );
+	at = p1.origin + fwd * 95 + right * 22;
+	spot = PhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) );
+	p2 SetOrigin( spot );
+	wait 0.2;
+	// each looks at the other's waist: the whole body and both hands in the frame
+	p2 SetPlayerAngles( VectorToAngles( p1.origin + ( 0, 0, 34 ) - p2 GetEye() ) );
+	p1 SetPlayerAngles( VectorToAngles( p2.origin + ( 0, 0, 34 ) - p1 GetEye() ) );
+	wait 1.5;
+	report( "knifepose: player 1 holds " + p1 GetCurrentWeapon() + ", player 2 holds " + p2 GetCurrentWeapon() );
+	foreach ( n, player in level.players )
+	{
+		text = "";
+		for ( i = 0; i < player GetAttachSize(); i++ )
+			text = text + " " + player GetAttachModelName( i ) + "@" + player GetAttachTagName( i );
+		report( "knifepose: player " + ( n + 1 ) + " attachments:" + text );
+	}
+	qa_shot( "kp1" );
+	wait 9;	// (the wake-up's shell shock blur fades)
+	p2 SetPlayerAngles( VectorToAngles( p1.origin + ( 0, 0, 34 ) - p2 GetEye() ) );
+	p1 SetPlayerAngles( VectorToAngles( p2.origin + ( 0, 0, 34 ) - p1 GetEye() ) );
+	wait 0.5;
+	qa_shot( "kp2" );
+	p2 SetStance( "crouch" );
+	p1 SetStance( "crouch" );
+	wait 2;
+	qa_shot( "kp3" );
+	// close-ups of player 2's hands from player 1's eye: in front, then from his right and his left side
+	p2 SetStance( "stand" );
+	p1 SetStance( "stand" );
+	wait 1;
+	fwd = AnglesToForward( ( 0, p1.angles[ 1 ], 0 ) );
+	at = p1.origin + fwd * 48;
+	p2 SetOrigin( PhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) ) );
+	sides = [];
+	sides[ 0 ] = 180;
+	sides[ 1 ] = 90;
+	sides[ 2 ] = -90;
+	foreach ( k, turn in sides )
+	{
+		p2 SetPlayerAngles( ( 0, p1.angles[ 1 ] + turn, 0 ) );
+		wait 0.3;
+		p1 SetPlayerAngles( VectorToAngles( p2.origin + ( 0, 0, 36 ) - p1 GetEye() ) );
+		wait 0.7;
+		qa_shot( "kpc" + k );
+	}
+	// player 1 walks ahead (a QA press of +forward), player 2 watches him from the side: the knife in the "hold" walk
+	right = AnglesToRight( ( 0, p1.angles[ 1 ], 0 ) );
+	at = p1.origin + right * 100 + AnglesToForward( ( 0, p1.angles[ 1 ], 0 ) ) * 120;
+	p2 SetOrigin( PhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) ) );
+	p1 SetPlayerAngles( ( 0, p1.angles[ 1 ], 0 ) );
+	wait 0.3;
+	SetDvar( "mw2coop_qa_press", "1 forward 4500" );
+	for ( k = 0; k < 6; k++ )
+	{
+		p2 SetPlayerAngles( VectorToAngles( p1.origin + ( 0, 0, 34 ) - p2 GetEye() ) );
+		wait 0.05;
+		qa_shot( "kpw" + k );
+	}
+	report( "knifepose: done" );
+}
+
+// Endgame after the wake-up: player 2's knife tried on several tags ("<tag> [model]", the dvar mw2coop_qa_knifevar, ","-separated), close-ups from player 1's eye, in
+// front and from both sides
+knifevar()
+{
+	flag_wait( "player_standing" );
+	wait 12;	// (the wake-up's shell shock blur fades)
+	p1 = level.player;
+	p2 = level.player2;
+	fwd = AnglesToForward( ( 0, p1.angles[ 1 ], 0 ) );
+	at = p1.origin + fwd * 80;
+	p2 SetOrigin( PhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) ) );
+	variants = StrTok( GetDvar( "mw2coop_qa_knifevar" ), "," );
+	if ( !variants.size )
+		variants = StrTok( "tag_inhand,tag_weapon_right,tag_weapon_left", "," );
+	foreach ( n, v in variants )
+	{
+		parts = StrTok( v, " " );	// "<tag> [model]"
+		model = "weapon_commando_knife";
+		if ( parts.size > 1 )
+			model = parts[ 1 ];
+		for ( i = p2 GetAttachSize() - 1; i >= 0; i-- )
+			if ( p2 GetAttachModelName( i ) == "weapon_commando_knife" || p2 GetAttachModelName( i ) == model )
+				p2 Detach( p2 GetAttachModelName( i ), p2 GetAttachTagName( i ) );
+		p2 Attach( model, parts[ 0 ], true );
+		report( "knifevar " + n + ": " + model + " on " + parts[ 0 ] );
+		turns = [];
+		turns[ 0 ] = 180;
+		turns[ 1 ] = 90;
+		turns[ 2 ] = -90;
+		foreach ( k, turn in turns )
+		{
+			p2 SetPlayerAngles( ( 0, p1.angles[ 1 ] + turn, 0 ) );
+			wait 1.4;
+			p1 SetPlayerAngles( VectorToAngles( p2.origin + ( 0, 0, 40 ) - p1 GetEye() ) );
+			wait 0.3;
+			qa_shot( "kv" + n + "-" + k );
+		}
+	}
+	report( "knifevar: done" );
+}
+
 knife()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
