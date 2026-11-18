@@ -468,8 +468,13 @@ void *transplant_clone(const char *name, void *(*find)(int, const char *))
 // the body and floated beside them). The copy's geometry hangs off its second bone instead of the root, and that bone is turned about the grip: the model turns with it.
 // - "mw2coop_pick_up": Cliffhanger's ice pick (weapon_ice_picker) standing upright in the hand that holds it. A co-op body holds it in the pistol grip, where the pick
 //   stuck out ahead of the fist like a pistol (owner, 2026-10-24: "turn them upright, right into his hands"): 90 degrees about Y (ahead becomes up), then 9 units back.
-// A model with more bones under its one root turns as a whole (each child of the root is turned). Tried 2026-11-18 on Endgame's knife (4 bones) in the body's "hold" set;
-// the knife went to a hand without a turn in the end (maps\_mw2coop::attach_weapon_model).
+// - "mw2coop_knife_held": Endgame's knife (weapon_commando_knife, 4 bones) held as the first-person rig holds it, for a body's left wrist (j_wrist_le). The level puts
+//   the knife on the rig's TAG_WEAPON_LEFT in the fight (af_chase_knife_fight.gsc); on the rig that tag is fixed to the left wrist: QA knifeframe, seven times of
+//   player_afchase_ending_turnbuckle, the same 2.58 -0.12 1.33 from j_wrist_le and the blade along (-0.289 -0.940 0.181) of the wrist's axes. The body's wrist has
+//   the rig's axes turned 180 degrees about the forearm (the axis to the fingers is the same): taken as it is, the blade came out of the little finger's side, down;
+//   turned so (the rotation Rx(180) * R, the offset 2.58 0.12 -1.33), out of the thumb's side, ahead and up, as in first person. The co-op body's own tag_weapon_left
+//   is not on its hand (the knife hung ahead of it, walking above it), so the copy carries the hold and goes on the wrist (owner, 2026-11-18: "take a frame of the
+//   animation and put it in like that").
 static struct {
 	const char *name, *source;
 	float r[4];     // the turn, a quaternion x y z w
@@ -477,6 +482,7 @@ static struct {
 	uint8_t *model, *from;
 } turned[] = {
     {PICK_NAME, "weapon_ice_picker", {0, -0.70710678f, 0, 0.70710678f}, {-9.0f, 0, 0}, NULL, NULL},
+    {"mw2coop_knife_held", "weapon_commando_knife", {0.3872f, 0.3968f, -0.6979f, -0.4532f}, {2.58f, 0.12f, -1.33f}, NULL, NULL},
 };
 #define TURNED_N (sizeof(turned) / sizeof(turned[0]))
 static int turned_index(const char *name)

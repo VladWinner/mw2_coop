@@ -199,6 +199,8 @@ set_bodies()
 			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ] ) );
 			PrecacheModel( "mw2coop_pick_up" );
 		}
+		if ( level.script == "ending" )	// the knife in the bodies' left hands (attach_weapon_model; src/transplant.c turned_copy)
+			PrecacheModel( "mw2coop_knife_held" );
 		if ( level.script == "af_caves" || level.script == "gulag" )	// the stand-in on the rope (maps\_mw2coop_cave::partner_view, maps\_mw2coop_gulag::rope_partner_view)
 			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ], maps\_mw2coop_bodies::rope_skeleton() ) );
 		player.mw2coop_body = models[ 0 ];
@@ -220,14 +222,16 @@ attach_weapon_model( weapon_model )
 		return;
 	}
 	// Endgame's knife (ending_knife) is never seen in third person in single player: its world model is a silenced pistol, and the
-	// partner saw player 1 walk to Shepherd with a gun (owner, 2026-11-14). The players' knife of that scene is shown instead, on the
-	// tag the multiplayer knife takes (tag_inhand): in the body's rifle stance (ending_knife is an smg to the body's animations) that is
-	// the right palm, the knife's grip in the fist and its blade ahead. On the weapon tag the knife lay sideways across the chest, and
-	// in the "hold" set (claymore, C4) tag_inhand is between the two fists, where the knife hung in the air (owner, 2026-11-18;
-	// QA knifevar, docs/32bit-native-map/weapon-animtype.md).
+	// partner saw player 1 walk to Shepherd with a gun (owner, 2026-11-14). The players' knife of that scene is shown instead, in the
+	// left hand as the player sees it in first person: on tag_weapon_left, where the level itself puts it on the player's rig in the
+	// fight (af_chase_knife_fight.gsc: player_rig Attach( "weapon_commando_knife", "TAG_WEAPON_LEFT" )); owner, 2026-11-18: "the knife
+	// should lie in the left hand, as in the first-person view"). On a co-op body that tag is not on the hand (the knife hung ahead of
+	// it), so the DLL's copy mw2coop_knife_held carries the rig's hold (the knife's place and turn from the rig's left wrist, the same in
+	// every frame of the fight's animation) and goes on the body's left wrist. The body has no pose of its own for a held knife
+	// (mp/playeranim.script: only the throwing knife's pull-out and throw); docs/32bit-native-map/weapon-animtype.md.
 	if ( is_campaign_coop() && level.script == "ending" && weapon_model == GetWeaponModel( "ending_knife" ) )
 	{
-		self attach( "weapon_commando_knife", "tag_inhand", true );
+		self attach( "mw2coop_knife_held", "j_wrist_le", true );
 		return;
 	}
 	self attach( weapon_model, "tag_weapon_right", true );

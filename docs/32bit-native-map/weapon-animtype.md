@@ -144,15 +144,20 @@ Events: `fireweapon` with hold plays `pt_hold_throw` / `pt_hold_prone_throw`; wi
 - When a changed value takes effect (next animation change or at once): not traced into the anim selection code.
 - 64-bit offsets marked "derived" in the summary (penetrateType, fireType, offhandClass, knifeModel, worldClipModel, rocketModel): no code read.
 
-## Outcome (2026-11-18): no anim type change, the knife on tag_inhand
+## Outcome (2026-11-18): the first-person rig's hold, on the body's left wrist
 
-- First try (written to the weapon def through a dvar `mw2coop_animtype` and BG_FindWeaponIndexForName, 64-bit rva 0x85700 / 32-bit VA 0x447150: a lookup only, unlike
-  G_GetWeaponIndexForName 0x1a1ce0 / VA 0x481960, which registers the weapon while the level loads): `playerAnimType` 13 ("hold") with the knife on `tag_inhand`. The owner:
-  "you don't see what position the knife is in?", then "it hangs in the air between the hands, not in the hand". In the "hold" set `tag_inhand` is between the two fists
-  (the claymore is held with both hands), and the knife stood there blade up. A turned copy of the knife (`src/transplant.c` `turned_copy`, which now takes models with
-  more bones under the root: `weapon_commando_knife` has 4) pointed the blade ahead, but it still hung between the hands.
-- QA `knifevar` (close-ups from player 1's eye: in front, both sides) over the sets with `tag_inhand`: pistol (2) and riot shield (15) put the knife by the leg or the
-  belt; none (0), other (1), m203 (12), laptop (16) fall to the rifle stance, where `tag_inhand` is the right palm: the grip in the fist, the blade ahead. That stance is
-  `ending_knife`'s own (smg, 3), so nothing is written: `maps\_mw2coop::attach_weapon_model` attaches `weapon_commando_knife` to `tag_inhand` instead of `tag_weapon_right`.
-- Checked with QA `knifepose` (64-bit, 32-bit, iw4x-sp split screen; front, both sides, crouched, walking): `weapon_commando_knife@tag_inhand` on both bodies, the knife in
-  the right fist. Not checked: a network pair (the script runs on both machines). The first-person knife is in the left hand, the body's in the right.
+- The playerAnimType route (a dvar `mw2coop_animtype` and a write into the weapon def: "hold" 13) was dropped: in the "hold" set `tag_inhand` is between the two fists,
+  and the knife hung there (owner). Nothing is written to the weapon def; `ending_knife` keeps its own set (smg, the rifle stance).
+- The owner asked for the knife in the left hand as in first person, taken from the game's own animation. The level puts the knife on the first-person rig's
+  `TAG_WEAPON_LEFT` for the fight (af_chase_knife_fight.gsc, then `player_afchase_ending_turnbuckle`). QA `knifeframe` (a rig spawned with `spawn_anim_model( "player_rig" )`,
+  the knife attached, the animation held at 7 times with `SetAnimTime`; GSC here has no `float()`): `TAG_WEAPON_LEFT` is fixed to `j_wrist_le`, 2.58 -0.12 1.33 in the
+  wrist's axes, the blade along (-0.289 -0.940 0.181), the knife's up along (-0.900 0.203 -0.385), in every frame.
+- `src/transplant.c` `turned_copy` makes `mw2coop_knife_held` from `weapon_commando_knife` (4 bones, 1 root: each child of the root turned, the root's vertices drawn
+  by its first child) with that hold; `maps\_mw2coop::attach_weapon_model` attaches it to the body's `j_wrist_le`. Taken as it is, the blade came out of the little
+  finger's side, pointing down: the body's wrist has the rig's axes turned 180 degrees about the forearm (the axis to the fingers agrees). The copy uses Rx(180) * R:
+  quaternion 0.3872 0.3968 -0.6979 -0.4532, offset 2.58 0.12 -1.33.
+- The body's own tags, checked with close-ups (QA `knifehand`, `knifevar`): `tag_inhand` is on the left hand (2.9 units from `j_wrist_le` by the server's tags), whose
+  rifle-stance support grip is open; `tag_weapon_left` stands ahead of the hand and moves apart from it when walking; `tag_weapon_right` lay the knife sideways. The
+  server's tag positions of a player do not match the drawn pose closely enough to place a model by them (a knife moved by them floated ahead of the hand).
+- Checked: 64-bit and 32-bit split screen (Endgame's wake-up, standing, both sides, walking): the grip in the left fist, the blade ahead and up. Not checked: a network
+  pair (the script runs on both machines; the copy is made by each one's DLL), iw4x-sp.

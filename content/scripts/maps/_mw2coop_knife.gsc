@@ -42,6 +42,7 @@ partner_wakeup( anim_node, scene )
 	node anim_first_frame_solo( rig, scene );
 	p2 DisableWeapons();
 	p2 FreezeControls( true );
+	p2 wakeup_shock();
 	p2 PlayerLinkToDelta( rig, "tag_player", 1, 0, 0, 0, 0, true );
 	maps\_mw2coop::state( "knife fight: player 2 wakes up " + int( Length( offset ) ) + " units beside player 1" );
 	p2 thread partner_wakeup_anim( node, rig, scene );
@@ -141,7 +142,14 @@ wounded_walk()
 	self AllowJump( false );
 	self AllowProne( false );
 	self SetMoveSpeedScale( 0.45 );
-	self ShellShock( "af_chase_ending_wakeup", 8 );
+}
+
+// The wake-up's shell shock as the level gives the lead (shellshock_very_long(): 31720 s, from the fall off the waterfall until
+// shepherd_gloats() stops it; the witness gets his own in witness_think()). Player 2 had it for 8 s after his wake-up only, so his
+// half cleared while player 1's stayed dazed for the whole walk (owner, 2026-11-18: "look at the top camera, there it lasts longer").
+wakeup_shock()
+{
+	self ShellShock( "af_chase_ending_wakeup", 31720 );
 }
 
 // --------------------------------------------------------------------------------------------

@@ -493,6 +493,15 @@ main()
 		case "knifevar":
 			knifevar();
 			break;
+		case "knifeaxis":
+			knifeaxis();
+			break;
+		case "knifehand":
+			knifehand();
+			break;
+		case "knifeframe":
+			knifeframe();
+			break;
 		case "body":
 			body();
 			break;
@@ -4150,6 +4159,172 @@ nrend()
 // zones): the bot strikes through player.mw2coop_qa_melee, holds the crawl and Use buttons
 // through player.mw2coop_qa_hold and throws with the "throw" notify. Only the striker is moved
 // (to Shepherd); the other player is left where he got up.
+// The knife model's own axes: a script model of it 24 units ahead of player 1's eye, its origin on the view's centre (the crosshair), its angles the view's
+// (yaw only): turned 0, 90 and 180 degrees about up, then rolled 90, a frame of each
+knifeaxis()
+{
+	flag_wait( "player_standing" );
+	wait 12;
+	p1 = level.player;
+	yaw = p1 GetPlayerAngles()[ 1 ];
+	p1 SetPlayerAngles( ( 0, yaw, 0 ) );
+	wait 0.5;
+	knife = Spawn( "script_model", p1 GetEye() + AnglesToForward( ( 0, yaw, 0 ) ) * 24 );
+	knife SetModel( "weapon_commando_knife" );
+	turns = [];
+	turns[ 0 ] = ( 0, yaw, 0 );
+	turns[ 1 ] = ( 0, yaw + 90, 0 );
+	turns[ 2 ] = ( 0, yaw + 180, 0 );
+	turns[ 3 ] = ( 0, yaw, 90 );
+	foreach ( k, a in turns )
+	{
+		knife.angles = a;
+		wait 0.4;
+		qa_shot( "ka" + k );
+	}
+	report( "knifeaxis: done" );
+}
+
+// Endgame after the wake-up: both halves under the wake-up's shell shock (a frame of the whole screen), then, the shock taken off for sharp frames, player 1's
+// knife hand close up from player 2's eye (from his left, his front-left, behind-left and his right), then player 1 walking seen from his left
+knifehand()
+{
+	flag_wait( "player_standing" );
+	wait 12;
+	qa_shot( "khs" );
+	p1 = level.player;
+	p2 = level.player2;
+	foreach ( player in level.players )
+		player StopShellShock();
+	SetBlur( 0, 0 );
+	wait 3;
+	yaw = p1 GetPlayerAngles()[ 1 ];
+	fwd = AnglesToForward( ( 0, yaw, 0 ) );
+	left = AnglesToRight( ( 0, yaw, 0 ) ) * -1;
+	spots = [];
+	spots[ 0 ] = left * 34 + fwd * 10;
+	spots[ 1 ] = left * 30 + fwd * 30;
+	spots[ 2 ] = left * 24 - fwd * 4;
+	spots[ 3 ] = left * -34 + fwd * 20;
+	tag = "tag_weapon_left";
+	model = "weapon_commando_knife";
+	for ( i = 0; i < p1 GetAttachSize(); i++ )
+		if ( IsSubStr( p1 GetAttachModelName( i ), "knife" ) )
+		{
+			tag = p1 GetAttachTagName( i );
+			model = p1 GetAttachModelName( i );
+		}
+	if ( GetDvar( "mw2coop_qa_knifetag" ) != "" )
+		tag = GetDvar( "mw2coop_qa_knifetag" );
+	models = StrTok( GetDvar( "mw2coop_qa_knifemodels" ), " " );	// (other knife models to try on the same tag, after the one attached)
+	all = [];
+	all[ 0 ] = model;
+	foreach ( m in models )
+		all[ all.size ] = m;
+	start = p1.origin;
+	foreach ( m, name in all )
+	{
+		p1 SetOrigin( start );	// (each model from the same place: the walk moved him)
+		p1 SetPlayerAngles( ( 0, yaw, 0 ) );
+		for ( i = p1 GetAttachSize() - 1; i >= 0; i-- )
+			if ( IsSubStr( p1 GetAttachModelName( i ), "knife" ) )
+				p1 Detach( p1 GetAttachModelName( i ), p1 GetAttachTagName( i ) );
+		p1 Attach( name, tag, true );
+		report( "knifehand " + m + ": " + name + " on " + tag );
+		foreach ( k, spot in spots )
+		{
+			at = p1.origin + spot;
+			p2 SetOrigin( PhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) ) );
+			wait 0.3;
+			p2 SetPlayerAngles( VectorToAngles( p1 GetTagOrigin( tag ) - p2 GetEye() ) );
+			wait 0.6;
+			qa_shot( "kh" + m + "-" + k );
+		}
+		// walking, seen from his left at 50 units
+		p1 SetPlayerAngles( ( 0, yaw, 0 ) );
+		at = p1.origin + left * 50 + fwd * 40;
+		p2 SetOrigin( PhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) ) );
+		wait 0.3;
+		SetDvar( "mw2coop_qa_press", "1 forward 1800 " + m );
+		for ( k = 0; k < 2; k++ )
+		{
+			wait 0.25;
+			p2 SetPlayerAngles( VectorToAngles( p1 GetTagOrigin( tag ) - p2 GetEye() ) );
+			wait 0.05;
+			qa_shot( "kw" + m + "-" + k );
+		}
+		wait 1;
+	}
+	at = p1.origin + left * 90 + fwd * 60;
+	p2 SetOrigin( PhysicsTrace( at + ( 0, 0, 48 ), at - ( 0, 0, 96 ) ) );
+	p1 SetPlayerAngles( ( 0, yaw, 0 ) );
+	wait 0.3;
+	SetDvar( "mw2coop_qa_press", "1 forward 3000" );
+	for ( k = 0; k < 3; k++ )
+	{
+		p2 SetPlayerAngles( VectorToAngles( p1.origin + ( 0, 0, 40 ) - p2 GetEye() ) );
+		wait 0.05;
+		qa_shot( "khw" + k );
+	}
+	report( "knifehand: done" );
+}
+
+// The knife in the left hand of the first-person rig, as the level holds it in the fight (af_chase_knife_fight.gsc: player_rig Attach( "weapon_commando_knife",
+// "TAG_WEAPON_LEFT" ), then the turn_buckle animation): the rig's left wrist and the knife's tag at several times of that animation (still), to hold the knife
+// the same way in a body's left hand
+knifeframe()
+{
+	flag_wait( "player_standing" );
+	wait 2;
+	rig = spawn_anim_model( "player_rig" );
+	rig.origin = level.player.origin + ( 0, 0, 2000 );
+	rig.angles = ( 0, 0, 0 );
+	rig Attach( "weapon_commando_knife", "TAG_WEAPON_LEFT" );
+	animation = rig getanim( "turn_buckle" );
+	rig SetAnim( animation, 1, 0, 0 );
+	times = [];
+	times[ 0 ] = 0;
+	times[ 1 ] = 0.02;
+	times[ 2 ] = 0.05;
+	times[ 3 ] = 0.1;
+	times[ 4 ] = 0.2;
+	times[ 5 ] = 0.5;
+	times[ 6 ] = 1;
+	foreach ( t in times )	// (no float() in this game's GSC)
+	{
+		rig SetAnimTime( animation, t );
+		wait 0.2;
+		foreach ( tag in StrTok( "j_wrist_le tag_weapon_left", " " ) )
+		{
+			o = rig GetTagOrigin( tag );
+			ta = rig GetTagAngles( tag );
+			f = AnglesToForward( ta );
+			l = AnglesToRight( ta ) * -1;
+			u = AnglesToUp( ta );
+			report( "knifeframe t " + t + " " + tag + " o " + o[ 0 ] + " " + o[ 1 ] + " " + o[ 2 ] + " f " + f[ 0 ] + " " + f[ 1 ] + " " + f[ 2 ] + " l " + l[ 0 ] + " " + l[ 1 ] + " " + l[ 2 ] + " u " + u[ 0 ] + " " + u[ 1 ] + " " + u[ 2 ] );
+		}
+	}
+	rig Delete();
+	report( "knifeframe: done" );
+}
+
+// The hand tags of each player (world origin, forward, left, up), to place the knife model in a hand by
+knife_tag_report( label )
+{
+	foreach ( n, player in level.players )
+	{
+		foreach ( tag in StrTok( "tag_weapon_right j_wrist_le j_mid_le_1 j_index_le_1 j_wrist_ri tag_inhand tag_weapon_left", " " ) )
+		{
+			o = player GetTagOrigin( tag );
+			ta = player GetTagAngles( tag );
+			f = AnglesToForward( ta );
+			l = AnglesToRight( ta ) * -1;
+			u = AnglesToUp( ta );
+			report( "knifetag " + label + " p" + ( n + 1 ) + " " + tag + " o " + o[ 0 ] + " " + o[ 1 ] + " " + o[ 2 ] + " f " + f[ 0 ] + " " + f[ 1 ] + " " + f[ 2 ] + " l " + l[ 0 ] + " " + l[ 1 ] + " " + l[ 2 ] + " u " + u[ 0 ] + " " + u[ 1 ] + " " + u[ 2 ] );
+		}
+	}
+}
+
 // Endgame after the wake-up: both hold the knife; player 2 is put in front of player 1, each looks at the other: frames of both views
 // (the partner's third-person knife: the body's "hold" set and the knife on tag_inhand)
 knifepose()
@@ -4176,6 +4351,7 @@ knifepose()
 			text = text + " " + player GetAttachModelName( i ) + "@" + player GetAttachTagName( i );
 		report( "knifepose: player " + ( n + 1 ) + " attachments:" + text );
 	}
+	knife_tag_report( "stand" );
 	qa_shot( "kp1" );
 	wait 9;	// (the wake-up's shell shock blur fades)
 	p2 SetPlayerAngles( VectorToAngles( p1.origin + ( 0, 0, 34 ) - p2 GetEye() ) );
@@ -4185,6 +4361,7 @@ knifepose()
 	p2 SetStance( "crouch" );
 	p1 SetStance( "crouch" );
 	wait 2;
+	knife_tag_report( "crouch" );
 	qa_shot( "kp3" );
 	// close-ups of player 2's hands from player 1's eye: in front, then from his right and his left side
 	p2 SetStance( "stand" );
@@ -4214,6 +4391,8 @@ knifepose()
 	SetDvar( "mw2coop_qa_press", "1 forward 4500" );
 	for ( k = 0; k < 6; k++ )
 	{
+		if ( k == 2 )
+			knife_tag_report( "walk" );
 		p2 SetPlayerAngles( VectorToAngles( p1.origin + ( 0, 0, 34 ) - p2 GetEye() ) );
 		wait 0.05;
 		qa_shot( "kpw" + k );
