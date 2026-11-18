@@ -163,3 +163,18 @@ Events: `fireweapon` with hold plays `pt_hold_throw` / `pt_hold_prone_throw`; wi
   server's tag positions of a player do not match the drawn pose closely enough to place a model by them (a knife moved by them floated ahead of the hand).
 - Checked: 64-bit and 32-bit split screen (Endgame's wake-up, standing, both sides, walking): the grip in the left fist, the blade ahead and up. Not checked: a network
   pair (the script runs on both machines; the copy is made by each one's DLL), iw4x-sp.
+
+### The hand (2026-11-18, later): the rig's wrist on the body, the body's own fingers, the knife in their curl
+
+- The owner wanted the hand like the first-person one, not only the knife. `src/transplant.c` hooks the animation calc that `DObjCalcSkel` calls before composing the
+  bones (64-bit rva 0x2a2df0 `(obj, partBits[6], workspace)`, called through 0x298ee0 / 0x298e90 from 0x299250; 32-bit VA 0x4d07b0, cdecl, from 0x466d60 through
+  0x63bde0 / 0x63be20; iw4x-sp rva 0xa9140). After it, for a DObj that has the knife copy among its models, the local turns of `j_wristtwist_le` and `j_wrist_le` are
+  set to the rig's (the rig's tag axes at the fight's first frame, as quaternions; the rig's local turn L is the body's C^-1 L C, C = 180 degrees about X, as found on the
+  knife's hold). DObj fields: numModels 64 +0xd / 32 +0x9, the composed bones' bits 64 +0x60 / 32 +0x5c, the matrices 64 +0x80 / 32 +0x78 (0x20 per bone: quaternion,
+  translation, weight), the models 64 +0xa8 / 32 +0x98. Bone indices by DObjGetBoneIndex (64 rva 0x296020, 32 VA 0x41f630) on SL_GetString names (64 rva 0x18f440, 32 VA
+  0x475dc0, iw4x-sp rva 0x52b90). It runs for the server's DObj of a player too.
+- The rig's finger turns applied the same way crumpled the body's hand (QA modes 2 / 4 / 8); the server's tag positions of the body's index and middle fingers were not
+  usable (up to 20 units from the wrist), the ring, little finger and thumb were. From those: the fingers point along the wrist's +X and close toward +Y, the thumb is on
+  -Z. The knife copy puts its handle there: blade out of the thumb's side (-Z), quaternion 0.7071 0 -0.7071 0, the handle's middle at 3.5 0.5 0.5 (`mw2coop_knife_held`);
+  the reverse grip (blade out of the little finger's side) is `mw2coop_knife_reverse`, QA only. The owner picked the forward grip.
+- Checked: 64-bit, 32-bit and iw4x-sp split screen (QA `knifehand`: close-ups from the left, the front-left and the right, walking). Not checked: a network pair.

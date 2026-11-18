@@ -468,16 +468,13 @@ void *transplant_clone(const char *name, void *(*find)(int, const char *))
 // the body and floated beside them). The copy's geometry hangs off its second bone instead of the root, and that bone is turned about the grip: the model turns with it.
 // - "mw2coop_pick_up": Cliffhanger's ice pick (weapon_ice_picker) standing upright in the hand that holds it. A co-op body holds it in the pistol grip, where the pick
 //   stuck out ahead of the fist like a pistol (owner, 2026-10-24: "turn them upright, right into his hands"): 90 degrees about Y (ahead becomes up), then 9 units back.
-// - "mw2coop_knife_held": Endgame's knife (weapon_commando_knife, 4 bones) held as the first-person rig holds it, for a body's left wrist (j_wrist_le). The level puts
-//   the knife on the rig's TAG_WEAPON_LEFT in the fight (af_chase_knife_fight.gsc); on the rig that tag is fixed to the left wrist: QA knifeframe, seven times of
-//   player_afchase_ending_turnbuckle, the same 2.58 -0.12 1.33 from j_wrist_le and the blade along (-0.289 -0.940 0.181) of the wrist's axes. The body's wrist has
-//   the rig's axes turned 180 degrees about the forearm (the axis to the fingers is the same): taken as it is, the blade came out of the little finger's side, down;
-//   turned so (the rotation Rx(180) * R, the offset 2.58 0.12 -1.33), out of the thumb's side, but its point toward the player himself (owner: "the blade looks
-//   toward the player, not away from him"); so the knife is also turned 180 degrees about its own side axis through the middle of its handle (2.5 units behind the
-//   guard, the model's origin): Rx(180) * R * Ry(180), the offset 2.58 0.12 -1.33 - 5 * the blade's axis = 4.025 -4.58 -0.425. The grip stays in the left fist,
-//   the point goes away from him (QA knifehand, beside the turn about the knife's up axis, which looked much the same). The co-op body's own tag_weapon_left
-//   is not on its hand (the knife hung ahead of it, walking above it), so the copy carries the hold and goes on the wrist (owner, 2026-11-18: "take a frame of the
-//   animation and put it in like that").
+// - "mw2coop_knife_held": Endgame's knife (weapon_commando_knife, 4 bones) in a body's left fist, for its j_wrist_le (owner, 2026-11-18: "in the left hand as in the
+//   first-person view", "it should lie in the hand like a person's, not stick out", forward grip "B"). knife_hand() below turns the wrist as the first-person rig's in
+//   the fight and leaves the body's own half-closed fingers; the handle lies across the palm in their curl: the fingers point along the wrist's +X and close toward +Y,
+//   the thumb is on -Z (the body's ring, little finger and thumb joints, QA knifehand with mw2coop_qa_knifegrip; the server's index and middle finger joints were not
+//   usable). So the blade goes out of the thumb's side (-Z), turned about its own axis to the side that looked right (QA knifehand, three grips side by side):
+//   quaternion 0.7071 0 -0.7071 0, the handle's middle (3 units behind the model's origin) at 3.5 0.5 0.5. "mw2coop_knife_reverse" is the reverse grip (the blade out
+//   of the little finger's side), kept for QA.
 static struct {
 	const char *name, *source;
 	float r[4];     // the turn, a quaternion x y z w
@@ -485,7 +482,8 @@ static struct {
 	uint8_t *model, *from;
 } turned[] = {
     {PICK_NAME, "weapon_ice_picker", {0, -0.70710678f, 0, 0.70710678f}, {-9.0f, 0, 0}, NULL, NULL},
-    {"mw2coop_knife_held", "weapon_commando_knife", {0.6979f, -0.4532f, 0.3872f, -0.3968f}, {4.025f, -4.58f, -0.425f}, NULL, NULL},
+    {"mw2coop_knife_held", "weapon_commando_knife", {0.70711f, 0, -0.70711f, 0}, {3.5f, 0.5f, -2.5f}, NULL, NULL},     // forward grip: the blade out of the thumb's side
+    {"mw2coop_knife_reverse", "weapon_commando_knife", {0.70711f, 0, 0.70711f, 0}, {3.5f, 0.5f, 3.5f}, NULL, NULL},    // (reverse grip, the blade out of the little finger's side)
 };
 #define TURNED_N (sizeof(turned) / sizeof(turned[0]))
 static int turned_index(const char *name)
@@ -765,11 +763,180 @@ static void hook_is_default(void)
 		return;
 }
 
+// ---- The hand that holds Endgame's knife (owner, 2026-11-18: "not only the knife, the hand too", "as in the first-person view")
+// The body's animations have no pose for a held knife: in the rifle stance the left hand is the open support hand. A body that wears the knife copy (mw2coop_knife_held,
+// on j_wrist_le) gets the left wrist of the first-person rig in the fight (player_afchase_ending_turnbuckle as the knife is attached, QA knifeframe): the forearm twist
+// and the wrist turned as the rig's relative to their parents, the elbow, the arm and the fingers as the body's own animation has them. The rig's finger turns are in
+// the table too (QA modes 2 / 4 / 8 of knife_hand_mode), but on the body's finger bones they crumpled the hand (owner: "the hand looks crumpled"): off by default. DObjCalcSkel (64-bit rva 0x299250)
+// first has the animations write each bone's local turn into the DObj's matrices (rva 0x2a2df0), then composes them parent first, the attached models included: the
+// turns are replaced in between, so the fingers and the knife on the wrist follow. The body's bones have the rig's axes turned 180 degrees about the bone (found on the
+// knife's hold: the axis to the child agrees), so a rig turn L is the body's C^-1 L C, C = 180 degrees about X. The rig has two joints per finger; the body's third
+// takes the second's turn. Only the bones this call composes are touched.
+static const struct {
+	const char *name;
+	float q[4]; // the rig bone's turn in the rig's space (x y z w), from its tag axes
+} rig_hand[] = {
+    {"j_elbow_le", {0.50781f, -0.06794f, 0.76147f, 0.39708f}},
+    {"j_wristtwist_le", {0.41824f, -0.21867f, 0.73257f, 0.49052f}},
+    {"j_wrist_le", {0.35198f, -0.28630f, 0.78066f, 0.42978f}},
+    {"j_thumb_le_1", {0.60771f, -0.24017f, 0.61489f, 0.44149f}},
+    {"j_thumb_le_2", {0.68889f, 0.08734f, 0.24878f, 0.67521f}},
+    {"j_index_le_1", {-0.44270f, 0.44343f, -0.24984f, 0.73821f}},
+    {"j_index_le_2", {-0.14947f, 0.62814f, 0.12945f, 0.75256f}},
+    {"j_mid_le_1", {-0.30701f, 0.61373f, -0.14364f, 0.71306f}},
+    {"j_mid_le_2", {0.13031f, 0.67795f, 0.35491f, 0.63044f}},
+    {"j_ring_le_1", {-0.21882f, 0.64762f, -0.19857f, 0.70234f}},
+    {"j_ring_le_2", {0.25219f, 0.63325f, 0.30672f, 0.66431f}},
+    {"j_pinky_le_1", {-0.21858f, 0.66934f, -0.24351f, 0.66702f}},
+    {"j_pinky_le_2", {0.27638f, 0.66064f, 0.28456f, 0.63734f}},
+};
+#define RIG_HAND_N (sizeof(rig_hand) / sizeof(rig_hand[0]))
+static const struct {
+	const char *name;
+	int like; // the rig_hand entry whose turn it takes
+} rig_hand_like[] = {{"j_thumb_le_3", 4}, {"j_index_le_3", 6}, {"j_mid_le_3", 8}, {"j_ring_le_3", 10}, {"j_pinky_le_3", 12}};
+#define RIG_LIKE_N (sizeof(rig_hand_like) / sizeof(rig_hand_like[0]))
+#ifdef _WIN64
+#define RVA_XANIM_CALC XR(0x2a2df0)      // (obj, partBits[6], workspace): the local turns of the bones asked for, into the DObj's matrices
+#define RVA_DOBJ_BONE_INDEX XR(0x296020) // (obj, name, byte *index): 1 and the DObj's bone index of a name (the index is a cache: 0xfe for none yet)
+#define RVA_SL_GET_STRING XR(0x18f440)   // (name): the script string of a name
+#define OBJ_NUM_MODELS 0xd
+#define OBJ_DONE_BITS 0x60 // the bones composed already (6 words)
+#define OBJ_MATS 0x80      // the bones' matrices: quaternion x y z w, translation, weight (0x20 each)
+#define OBJ_MODELS 0xa8    // the models' XModel pointers
+static const uint8_t xanim_calc_bytes[] = {0x40, 0x56, 0x41, 0x54, 0x41, 0x56, 0x48, 0x83, 0xec, 0x50, 0x44, 0x8b, 0x0a, 0x49, 0x8b, 0xf0};
+#else
+// 32 bits (the same engine; matched by tools/match_funcs.py and read in Ghidra: DObjCalcSkel VA 0x466d60 calls 0x4d07b0 through 0x63bde0 / 0x63be20, cdecl with the same
+// three arguments; the DObj's fields at other offsets). The functions are only called or (0x4d07b0) hooked: none lies in the ranges the exe hashes.
+#define RVA_XANIM_CALC XR(0xd07b0)       // VA 0x4d07b0
+#define RVA_DOBJ_BONE_INDEX XR(0x1f630)  // VA 0x41f630 (cdecl)
+#define RVA_SL_GET_STRING XR(0x75dc0)    // VA 0x475dc0 (cdecl)
+#define OBJ_NUM_MODELS 0x9
+#define OBJ_DONE_BITS 0x5c
+#define OBJ_MATS 0x78
+#define OBJ_MODELS 0x98
+static const uint8_t xanim_calc_bytes[] = {0x83, 0xec, 0x18, 0x53, 0x55, 0x56, 0x57, 0x8b, 0x4c, 0x24, 0x30}; // sub esp,18h; push ebx; push ebp; push esi; push edi; mov ecx,[esp+30h]
+#endif
+static void (*xanim_calc_original)(uint8_t *obj, const uint32_t *bits, void *work);
+static uint16_t hand_ids[RIG_HAND_N + RIG_LIKE_N];
+static int hand_ids_made;
+static void quat_mul(const float *a, const float *b, float *o) // o = a b (x y z w)
+{
+	o[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
+	o[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
+	o[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
+	o[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
+}
+static int knife_hand_mode(void) // QA (the dvar mw2coop_qa_knifehand, read once a second): the parts of the hand posed, default 1 (the wrist: the rig's fingers on
+{                                // the body's finger bones looked crumpled, owner 2026-11-18; the body's own half-closed fingers hold the handle)
+	static int mode = 1;
+	static DWORD at;
+	if (GetTickCount() - at >= 1000) {
+		at = GetTickCount();
+		char v[16] = "";
+		mode = game_dvar_raw("mw2coop_qa_knifehand", v, sizeof(v)) && v[0] ? atoi(v) : 1;
+	}
+	return mode;
+}
+static void knife_hand(uint8_t *obj, const uint32_t *bits, const uint32_t *done)
+{
+	const int nmodels = obj[OBJ_NUM_MODELS];
+	uint8_t **models = *(uint8_t ***)(obj + OBJ_MODELS);
+	float *mats = *(float **)(obj + OBJ_MATS);
+	if (!models || !mats || nmodels < 2 || !models[0])
+		return;
+	int wears = 0; // (a turned copy of the knife: mw2coop_knife_held, or a QA one)
+	for (size_t k = 0; k < TURNED_N && !wears; k++)
+		if (turned[k].model && strcmp(turned[k].source, "weapon_commando_knife") == 0)
+			for (int i = 1; i < nmodels; i++)
+				wears |= models[i] == turned[k].model;
+	if (!wears)
+		return;
+	if (!hand_ids_made) {
+		uint16_t (*sl_get)(const char *) = (uint16_t (*)(const char *))(void *)(base + RVA_SL_GET_STRING);
+		for (size_t i = 0; i < RIG_HAND_N; i++)
+			hand_ids[i] = sl_get(rig_hand[i].name);
+		for (size_t i = 0; i < RIG_LIKE_N; i++)
+			hand_ids[RIG_HAND_N + i] = sl_get(rig_hand_like[i].name);
+		hand_ids_made = 1;
+	}
+	char (*bone_index)(uint8_t *, unsigned, uint8_t *) = (char (*)(uint8_t *, unsigned, uint8_t *))(void *)(base + RVA_DOBJ_BONE_INDEX);
+	int idx[RIG_HAND_N + RIG_LIKE_N];
+	for (size_t i = 0; i < RIG_HAND_N + RIG_LIKE_N; i++) {
+		uint8_t c = 0xfe;
+		idx[i] = bone_index(obj, hand_ids[i], &c) ? c : -1;
+	}
+	const uint8_t *body = models[0];
+	const int nb = body[M_BONES], nr = body[M_ROOTS];
+	const uint8_t *parents = *(const uint8_t *const *)(body + M_PARENTS);
+	if (!parents)
+		return;
+	float local[RIG_HAND_N][4];
+	int have[RIG_HAND_N] = {0};
+	static int logged;
+	int set = 0;
+	const int mode = knife_hand_mode();
+	for (size_t i = 0; i < RIG_HAND_N; i++) {
+		const int b = idx[i];
+		if (!(mode & (i < 3 ? 1 : 2)))
+			continue;
+		if (b < nr || b >= nb || !(bits[b >> 5] & ~done[b >> 5] & (0x80000000u >> (b & 31))))
+			continue;
+		const int p = b - parents[b - nr];
+		size_t j = 0;
+		while (j < RIG_HAND_N && idx[j] != p)
+			j++;
+		if (j == RIG_HAND_N || j == i)
+			continue; // (the parent is not one of the rig's bones measured: the elbow keeps the body's own turn)
+		const float pc[4] = {-rig_hand[j].q[0], -rig_hand[j].q[1], -rig_hand[j].q[2], rig_hand[j].q[3]};
+		float l[4];
+		quat_mul(pc, rig_hand[i].q, l); // the rig's local turn
+		if (i < 3 || !(mode & 8))
+			l[1] = -l[1], l[2] = -l[2]; // in the body's axes (C^-1 L C, C = 180 degrees about X)
+		memcpy(local[i], l, sizeof(l));
+		have[i] = 1;
+		memcpy(mats + (size_t)b * 8, l, sizeof(l));
+		set++;
+	}
+	for (size_t k = 0; k < RIG_LIKE_N && (mode & 4); k++) {
+		const int b = idx[RIG_HAND_N + k], from = rig_hand_like[k].like;
+		if (b < nr || b >= nb || !have[from] || !(bits[b >> 5] & ~done[b >> 5] & (0x80000000u >> (b & 31))))
+			continue;
+		memcpy(mats + (size_t)b * 8, local[from], sizeof(local[from]));
+		set++;
+	}
+	if (logged < 3 && set) {
+		logged++;
+		log_printf("transplant: the knife hand: %d bones of the left hand turned as the first-person rig's (wrist bone %d)", set, idx[2]);
+	}
+}
+static void xanim_calc_hook(uint8_t *obj, const uint32_t *bits, void *work)
+{
+	uint32_t done[6];
+	memcpy(done, obj + OBJ_DONE_BITS, sizeof(done));
+	xanim_calc_original(obj, bits, work);
+	knife_hand(obj, bits, done);
+}
+static void hook_knife_hand(void)
+{
+	uint8_t *target = base + RVA_XANIM_CALC;
+	if (memcmp(target, xanim_calc_bytes, sizeof(xanim_calc_bytes)) != 0) {
+		log_printf("transplant: unexpected bytes at the animation calc, the knife hand keeps the body's pose");
+		return;
+	}
+#ifdef _WIN64
+	hook_function(target, xanim_calc_bytes, sizeof(xanim_calc_bytes), xanim_calc_hook, (void **)&xanim_calc_original);
+#else
+	hook_function(target, xanim_calc_bytes, 7, xanim_calc_hook, (void **)&xanim_calc_original); // (the first 7 bytes: whole instructions)
+#endif
+}
+
 void transplant_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	hook_is_default();
 	fix_reader_leak();
+	hook_knife_hand();
 	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
 		game_add_command(&commands[i]);
 }

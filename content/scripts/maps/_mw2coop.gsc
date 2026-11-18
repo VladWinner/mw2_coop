@@ -201,6 +201,8 @@ set_bodies()
 		}
 		if ( level.script == "ending" )	// the knife in the bodies' left hands (attach_weapon_model; src/transplant.c turned_copy)
 			PrecacheModel( "mw2coop_knife_held" );
+		if ( level.script == "ending" && GetDvar( "mw2coop_qa" ) == "knifehand" )
+			PrecacheModel( "mw2coop_knife_reverse" );
 		if ( level.script == "af_caves" || level.script == "gulag" )	// the stand-in on the rope (maps\_mw2coop_cave::partner_view, maps\_mw2coop_gulag::rope_partner_view)
 			PrecacheModel( maps\_mw2coop_bodies::rider_model( models[ 0 ], maps\_mw2coop_bodies::rope_skeleton() ) );
 		player.mw2coop_body = models[ 0 ];

@@ -4222,15 +4222,37 @@ knifehand()
 	foreach ( m in models )
 		all[ all.size ] = m;
 	start = p1.origin;
-	foreach ( m, name in all )
+	foreach ( m, entry in all )
 	{
+		parts = StrTok( entry, ":" );	// "<model>[:<hand mode>]" (src/transplant.c knife_hand_mode)
+		name = parts[ 0 ];
+		if ( parts.size > 1 )
+			SetDvar( "mw2coop_qa_knifehand", parts[ 1 ] );
+		wait 1.2;
 		p1 SetOrigin( start );	// (each model from the same place: the walk moved him)
 		p1 SetPlayerAngles( ( 0, yaw, 0 ) );
 		for ( i = p1 GetAttachSize() - 1; i >= 0; i-- )
 			if ( IsSubStr( p1 GetAttachModelName( i ), "knife" ) )
 				p1 Detach( p1 GetAttachModelName( i ), p1 GetAttachTagName( i ) );
 		p1 Attach( name, tag, true );
-		report( "knifehand " + m + ": " + name + " on " + tag );
+		report( "knifehand " + m + ": " + entry + " on " + tag );
+		if ( GetDvar( "mw2coop_qa_knifegrip" ) == "1" )
+		{
+			wait 1;
+			tags = "j_wrist_le";
+			foreach ( finger in StrTok( "thumb index mid ring pinky", " " ) )
+				for ( k = 1; k <= 3; k++ )
+					tags = tags + " j_" + finger + "_le_" + k;
+			foreach ( t in StrTok( tags, " " ) )
+			{
+				o = p1 GetTagOrigin( t );
+				ta = p1 GetTagAngles( t );
+				f = AnglesToForward( ta );
+				l = AnglesToRight( ta ) * -1;
+				u = AnglesToUp( ta );
+				report( "knifegrip " + m + " " + t + " o " + o[ 0 ] + " " + o[ 1 ] + " " + o[ 2 ] + " f " + f[ 0 ] + " " + f[ 1 ] + " " + f[ 2 ] + " l " + l[ 0 ] + " " + l[ 1 ] + " " + l[ 2 ] + " u " + u[ 0 ] + " " + u[ 1 ] + " " + u[ 2 ] );
+			}
+		}
 		foreach ( k, spot in spots )
 		{
 			at = p1.origin + spot;
@@ -4283,18 +4305,16 @@ knifeframe()
 	animation = rig getanim( "turn_buckle" );
 	rig SetAnim( animation, 1, 0, 0 );
 	times = [];
-	times[ 0 ] = 0;
-	times[ 1 ] = 0.02;
-	times[ 2 ] = 0.05;
-	times[ 3 ] = 0.1;
-	times[ 4 ] = 0.2;
-	times[ 5 ] = 0.5;
-	times[ 6 ] = 1;
+	times[ 0 ] = 0.02;
+	tags = "j_elbow_le j_wristtwist_le j_wrist_le tag_weapon_left";
+	foreach ( finger in StrTok( "thumb index mid ring pinky", " " ) )
+		for ( k = 1; k <= 3; k++ )
+			tags = tags + " j_" + finger + "_le_" + k;
 	foreach ( t in times )	// (no float() in this game's GSC)
 	{
 		rig SetAnimTime( animation, t );
 		wait 0.2;
-		foreach ( tag in StrTok( "j_wrist_le tag_weapon_left", " " ) )
+		foreach ( tag in StrTok( tags, " " ) )
 		{
 			o = rig GetTagOrigin( tag );
 			ta = rig GetTagAngles( tag );

@@ -102,3 +102,7 @@
 0x88796 -> 0xa6336    # the vehicle turret's spin loop: its call of the world sound start 0x66d250 (159 0x66f910); the surrounding 65 bytes match 46, no other call above 20
 0xd91d3 -> 0x26fcd3    # return address of the sound helper 0xd9190 (push 0 variant; 159 has it at 0x26fc90 with the same 0x3e bytes, the push 1 twin 0x18850 is 159 0x45ce0)
 0x4c509 -> 0xf4219    # the effects' pending sound queue call (fxq_hook32): map159 matched 0x3e159, a call of 0xe9c50; 0xf4219 calls 0xacd20, the 159 address of the queue 0xa3c0 (found by the signatures, 2026-11-18)
+# the knife hand of Endgame (transplant.c knife_hand, 2026-11-18):
+0xd07b0 -> 0xa9140    # the animation calc into the DObj's matrices (official VA 0x4d07b0; map159 code 0+64)
+0x1f630 -> 0xd5bf0    # DObjGetBoneIndex (official VA 0x41f630; map159 code 0+64)
+0x75dc0 -> 0x52b90    # SL_GetString: "mov eax,[esp+4]; push 1; push eax; call; add esp,8; ret", the call after "push j_spine4" in the const init (159 VA 0x47761b)
