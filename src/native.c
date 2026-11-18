@@ -5675,7 +5675,7 @@ static void ctx_swap_mask(int to, unsigned mask)
 		if (i == RANGE_RIDE && !CFG_ONCE("ridesplit", 1))
 			continue;
 #endif
-		if (i == RANGE_MSEC && !CFG_ONCE("msecsplit", 1))
+		if (i == RANGE_MSEC && (!CFG_ONCE("msecsplit", 1) || !addr_resolved(ranges[i].rva)))
 			continue;
 		uint8_t *live = base + RANGE_RVA(i);
 #if defined(_WIN64) && defined(RANGE_FX)
@@ -8433,7 +8433,7 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 			// moves the cgame's cursor 0x4320c8.. in 0xd09d0 instead), frame_msec (0x52fb70; 0: no mouse look), the accumulators, the mouse reads of player 2 since the last line
 			const float *acc = (const float *)(base + RVA_ACC_PITCH);
 			log_printf("native: cmdlog1 catchers %08x cgword %08x frame_msec %d acc %.2f %.2f mouse reads %u sum %.1f %.1f", *(unsigned *)(base + RVA_KEY_CATCHERS),
-				   *(unsigned *)(base + XR(0x422440) + 0x1b4), *(int *)(base + RVA_KEY_CATCHERS - 0x4140), (double)acc[0], (double)acc[1], mouse1_reads, (double)mouse1_sum[0], (double)mouse1_sum[1]);
+				   *(unsigned *)(base + XR(0x422440) + 0x1b4), *(int *)(base + XR(0x52fb70)), (double)acc[0], (double)acc[1], mouse1_reads, (double)mouse1_sum[0], (double)mouse1_sum[1]);
 			mouse1_reads = 0;
 			mouse1_sum[0] = mouse1_sum[1] = 0;
 #endif
@@ -11794,6 +11794,10 @@ static int split_addresses_ok(void)
 	int bad = 0;
 	for (size_t i = 0; i < NRANGES; i++)
 		if (!addr_resolved(ranges[i].rva)) {
+			if (i == RANGE_MSEC) { // (only player 2's mouse look needs it: ctx_swap_mask leaves it out, as before 2026-11-18)
+				log_printf("native: the range of frame_msec (reference rva 0x%x) was not found in this build: player 2's mouse does not turn the view in split screen (a pad does)", ranges[i].rva);
+				continue;
+			}
 			if (bad++ < 6)
 				log_printf("native: the split screen needs the range at reference rva 0x%x, which was not found in this build", ranges[i].rva);
 		}

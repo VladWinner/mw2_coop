@@ -85,7 +85,14 @@ class X86Backend:
         self.lo, self.hi = map159.LO, map159.HI
 
     def wildmask(self, buf, va0, wild_at=()):
-        return self.map159.wildmask(buf, va0, wild_at)
+        # The bytes on both sides of the window are looked at too: an address cut by the window's edge (its first bytes at the end, say) was not seen as one
+        # and its bytes stayed fixed. 2026-11-18: frame_msec's second signature ended in "81 C3 E0 5B 92" (add ebx, 0x925be0 without its last byte), so it
+        # never matched a build whose globals moved and the address was not found on the iw4x-sp exe.
+        before, after = self.img.read(va0 - 3, 3), self.img.read(va0 + len(buf), 3)
+        if len(before) != 3 or len(after) != 3:
+            return self.map159.wildmask(buf, va0, wild_at)
+        mark = self.map159.wildmask(before + buf + after, va0 - 3, tuple(p + 3 for p in wild_at))
+        return mark[3:3 + len(buf)]
 
     def refs_to(self, data_va, text_va, text):
         needle = struct.pack("<I", data_va)

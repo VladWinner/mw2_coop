@@ -702,7 +702,12 @@ unsigned addr_dead_block(void)
 
 int addr_moved_allowed(int found, int total, const char *ini, const char **why)
 {
+#ifdef ADDR_TEST
+	(void)ini;
+	const int setting = -1; // (tools/test_addr.c reads no settings file: the default rule)
+#else
 	const int setting = ini ? (int)GetPrivateProfileIntA("native", "movedbuilds", -1, ini) : -1;
+#endif
 	const int pct = total > 0 ? found * 100 / total : 0;
 	if (getenv("MW2COOP_MOVED") != NULL) {
 		*why = "forced (MW2COOP_MOVED)";

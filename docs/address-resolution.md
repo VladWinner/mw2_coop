@@ -145,6 +145,36 @@ routing (it now reads only the lines the 32-bit build compiles, plus the `REF_` 
   run, mode 11 split screen on Trainer (5200 draws, no address left to a harmless block but the builtin table entries found by name); 32-bit 407 of 407, the asset hook
   on, mode 11 split screen on Trainer.
 
+## Fifth round (2026-11-18): after player 2's mouse look, the shell shock per view and the knife hand
+
+The day's fixes (`5b08ac8..cd9b74d`) added 10 64-bit and 8 32-bit addresses. Checked again (owner: "check the mod's independence of the game's version after these edits"):
+
+* **Every new address is in the files and goes through the resolver.** `tools/check_raw_addresses.py`: no raw offsets. One was hidden from it: the QA log `cmdlog1` read frame_msec as
+  `RVA_KEY_CATCHERS - 0x4140` (a distance between two globals that a moved build need not keep); it reads `XR(0x52fb70)` now. The knife hand's three functions are `REF_` numbers
+  (the generators take them; the files came out unchanged), and **the hook is not installed unless all three were found** (`addr_resolved`): the hook calls `DObjGetBoneIndex`
+  and `SL_GetString` from inside the animation calc, and an unresolved one would have returned 0 from the harmless block (`SL_GetString` is not found on the iw4x-sp exe through
+  the signatures). The shell shock's 64-bit patch and handler slot compare their bytes and the slot's old value first; the 32-bit call goes through `m11_call32`, which checks
+  the call and its target: unresolved, both refuse.
+* **frame_msec is no longer needed by the split screen.** `split_addresses_ok()` refused the split screen when any swapped range was not found; frame_msec's range (`RANGE_MSEC`)
+  only serves player 2's mouse look, so without it the split screen runs as before 2026-11-18 (the range is left out of the swap, a log line says that player 2's mouse does
+  not turn the view).
+* **Addresses cut by a signature's edge.** frame_msec's 32-bit address was not found on the iw4x-sp exe: one of its two signatures ended in `81 C3 E0 5B 92`, an `add ebx, 0x925be0`
+  without the address's last byte, so the generator did not see it as an address and kept it fixed. `tools/addrsig.py` (x86) now looks at 3 bytes on each side of the window
+  when it marks wildcards. Regenerated `addresses-x86.txt`: on the official image 415 of 415, on the owner's other exe 415 of 415, on the iw4x-sp 1.0.159 exe through the signatures
+  **370 of 415 (was 354), 362 equal to the hand-checked table (was 346)**, the same one wrong (`RVA_VM_STACK_TOP`, log only), frame_msec found. 19 globals of `.rdata` that had a
+  single signature (it held such a cut address) are now placed by their neighbours only; a single data signature never resolved on its own, so nothing is lost.
+* **The C resolver's test builds again** (`tools/test_addr.sh`: `addr_moved_allowed()` read the settings file with a Windows call the test does not link; under `ADDR_TEST` it
+  takes the default rule): x64 477 of 477, x86 415 of 415, the iw4x-sp exe 369 of 415.
+* **Runs on the unknown-build path** (Endgame's wake-up in split screen, `knifeshots`, 40 s; QA `knifehand` for the hand):
+  * 64-bit, `MW2COOP_FORCE_UNKNOWN=1 MW2COOP_FORCE_RESOLVED=1`: 477 of 477 found, the default lets it run, mode 11 split screen, the shell shock's saved screen per view
+    (`shocksect` installed, each view's rectangle, player 2's commands on timer slot 1), no crash.
+  * 32-bit official exe, the same: 415 of 415, "12 of 12 calls hooked" (the shock copy among them), each view's rectangle copied, no crash.
+  * The iw4x-sp 1.0.159 exe through the signatures (`MW2COOP_FORCE_UNKNOWN=1 MW2COOP_MOVED=1`, code that really moved): 366 of 415 found in game, no crash; the knife hand is
+    refused with its log line; the split screen does not start (its context hook's call is not found, as in the third round) and the game stays in the main menu.
+  * QA `knifehand` (map `ending`, player 1 looks at player 2's left fist): 64-bit and 32-bit on the unknown-build path and the iw4x-sp exe on its own table (`addr159.c`,
+    where `addr_resolved` reads that table): the hook turns the two wrist bones, the knife in the left fist as before, the scenario runs to its end. The first iw4x-sp
+    start opened no game window in 120 s; the same run again started normally (cause not found).
+
 ## What is not done
 
 * No 64-bit build whose addresses moved exists here to run it on. The path is run on the reference

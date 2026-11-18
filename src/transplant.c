@@ -797,9 +797,9 @@ static const struct {
 } rig_hand_like[] = {{"j_thumb_le_3", 4}, {"j_index_le_3", 6}, {"j_mid_le_3", 8}, {"j_ring_le_3", 10}, {"j_pinky_le_3", 12}};
 #define RIG_LIKE_N (sizeof(rig_hand_like) / sizeof(rig_hand_like[0]))
 #ifdef _WIN64
-#define RVA_XANIM_CALC XR(0x2a2df0)      // (obj, partBits[6], workspace): the local turns of the bones asked for, into the DObj's matrices
-#define RVA_DOBJ_BONE_INDEX XR(0x296020) // (obj, name, byte *index): 1 and the DObj's bone index of a name (the index is a cache: 0xfe for none yet)
-#define RVA_SL_GET_STRING XR(0x18f440)   // (name): the script string of a name
+#define REF_XANIM_CALC 0x2a2df0      // (obj, partBits[6], workspace): the local turns of the bones asked for, into the DObj's matrices
+#define REF_DOBJ_BONE_INDEX 0x296020 // (obj, name, byte *index): 1 and the DObj's bone index of a name (the index is a cache: 0xfe for none yet)
+#define REF_SL_GET_STRING 0x18f440   // (name): the script string of a name
 #define OBJ_NUM_MODELS 0xd
 #define OBJ_DONE_BITS 0x60 // the bones composed already (6 words)
 #define OBJ_MATS 0x80      // the bones' matrices: quaternion x y z w, translation, weight (0x20 each)
@@ -808,15 +808,18 @@ static const uint8_t xanim_calc_bytes[] = {0x40, 0x56, 0x41, 0x54, 0x41, 0x56, 0
 #else
 // 32 bits (the same engine; matched by tools/match_funcs.py and read in Ghidra: DObjCalcSkel VA 0x466d60 calls 0x4d07b0 through 0x63bde0 / 0x63be20, cdecl with the same
 // three arguments; the DObj's fields at other offsets). The functions are only called or (0x4d07b0) hooked: none lies in the ranges the exe hashes.
-#define RVA_XANIM_CALC XR(0xd07b0)       // VA 0x4d07b0
-#define RVA_DOBJ_BONE_INDEX XR(0x1f630)  // VA 0x41f630 (cdecl)
-#define RVA_SL_GET_STRING XR(0x75dc0)    // VA 0x475dc0 (cdecl)
+#define REF_XANIM_CALC 0xd07b0       // VA 0x4d07b0
+#define REF_DOBJ_BONE_INDEX 0x1f630  // VA 0x41f630 (cdecl)
+#define REF_SL_GET_STRING 0x75dc0    // VA 0x475dc0 (cdecl)
 #define OBJ_NUM_MODELS 0x9
 #define OBJ_DONE_BITS 0x5c
 #define OBJ_MATS 0x78
 #define OBJ_MODELS 0x98
 static const uint8_t xanim_calc_bytes[] = {0x83, 0xec, 0x18, 0x53, 0x55, 0x56, 0x57, 0x8b, 0x4c, 0x24, 0x30}; // sub esp,18h; push ebx; push ebp; push esi; push edi; mov ecx,[esp+30h]
 #endif
+#define RVA_XANIM_CALC XR(REF_XANIM_CALC)
+#define RVA_DOBJ_BONE_INDEX XR(REF_DOBJ_BONE_INDEX)
+#define RVA_SL_GET_STRING XR(REF_SL_GET_STRING)
 static void (*xanim_calc_original)(uint8_t *obj, const uint32_t *bits, void *work);
 static uint16_t hand_ids[RIG_HAND_N + RIG_LIKE_N];
 static int hand_ids_made;
@@ -919,6 +922,11 @@ static void xanim_calc_hook(uint8_t *obj, const uint32_t *bits, void *work)
 }
 static void hook_knife_hand(void)
 {
+	// (a build whose addresses moved: the hook calls the other two from inside the animation calc, so all three must have been found, not only the hooked one)
+	if (!addr_resolved(REF_XANIM_CALC) || !addr_resolved(REF_DOBJ_BONE_INDEX) || !addr_resolved(REF_SL_GET_STRING)) {
+		log_printf("transplant: the animation calc, DObjGetBoneIndex or SL_GetString was not found on this build: the knife hand keeps the body's pose");
+		return;
+	}
 	uint8_t *target = base + RVA_XANIM_CALC;
 	if (memcmp(target, xanim_calc_bytes, sizeof(xanim_calc_bytes)) != 0) {
 		log_printf("transplant: unexpected bytes at the animation calc, the knife hand keeps the body's pose");
