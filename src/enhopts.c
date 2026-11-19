@@ -695,10 +695,31 @@ static void follow_all(void)
 	InterlockedExchange(&busy, 0);
 }
 
+// (the control thread, every 250 ms, also in a level where the menu tick does not run) The field of view is held here; the menu work (the page,
+// the pop-up, the rows: the game's menu list, which a level load rebuilds on the main thread) is asked of the main thread as a command. It was
+// done on this thread and could race the game's own changes of that list (audit 2026-11-18, menus F2).
 void enhopts_level_tick(void)
+{
+	if (!registered)
+		return;
+	hold_fov();
+	game_cbuf_addtext("mw2coop_enh_tick\n");
+}
+
+static void enh_tick_f(void)
 {
 	if (registered)
 		follow_all();
+}
+
+static cmd_function_t commands[] = {
+	{NULL, "mw2coop_enh_tick", NULL, NULL, enh_tick_f CMD_NODE_FLAG},
+};
+
+void enhopts_install(void)
+{
+	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
+		game_add_command(&commands[i]);
 }
 
 int enhopts_sharpness(void)

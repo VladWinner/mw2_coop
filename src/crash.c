@@ -469,6 +469,15 @@ void crash_install(void)
 			log_printf("crash: the engine's error function logs its messages");
 	}
 #endif
+	crash_stack_watch();
+	log_printf("crash: exception logger installed");
+}
+
+void crash_stack_watch(void)
+{
+	static volatile LONG started;
+	if (InterlockedExchange(&started, 1))
+		return;
 	DWORD n = GetModuleFileNameA(NULL, flag_path, MAX_PATH);
 	while (n > 0 && flag_path[n - 1] != '\\')
 		n--;
@@ -477,5 +486,4 @@ void crash_install(void)
 	lstrcatA(flag_path, "mw2coop\\dumpstacks");
 	lstrcatA(out_path, "mw2coop\\stacks.txt");
 	CloseHandle(CreateThread(NULL, 0, watchdog, NULL, 0, NULL));
-	log_printf("crash: exception logger installed");
 }

@@ -20,6 +20,9 @@ unsigned long long nat12_pending_value(const nat_device *d);
 unsigned long long nat12_completed_value(nat_device *d);
 // submits what is recorded and waits until the GPU is done with it (readbacks, a full upload ring, a resize); the list is open again afterwards
 void nat12_flush(nat_device *d);
+uint64_t nat12_new_id(void);                              // a number never handed out before in this run
+uint64_t nat12_shader_id(const nat_shader *s);            // the shader's number (0 for none)
+void nat12_release_later(nat_device *d, void *object);    // a COM object released once the GPU is past the commands recorded now
 // commands were recorded in the list (an event query issued before any is complete with the submissions already made)
 void nat12_note_commands(nat_device *d);
 int nat12_gpu_active(nat_device *d);

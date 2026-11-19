@@ -62,6 +62,7 @@
 #define CONSOLE_WATCH_COLUMNS 4
 #define CONSOLE_WATCH_ROW_HEIGHT 22
 #define CONSOLE_TITLE_CLICK_TIMER 0x4D574532u
+#define CONSOLE_WATCH_TIMER 0x4D574533u // the pinned dvars' snapshot (watch_snapshot)
 #define CONSOLE_TITLE_CLICK_DELAY_MS 220u
 #define INPUT_TEXT_OFFSET 62
 #define CONSOLE_STATUS_HEIGHT 22
@@ -84,6 +85,22 @@ static size_t source_bytes;
 static int source_count, source_next;
 static int console_reflowing;
 static int line_count, line_next; // a ring: line_next is where the next line goes
+
+// The unwrapped copies of the output lines go too when the output is cleared: Ctrl+L and Clear Output emptied only the wrapped ring, and the
+// next resize rebuilt everything from the copies (audit 2026-11-18, console C5). (The lock is a critical section: taking it again is fine.)
+static void clear_source_lines(void)
+{
+	EnterCriticalSection(&lock);
+	for (int i = 0; i < MAX_LINES; i++) {
+		free(source_lines[i]);
+		source_lines[i] = NULL;
+		source_line_lengths[i] = 0;
+		source_codepage[i] = 0;
+	}
+	source_bytes = 0;
+	source_count = source_next = 0;
+	LeaveCriticalSection(&lock);
+}
 static char input[INPUT_LEN + 1];
 static int input_len, cursor, selection_anchor = -1;
 static int input_selecting;
@@ -105,6 +122,10 @@ static int output_last_click_seq = -1, output_click_count;
 static LONG output_last_click_x, output_last_click_y;
 static int output_context_line = -1;
 static volatile LONG console_watch_count;
+// The pinned dvars' values as the main thread read them (the paint runs on the render thread, and a string dvar it read itself could be freed
+// or replaced by the main thread meanwhile: garbage or a fault, audit 2026-11-18, console C11). Taken under the console lock.
+static char (*watch_values)[COMPLETION_VALUE_LEN];
+static int watch_values_n, watch_values_cap;
 static char (*console_watch_names)[COMPLETION_NAME_LEN];
 static size_t console_watch_capacity;
 typedef struct {
@@ -384,6 +405,17 @@ static void console_store_line(const char *text, size_t length, UINT codepage)
 				output_context_line = -1;
 			else
 				output_context_line--;
+		}
+		// the selection moves with its lines too (it stayed where it was and Ctrl+C copied other lines once the buffer was full, audit 2026-11-18,
+		// console C10); a selection whose first line leaves the buffer is dropped
+		if (output_sel_a_line >= 0 || output_sel_b_line >= 0) {
+			if (output_sel_a_line <= 0 || output_sel_b_line <= 0) {
+				output_sel_a_line = output_sel_b_line = -1;
+				output_selecting = 0;
+			} else {
+				output_sel_a_line--;
+				output_sel_b_line--;
+			}
 		}
 	}
 	memcpy(lines[line_next], text, length);
@@ -1228,6 +1260,7 @@ static void completion_add_match(comp_ctx *c, const completion_source_t *source)
 }
 
 /* Called with lock held by the input/window thread; never from the renderer. */
+static volatile LONG completion_serial; // a new list of completions: its widest pair is measured again (paint)
 static void refresh_completions(int apply_common)
 {
 	char word[INPUT_LEN + 1];
@@ -1307,6 +1340,7 @@ static void refresh_completions(int apply_common)
 
 	completion_total = c.n;
 	completion_count = c.stored;
+	completion_serial++; // (the paint measures the list again)
 	completion_scroll = 0;
 	completion_selected = -1;
 	completion_rows = completion_columns = completion_cell_width = 0;
@@ -2727,6 +2761,7 @@ static void console_context_menu_execute(int mode, int index)
 			break;
 		case 3:
 			line_count = line_next = 0;
+			clear_source_lines();
 			scroll = 0;
 			output_search_match_seq = -1;
 			output_context_line = -1;
@@ -2880,6 +2915,7 @@ static void edit_key(WPARAM vk)
 			break;
 		case 'L':
 			line_count = line_next = 0;
+			clear_source_lines();
 			scroll = 0;
 			output_search_match_seq = -1;
 			output_context_line = -1;
@@ -5038,7 +5074,10 @@ static int console_handle_raw_input(HWND h, HRAWINPUT raw_handle)
 
 static LRESULT CALLBACK raw_input_relay_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 {
-	if (msg == WM_INPUT && is_open && game_window && console_handle_raw_input(game_window, (HRAWINPUT)l)) {
+	// (input meant for another window, sent here because the raw mouse is registered with RIDEV_INPUTSINK, is not the console's: clicks in a browser
+	// after Alt+Tab closed the console or ran its menu at the virtual pointer, audit 2026-11-18, console C1)
+	if (msg == WM_INPUT && is_open && game_window && GET_RAWINPUT_CODE_WPARAM(w) == RIM_INPUT && GetForegroundWindow() == game_window &&
+	    console_handle_raw_input(game_window, (HRAWINPUT)l)) {
 		/* The game registered input on this auxiliary HWND. Consume mouse input
 		   after routing it to the overlay; keyboard input is already handled by
 		   WM_KEYDOWN/WM_CHAR, while unrelated HID devices stay with the game. */
@@ -5051,8 +5090,39 @@ static LRESULT CALLBACK raw_input_relay_proc(HWND h, UINT msg, WPARAM w, LPARAM 
 	}
 }
 
+// (main thread: the game window's) the values of the pinned dvars into watch_values
+static void watch_snapshot(void)
+{
+	const int n = console_watch_count_read();
+	EnterCriticalSection(&lock);
+	if (n > watch_values_cap) {
+		void *more = realloc(watch_values, (size_t)n * sizeof(*watch_values));
+		if (more) {
+			watch_values = more;
+			watch_values_cap = n;
+		}
+	}
+	watch_values_n = n < watch_values_cap ? n : watch_values_cap;
+	for (int i = 0; i < watch_values_n; i++) {
+		watch_values[i][0] = 0;
+		game_dvar_string(console_watch_names[i], watch_values[i], sizeof(watch_values[i]));
+	}
+	LeaveCriticalSection(&lock);
+}
+
 static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 {
+	static int watch_timer;
+	if (!watch_timer) { // (on the game window's own thread, the first time a message comes: SetTimer needs that thread)
+		watch_timer = 1;
+		SetTimer(h, CONSOLE_WATCH_TIMER, 250, NULL);
+		watch_snapshot();
+	}
+	if (msg == WM_TIMER && w == CONSOLE_WATCH_TIMER) {
+		if (is_open)
+			watch_snapshot();
+		return 0;
+	}
 	int scan = (int)((l >> 16) & 0xff);
 	// The key left of 1 by its scan code. VK_OEM_3 only for input without a scan code (a remote desktop, an on-screen keyboard): it is a letter key on other layouts (o-umlaut on a German one,
 	// u-grave on a French one, '@ on a UK one), which opened the console in the game's text fields and was swallowed (night audit CON-1).
@@ -5749,7 +5819,14 @@ static int paint(int w, int panel_h)
 		int max_visible;
 		int input_line = input_top_y;
 		show_single_default = completion_count == 1 && completion_items[0].is_dvar;
-		for (int i = 0; i < completion_count; i++) {
+		// Every name and value of the list was measured on every repaint (up to 4,096 of them, three measures each); the widest pair is kept for
+		// the list it was measured for and the font's line height (audit 2026-11-18, console C4).
+		static LONG measured_serial = -1;
+		static int measured_count = -1, measured_lh = -1, measured_width;
+		const int measure = measured_serial != completion_serial || measured_count != completion_count || measured_lh != lh;
+		if (!measure)
+			max_pair_width = measured_width;
+		for (int i = 0; measure && i < completion_count; i++) {
 			SIZE z = {0, 0};
 			console_text_width(mem_dc, completion_items[i].name, (int)strlen(completion_items[i].name), &z);
 			{
@@ -5766,6 +5843,12 @@ static int paint(int w, int panel_h)
 				}
 				if (pair_width > max_pair_width) max_pair_width = pair_width;
 			}
+		}
+		if (measure) {
+			measured_serial = completion_serial;
+			measured_count = completion_count;
+			measured_lh = lh;
+			measured_width = max_pair_width;
 		}
 		total_rows = show_single_default ? 2 : completion_count;
 
@@ -6140,7 +6223,8 @@ static int paint(int w, int panel_h)
 				if (idx >= watch_count || !console_watch_item_rect(idx, &item_rect)) continue;
 				hovered = idx == (int)InterlockedCompareExchange(&console_watch_hover_index, 0, 0);
 				value[0] = 0;
-				game_dvar_string(console_watch_names[idx], value, sizeof(value));
+				if (idx < watch_values_n) // (the main thread's snapshot, watch_snapshot)
+					lstrcpynA(value, watch_values[idx], sizeof(value));
 				snprintf(label, sizeof(label), "%s = %s", console_watch_names[idx], value[0] ? value : "?");
 				/* Reserve icon space even before hover, preventing label jitter. */
 				if (completion_fit_value(mem_dc, label,
@@ -7214,6 +7298,12 @@ static void draw_panel(IDirect3DDevice9 *dev, int trace)
 		panel_state_block = NULL;
 	}
 	if (trace && SUCCEEDED(apply_result)) log_printf("console: panel D3D state restored");
+	// The block captured what the game had bound (its default-pool buffers among them): kept, it held them through a device Reset (vid_restart,
+	// Alt+Enter), which then fails. It is made for each drawn frame and let go here (audit 2026-11-18, console C2; only while the console is drawn).
+	if (panel_state_block) {
+		IDirect3DStateBlock9_Release(panel_state_block);
+		panel_state_block = NULL;
+	}
 	if (trace) log_printf("console: panel draw complete");
 }
 

@@ -228,7 +228,8 @@ self
 @@@ end
 
 5. The claymore hint (shown to both players) goes away when the player who sees it takes his claymores; the d-pad press it
-   also reads is a key of the local machine, kept for player 1 only (night audit 2026-11-17).
+   also reads is a key of the local machine, kept for player 1 only (night audit 2026-11-17), and only outside a co-op session: there
+   buttonPressed() is a script error ("not valid to use in network special ops", night tour 2026-11-18), every time the hint looked.
 @@@ subst should_break_claymore_hint
 weapon = level.player GetCurrentWeapon();
 @@@ to
@@ -237,5 +238,5 @@ weapon = self GetCurrentWeapon();
 @@@ subst should_break_claymore_hint
 if( !( level.player buttonpressed( "DPAD_RIGHT" ) ) )
 @@@ to
-if( self != level.player || !( level.player buttonpressed( "DPAD_RIGHT" ) ) )
+if( self != level.player || maps\_mw2coop::is_campaign_coop() || !( level.player buttonpressed( "DPAD_RIGHT" ) ) )
 @@@ end

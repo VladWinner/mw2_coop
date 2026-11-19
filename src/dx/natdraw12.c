@@ -97,12 +97,39 @@ struct nd_decl {
 	sm3_int_input ints[32];
 	int nints;
 	unsigned sig;
+	uint64_t id; // unique for the run (nat12_new_id): the pipeline cache's key
 };
+
+// The pipelines are cached by the numbers of their shaders and declaration (nat12_new_id), not by the objects' addresses: the game frees shaders at a
+// level change and a new one at a freed address got the old level's pipeline (audit 2026-11-18, DX F1). The numbers of destroyed objects are kept
+// here; the render thread drops their pipelines from the cache in batches (sweep_dead) and releases them once the GPU is past them.
+static SRWLOCK dead_lock = SRWLOCK_INIT;
+static uint64_t *dead_ids;
+static size_t dead_n, dead_cap;
+static volatile LONG dead_count;
+static void note_dead(uint64_t id)
+{
+	if (!id)
+		return;
+	AcquireSRWLockExclusive(&dead_lock);
+	if (dead_n == dead_cap) {
+		size_t cap = dead_cap ? dead_cap * 2 : 256;
+		uint64_t *n = realloc(dead_ids, cap * sizeof(*n));
+		if (n)
+			dead_ids = n, dead_cap = cap;
+	}
+	if (dead_n < dead_cap) {
+		dead_ids[dead_n++] = id;
+		InterlockedIncrement(&dead_count);
+	}
+	ReleaseSRWLockExclusive(&dead_lock);
+}
 
 nd_decl *nd_decl_create(const nd_elem *elems, int count)
 {
 	nd_decl *d = calloc(1, sizeof(*d));
 	obj_vts_init();
+	d->id = nat12_new_id();
 	d->vt = decl_vt;
 	d->n = count > 32 ? 32 : count;
 	memcpy(d->el, elems, (size_t)d->n * sizeof(nd_elem));
@@ -120,7 +147,12 @@ nd_decl *nd_decl_create(const nd_elem *elems, int count)
 	d->sig = d->nints ? h : 0;
 	return d;
 }
-void nd_decl_destroy(nd_decl *d) { free(d); }
+void nd_decl_destroy(nd_decl *d)
+{
+	if (d)
+		note_dead(d->id);
+	free(d);
+}
 
 struct nd_shader {
 	void **vt;
@@ -153,8 +185,10 @@ void nd_shader_destroy(nd_shader *s)
 {
 	if (!s)
 		return;
-	for (int i = 0; i < s->nvar; i++)
+	for (int i = 0; i < s->nvar; i++) {
+		note_dead(nat12_shader_id(s->var[i].s));
 		nat_shader_destroy(s->var[i].s);
+	}
 	free(s->code);
 	free(s);
 }
@@ -497,11 +531,61 @@ static void stencil_face(D3D12_DEPTH_STENCILOP_DESC *o, const state11_stencil_t 
 	o->StencilDepthFailOp = (D3D12_STENCIL_OP)(f->zfail >= 1 && f->zfail <= 8 ? f->zfail : 1);
 }
 
+static int cmp_u64(const void *a, const void *b)
+{
+	const uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+	return x < y ? -1 : x > y;
+}
+
+static int is_dead(const uint64_t *ids, size_t n, uint64_t id)
+{
+	return id && bsearch(&id, ids, n, sizeof(*ids), cmp_u64) != NULL;
+}
+
+// (render thread) the pipelines of destroyed shaders and declarations leave the cache and are released once the GPU is past them
+static void sweep_dead(nd *d)
+{
+	AcquireSRWLockExclusive(&dead_lock);
+	uint64_t *ids = dead_ids;
+	size_t n = dead_n;
+	dead_ids = NULL;
+	dead_n = dead_cap = 0;
+	InterlockedExchange(&dead_count, 0);
+	ReleaseSRWLockExclusive(&dead_lock);
+	if (!ids)
+		return;
+	qsort(ids, n, sizeof(*ids), cmp_u64);
+	kc old = d->pso;
+	memset(&d->pso, 0, sizeof(d->pso));
+	unsigned dropped = 0;
+	for (size_t i = 0; i < old.cap; i++) {
+		if (!old.e[i].used)
+			continue;
+		uint64_t a, b, c;
+		memcpy(&a, old.e[i].key + 0, 8);
+		memcpy(&b, old.e[i].key + 2, 8);
+		memcpy(&c, old.e[i].key + 4, 8);
+		if (is_dead(ids, n, a) || is_dead(ids, n, b) || is_dead(ids, n, c)) {
+			if (old.e[i].val && old.e[i].val != (void *)1)
+				nat12_release_later(d->dev, old.e[i].val);
+			dropped++;
+		} else
+			kc_put(&d->pso, old.e[i].key, old.e[i].val);
+	}
+	free(old.e);
+	free(ids);
+	static unsigned logged;
+	if (dropped && logged++ < 20 && nat_log_hook)
+		nat_log_hook("natdraw12: %u pipelines of destroyed shaders released (%u kept)", dropped, (unsigned)d->pso.n);
+}
+
 // the pipeline state for the shaders, the vertex declaration, the pass state and the target formats
 static ID3D12PipelineState *get_pso(nd *d, nat_shader *vs, nat_shader *ps, const nd_decl *decl, const state11_t *s, float bias, float slope, DXGI_FORMAT rtvf, DXGI_FORMAT dsvf, unsigned samples)
 {
+	if (InterlockedCompareExchange(&dead_count, 0, 0) >= 64)
+		sweep_dead(d);
 	uint32_t key[KW] = {0};
-	uint64_t a = (uintptr_t)vs, b = (uintptr_t)ps, c = (uintptr_t)decl;
+	uint64_t a = nat12_shader_id(vs), b = nat12_shader_id(ps), c = decl ? decl->id : 0;
 	memcpy(key + 0, &a, 8);
 	memcpy(key + 2, &b, 8);
 	memcpy(key + 4, &c, 8);
@@ -787,7 +871,8 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 			d->smp_last_key = smp_gpu.ptr;
 		}
 	}
-	// constants
+	// constants (a full constants segment flushes the list: what this draw bound so far is then in the old list, see the restart below)
+	const unsigned list_gen_before = nat12_list_generation(d->dev);
 	int vs_dirty = 0, ps_dirty = 0;
 	for (int i = 0; i < 8; i++) {
 		vs_dirty |= g->vs_dirty[i] != 0;
@@ -833,6 +918,11 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 			memcpy(p, at, sizeof(at));
 		memcpy(d->alpha_last, at, sizeof(at));
 		ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_PS_B5, d->cb_alpha_va);
+	}
+	if (nat12_list_generation(d->dev) != list_gen_before) {
+		// the constants segment was full and the list was flushed: the targets, tables and root parameters bound above are in the old list. The draw
+		// starts again on the new one, whose segment has room (audit 2026-11-18, DX F2; the viewport as it is now: a movie's fit is already in it)
+		return nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
 	}
 	// state
 	if (pso != d->pso_cur) {
@@ -1026,16 +1116,17 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	ID3D12PipelineState *pso = blit_pso(d, nat12_image_rtv_format(d_img, 0), ds, d->blit_alpha);
 	if (!pso)
 		return 0;
-	barrier_cur(d, s_img, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-	barrier_cur(d, d_img, D3D12_RESOURCE_STATE_RENDER_TARGET);
-	D3D12_CPU_DESCRIPTOR_HANDLE rtv = nat12_image_rtv(d_img, 0);
-	ID3D12GraphicsCommandList_OMSetRenderTargets(d->list, 1, &rtv, FALSE, NULL);
+	// the constants first: a full segment flushes the list, and the target bound before it was then in the old one (audit 2026-11-18, DX F2)
 	const float c[8] = {(float)sr->left / (float)sw, (float)sr->top / (float)sh, (float)(sr->right - sr->left) / (float)sw, (float)(sr->bottom - sr->top) / (float)sh, 0, 0, 0, 0};
 	D3D12_GPU_VIRTUAL_ADDRESS va;
 	void *p = alloc_const(d, sizeof(c), &va);
 	if (!p)
 		return 0;
 	memcpy(p, c, sizeof(c));
+	barrier_cur(d, s_img, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	barrier_cur(d, d_img, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	D3D12_CPU_DESCRIPTOR_HANDLE rtv = nat12_image_rtv(d_img, 0);
+	ID3D12GraphicsCommandList_OMSetRenderTargets(d->list, 1, &rtv, FALSE, NULL);
 	ID3D12GraphicsCommandList_SetPipelineState(d->list, pso);
 	d->pso_cur = pso;
 	ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_VS_B0, va);

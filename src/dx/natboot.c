@@ -302,9 +302,18 @@ int natboot_tex_upload(void *img, unsigned level, const void *data, unsigned pit
 	TEX_DISPATCH(int, natboot_tex_upload, (void *, unsigned, const void *, unsigned), (img, level, data, pitch))
 	return nat_image_upload((nat_image *)img, 0, level, data, pitch, 0);
 }
+static volatile DWORD render_tid; // (set by the render thread's frame function below)
 int natboot_tex_download(void *img, unsigned level, void **out, unsigned *pitch, unsigned *rows)
 {
 	TEX_DISPATCH(int, natboot_tex_download, (void *, unsigned, void **, unsigned *, unsigned *), (img, level, out, pitch, rows))
+#ifdef NAT_BACKEND_12
+	// off the render thread (the logo and pad pictures at the main menu), Direct3D 12's own command list is not ours to record into: a side list
+	// (Direct3D 11 is multithread protected and needs none)
+	if (render_tid && GetCurrentThreadId() != render_tid) {
+		extern int nat12_image_download_side(nat_image *, unsigned, void **, unsigned *, unsigned *);
+		return nat12_image_download_side((nat_image *)img, level, out, pitch, rows);
+	}
+#endif
 	return nat_image_download((nat_image *)img, level, out, pitch, rows);
 }
 int natboot_tex_info(void *img, unsigned *w, unsigned *h, unsigned *levels, unsigned *max_size, unsigned *fmt)

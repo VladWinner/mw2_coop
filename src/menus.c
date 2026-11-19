@@ -32,6 +32,7 @@
 #include "access.h"
 #include "firewall.h"
 #include "hook.h"
+#include "ctexts.h"
 #include "localize.h"
 #include "devices.h"
 #include "native.h"
@@ -103,7 +104,7 @@ uint8_t *ui_find_menu(const char *name)
 	uint8_t **menus = (uint8_t **)(ui + UI_MENUS);
 	for (int i = 0; i < count && i < UI_MAX_MENUS; i++) {
 		const char *n = menus[i] ? *(const char **)menus[i] : NULL;
-		if (n && lstrcmpiA(n, name) == 0)
+		if (n && _stricmp(n, name) == 0) // (ASCII names: _stricmp, not the locale-aware lstrcmpiA that converts to UTF-16 on every call, audit 2026-11-18, menus F9)
 			return menus[i];
 	}
 	return NULL;
@@ -118,7 +119,7 @@ int ui_menu_instances(const char *name, uint8_t **out, int max)
 	int n = 0;
 	for (int i = 0; i < count && i < UI_MAX_MENUS && n < max; i++) {
 		const char *nm = menus[i] ? *(const char **)menus[i] : NULL;
-		if (nm && lstrcmpiA(nm, name) == 0)
+		if (nm && _stricmp(nm, name) == 0)
 			out[n++] = menus[i];
 	}
 	return n;
@@ -706,6 +707,7 @@ static void patch_main_menu(void)
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	if (items == main_items)
 		return;
+	fade_material = NULL; // (main_text is new: its zone's fade-in material is found again, not the one of the zone before)
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	int at = ui_item_index(menu, "levelselect");
 	const int nbuttons = main_button_count();
@@ -1901,6 +1903,17 @@ static void patch_split_lobby(uint8_t *menu, int spec_split)
 	int split = split_mode;
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	// a new copy of the lobby menu (the UI's zone came back from a level): the items found in the old one are not written any more (they were, every
+	// tick, into memory the old zone gave back; audit 2026-11-18, menus F5)
+	static uint8_t *seen_menu;
+	static uint8_t **seen_items;
+	if (menu != seen_menu || items != seen_items) {
+		seen_menu = menu;
+		seen_items = items;
+		cards[0] = cards[1] = title_item = NULL;
+		title_native = NULL;
+		kb_material = NULL;
+	}
 	if (!cards[0] || !cards[1] || !title_item) {
 		for (int i = 0; i < count; i++) {
 			uint8_t *it = items[i];
@@ -2588,9 +2601,12 @@ static void snapshot_question(void);
 static void start_launch(void);
 
 // devices.c: a player's device changed
+// (devices.c, its own thread) a press changed who plays on what: the texts are made again by the menu tick on the main thread. Made here, they looked
+// up assets and changed the lobby's items from the devices thread, racing the UI (audit 2026-11-18, menus F7).
+static volatile LONG split_texts_wanted;
 void menus_split_changed(void)
 {
-	update_texts();
+	InterlockedExchange(&split_texts_wanted, 1);
 }
 
 // The split screen's Start (src/native.c): the second player is on this PC, in this process. The lobby's party is let go, the game becomes a two local players game and the
@@ -2752,15 +2768,16 @@ static void partner_questions(void)
 		key[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
 	key[n] = 0;
 	const char *mission = localize_text(key), *fmt;
-	if ((fmt = localize_text("MW2COOP_PARTNER_FMT"))) {
+	// (the formats come from the .str files a translation may replace: one whose conversions differ is not used, audit 2026-11-18, menus F10)
+	if ((fmt = localize_text("MW2COOP_PARTNER_FMT")) && ctexts_fmt_ok(fmt, "sss")) {
 		snprintf(text, sizeof(text), fmt, mission ? mission : map, members, partner);
 		localize_set_text("MW2COOP_PARTNER_Q", text);
 	}
-	if ((fmt = localize_text("MW2COOP_MEMBER_FMT"))) {
+	if ((fmt = localize_text("MW2COOP_MEMBER_FMT")) && ctexts_fmt_ok(fmt, "s")) {
 		snprintf(text, sizeof(text), fmt, partner);
 		localize_set_text("MW2COOP_MEMBER_Q", text);
 	}
-	if ((fmt = localize_text("MW2COOP_NEWGAME_FMT"))) {
+	if ((fmt = localize_text("MW2COOP_NEWGAME_FMT")) && ctexts_fmt_ok(fmt, "s")) {
 		snprintf(text, sizeof(text), fmt, partner);
 		localize_set_text("MW2COOP_NEWGAME_Q", text);
 	}
@@ -2772,7 +2789,7 @@ static void snapshot_question(void)
 	char text[320];
 	const char *partner = (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38; // slot 1
 	const char *fmt = localize_text("MW2COOP_SNAPBLOCK_FMT");
-	if (fmt) {
+	if (fmt && ctexts_fmt_ok(fmt, "ss")) {
 		snprintf(text, sizeof(text), fmt, partner, partner);
 		localize_set_text("MW2COOP_NEWGAME_Q", text);
 	}
@@ -3603,6 +3620,8 @@ static void tick_f(void)
 	InterlockedExchange(&tick_queued, 0);
 	if (!base)
 		return;
+	if (InterlockedExchange(&split_texts_wanted, 0))
+		update_texts();
 	addr_scratch_check("between two menu ticks"); // (a build whose addresses moved: the block for code that was not found must stay `ret`)
 	native_session_tick();
 	patch_main_menu();
@@ -3724,7 +3743,7 @@ static void tick_f(void)
 				what = localize_text("MW2COOP_SPLIT_KEYBOARD");
 			else {
 				const char *f = localize_text("MW2COOP_SPLIT_PAD");
-				snprintf(dev, sizeof(dev), f ? f : "pad %d", d + 1);
+				snprintf(dev, sizeof(dev), f && ctexts_fmt_ok(f, "d") ? f : "pad %d", d + 1);
 				what = dev;
 			}
 			const char *cancel = d == DEVICE_NONE ? "" : localize_text(d == DEVICE_KEYBOARD ? "MW2COOP_SPLIT_CANCEL_KB" : "MW2COOP_SPLIT_CANCEL_PAD");

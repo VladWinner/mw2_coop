@@ -103,14 +103,29 @@ fi
 rm -f $A/mw2coop/mw2coop.log $B/mw2coop/mw2coop.log
 # A hang watchdog: when both logs stand still for 25 s (the games run in lockstep, so a hung copy stops the other too), ask
 # both copies for the stacks of their threads (crash.c: the file mw2coop\dumpstacks) and keep them with the logs in
-# $ROOT/hang-reports/<time>/. The run goes on and ends by its timeout as before.
+# $ROOT/hang-reports/<time>/. The run goes on and ends by its timeout as before. A copy that has not made its game window
+# 120 s after its start is reported as a STARTUP HANG with its stacks, and the copies are closed (the tour then tries again).
 (
 	sleep 20
 	while sleep 5; do
+		for side in "$A" "$B"; do
+			if grep -aq "no game window after 120 s" "$side/mw2coop/mw2coop.log" 2>/dev/null; then
+				rm -f "$side/mw2coop/stacks.txt"; : > "$side/mw2coop/dumpstacks"
+				sleep 3
+				dir="$ROOT/hang-reports/$(date +%Y%m%d-%H%M%S)-start"
+				mkdir -p "$dir"
+				cp "$side/mw2coop/stacks.txt" "$dir/stuck-stacks.txt" 2>/dev/null
+				cp "$A/mw2coop/mw2coop.log" "$dir/host.log"; cp "$B/mw2coop/mw2coop.log" "$dir/client.log"
+				rm -f "$side/mw2coop/dumpstacks"
+				echo "STARTUP HANG: $(basename "$side") never made its game window; stacks and logs in $dir"
+				powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies.ps1" -Root "$(cygpath -w "$ROOT")" > /dev/null 2>&1
+				exit 0
+			fi
+		done
 		now=$(date +%s); [ -n "$WD_DEBUG" ] && echo "$(date +%T) wd a=$(( now - $(stat -c %Y "$A/mw2coop/mw2coop.log" 2>/dev/null || echo 0) )) b=$(( now - $(stat -c %Y "$B/mw2coop/mw2coop.log" 2>/dev/null || echo 0) ))" >> /tmp/wd.txt
 		la=$(stat -c %Y "$A/mw2coop/mw2coop.log" 2>/dev/null || echo 0)
 		lb=$(stat -c %Y "$B/mw2coop/mw2coop.log" 2>/dev/null || echo 0)
-		if [ "$la" -gt 0 ] && [ "$lb" -gt 0 ] && [ $((now - la)) -gt 25 ] && [ $((now - lb)) -gt 25 ]; then
+		if [ "$hang_told" != 1 ] && [ "$la" -gt 0 ] && [ "$lb" -gt 0 ] && [ $((now - la)) -gt 25 ] && [ $((now - lb)) -gt 25 ]; then
 			rm -f "$A/mw2coop/stacks.txt" "$B/mw2coop/stacks.txt"
 			: > "$A/mw2coop/dumpstacks"; : > "$B/mw2coop/dumpstacks"
 			sleep 6
@@ -119,7 +134,7 @@ rm -f $A/mw2coop/mw2coop.log $B/mw2coop/mw2coop.log
 			cp "$A/mw2coop/stacks.txt" "$dir/host-stacks.txt" 2>/dev/null; cp "$B/mw2coop/stacks.txt" "$dir/client-stacks.txt" 2>/dev/null
 			cp "$A/mw2coop/mw2coop.log" "$dir/host.log"; cp "$B/mw2coop/mw2coop.log" "$dir/client.log"
 			echo "HANG: both copies stopped writing their logs; stacks and logs in $dir"
-			exit 0
+			hang_told=1   # once; the watch goes on, for a copy that never makes its window (STARTUP HANG above)
 		fi
 	done
 ) &

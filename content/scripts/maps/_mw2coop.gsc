@@ -440,10 +440,25 @@ follow_leader_teleports()
 			far_time += 0.05;
 		else
 			far_time = 0;
-		if ( far_time >= leash_time() && level.player2 teleport_to_partner( level.player ) )
+		// the one behind goes to the one ahead (each player's checkpoint progress, as the checkpoints count it): player 2 was always brought to player 1,
+		// also when he was the one far ahead (audit 2026-11-18, GSC F4); with the same progress player 2 goes, as before
+		if ( far_time >= leash_time() )
 		{
-			far_time = 0;
-			state( "leash: player 2 brought to player 1" );
+			mover = level.player2;
+			target = level.player;
+			if ( progress_of( level.player2 ) > progress_of( level.player ) )
+			{
+				mover = level.player;
+				target = level.player2;
+			}
+			if ( mover teleport_to_partner( target ) )
+			{
+				far_time = 0;
+				if ( mover == level.player2 )
+					state( "leash: player 2 brought to player 1" );
+				else
+					state( "leash: player 1 brought to player 2 (who is further on)" );
+			}
 		}
 	}
 }
@@ -1250,6 +1265,10 @@ restore_ally_positions()
 		if ( !isdefined( best ) )
 			continue;
 		used[ "" + best GetEntityNumber() ] = true;
+		// (an ally the start seated in a vehicle or linked to something stays there, as the comment above says: only IsAlive was checked, audit
+		// 2026-11-18, GSC F5)
+		if ( isdefined( best.vehicle ) || best IsLinked() )
+			continue;
 		if ( Distance( best.origin, target ) > 600 )
 		{
 			best ForceTeleport( target, ( 0, spot_value( pos[ 3 ] ), 0 ) );
@@ -1725,6 +1744,15 @@ mission_complete()
 	next = next_level_name();
 	SetDvar( "start", "" );
 	write_records();
+	// The last mission: single player's _nextmission() waits for the end of the credits after the knife fight (af_chase_nextmission, set by
+	// char_museum when the credits are over) and then goes back to the main menu. Here the request came 4 s into the credits and asked for a next
+	// mission there is none of: both players stayed in the Museum with no way on (audit 2026-11-18, GSC F3). The request now waits for the same
+	// flag; with no next mission both PCs leave the session for the main menu (src/control.c).
+	if ( level.script == "ending" && isdefined( level.level_mode ) && level.level_mode == "credits_1" && isdefined( level.flag[ "af_chase_nextmission" ] ) )
+	{
+		state( "mission complete ending: waiting for the end of the credits" );
+		flag_wait( "af_chase_nextmission" );
+	}
 	state( "mission complete " + level.script + ", next '" + next + "'" );
 	request( "nextmap " + next );	// the host saves it as progress and launches it
 }

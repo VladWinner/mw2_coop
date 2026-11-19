@@ -5,5 +5,6 @@
 void enhopts_tick(void);
 // Called while a level runs too (control.c's poll): the page's field of view is held against the level's scripts.
 void enhopts_level_tick(void);
+void enhopts_install(void); // its console command (the main thread's share of the level tick)
 // The sharpening the page holds (0-100), -1 before the page's dvars exist.
 int enhopts_sharpness(void);

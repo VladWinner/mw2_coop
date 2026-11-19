@@ -307,3 +307,28 @@ flag_wait( "ghost_gives_regroup_order" );
 @@@ to
 flag_wait_any( "ghost_gives_regroup_order", "house_briefing_is_over" );
 @@@ end
+
+7. The ambush's and the forest fight's start points put the level's "starterguy" allies on their start nodes: in a co-op
+   session there are more of them than nodes, and the one past the last node was a script error that ended the start function before
+   the troops and the scouts were spawned and the start's triggers were used (both are checkpoints: a restart there was broken; night
+   tour 2026-11-18). The ones past the last node stay where they are.
+@@@ subst startAmbush
+redshirt.origin = nodes[ index ].origin;
+			redshirt.angles = nodes[ index ].angles;
+@@@ to
+if ( index < nodes.size )
+			{
+				redshirt.origin = nodes[ index ].origin;
+				redshirt.angles = nodes[ index ].angles;
+			}
+@@@ end
+@@@ subst startForestFight
+redshirt.origin = nodes[ index ].origin;
+			redshirt.angles = nodes[ index ].angles;
+@@@ to
+if ( index < nodes.size )
+			{
+				redshirt.origin = nodes[ index ].origin;
+				redshirt.angles = nodes[ index ].angles;
+			}
+@@@ end

@@ -67,3 +67,14 @@ level.player.ignorerandombulletdamage = false;
 foreach ( mw2coop_player in level.players )
 		mw2coop_player.ignorerandombulletdamage = false;
 @@@ end
+
+The first objective is put on Soap once he is there: at the "intro" start point (a co-op restart at that checkpoint) gulag_objectives()
+came a frame after the level began, before Soap was spawned, and Objective_OnEntity on him was a script error that ended the objectives
+for the rest of the level (night tour 2026-11-18).
+@@@ subst gulag_objectives
+Objective_Add( 1, "current", &"GULAG_FIND_POW", pow_org() );
+@@@ to
+while ( !isdefined( level.soap ) )
+		wait 0.05;
+	Objective_Add( 1, "current", &"GULAG_FIND_POW", pow_org() );
+@@@ end

@@ -162,7 +162,9 @@ while ((Get-Date) -lt $deadline) {
     } else { $idleSince = $null }
 }
 $left = Get-Process iw4sp,iw4x-sp -ErrorAction SilentlyContinue
-if ($left) { "[$Tag] timeout, killing $($left.Id -join ',')"; $left | Stop-Process -Force }
+# a killed copy is waited for until it is gone: the next run's first copy, started while the GPU driver was still taking the old one's device
+# down, sometimes never made its window (night tour 2026-11-18/19: the host of airport, oilrig and boneyard on iw4x-sp, airport on 64-bit)
+if ($left) { "[$Tag] timeout, killing $($left.Id -join ',')"; $left | Stop-Process -Force; $left | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue }
 else { "[$Tag] all exited after $([int]((Get-Date) - $start).TotalSeconds) s; codes: $(($launched | ForEach-Object { $_.ExitCode }) -join ',')" }
 if ($RealInstall) {
     $touched = Get-ChildItem -Force -Recurse -File $RealInstall | Where-Object { $_.LastWriteTime -ge $start.AddSeconds(-2) }

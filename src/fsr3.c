@@ -2070,7 +2070,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		metric_copy(b, &n, 0);
 		metric_copy(b, &n, 1);
 	}
-	if (S.prev && S.pso_rfa) { // this frame's input is the next frame's previous picture
+	if (S.prev && S.pso_rfa && g_refine) { // this frame's input is the next frame's previous picture (only when the refinement reads it: audit 2026-11-18, U10)
 		barrier(b, &n, S.color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
 		barrier(b, &n, S.prev, S.prev_ok ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
 		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);

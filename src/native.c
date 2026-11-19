@@ -1052,7 +1052,14 @@ static HRESULT STDMETHODCALLTYPE sc_present_hook(IDirect3DSwapChain9 *sc, const 
 		sc_present_t target = sc_present_base_orig ? sc_present_base_orig : sc_present_orig;
 		return target && target != sc_present_hook ? target(sc, a, b, c, d, e) : D3DERR_INVALIDCALL;
 	}
-	before_present(2, the_device);
+	// the swap chain's own device, not the one kept in the_device: a vid_restart frees that one (32-bit: it is never refreshed; 64-bit: NULL until
+	// the next capture), and the console, FSR and shots were handed a freed or NULL device (audit 2026-11-18, native 1)
+	IDirect3DDevice9 *sc_dev = NULL;
+	if (FAILED(IDirect3DSwapChain9_GetDevice(sc, &sc_dev)))
+		sc_dev = NULL;
+	before_present(2, sc_dev ? sc_dev : the_device);
+	if (sc_dev)
+		IDirect3DDevice9_Release(sc_dev);
 	if (skip_this_present) {
 		present_hook_leave(owner);
 		return D3D_OK;
@@ -1075,8 +1082,20 @@ static struct {
 	int in;
 } slots[64];
 static int nslots;
+// slots[] is written from four threads (the Bink thread, the render thread, the main thread, the console's) and read around a Reset: one at a time
+// (audit 2026-11-18, native 3)
+static SRWLOCK slots_lock = SRWLOCK_INIT;
 
+static int patch_slot_locked(void **slot, void *hook, void **orig);
 static int patch_slot(void **slot, void *hook, void **orig)
+{
+	AcquireSRWLockExclusive(&slots_lock);
+	const int r = patch_slot_locked(slot, hook, orig);
+	ReleaseSRWLockExclusive(&slots_lock);
+	return r;
+}
+
+static int patch_slot_locked(void **slot, void *hook, void **orig)
 {
 	DWORD old, ignored;
 	void *previous;
@@ -1108,9 +1127,12 @@ static int patch_slot(void **slot, void *hook, void **orig)
 	return 1;
 }
 
+// From the last patched down: of two hooks of ours on one slot the upper one comes out first, and the lower one is then on top and comes out too (going
+// up, the lower one was skipped as covered and later forgotten, audit 2026-11-18, native 3).
 static void slots_take_out(void)
 {
-	for (int i = 0; i < nslots; i++) {
+	AcquireSRWLockExclusive(&slots_lock);
+	for (int i = nslots - 1; i >= 0; i--) {
 		DWORD old;
 		if (!slots[i].in || *slots[i].slot != slots[i].hook || !VirtualProtect(slots[i].slot, sizeof(void *), PAGE_READWRITE, &old))
 			continue; // somebody else is on top of ours: left as it is
@@ -1118,10 +1140,27 @@ static void slots_take_out(void)
 		VirtualProtect(slots[i].slot, sizeof(void *), old, &old);
 		slots[i].in = 0;
 	}
+	ReleaseSRWLockExclusive(&slots_lock);
 }
+
+// (vid_restart) the entries that are out are forgotten (they go back on the new device); one that could not be taken out (something else on top of
+// it) is kept, so a later take-out still knows it is ours (the 64-bit game's vid_restart only)
+#ifdef _WIN64
+static void slots_forget_out(void)
+{
+	AcquireSRWLockExclusive(&slots_lock);
+	int k = 0;
+	for (int i = 0; i < nslots; i++)
+		if (slots[i].in)
+			slots[k++] = slots[i];
+	nslots = k;
+	ReleaseSRWLockExclusive(&slots_lock);
+}
+#endif
 
 static void slots_put_back(void)
 {
+	AcquireSRWLockExclusive(&slots_lock);
 	for (int i = 0; i < nslots; i++) {
 		DWORD old;
 		if (slots[i].in || !VirtualProtect(slots[i].slot, sizeof(void *), PAGE_READWRITE, &old))
@@ -1131,6 +1170,7 @@ static void slots_put_back(void)
 		VirtualProtect(slots[i].slot, sizeof(void *), old, &old);
 		slots[i].in = 1;
 	}
+	ReleaseSRWLockExclusive(&slots_lock);
 }
 
 // [native] resetlog=1 (default off): the vtable slots around a device Reset, to see who else writes them (the Steam and Discord overlays hook the device as well): where each slot points, as module+offset
@@ -1182,14 +1222,24 @@ static DWORD WINAPI slots_watch_thread(LPVOID unused)
 // A device Reset (vtable 16: a lost device, a vid_restart, a change of the desktop): the hooks are taken out for it and put back after it (see above)
 typedef HRESULT(STDMETHODCALLTYPE *reset_t)(IDirect3DDevice9 *, void *);
 static reset_t reset_orig;
+// A Reset that comes back into ours while ours runs (an overlay put on top of ours, whose saved original is our hook, once ours had saved the overlay's)
+// went round until the stack ran out: such a call goes to the first original ours saw (audit 2026-11-18, native 3).
+static __thread int reset_depth;
 static HRESULT STDMETHODCALLTYPE reset_hook(IDirect3DDevice9 *dev, void *params)
 {
+	static reset_t first;
+	if (!first)
+		first = reset_orig;
+	if (reset_depth)
+		return first ? first(dev, params) : D3DERR_INVALIDCALL;
 	log_printf("native: device reset: the hooks are taken out for it");
 	reset_t call = reset_orig;
 	slots_log("before the Reset");
 	slots_take_out();
 	slots_log("taken out");
+	reset_depth++;
 	HRESULT hr = call(dev, params);
+	reset_depth--;
 	slots_log("after the Reset");
 	slots_put_back();
 	slots_log("put back");
@@ -1201,12 +1251,19 @@ typedef HRESULT(STDMETHODCALLTYPE *reset_ex_t)(IDirect3DDevice9 *, void *, void 
 static reset_ex_t reset_ex_orig;
 static HRESULT STDMETHODCALLTYPE reset_ex_hook(IDirect3DDevice9 *dev, void *params, void *mode)
 {
+	static reset_ex_t first;
+	if (!first)
+		first = reset_ex_orig;
+	if (reset_depth)
+		return first ? first(dev, params, mode) : D3DERR_INVALIDCALL;
 	log_printf("native: device reset (Ex): the hooks are taken out for it");
 	reset_ex_t call = reset_ex_orig;
 	slots_log("before the Reset");
 	slots_take_out();
 	slots_log("taken out");
+	reset_depth++;
 	HRESULT hr = call(dev, params, mode);
+	reset_depth--;
 	slots_log("after the Reset");
 	slots_put_back();
 	slots_log("put back");
@@ -2013,10 +2070,11 @@ static void vid_restart_hook(void)
 		return;
 	}
 	zones_pools_reset(); // the restart initialises the asset database again: the raised pool sizes of the co-op levels must not be what it builds from
+	const int had_present_hooks = the_device != NULL;
 	if (the_device || bink_fit_device) {
 		log_printf("native: vid_restart: the device hooks are taken out, they go back on the new device");
 		slots_take_out();
-		nslots = 0;
+		slots_forget_out();
 		the_device = NULL;
 		bink_fit_device = NULL;
 		comp_not_before = GetTickCount() + 4000;
@@ -2026,6 +2084,14 @@ static void vid_restart_hook(void)
 		HANDLE t = CreateThread(NULL, 0, bink_device_hooks_thread, NULL, 0, NULL);
 		if (t)
 			CloseHandle(t); // (one handle a vid_restart was never closed)
+	}
+	// The Present hooks (the console, FSR 3, weaponfov, QA shots) were taken out above; outside split screen nothing asked for them again, and after a
+	// resolution change or Alt+Enter the console never drew again (audit 2026-11-18, native 4). The same worker as at the start puts them on the
+	// new device once it exists.
+	if (had_present_hooks) {
+		HANDLE t = CreateThread(NULL, 0, device_hooks_thread, NULL, 0, NULL);
+		if (t)
+			CloseHandle(t);
 	}
 }
 static void vid_restart_install(void)
@@ -2939,7 +3005,7 @@ static void slice_flush(void)
 	char line[1800];
 	for (int part = 0; part < 20; part++) {
 		int len = 0;
-		for (int i = part * 35; i < part * 35 + 35; i++) {
+		for (int i = part * 35; i < part * 35 + 35 && len < (int)sizeof(line) - 1; i++) { // (stops when the line is full: past it the size wrapped, audit 2026-11-18)
 			if (slice_ev[i].kind == 1)
 				len += snprintf(line + len, sizeof(line) - (size_t)len, "|STEP@%.1f| ", slice_ev[i].t);
 			else
@@ -4854,6 +4920,12 @@ static DWORD WINAPI hang_watch_thread(LPVOID unused)
 		Sleep(1000);
 		DWORD now = GetTickCount();
 		LONG f = hang_frames;
+		// the frames are counted by the split screen's draw (ctx_after_draw) only: with no split session the count stands still, and the first level
+		// after a session logged a false hang and walked every thread (audit 2026-11-18, native 7)
+		if (!native_active) {
+			last = -1, since = now, dumped = 0;
+			continue;
+		}
 		if (f != last) {
 			last = f, since = now, dumped = 0;
 			continue;
@@ -5010,6 +5082,8 @@ static void npc_log(void)
 		int n = snprintf(line, sizeof(line), "native: npcsnap ctx %d:", ctx_current);
 		for (int off = 0x404450; off < 0x44f000; off += 8) {
 			uintptr_t v = *(const uintptr_t *)(base + off);
+			if (n >= (int)sizeof(line) - 160)
+				break; // (QA only: the line is full; past its end the size wrapped and the stack was overwritten, audit 2026-11-18)
 			if (v >= (uintptr_t)base + XR64(0x51b078) && v < (uintptr_t)base + XR64(0x51dcb0) + 0x100)
 			{
 				n += snprintf(line + n, sizeof(line) - n, " [%x]=snap+%x:", off, (unsigned)(v - (uintptr_t)base - 0x51b078));
@@ -5734,10 +5808,36 @@ static const uint8_t *dobj_model_names(const uint8_t *dobj, const char *out[8], 
 static unsigned dobj_make_original(void *info, void *dobj_info); // (below) the 32-bit engine's make takes EDI and EBX
 #define DOBJ_MAKE_DIRECT(info, sinfo) ((int)dobj_make_original(info, sinfo))
 #endif
+// On a build whose addresses moved, a function that was not found is a `ret` block: called, it hands back whatever was in the return register, and
+// the callers below read through it (audit 2026-11-18, native 5). They run only when their functions were found.
+static int dobj_fns_ok(void)
+{
+	static int ok = -1;
+	if (ok < 0)
+#ifdef _WIN64
+		ok = addr_resolved(0x1fece0) && addr_resolved(0x1fee30);
+#else
+		ok = addr_resolved(0xf3c70) && addr_resolved(0x95740);
+#endif
+	return ok;
+}
+
+static int weapon_def_ok(void)
+{
+#ifdef _WIN64
+	static int ok = -1;
+	if (ok < 0)
+		ok = addr_resolved(0x85850);
+	return ok;
+#else
+	return 1; // (a table read: an address that was not found reads the zero block)
+#endif
+}
+
 static void body_dobj_sync(void)
 {
 	static DWORD at;
-	if (!native_active || ctx_current != 0 || !CFG_ONCE("bodysync", 1) || GetTickCount() - at < 200)
+	if (!native_active || ctx_current != 0 || !CFG_ONCE("bodysync", 1) || GetTickCount() - at < 200 || !dobj_fns_ok())
 		return;
 	at = GetTickCount();
 	const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + RVA_CLIENT_DOBJ);
@@ -5830,9 +5930,9 @@ static unsigned dobj_make_hook(void *info, void *dobj_info)
 		return 0;
 	int ent = info ? *(const uint16_t *)((const uint8_t *)info + 0x7e) : -1;
 	const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + RVA_CLIENT_DOBJ);
-	const uint8_t *before = ent >= 0 && ent < 2048 ? client_dobj(ent) : NULL;
+	const uint8_t *before = ent >= 0 && ent < 2048 && dobj_fns_ok() ? client_dobj(ent) : NULL;
 	unsigned r = dobj_make_original(info, dobj_info);
-	if (CFG_ONCE("dobjmakelog", 0) && ent >= 64) {
+	if (CFG_ONCE("dobjmakelog", 0) && ent >= 64 && dobj_fns_ok()) {
 		static int logged;
 		const uint8_t *after = client_dobj(ent);
 		if (logged < 400 || ent == 1399) {
@@ -5926,7 +6026,7 @@ static void aim_assist(int pl, float dt, float *yaw, float *pitch, float move, f
 	int ads_was = s->ads_was;
 	s->ads_was = ads;
 	int weapon = *(const int *)(aa + 0x24);
-	const uint8_t *wd = aa[0xb0] && weapon > 0 ? WEAPON_DEF(weapon) : NULL;
+	const uint8_t *wd = aa[0xb0] && weapon > 0 && weapon_def_ok() ? WEAPON_DEF(weapon) : NULL;
 	if (!wd) {
 		s->lock_ent = s->snap_ent = -1;
 		return;
@@ -9923,14 +10023,21 @@ static void contexts_install(void)
 // The scripts decide "co-op" from the dvar `coop` (rva 0x1905308, a bool whose script-side writes are refused); the engine's own co-op byte (rva 0x52fb5c) stays 0 so that the engine takes its
 // local-players branch. [native] coopdvar=1 keeps the dvar at 1 (written from a thread, every 20 ms) so that the level scripts, the mod's among them, run their two-player code.
 static volatile LONG coopdvar_on; // the thread below writes only while a split session runs
+// The session's stop takes this lock to turn the forcing off: a write of 1 that was under way when it stopped then always lands before the stop's
+// own 0 (a 60 ms sleep stood for that, and a thread held up longer than that wrote 1 after it: the next solo game ran as co-op, audit 2026-11-18,
+// native 8). With no session the thread looks four times a second, not fifty.
+static SRWLOCK coopdvar_lock = SRWLOCK_INIT;
 static DWORD WINAPI coop_dvar_thread(LPVOID unused)
 {
 	(void)unused;
 	for (;;) {
+		AcquireSRWLockExclusive(&coopdvar_lock);
 		uint8_t *dvar = *(uint8_t **)(base + RVA_COOP_DVAR);
-		if (dvar && coopdvar_on)
+		const int on = coopdvar_on != 0;
+		if (dvar && on)
 			*(int *)(dvar + 0x10) = 1;
-		Sleep(20);
+		ReleaseSRWLockExclusive(&coopdvar_lock);
+		Sleep(on ? 20 : 250);
 	}
 	return 0;
 }
@@ -10295,6 +10402,17 @@ static void session_reset(void)
 	draws_after_init = 0;
 	split_on = 0;
 	frame_bottom = 0;
+	// A mode-11 frame sets these and puts them back after the game's own call; an engine error inside that call (a server command overflow, a GSC
+	// runtime error that drops the level) longjmps past the put-back. The screen update's busy flag then stayed set and no later screen update ran,
+	// the error menu included (audit 2026-11-18, native 2). The session's end clears them: no frame is under way here.
+	p2_frame = 0;
+#ifdef _WIN64
+	ng_skip_reset_2d = 0;
+#endif
+	if (*(base + M11_SCR_BUSY)) {
+		*(base + M11_SCR_BUSY) = 0;
+		log_printf("native: the screen update's busy flag was still set at the session's end (an error inside a split frame): cleared");
+	}
 }
 
 // The split screen swaps whole ranges of the game's memory between two client contexts and draws through the game's device pointer. On a build whose addresses were looked up (addr.c), an address
@@ -10641,8 +10759,9 @@ void native_split_stop(void)
 	native_active = 0;
 	mode = 0;
 	ctx_on = 0;
+	AcquireSRWLockExclusive(&coopdvar_lock); // (the forcing thread has written its last value once this is held)
 	InterlockedExchange(&coopdvar_on, 0);
-	Sleep(60); // the forcing thread has written its last value
+	ReleaseSRWLockExclusive(&coopdvar_lock);
 	{
 		uint8_t *dvar = *(uint8_t **)(base + RVA_COOP_DVAR); // the scripts' co-op dvar goes back to 0 (the game's own co-op sets it itself)
 		if (dvar)

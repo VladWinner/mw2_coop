@@ -146,7 +146,9 @@ course_triggers( flag_name )
 // until every player still up has gone through that trigger (the first did, setting it).
 both_past( flag_name )
 {
-	if ( !course_coop() )
+	// door_close() calls this after its "if ( isdefined( sFlagToWaitFor ) ) flag_wait(...)", which has no braces: a door without a flag came here
+	// with none, and comparing every trigger's flag with undefined was a script error for each (night tour 2026-11-18, Training: 50 a run)
+	if ( !isdefined( flag_name ) || !course_coop() )
 		return;
 	trigs = course_triggers( flag_name );
 	if ( !trigs.size )

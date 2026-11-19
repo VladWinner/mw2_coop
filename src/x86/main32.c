@@ -19,6 +19,7 @@
 #include "fov.h"
 #include "window.h"
 #include "access.h"
+#include "enhopts.h"
 #include "firewall.h"
 #include "devices.h"
 #include "console.h"
@@ -234,6 +235,7 @@ static void install_all(void)
 	menus_install();
 	addr_scratch_check("after menus_install");
 	access_install();
+	enhopts_install();
 	addr_scratch_check("after access_install");
 	upnp_install();
 	addr_scratch_check("after upnp_install");
@@ -266,6 +268,7 @@ static void install_all(void)
 static DWORD WINAPI identify(LPVOID unused)
 {
 	(void)unused;
+	crash_stack_watch(); // (a start that hangs before the window can still be asked for its stacks)
 	DWORD start = GetTickCount();
 	HWND game = NULL;
 	while (!game && GetTickCount() - start < 120000) {

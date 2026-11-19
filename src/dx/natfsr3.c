@@ -1082,11 +1082,56 @@ float natfsr3_dlss_sharpness(void)
 }
 
 // the upscale of the frame into `out_img` (the image of the output size the 2D passes draw into); 1 when it holds the upscaled picture
+// The upscaler is made for one device and one pair of sizes. A resolution change in the menu (vid_restart) left FSR 3 / DLSS off for the rest of the
+// session (each frame stretched instead), and a later change back to the first sizes would have used images of a device that is gone (audit
+// 2026-11-18, U1). On the same device the old context and images are released once the GPU is past them; on a new device they are left as they are
+// (the old device is not destroyed either) and only forgotten. Then setup() makes everything again for the new sizes.
+static void forget_upscaler(nat_device *d, int same_device)
+{
+	ID3D12Resource **imgs[] = {&S.out, &S.depth, &S.motion, &S.dcopy, &S.prev, &S.block, &S.motion2};
+	ID3D12PipelineState **psos[] = {&S.pso_ms, &S.pso_1, &S.pso_mv, &S.pso_rfa, &S.pso_rfb};
+	ID3D12RootSignature **rss[] = {&S.rs, &S.rs_mv, &S.rs_rf};
+	if (same_device) {
+		nat12_flush(d); // (it waits for the GPU)
+		if (S.ctx && S.destroy && !settings_dlss())
+			S.destroy(&S.ctx, NULL);
+		for (size_t i = 0; i < sizeof(imgs) / sizeof(imgs[0]); i++)
+			if (*imgs[i])
+				ID3D12Resource_Release(*imgs[i]);
+		for (size_t i = 0; i < sizeof(psos) / sizeof(psos[0]); i++)
+			if (*psos[i])
+				ID3D12PipelineState_Release(*psos[i]);
+		for (size_t i = 0; i < sizeof(rss) / sizeof(rss[0]); i++)
+			if (*rss[i])
+				ID3D12RootSignature_Release(*rss[i]);
+	}
+	for (size_t i = 0; i < sizeof(imgs) / sizeof(imgs[0]); i++)
+		*imgs[i] = NULL;
+	for (size_t i = 0; i < sizeof(psos) / sizeof(psos[0]); i++)
+		*psos[i] = NULL;
+	for (size_t i = 0; i < sizeof(rss) / sizeof(rss[0]); i++)
+		*rss[i] = NULL;
+	S.mv_final = NULL;
+	S.ctx = NULL;
+	S.out_state = S.depth_state = S.motion_state = S.dcopy_state = S.prev_state = 0;
+	S.prev_valid = S.block_ok = S.m2_ok = 0;
+	S.dcopy_w = S.dcopy_h = S.dcopy_samples = 0;
+	S.frame = 0;
+	S.ok = S.tried = 0;
+	DL.feature = 0; // (dlss_bridge_create makes the feature again for the new sizes)
+	nd_lod_bias = 0.0f;
+}
+
 int natfsr3_upscale(nat_device *d, nat_image *color_img, nat_image *depth_img, nat_image *out_img)
 {
 	unsigned iw, ih, s, ow, oh;
 	nat_image_size(color_img, &iw, &ih, &s);
 	nat_image_size(out_img, &ow, &oh, &s);
+	if (S.ok && (S.dev != nat12_device(d) || iw != S.iw || ih != S.ih || ow != S.w || oh != S.h)) {
+		log_printf("natfsr3: the sizes or the device changed (%ux%u -> %ux%u, was %ux%u -> %ux%u%s): the upscaler is made again", iw, ih, ow, oh, S.iw, S.ih,
+			   S.w, S.h, S.dev != nat12_device(d) ? ", a new device" : "");
+		forget_upscaler(d, S.dev == nat12_device(d));
+	}
 	if (!setup(d, iw, ih, ow, oh) || iw != S.iw || ih != S.ih || ow != S.w || oh != S.h)
 		return 0;
 	if (!depth_img || !depth_pass(d, depth_img))

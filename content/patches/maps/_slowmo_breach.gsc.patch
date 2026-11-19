@@ -34,3 +34,12 @@ mw2coop patch for maps/_slowmo_breach.gsc (Modern Warfare 2, 64-bit Steam build)
 	if ( maps\_mw2coop::is_campaign_coop() && isdefined( level.player2 ) )
 		level thread maps\_mw2coop::breach_unstick( self.origin, ent.room_volume.origin );
 @@@ end
+
+3. A breach whose door was already blown (a later start point, a co-op restart at a checkpoint after it) has no lookat trigger any more: the
+   objectives' assign_script_breachgroup_to_ents() read its breach origin as undefined, a script error that ended the objectives for the rest
+   of the level (night tour 2026-11-18: Loose Ends restarted at house_briefing). Such a trigger is passed by.
+@@@ replace
+				if ( distance( ent.origin, trigger.breach_origin ) > 80 )
+@@@ with
+				if ( !isdefined( trigger ) || !isdefined( trigger.breach_origin ) || distance( ent.origin, trigger.breach_origin ) > 80 )
+@@@ end

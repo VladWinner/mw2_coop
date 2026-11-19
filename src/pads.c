@@ -336,13 +336,25 @@ static DWORD WINAPI sdl_thread(LPVOID unused)
 		for (int i = 0; i < MAX_SDL; i++)
 			if (sp[i].used)
 				read_pad(&sp[i]);
+		int any_sdl = 0;
+		for (int i = 0; i < MAX_SDL; i++)
+			any_sdl |= sp[i].used;
 		if (now - last_look >= 20) {
 			pads_state_t real[4];
 			int real_on = 0;
+			// an empty XInput slot is the costly query: one that held no pad is asked again once a second, not every 20 ms (audit 2026-11-18, glue F10)
+			static int empty[4];
+			static DWORD empty_at;
+			const int probe_empty = now - empty_at >= 1000;
+			if (probe_empty)
+				empty_at = now;
 			for (int s = 0; s < 4; s++) {
 				memset(&real[s], 0, sizeof(real[s]));
+				if (empty[s] && !probe_empty)
+					continue;
 				if (real_get && real_get((DWORD)s, &real[s]) == ERROR_SUCCESS)
 					real_on |= 1 << s;
+				empty[s] = !(real_on & (1 << s));
 			}
 			for (int i = 0; i < MAX_SDL; i++)
 				if (sp[i].used) {
@@ -356,7 +368,7 @@ static DWORD WINAPI sdl_thread(LPVOID unused)
 			S.FlushEvents(0, 0xffffffffu);
 			last_flush = now;
 		}
-		Sleep(4);
+		Sleep(any_sdl ? 4 : 16); // (no SDL pad open: nothing to read at 250 Hz, audit 2026-11-18, glue F10)
 	}
 	return 0;
 }

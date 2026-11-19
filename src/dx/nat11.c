@@ -1129,10 +1129,8 @@ static void warm_one(const uint32_t *code, size_t dwords)
 	int is_vs = 0;
 	if (!sm3_translate_vs(code, dwords, SM3_ALPHA_TEST , NULL, 0, &hlsl, &is_vs, why, sizeof(why)))
 		return;
-	size_t n = 0;
-	void *have = nc_load(hlsl, is_vs, &n);
-	if (have) {
-		free(have);
+	if (nc_exists(hlsl, is_vs)) {
+		// (in the cache already)
 	} else if (load_compiler()) {
 		ID3DBlob *blob = NULL, *msgs = NULL;
 		if (SUCCEEDED(p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &blob, &msgs)) && blob) {

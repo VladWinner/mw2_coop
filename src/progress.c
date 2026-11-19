@@ -337,9 +337,13 @@ int progress_chosen(char *map, int map_size, char *start, int start_size)
 int progress_find_with(const char *id, uint64_t xuid, char *map, int map_size, char *start, int start_size)
 {
 	save_t v;
-	char file[MAX_PATH];
-	for (int i = 0; nth_save(i, &v, file); i++)
-		if (is_member(&v, id, xuid)) {
+	// the saves listed once, newest first, each read once (a loop of nth_save listed the folder and read saves 0..i again for every i: some
+	// 2,000 file reads at 64 saves on the main thread when a partner joined, audit 2026-11-18, PRG-2)
+	save_file_t files[MAX_FILES];
+	const int n = list_saves(files);
+	for (int f = 0; f < n; f++)
+		if (read_save(files[f].file, &v) && is_member(&v, id, xuid)) {
+			const char *file = files[f].file;
 			lstrcpynA(chosen_file, file, MAX_PATH);
 			lstrcpynA(map, v.map, map_size);
 			lstrcpynA(start, v.start, start_size);
@@ -653,8 +657,21 @@ int progress_skill_lobby(void)
 	return d->current.integer >= 0 && d->current.integer <= 3 ? d->current.integer : -1;
 }
 
+// A new session starts with no checkpoint data of an earlier one in this process (the weapons, flags and allies maps\_mw2coop keeps at a checkpoint):
+// only the PC that played the earlier session had them, and a start of the same level and start point restored them there alone (audit
+// 2026-11-18, GSC F1). Both PCs drop them at the launch: the host when it sends coopLaunch, the client when the start packet comes.
+static void forget_checkpoint_data(void)
+{
+	game_cbuf_addtext("set mw2coop_cp_wname \"\"\nset mw2coop_cp_fname \"\"\nset mw2coop_cp_fn 0\nset mw2coop_cp_allies \"\"\n");
+}
+
 int progress_launch_packet(char *buf, int size)
 {
+	static DWORD forgot;
+	if (GetTickCount() - forgot > 10000) { // (the party sends coopLaunch again until the client answers: once per launch)
+		forgot = GetTickCount();
+		forget_checkpoint_data();
+	}
 	int skill = skill_pick();
 	if (skill >= 0) {
 		skill_apply(skill);
@@ -695,6 +712,7 @@ int progress_on_packet(const char *buf, int len)
 	if (len < tl || memcmp(buf, tag, tl) != 0)
 		return 0;
 	menus_campaign_loading_begin();
+	forget_checkpoint_data();
 	char text[512];
 	int n = len - tl < (int)sizeof(text) - 1 ? len - tl : (int)sizeof(text) - 1;
 	memcpy(text, buf + tl, n);

@@ -791,6 +791,12 @@ static void upload_submit(nat_device *d)
 	if (!d->ca_open)
 		return;
 	ID3D12GraphicsCommandList_Close(d->clist);
+	// Copies made while the game runs (the model lighting volume, the film planes, the console) go over an image the frames already submitted may
+	// still sample: the copy queue waits on the GPU for the last submitted frame first (audit 2026-11-18, DX F5). The direct queue waits for the
+	// copies in turn (upload_gpu_wait), on later values, so nothing waits in a circle; the CPU never waits here.
+	const UINT64 submitted = d->pending > 1 ? d->pending - 1 : 0;
+	if (submitted)
+		ID3D12CommandQueue_Wait(d->cqueue, d->fence, submitted);
 	ID3D12CommandList *l[1] = {(ID3D12CommandList *)d->clist};
 	ID3D12CommandQueue_ExecuteCommandLists(d->cqueue, 1, l);
 	const UINT64 v = ++d->cvalue;
@@ -940,6 +946,8 @@ static int nat_image_upload_sync(nat_image *i, unsigned face, unsigned level, co
 	sl.PlacedFootprint = fp;
 	ID3D12GraphicsCommandList_CopyTextureRegion(d->clist, &dst, 0, 0, 0, &sl, NULL);
 	ID3D12GraphicsCommandList_Close(d->clist);
+	if (d->pending > 1) // (as upload_submit: not over an image the submitted frames may still sample)
+		ID3D12CommandQueue_Wait(d->cqueue, d->fence, d->pending - 1);
 	ID3D12CommandList *l[1] = {(ID3D12CommandList *)d->clist};
 	ID3D12CommandQueue_ExecuteCommandLists(d->cqueue, 1, l);
 	const UINT64 v = ++d->cvalue;
@@ -1601,6 +1609,10 @@ static int final_passes(nat_device *d, ID3D12Resource *back, UINT bi)
 	nat_image *src = d->scene;
 	const unsigned ow = BW(d), oh = BH(d);
 	const DXGI_FORMAT bfmt = d->hdr_on ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
+	if (!d->up_on) { // (no upscaling on this device: the world's texture LOD bias of an earlier upscaled device does not stay, audit 2026-11-18, U1)
+		extern float nd_lod_bias;
+		nd_lod_bias = 0.0f;
+	}
 	if (d->up_on) {
 		if (!d->up_done && !up_stage(d))
 			return 0;
@@ -2145,7 +2157,15 @@ struct nat_shader {
 	IUnknown *blob;
 	int is_vs;
 	unsigned nconst;
+	uint64_t id; // unique for the run (nat12_new_id): the pipeline cache's key, never an address a later shader can have
 };
+
+static volatile LONG64 next_object_id;
+uint64_t nat12_new_id(void) { return (uint64_t)InterlockedIncrement64(&next_object_id); }
+uint64_t nat12_shader_id(const nat_shader *s) { return s ? s->id : 0; }
+// any object (a pipeline state) released once the GPU is past what is recorded now: the garbage list releases through IUnknown's Release, the
+// third slot of every COM object's table
+void nat12_release_later(nat_device *d, void *object) { gc_add(d, (ID3D12Resource *)object); }
 
 nat_shader *nat_shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size)
 {
@@ -2187,6 +2207,7 @@ nat_shader *nat_shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, cha
 	nat_shader *s = calloc(1, sizeof(*s));
 	s->is_vs = is_vs;
 	s->blob = code;
+	s->id = nat12_new_id();
 	return s;
 }
 
@@ -2197,10 +2218,8 @@ static void warm_one(const uint32_t *code, size_t dwords)
 	int is_vs = 0;
 	if (!sm3_translate_vs(code, dwords, SM3_ALPHA_TEST | SM3_D3D12, NULL, 0, &hlsl, &is_vs, why, sizeof(why)))
 		return;
-	size_t n = 0;
-	void *have = nc_load(hlsl, is_vs, &n);
-	if (have) {
-		free(have);
+	if (nc_exists(hlsl, is_vs)) {
+		// (in the cache already)
 	} else if (load_compiler()) {
 		IUnknown *blob = NULL, *msgs = NULL;
 		if (SUCCEEDED(p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &blob, &msgs)) && blob) {
@@ -2366,6 +2385,107 @@ int nat_image_download(nat_image *im, unsigned level, void **out, unsigned *pitc
 		ID3D12Resource_Unmap(rb, 0, &none);
 	}
 	ID3D12Resource_Release(rb);
+	return ok;
+}
+
+// A texture read back off the render thread (the main thread builds the logo and the pad pictures from the game's textures at the main menu):
+// nat_image_download records into the render thread's command list and flushes it, which that thread may be recording into at the same moment
+// (audit 2026-11-18, DX F3). This one has an allocator, a list and a fence of its own on the same queue; an image whose state is tracked (a render
+// target) is put back in the state it had. A plain texture needs no barrier: a copy promotes it and it decays back.
+static SRWLOCK side_lock = SRWLOCK_INIT;
+static ID3D12CommandAllocator *side_alloc;
+static ID3D12GraphicsCommandList *side_list;
+static ID3D12Fence *side_fence;
+static HANDLE side_event;
+static UINT64 side_value;
+
+int nat12_image_download_side(nat_image *im, unsigned level, void **out, unsigned *pitch, unsigned *rows)
+{
+	nat_device *d = im ? im->dev : NULL;
+	if (!d || !im->res || level >= im->levels)
+		return 0;
+	AcquireSRWLockExclusive(&side_lock);
+	int ok = 0;
+	if (!side_alloc) {
+		if (FAILED(ID3D12Device_CreateCommandAllocator(d->dev, D3D12_COMMAND_LIST_TYPE_DIRECT, &IID_ID3D12CommandAllocator, (void **)&side_alloc)))
+			side_alloc = NULL;
+		else if (FAILED(ID3D12Device_CreateCommandList(d->dev, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, side_alloc, NULL, &IID_ID3D12GraphicsCommandList, (void **)&side_list)) ||
+			 FAILED(ID3D12Device_CreateFence(d->dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void **)&side_fence)) ||
+			 !(side_event = CreateEventA(NULL, FALSE, FALSE, NULL))) {
+			if (side_list)
+				ID3D12GraphicsCommandList_Release(side_list);
+			if (side_fence)
+				ID3D12Fence_Release(side_fence);
+			ID3D12CommandAllocator_Release(side_alloc);
+			side_alloc = NULL, side_list = NULL, side_fence = NULL;
+		} else
+			ID3D12GraphicsCommandList_Close(side_list);
+	}
+	if (!side_alloc) {
+		ReleaseSRWLockExclusive(&side_lock);
+		return 0;
+	}
+	D3D12_RESOURCE_DESC rd = ID3D12Resource_GetDesc(im->res);
+	D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp;
+	UINT nrows;
+	UINT64 rowsize, total;
+	ID3D12Device_GetCopyableFootprints(d->dev, &rd, level, 1, 0, &fp, &nrows, &rowsize, &total);
+	ID3D12Resource *rb = make_buffer(d, total, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+	if (rb && SUCCEEDED(ID3D12CommandAllocator_Reset(side_alloc)) && SUCCEEDED(ID3D12GraphicsCommandList_Reset(side_list, side_alloc, NULL))) {
+		const D3D12_RESOURCE_STATES was = im->state;
+		D3D12_RESOURCE_BARRIER b = {0};
+		b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		b.Transition.pResource = im->res;
+		b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		const int turn = im->tracked && was != D3D12_RESOURCE_STATE_COPY_SOURCE;
+		if (turn) {
+			b.Transition.StateBefore = was;
+			b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+			ID3D12GraphicsCommandList_ResourceBarrier(side_list, 1, &b);
+		}
+		D3D12_TEXTURE_COPY_LOCATION dst = {0}, sl = {0};
+		dst.pResource = rb;
+		dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+		dst.PlacedFootprint = fp;
+		sl.pResource = im->res;
+		sl.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+		sl.SubresourceIndex = level;
+		ID3D12GraphicsCommandList_CopyTextureRegion(side_list, &dst, 0, 0, 0, &sl, NULL);
+		if (turn) {
+			b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+			b.Transition.StateAfter = was;
+			ID3D12GraphicsCommandList_ResourceBarrier(side_list, 1, &b);
+		}
+		if (SUCCEEDED(ID3D12GraphicsCommandList_Close(side_list))) {
+			upload_gpu_wait(d); // (the image's own upload, if it is still on the copy queue)
+			ID3D12CommandList *l[1] = {(ID3D12CommandList *)side_list};
+			ID3D12CommandQueue_ExecuteCommandLists(d->queue, 1, l);
+			ID3D12CommandQueue_Signal(d->queue, side_fence, ++side_value);
+			if (ID3D12Fence_GetCompletedValue(side_fence) < side_value) {
+				ID3D12Fence_SetEventOnCompletion(side_fence, side_value, side_event);
+				WaitForSingleObject(side_event, 5000);
+			}
+			uint8_t *map = NULL;
+			D3D12_RANGE all = {0, (SIZE_T)total};
+			if (ID3D12Fence_GetCompletedValue(side_fence) >= side_value && SUCCEEDED(ID3D12Resource_Map(rb, 0, &all, (void **)&map))) {
+				uint8_t *buf = malloc((size_t)fp.Footprint.RowPitch * nrows);
+				if (buf) {
+					memcpy(buf, map, (size_t)fp.Footprint.RowPitch * nrows);
+					*out = buf;
+					*pitch = fp.Footprint.RowPitch;
+					*rows = nrows;
+					ok = 1;
+				}
+				D3D12_RANGE none = {0, 0};
+				ID3D12Resource_Unmap(rb, 0, &none);
+			}
+		}
+	}
+	if (rb && ok)
+		ID3D12Resource_Release(rb);
+	else if (rb)
+		gc_add(d, rb); // (not known to be finished: released once the main fence is past it)
+	ReleaseSRWLockExclusive(&side_lock);
 	return ok;
 }
 

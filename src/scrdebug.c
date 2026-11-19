@@ -96,7 +96,7 @@ static uintptr_t site_rva[MAX_SITES];
 static volatile LONG site_hits[MAX_SITES];
 static volatile LONG site_count;
 
-static void log_error(uintptr_t rva)
+static void log_error(uintptr_t rva, const char *msg)
 {
 	int i;
 	for (i = 0; i < site_count && site_rva[i] != rva; i++)
@@ -120,15 +120,19 @@ static void log_error(uintptr_t rva)
 	char last[160], prev[160];
 	lstrcpynA(last, block + (slot ^ 1) * 0x400, sizeof(last));
 	lstrcpynA(prev, block + slot * 0x400, sizeof(prev));
-	log_printf("SCRIPT ERROR #%ld from rva 0x%llx (va slots: '%s' / '%s')", n, (unsigned long long)rva, last, prev);
+	// the error's own text (Scr_Error's argument): the stack alone did not say what went wrong (night 2026-11-18: Training's course_triggers)
+	char text[200] = "?";
+	if (msg && game_string_readable(msg, sizeof(text)))
+		lstrcpynA(text, msg, sizeof(text));
+	log_printf("SCRIPT ERROR #%ld from rva 0x%llx: %s (va slots: '%s' / '%s')", n, (unsigned long long)rva, text, last, prev);
 	scrdebug_stack_log();
 }
 
-static void scr_error(void)
+static void scr_error(const char *msg) // (the hook replaces Scr_Error(const char *error) at its entry: the argument is still in its register)
 {
 	if (base[RVA_SCR_ERR_FLAG_A] || base[RVA_SCR_ERR_FLAG_B] || !*(int32_t *)(base + RVA_SCR_ERR_DEPTH))
 		return;
-	log_error((uintptr_t)__builtin_return_address(0) - (uintptr_t)base);
+	log_error((uintptr_t)__builtin_return_address(0) - (uintptr_t)base, msg);
 	int index = *(int32_t *)(base + RVA_SCR_JMPBUF_INDEX);
 	((void (*)(void *, int))(base + RVA_LONGJMP))(base + RVA_SCR_JMPBUFS + (int64_t)index * 0x100, -1);
 }

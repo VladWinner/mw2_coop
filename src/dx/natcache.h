@@ -22,6 +22,16 @@ static void nc_path(char *out, size_t size, const char *hlsl, int is_vs, uint64_
 	snprintf(out, size, "mw2coop\\shadercache\\%016llx.cso", (unsigned long long)h);
 }
 
+// the HLSL's compiled code is in the cache (the warm-up's test: a whole read of every cached shader at each level was disk time for nothing, audit
+// 2026-11-18, DX F10; a damaged file is found when it is loaded for a draw, which compiles it again)
+static int nc_exists(const char *hlsl, int is_vs)
+{
+	char path[96];
+	uint64_t check;
+	nc_path(path, sizeof(path), hlsl, is_vs, &check);
+	return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
 // the compiled code of the HLSL, or NULL: the caller frees it
 static void *nc_load(const char *hlsl, int is_vs, size_t *size)
 {

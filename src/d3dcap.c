@@ -943,6 +943,12 @@ void d3dcap_install(void)
 	if (d3d9 && !create9_orig)
 		hook_create9(d3d9);
 #endif
+#ifdef _WIN64
+	// the mod's own Direct3D 11 / 12 renderers make no Direct3D 9 device: the worker would walk every module's imports ten times a second for 120 s
+	// for nothing (audit 2026-11-18, U9)
+	if (settings_directx11() || settings_directx12())
+		return;
+#endif
 	HANDLE thread = CreateThread(NULL, 0, wait_for_d3d9_capture, NULL, 0, NULL);
 	if (thread)
 		CloseHandle(thread);

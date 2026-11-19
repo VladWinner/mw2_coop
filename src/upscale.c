@@ -29,6 +29,7 @@ int upscale_native_sizes(int game_w, int game_h, int *out_width, int *out_height
 	const int w = settings_upscale_width(), h = settings_upscale_height();
 	if (game_w == w && game_h == h) {
 		log_printf("upscale: the game asked for the output size %dx%d itself: nothing to upscale (set the game's own resolution lower)", w, h);
+		out_w = out_h = in_w = in_h = 0; // (the cursor is no longer scaled by an earlier, upscaled size: audit 2026-11-18, U4)
 		return 0;
 	}
 	out_w = w;
@@ -48,6 +49,7 @@ int upscale_adjust_params(D3DPRESENT_PARAMETERS *pp)
 	int w = settings_upscale_width(), h = settings_upscale_height();
 	if ((int)pp->BackBufferWidth == w && (int)pp->BackBufferHeight == h) {
 		log_printf("upscale: the game asked for the output size %dx%d itself: nothing to upscale (set the game's own resolution lower)", w, h);
+		out_w = out_h = in_w = in_h = 0; // (the cursor is no longer scaled by an earlier, upscaled size: audit 2026-11-18, U4)
 		return 0;
 	}
 	out_w = w;

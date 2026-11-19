@@ -150,3 +150,15 @@ level.player add_func( ::blend_movespeedscale, .8 );
 @@@ to
 add_func( maps\_mw2coop::players_blend_movespeedscale, .8 );
 @@@ end
+
+7. The "office" start point (a co-op restart at that checkpoint) kills marine3 while he still has the shield the meetup
+   gives every ally: that kill was a script error ("Trying to kill AI with damageShield") that ended the start function before
+   the team and the players were brought into the office (night tour 2026-11-18). His shield is taken off first. The game's own
+   start point had the same error, so this one change also applies outside a co-op session.
+@@@ subst start_office
+level.team[ "marine3" ] kill();
+@@@ to
+if ( isdefined( level.team[ "marine3" ].magic_bullet_shield ) )
+		level.team[ "marine3" ] stop_magic_bullet_shield();
+	level.team[ "marine3" ] kill();
+@@@ end

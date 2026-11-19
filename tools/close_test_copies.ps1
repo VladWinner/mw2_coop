@@ -14,6 +14,7 @@ Get-Process iw4sp,iw4x-sp -ErrorAction SilentlyContinue | Where-Object { $_.Path
 	$closed += $_.Id
 }
 if ($closed.Count) {
+	Wait-Process -Id $closed -Timeout 20 -ErrorAction SilentlyContinue   # gone, its device too (see run_test.ps1's end)
 	Start-Sleep -Seconds 3   # the files and the port are free a moment after the process is gone
 	"closed test copies from an earlier run: " + ($closed -join ' ')
 }

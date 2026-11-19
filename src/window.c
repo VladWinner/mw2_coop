@@ -75,6 +75,8 @@ typedef struct {
 	int known;
 	float base;    // the player's value (for 16:9)
 	float written; // what this module put into the dvar last
+	int fights, left; // the game putting the same value back again and again; left: the dvar is the game's for the rest of the run
+	DWORD fight_since;
 } SafeState;
 
 static char safe_ini[MAX_PATH];
@@ -114,7 +116,7 @@ static void safe_apply(float aspect)
 		factor = 0.5f;
 	for (int i = 0; i < SAFE_DVARS; i++) {
 		dvar_t *d = game_find_dvar(safe_names[i]);
-		if (!d || d->type != DVAR_TYPE_FLOAT)
+		if (!d || d->type != DVAR_TYPE_FLOAT || st[i].left)
 			continue;
 		float cur = d->current.value;
 		int dirty = 0;
@@ -129,6 +131,19 @@ static void safe_apply(float aspect)
 			dirty = 1;
 			log_printf("window: %s is %.3f, the 16:9 value %.3f", safe_names[i], cur, st[i].base);
 		} else if (!safe_close(cur, st[i].written)) {
+			// The game itself can put a value back (safeArea_adjusted_horizontal is set again every quarter second in some states): taken for the
+			// player's each time, it was lowered again and logged twice a quarter second for as long as the game ran, and the log that never stood still
+			// hid a hung game from the QA's hang watch (audit night 2026-11-18). The same value back three times in 10 s: left to the game.
+			const DWORD now = GetTickCount();
+			if (safe_close(cur, st[i].base)) {
+				if (!st[i].fights || now - st[i].fight_since > 10000)
+					st[i].fights = 0, st[i].fight_since = now;
+				if (++st[i].fights >= 3) {
+					st[i].left = 1;
+					log_printf("window: the game keeps putting %s back to %.3f: left to the game for this run", safe_names[i], cur);
+					continue;
+				}
+			}
 			st[i].base = cur; // set by the player (an options page, the console, a config): this is the value for 16:9 now
 			st[i].written = cur;
 			dirty = 1;

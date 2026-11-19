@@ -59,7 +59,11 @@ static DWORD WINAPI prof_thread(LPVOID arg)
 					CONTEXT c;
 					memset(&c, 0, sizeof(c));
 					c.ContextFlags = CONTEXT_CONTROL;
-					if (GetThreadContext(h, &c)) {
+					const BOOL got = GetThreadContext(h, &c);
+					// (the thread goes on before the module lookup: GetModuleHandleEx takes the loader lock, which a suspended thread may hold during a
+					// level load, and the profiler then waited for ever with the game stopped, audit 2026-11-18, glue F7)
+					ResumeThread(h);
+					if (got) {
 						HMODULE m = NULL;
 						char key[40];
 						if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)(uintptr_t)c.Rip, &m) && m) {
@@ -82,7 +86,6 @@ static DWORD WINAPI prof_thread(LPVOID arg)
 						}
 						samples++;
 					}
-					ResumeThread(h);
 				}
 				CloseHandle(h);
 			} while (Thread32Next(snap, &te));

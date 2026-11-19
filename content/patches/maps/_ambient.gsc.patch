@@ -80,3 +80,15 @@ level.player deactivateeq
 @@@ to
 snd_player deactivateeq
 @@@ end
+
+A two-zone ambience trigger fired by a player who no longer touches it when it is looked at (a co-op teleport: the partner brought over,
+a regroup at a start point) left its progress undefined; the comparison after the loop was a script error that ended the trigger's thread,
+and that trigger never changed the ambience again for the rest of the level (night tour 2026-11-18: Of Their Own Accord, Second Sun).
+Such a touch is passed by.
+@@@ subst ambient_trigger
+if ( progress > cap )
+@@@ to
+if ( !isdefined( progress ) )
+			continue;
+		if ( progress > cap )
+@@@ end

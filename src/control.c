@@ -114,6 +114,11 @@ static void script_request(const char *cmd)
 			char launch[128];
 			snprintf(launch, sizeof(launch), "set coop_mapName %s\nmw2coop_launch_map\n", map);
 			game_cbuf_addtext(launch);
+		} else {
+			// the last mission is over (after the credits, maps\_mw2coop::mission_complete): no next one to launch, both PCs leave the session for
+			// the main menu, as single player does there; each PC does it itself, so neither sees the other drop (audit 2026-11-18, GSC F3)
+			log_printf("control: the last mission is over: back to the main menu");
+			game_cbuf_addtext("disconnect\n");
 		}
 		return;
 	}
