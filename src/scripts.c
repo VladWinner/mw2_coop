@@ -119,7 +119,7 @@ static char *read_mod_script(const char *ext, int *size)
 		static const char stub[] = "// the QA scenarios are left out of a session without one (src/scripts.c): their entry points\n"
 					   "main()\n{\n\tif ( GetDvar( \"mw2coop_qa\" ) == \"hoplite\" )\n\t\tlevel thread hoplite();\n}\n"
 					   "hoplite()\n{\n\twait 15;\n\tmaps\\_mw2coop::mission_complete();\n}\n"
-					   "link_probe()\n{\n}\nclimbsolo()\n{\n}\nbbcheck()\n{\n}\ncheck( ok, text )\n{\n}\nreport( text )\n{\n}\n"
+					   "link_probe()\n{\n}\nmuseum_anim_probe()\n{\n}\nclimbsolo()\n{\n}\nbbcheck()\n{\n}\ncheck( ok, text )\n{\n}\nreport( text )\n{\n}\n"
 					   "qa_shot( label )\n{\n}\nwait_intro()\n{\n}\nplayer_name( player )\n{\n\treturn \"\";\n}\n";
 		char *buf = malloc(sizeof(stub));
 		if (!buf)
@@ -388,6 +388,43 @@ static char *to_hunk(const char *text, int len)
 	return buf;
 }
 
+// Debugging: with MW2COOP_SCRIPTDUMP=<part of a name> in the environment, the zone's own text of every script whose name has that part
+// (any case) is written to mw2coop\scriptdump\<name, '/' as '_'>, before any patch: which version of a level's script a client's zone
+// holds (the Museum's animations were undefined on iw4x-sp only, 2026-11-19).
+static void dump_zone_script(const char *ext, const char *buf, int len)
+{
+	char want[64];
+	DWORD w = GetEnvironmentVariableA("MW2COOP_SCRIPTDUMP", want, sizeof(want));
+	if (!w || w >= sizeof(want) || !buf || len <= 0)
+		return;
+	int found = 0;
+	for (const char *s = ext; *s && !found; s++) {
+		size_t i = 0;
+		while (want[i] && s[i] && (s[i] | 0x20) == (want[i] | 0x20))
+			i++;
+		found = !want[i];
+	}
+	if (!found)
+		return;
+	char path[MAX_PATH];
+	int n = snprintf(path, sizeof(path), "%s\\scriptdump", mod_dir);
+	if (n <= 0 || n >= (int)sizeof(path))
+		return;
+	CreateDirectoryA(path, NULL);
+	n = snprintf(path, sizeof(path), "%s\\scriptdump\\%s", mod_dir, ext);
+	if (n <= 0 || n >= (int)sizeof(path))
+		return;
+	for (char *p = path + strlen(mod_dir) + 12; *p; p++) // (past "\scriptdump\")
+		if (*p == '/' || *p == '\\')
+			*p = '_';
+	FILE *f = fopen(path, "wb");
+	if (!f)
+		return;
+	fwrite(buf, 1, (size_t)len, f);
+	fclose(f);
+	log_printf("scripts: %s: the zone's text (%d bytes) written to %s", ext, len, path);
+}
+
 // The zone text of `ext` (buf, len) with the patch files applied: a malloc'd copy and its length in *n, or NULL when the
 // script has no patch file. Logs the result (the FNV hash is what host and client compare).
 static char *patched_text(const char *ext, const char *buf, int len, int *n, int coop)
@@ -452,6 +489,7 @@ static char *add_source_buffer(const char *filename, const char *ext, const char
 		buf = FN(RVA_HUNK_TEMP_HIGH, hunk_temp_high_t)(len);
 		FN(RVA_DB_RAW_BUFFER, db_raw_buffer_t)(raw, buf, len);
 	}
+	dump_zone_script(ext, buf, len);
 
 	int n;
 	char *work = patched_text(ext, buf, len, &n, coop);
@@ -544,6 +582,7 @@ static script_entry_t *script_entry(const char *name, raw_file_t *raw)
 		char *buf = malloc(len + 1);
 		buffer_original(raw, buf, len);
 		buf[len] = 0;
+		dump_zone_script(name, buf, len);
 		e->text = patched_text(name, buf, len, &e->n, coop);
 		if (!e->text)
 			scrdebug_note_source(name, buf, len); // (the zone's own script: its function names are for the call stacks too)

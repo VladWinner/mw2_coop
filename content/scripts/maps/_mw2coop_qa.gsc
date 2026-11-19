@@ -2370,6 +2370,30 @@ link_probe()
 	maps\_mw2coop::state( "link probe:" + text );
 }
 
+// QA probe, started from maps\_mw2coop::main() in the Museum: the dioramas' animations (the .animation of the structs the drones stand on)
+// that level.scr_anim[ "generic" ] has no entry for. On iw4x-sp the Museum's setup failed about 40 times with "type undefined is not an
+// anim" where the 64-bit game had one (night tour 2026-11-18/19).
+museum_anim_probe()
+{
+	if ( level.script != "ending" || !isdefined( level.struct ) )
+		return;
+	wait 1;
+	missing = [];
+	with = 0;
+	foreach ( s in level.struct )
+	{
+		if ( !isdefined( s.animation ) )
+			continue;
+		with++;
+		if ( isdefined( level.scr_anim[ "generic" ][ s.animation ] ) || isdefined( missing[ s.animation ] ) )
+			continue;
+		missing[ s.animation ] = 1;
+		maps\_mw2coop::state( "museum anim probe: no generic anim " + s.animation + " (" + s.origin + ")" );
+		wait 0.05;	// one state line a frame reaches the log
+	}
+	maps\_mw2coop::state( "museum anim probe: " + with + " structs with an animation, " + missing.size + " names without a generic anim" );
+}
+
 // Team Player opening (roadkill, default start): during Shepherd's "get on the line" scene both
 // players are on the view rig; afterwards both are free and together.
 rkintro()
@@ -5749,6 +5773,13 @@ tour_starts()
 {
 	names = [];
 	seen = [];
+	// The ending map in its knife fight mode ("credits_1", the way from af_chase, and what a tour launched straight onto the map gets): the
+	// Museum's rooms are start points of its other modes (credits_2 starts at af_caves, the lobby's Museum is "free"). Here their dioramas
+	// set up before the museum's animations exist, which this mode defines only when its credits reach the museum: about 40 script errors
+	// a tour, none in play (night tour 2026-11-19).
+	if ( level.script == "ending" && isdefined( level.level_mode ) && level.level_mode == "credits_1" )
+		foreach ( room in strtok( "af_caves dc_burning airport cliffhanger favela hallway1 vehicles hallway2 oilrig estate hostage trainer arcadia", " " ) )
+			seen[ room ] = true;
 	foreach ( start in level.start_functions )
 	{
 		name = start[ "name" ];

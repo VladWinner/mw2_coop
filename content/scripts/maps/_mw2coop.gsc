@@ -173,6 +173,7 @@ main()
 	if ( GetDvar( "mw2coop_qa" ) != "" )
 	{
 		thread maps\_mw2coop_qa::link_probe();
+		thread maps\_mw2coop_qa::museum_anim_probe();
 		thread maps\_mw2coop_qa::main();
 	}
 }
@@ -367,10 +368,21 @@ regroup_after_start()
 	thread restore_ally_positions();
 	thread restore_weapons();
 	thread restore_flags();
+	linked_for = 0;
 	for ( waited = 0; waited < 120; waited += 0.25 )
 	{
+		// player 2 seated by the level itself (a vehicle, a scene) stays where it put him; a link of the level's first frames only is waited
+		// out: Loose Ends' intro holds both players for half a second at every start point, and at the forest fight's (a checkpoint) player 2
+		// was left at the level's spawn, 2100 units behind, until player 1 next moved far (night tour 2026-11-19)
 		if ( level.player2 IsLinked() )
-			break;
+		{
+			linked_for += 0.25;
+			if ( linked_for >= 1 )
+				break;
+			wait 0.25;
+			continue;
+		}
+		linked_for = 0;
 		if ( level.player2 teleport_to_partner( level.player ) )
 		{
 			state( "regrouped at start point " + level.start_point );
