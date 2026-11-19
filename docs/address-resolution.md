@@ -175,6 +175,19 @@ The day's fixes (`5b08ac8..cd9b74d`) added 10 64-bit and 8 32-bit addresses. Che
     where `addr_resolved` reads that table): the hook turns the two wrist bones, the knife in the left fist as before, the scenario runs to its end. The first iw4x-sp
     start opened no game window in 120 s; the same run again started normally (cause not found).
 
+## Sixth round (2026-11-19): after the split screen's loops and the network watch
+
+Since the fifth round (`6987966`) the code took 4 64-bit and 10 32-bit addresses that the signature files did not have (owner: "have new addresses appeared since the
+last commit on independence?"): the network watch (`netwatch.c`: the lockstep frame executor, its frame ring, the running state hash, the cgame's game message; 32 bits
+also the host byte), the 32-bit loops' expiry (`0x9da00` and the flag its first instruction compares, `0x494330`) and the QA seek log (`0xb2c80`, `0xb4d60`, `0x1552dd0`).
+One 64-bit address left the code (`0x5c5bf`, the call of the scene's last pass that FSR 1 used; FSR 1 was removed in `60ed331`). Both files made again:
+
+* x64 476 addresses, x86 417; on the reference builds 476 of 476 and 417 of 417, none moved (`verify --list reference`; the C resolver `tools/test_addr.sh`: the same).
+* The iw4x-sp 1.0.159 exe through the signatures: 370 of 417 (Python) / 369 (C), 362 equal to the hand-checked table; the 8 others as before (7 the table marks off on that
+  client, the log-only `RVA_VM_STACK_TOP` 0x80 off). Of the 10 new 32-bit addresses 7 are found there and right; not found: the game message (the network watch's notices
+  then stay off: the call reaches the harmless block of `ret`), the loops' expiry (its hook compares its bytes and refuses: the loops restart in every split screen frame as
+  before the fix) and the QA seek log. That exe itself runs from its own table (`addr159.c`), where all 10 are mapped.
+
 ## What is not done
 
 * No 64-bit build whose addresses moved exists here to run it on. The path is run on the reference
