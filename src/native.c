@@ -2658,6 +2658,8 @@ static int split_on = 1; // the scripts set the dvar mw2coop_split_view once the
 static int frame_bottom; // this client frame is context 1's (player 2's client logic, client_frame_inner)
 static int ctx1_clc_synced; // ctx1_deliver_commands: the ring of context 1 has been made equal (nothing pending) since its init
 static void ctx_swap(int to);
+static void ctx_swap_after_p2_draw(void);
+static int sun_range_owner(void);
 #ifdef _WIN64
 static void flip_watch(int ending); // (QA, see below)
 #endif
@@ -3600,7 +3602,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 #else
 			const float *s = (const float *)(base + XR(0x204a260));
 #endif
-			log_printf("native: sunlog ctx %d state %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f cg.time %d", ctx_current, (double)s[0], (double)s[1], (double)s[2], (double)s[3], (double)s[4], (double)s[5],
+			log_printf("native: sunlog ctx %d state %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f cg.time %d", sun_range_owner(), (double)s[0], (double)s[1], (double)s[2], (double)s[3], (double)s[4], (double)s[5],
 				   (double)s[6], (double)s[7], (double)s[8], (double)s[9], *(int *)(base + XR64(0x422434)));
 		}
 	}
@@ -3869,6 +3871,18 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			cg_draw_vis(0, a, b);
 			if (CFG_ONCE("npclog", 0) && ctx_current == 1) // QA: the actors as player 2's draw placed them (the frame hook logs context 0 only in mode 11)
 				npc_log();
+			if (CFG_ONCE("sunlog", 0) && ctx_current == 1) { // QA: player 2's sun state right after his draw (the frame hook logs context 0 only in mode 11)
+				static unsigned sn1;
+				if (++sn1 % 30 == 0) {
+#ifdef _WIN64
+					const float *sv = (const float *)(base + XR(0x45851b0)); // (RANGE_SUN, defined further down)
+#else
+					const float *sv = (const float *)(base + XR(0x204a260));
+#endif
+					log_printf("native: sunlog ctx 1 state %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f cg.time %d", (double)sv[0], (double)sv[1], (double)sv[2], (double)sv[3], (double)sv[4],
+						   (double)sv[5], (double)sv[6], (double)sv[7], (double)sv[8], (double)sv[9], *(int *)(base + RVA_CG_TIME));
+				}
+			}
 			place_client_set(0, 1); // the whole screen again, as at the video start
 			second_pass = 0;
 			if (nogun11)
@@ -3892,7 +3906,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 				flip_watch(1);
 #endif
 			if (!CFG_ONCE("exp11same", 0))
-				ctx_swap(0);
+				ctx_swap_after_p2_draw();
 		}
 		{
 			static unsigned n11b;
@@ -4081,10 +4095,15 @@ static void render_wait_idle(void)
 #ifdef _WIN64
 	((void (*)(int (*)(void)))(base + XR(0x301e0)))(render_idle_pred);
 #else
-	// (32-bit: the engine's loop, VA 0x52afc0, takes the predicate in ESI and has another shape in the iw4x-sp exe, so the counter is polled here, 50 ms at most)
-	const DWORD t0 = GetTickCount();
-	while (!render_idle_pred() && GetTickCount() - t0 < 50)
-		Sleep(0);
+	// 32 bits: the engine's own wait (m11_rt_wait: VA 0x52afc0, the iw4x-sp exe's shape handled there), which runs the workers' jobs meanwhile, as the 64-bit build does. It
+	// polled the counter with Sleep(0) for up to 50 ms before: the first context swap of every mode-11 frame waits here for the render thread (the sun range), and on
+	// Second Sun 5 % of the 32-bit frames took 16 ms or more (2026-11-19; the swap's copy time was 174 ms a second, most of it this wait). [native] rtpoll=1 polls again.
+	if (CFG_ONCE("rtpoll", 0)) {
+		const DWORD t0 = GetTickCount();
+		while (!render_idle_pred() && GetTickCount() - t0 < 50)
+			Sleep(0);
+	} else
+		m11_rt_wait(rt_frames_done);
 #endif
 }
 #define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)
@@ -4176,14 +4195,19 @@ static void ctx_wait_workers(void)
 static struct {
 	uintptr_t site;
 	unsigned mask;
-	long n;
+	long n, real;
+	LONGLONG wait, copy;
 } swap_sites[40];
+static int swap_site_cur = -1; // (the entry of the swap in progress: its wait and copy time go there)
+static LONGLONG perf_now(void);
 static void swap_site_note(uintptr_t site, unsigned mask)
 {
 	static LONGLONG next;
+	swap_site_cur = -1;
 	for (int i = 0; i < 40; i++)
 		if ((swap_sites[i].site == site && swap_sites[i].mask == mask) || !swap_sites[i].site) {
 			swap_sites[i].site = site, swap_sites[i].mask = mask, swap_sites[i].n++;
+			swap_site_cur = i;
 			break;
 		}
 	LARGE_INTEGER c, f;
@@ -4194,8 +4218,8 @@ static void swap_site_note(uintptr_t site, unsigned mask)
 	if (c.QuadPart >= next) {
 		next = c.QuadPart + 10 * f.QuadPart;
 		for (int i = 0; i < 40 && swap_sites[i].site; i++) {
-			{ HMODULE me = NULL; GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)swap_sites[i].site, &me); log_printf("native: swapsites: caller %s+0x%x mask 0x%x: %ld swaps in 10 s", me == (HMODULE)base ? "exe" : "dll", (unsigned)(swap_sites[i].site - (uintptr_t)me), swap_sites[i].mask, swap_sites[i].n); }
-			swap_sites[i].n = 0;
+			{ HMODULE me = NULL; GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)swap_sites[i].site, &me); log_printf("native: swapsites: caller %s+0x%x mask 0x%x: %ld swaps in 10 s, %ld moved data, worker waits %.1f ms, copies %.1f ms", me == (HMODULE)base ? "exe" : "dll", (unsigned)(swap_sites[i].site - (uintptr_t)me), swap_sites[i].mask, swap_sites[i].n, swap_sites[i].real, (double)swap_sites[i].wait * 1000.0 / (double)f.QuadPart, (double)swap_sites[i].copy * 1000.0 / (double)f.QuadPart); }
+			swap_sites[i].n = swap_sites[i].real = 0, swap_sites[i].wait = swap_sites[i].copy = 0;
 		}
 	}
 }
@@ -4437,9 +4461,13 @@ static void ctx_swap_mask(int to, unsigned mask)
 		fov_scale_follow(to);
 		return;
 	}
+	const int site_i = CFG_ONCE("swapsites", 0) ? swap_site_cur : -1;
+	const LONGLONG tw = site_i >= 0 ? perf_now() : 0;
 	ctx_wait_workers();
 	int perf_on = CFG_ONCE("perflog", 0);
-	LONGLONG t0 = perf_on ? perf_now() : 0;
+	LONGLONG t0 = perf_on || site_i >= 0 ? perf_now() : 0;
+	if (site_i >= 0)
+		swap_sites[site_i].real++, swap_sites[site_i].wait += t0 - tw;
 	static int fx_on = -1;
 	if (fx_on < 0) // mode 11: one effects system for both views, as the 360 has (it steps the effects of player 0 only, 0x82141e70): with a copy for player 2 the effects a level's
 		       // scripts start (PlayFX: a temporary entity whose event only context 0 handles; the exploders' smoke) were in player 1's half only (owner, Gulag fly-in: "when the
@@ -4453,7 +4481,9 @@ static void ctx_swap_mask(int to, unsigned mask)
 		((void (*)(int))(base + RVA_WAIT_TYPE))(19);
 #endif
 #if defined(RANGE_SUN)
-	if ((need & (1u << RANGE_SUN)) && CFG_ONCE("sunwait", 1) && CFG_ONCE("sunsplit", SUNSPLIT_DEFAULT)) { // the sun state is written by the frame the renderer draws, after the client went on: without this wait each context's state got the other view's value (QA 2026-11-02: player 1 turning moved player 2's state); [native] sunwait=0 off
+	// The sun state is written by the render thread while it draws a view's frame ([native] sunwait=0 does not wait for it; QA 2026-11-02: player 1 turning moved player
+	// 2's state). In mode 11 player 2's frame is drawn after his draw has swapped back: the range now stays with him until the next swap that takes it (ctx_swap_after_p2_draw).
+	if ((need & (1u << RANGE_SUN)) && CFG_ONCE("sunwait", 1) && CFG_ONCE("sunsplit", SUNSPLIT_DEFAULT)) {
 		render_wait_idle();
 	}
 #endif
@@ -4535,6 +4565,8 @@ static void ctx_swap_mask(int to, unsigned mask)
 		perf_copy += perf_now() - t0;
 		InterlockedIncrement(&perf_swaps);
 	}
+	if (site_i >= 0)
+		swap_sites[site_i].copy += perf_now() - t0;
 	ctx_current = to;
 	fov_scale_follow(to);
 }
@@ -4593,6 +4625,29 @@ static void flip_watch(int ending)
 static void ctx_swap(int to)
 {
 	ctx_swap_mask(to, CTX_ALL);
+}
+// Mode 11, after player 2's draw: everything back to context 0 but the sun state. The render thread draws player 2's frame after this and writes his sun state (blind,
+// glare) into the live range; swapped back at once, it wrote into context 0's: QA sunlook (Boneyard, player 1 turns once around, player 2 stands; field 5 = view forward .
+// sun direction) held player 1's state at player 2's value through the whole turn, in both builds (2026-11-19). The range stays with context 1 now, and the next swap
+// that takes it to context 0 (player 2's client logic at the next frame's start) waits for the render thread first. Then player 1's went from -0.906 to 0.906 and
+// player 2's stayed put. [native] sunkeep=0 swaps it back at once again.
+static int sun_range_owner(void) // (QA: whose sun state the live range holds, for the sunlog lines)
+{
+#ifdef RANGE_SUN
+	return range_owner[RANGE_SUN];
+#else
+	return ctx_current;
+#endif
+}
+static void ctx_swap_after_p2_draw(void)
+{
+#ifdef RANGE_SUN
+	if (mode == 11 && CFG_ONCE("sunkeep", 1)) {
+		ctx_swap_mask(0, CTX_ALL & ~(1u << RANGE_SUN));
+		return;
+	}
+#endif
+	ctx_swap(0);
 }
 // For the hand-over hooks (server step, snapshot, server commands, usercmds): everything but the effects system, the renderer's view and the sun state, which they never touch.
 #define CTX_HAND (CTX_ALL & ~((1u << RANGE_FX) | (1u << RANGE_VIEW) | (1u << RANGE_SUN)))
@@ -5119,6 +5174,10 @@ static void npc_log(void)
 			log_printf("native: npclog tracks entity %d (it travelled %.0f units in the last 300 frames)", pick, (double)best);
 		}
 	}
+	if (CFG_ONCE("npcent", -1) >= 0 && pick != CFG_ONCE("npcent", -1)) { // [native] npcent=<n>: track entity n (1: player 2's body as player 1's half draws it, 0: player 1's in player 2's half)
+		pick = CFG_ONCE("npcent", -1);
+		log_printf("native: npclog tracks entity %d (npcent)", pick);
+	}
 	static int goff_pick = -1; // the server entity's origin (gentity r.currentOrigin), found by matching the snapshot's origin of the tracked entity
 	float gx = 0, gy = 0;
 	if (pick >= 0) {
@@ -5178,6 +5237,16 @@ static void npc_log(void)
 		log_printf("native: npcptr ctx %d ent %d poseA %d poseB %d frac %.3f | cg.snap %d cg.next %d | cg.time %d", ctx_current, pick, pa ? *(const int *)(pa + 4) : -1, pb ? *(const int *)(pb + 4) : -1,
 			   (double)*(const float *)(base + XR64(0x51dcb0)), *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac8)) + 4), *(const int *)(base + XR64(0x422434)));
 	}
+#ifndef _WIN64
+	if (pick >= 0 && logged[c] < 9000) { // 32 bits: the drawn pose and the cgame's time only (the snapshot fields of the 64-bit line are not mapped here), in the same shape
+		const float *o = (const float *)(base + RVA_CENT + (size_t)pick * CENT_SIZE + 0x18);
+		logged[c]++;
+		const float *cam = (const float *)(base + RVA_CG_PS_ORIGIN);
+		log_printf("native: npc ctx %d ent %d wall %.2f cg.time %d interp 0 snap 0 frac 0 pos %.2f %.2f next %.2f %.2f cam %.2f %.2f", ctx_current, pick, wall_now * 1000.0, *(const int *)(base + RVA_CG_TIME),
+			   (double)o[0], (double)o[1], (double)o[0], (double)o[1], (double)cam[0], (double)cam[1]);
+	}
+	return;
+#endif
 	if (pick >= 0 && logged[c] < 9000) {
 		const uint8_t *e = base + RVA_CENT + (size_t)pick * CENT_SIZE;
 		const float *o = (const float *)(e + 0x18), *n2 = (const float *)(e + 0xfc), *c2 = (const float *)(e + 0x80);
@@ -5185,6 +5254,8 @@ static void npc_log(void)
 		log_printf("native: npc ctx %d ent %d wall %.2f cg.time %d interp %.3f snap %d frac %.3f pos %.2f %.2f next %.2f %.2f cur %.2f %.2f type %u flags %08x s0 %d s1 %d srv %.2f %.2f", ctx_current, pick, wall_now * 1000.0, *(int *)(base + XR64(0x422434)),
 			   (double)*(float *)(base + XR64(0x42242c)), *(int *)(base + XR64(0x51dca8)), (double)*(float *)(base + XR64(0x51dcb0)), (double)o[0], (double)o[1], (double)n2[0], (double)n2[1], (double)c2[0], (double)c2[1], (unsigned)e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS),
 			   *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac8)) + 4), (double)gx, (double)gy);
+		const float *cam = (const float *)(base + RVA_CG_PS_ORIGIN), *rd = (const float *)(base + XR64(0x42d310));
+		log_printf("native: npccam ctx %d cg.time %d cam %.2f %.2f refdef %.2f %.2f", ctx_current, *(const int *)(base + RVA_CG_TIME), (double)cam[0], (double)cam[1], (double)rd[0], (double)rd[1]);
 	}
 }
 
@@ -9744,8 +9815,34 @@ static void mix_install32(void)
 	log_printf("native: the sound mixer's environment %s, its channel volumes %s", b ? "is held while either view holds it" : "is not hooked (rva 0xcb5b0 / 0xd3e90)",
 		   d ? "too" : "are not hooked (rva 0x60140 / 0xf9840)");
 }
+// The sound system's loop expiry (VA 0x49da00, run once per client frame from VA 0x506b24: VA 0x4b24d0 stops each looping channel whose frame stamp is not the one
+// of the previous pass, then moves the stamp on). In mode 11 it ran in both players' client frames, and only context 0's entity pass keeps the loops alive (context
+// 1's starts none, loopsnd1: the doubled emitters of Second Sun). So context 1's pass stopped every loop and context 0's frame started each one again: a looping
+// stream (No Russian's emt_airport_traffic1 / emt_airport_int_flyovers1, packed in an .iwd) was opened again in every frame and set to its play position, which
+// is reached by inflating the file from its start: about 200 MB a second, and 30 frames a second on the 32-bit split screen instead of 280 (2026-11-19, the
+// stream stop's caller found on context 1's stack, [native] seeklog=1). The pass runs in context 0's frame only; [native] loopexpire1=1 lets context 1 run it too.
+static void (*loop_expire_original)(void);
+static void loop_expire_hook(void)
+{
+	if (ctx_current == 1 && native_active && mode == 11 && !CFG_ONCE("loopexpire1", 0))
+		return;
+	loop_expire_original();
+}
+static void loop_expire_install32(void)
+{
+	static int done;
+	if (done)
+		return;
+	done = 1;
+	uint8_t want[7] = {0x83, 0x3d, 0, 0, 0, 0, 0x00}; // cmp dword [sound system up], 0
+	const uint32_t up = XV(0x894330);
+	memcpy(want + 2, &up, 4);
+	log_printf("native: the looping sounds' expiry %s", jhook_function(base + XR(0x9da00), want, sizeof(want), (void *)loop_expire_hook, (void **)&loop_expire_original)
+		   ? "runs in context 0's frame only" : "(rva 0x9da00) is not as expected: it runs in both views' frames, and the looping streams start again in every frame");
+}
 static void sound_once_install32(void)
 {
+	loop_expire_install32();
 	if (!cfg("evsnd1", 1) && !cfg("sndcount", 0))
 		return;
 	snd_count32 = cfg("sndcount", 0) != 0;
@@ -10472,6 +10569,12 @@ static int activate(int players)
 	if (cfg("framelog", 0) || cfg("pace", 0))
 		fs_install(); // the split screen: one cg_draw_hook call draws both views, so the pacing waits after both
 #endif
+#ifndef _WIN64
+	if (cfg("seeklog", 0)) {
+		void seeklog_install_(void);
+		seeklog_install_();
+	}
+#endif
 	if (cfg("entring", 1)) // default on in a split screen session ([native] entring=0 off): the cgame reads each snapshot's entity states from a copy of its own
 		entring_install();
 	session_reset();
@@ -10485,6 +10588,164 @@ static int activate(int players)
 	log_printf("native: split screen session on (%d local players, mode %d%s)", players, mode, from_menu ? ", from the menu" : "");
 	return 1;
 }
+
+#ifndef _WIN64
+// QA ([native] seeklog=1, the official 32-bit exe only): the game's FS_Seek (VA 0x4b2c80, cdecl: handle, offset, origin 0 cur / 1 end / 2 set; the file handles at
+// VA 0x1952dd0, 0x11c each, +0x14 set for a file inside an .iwd) and FS_FTell (VA 0x4b4d60). A backward seek in a packed file re-opens it and inflates it again from
+// its start up to the offset (VA 0x459470 in a loop): the split screen's 32-bit frames spent 20-80 ms there, called from the Miles sound library's file callback
+// (VA 0x636b70). Every 5 s: per file, the seeks, the backward ones and the bytes they skipped.
+static int (*seek_orig)(int, int, int);
+static struct {
+	char name[64];
+	LONG n, back, packed, handles;
+	long long skipped, fwd;
+	int last_h;
+} seek_files[32];
+static int seek_hook(int h, int off, int origin)
+{
+	const uint8_t *e = (const uint8_t *)(uintptr_t)XV(0x1952dd0) + (size_t)h * 0x11c;
+	const int packed = *(const int *)(e + 0x14) != 0;
+	const int cur = ((int (*)(int))(base + XR(0xb4d60)))(h);
+	char name[64] = "";
+	for (int o = 0x18; o < 0x11c - 8 && !name[0]; o += 4) { // the handle's name: the first run of 6+ printable characters in the entry
+		int k = 0;
+		while (o + k < 0x11c && k < 63 && e[o + k] >= 0x20 && e[o + k] < 0x7f)
+			k++;
+		if (k >= 6 && !e[o + k]) {
+			memcpy(name, e + o, (size_t)k);
+			name[k] = 0;
+		}
+	}
+	int i;
+	for (i = 0; i < 32; i++)
+		if (!seek_files[i].name[0] || !strcmp(seek_files[i].name, name))
+			break;
+	if (i < 32) {
+		if (!seek_files[i].name[0])
+			lstrcpynA(seek_files[i].name, name[0] ? name : "?", sizeof(seek_files[i].name));
+		seek_files[i].n++;
+		seek_files[i].packed = packed;
+		const int target = origin == 2 ? off : origin == 0 ? cur + off : -1;
+		if (target >= 0 && target < cur) {
+			seek_files[i].back++;
+			if (packed)
+				seek_files[i].skipped += target;
+		} else if (target > cur && packed)
+			seek_files[i].fwd += target - cur;
+		if (seek_files[i].last_h != h + 1)
+			seek_files[i].handles++, seek_files[i].last_h = h + 1;
+	}
+	static DWORD at;
+	if (!at)
+		at = GetTickCount();
+	if (GetTickCount() - at >= 5000) {
+		at = GetTickCount();
+		for (int k = 0; k < 32 && seek_files[k].name[0]; k++)
+			if (seek_files[k].n) {
+				log_printf("native: seeklog 5 s: %s%s: %ld seeks (%ld handle changes), %ld backwards, %lld KB inflated again from the start, %lld KB skipped forward", seek_files[k].name,
+					   seek_files[k].packed ? " (packed)" : "", seek_files[k].n, seek_files[k].handles, seek_files[k].back, seek_files[k].skipped / 1024, seek_files[k].fwd / 1024);
+				seek_files[k].n = seek_files[k].back = seek_files[k].handles = 0, seek_files[k].skipped = seek_files[k].fwd = 0;
+			}
+	}
+	return seek_orig(h, off, origin);
+}
+static struct {
+	uintptr_t caller;
+	LONG n;
+	const char *what;
+} mss_callers[24];
+static void mss_note(const char *what, uintptr_t caller)
+{
+	for (int i = 0; i < 24; i++)
+		if ((mss_callers[i].caller == caller && mss_callers[i].what == what) || !mss_callers[i].caller) {
+			mss_callers[i].caller = caller, mss_callers[i].what = what;
+			InterlockedIncrement(&mss_callers[i].n);
+			break;
+		}
+	static DWORD at;
+	if (!at)
+		at = GetTickCount();
+	if (GetTickCount() - at >= 5000) {
+		at = GetTickCount();
+		for (int i = 0; i < 24 && mss_callers[i].caller; i++)
+			if (mss_callers[i].n) {
+				log_printf("native: seeklog 5 s: %s from exe+0x%x: %ld calls", mss_callers[i].what, (unsigned)(mss_callers[i].caller - (uintptr_t)base), mss_callers[i].n);
+				mss_callers[i].n = 0;
+			}
+	}
+}
+static int(__stdcall *set_ms_orig)(void *, int);
+static int __stdcall set_ms_hook(void *stream, int ms)
+{
+	mss_note("AIL_set_stream_ms_position", (uintptr_t)__builtin_return_address(0));
+	return set_ms_orig(stream, ms);
+}
+static void(__stdcall *close_stream_orig)(void *);
+static void __stdcall close_stream_hook(void *stream)
+{
+	mss_note(ctx_current == 1 ? "AIL_close_stream (context 1)" : "AIL_close_stream (context 0)", (uintptr_t)__builtin_return_address(0));
+	{ // QA: the code addresses on the stack (values inside the exe's code that follow a call instruction), once every 5 s, for the stream stops of context 1
+		static DWORD at;
+		if (ctx_current == 1 && GetTickCount() - at >= 5000) {
+			at = GetTickCount();
+			const volatile uintptr_t *sp = (const volatile uintptr_t *)__builtin_frame_address(0);
+			char line[400];
+			int n = snprintf(line, sizeof(line), "native: seeklog stream stop stack (context 1, thread %lu):", GetCurrentThreadId()), k = 0;
+			for (int i = 0; i < 600 && k < 14 && n < (int)sizeof(line) - 12; i++) {
+				const uintptr_t v = sp[i];
+				if (v < 0x401006 || v > 0x6f0000)
+					continue;
+				const uint8_t *c = (const uint8_t *)v;
+				if (c[-5] != 0xe8 && !(c[-2] == 0xff && (c[-1] & 0xf8) == 0xd0) && !(c[-6] == 0xff && c[-5] == 0x15) && !(c[-3] == 0xff && (c[-2] & 0x38) == 0x10))
+					continue;
+				n += snprintf(line + n, sizeof(line) - n, " %x", (unsigned)v);
+				k++;
+			}
+			log_printf("%s", line);
+		}
+	}
+	close_stream_orig(stream);
+}
+static void *(__stdcall *open_stream_orig)(void *, const char *, int);
+static void *__stdcall open_stream_hook(void *dig, const char *name, int mem)
+{
+	mss_note(ctx_current == 1 ? "AIL_open_stream (context 1)" : "AIL_open_stream (context 0)", (uintptr_t)__builtin_return_address(0));
+	return open_stream_orig(dig, name, mem);
+}
+static void seeklog_iat(const char *sym, void *hook, void **orig)
+{
+	IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+	IMAGE_DATA_DIRECTORY *dir = &nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+	for (IMAGE_IMPORT_DESCRIPTOR *imp = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir->VirtualAddress); imp->Name; imp++) {
+		if (_strnicmp((const char *)(base + imp->Name), "mss32", 5) || !imp->OriginalFirstThunk)
+			continue;
+		IMAGE_THUNK_DATA *iat = (IMAGE_THUNK_DATA *)(base + imp->FirstThunk), *names = (IMAGE_THUNK_DATA *)(base + imp->OriginalFirstThunk);
+		for (; iat->u1.Function; iat++, names++) {
+			if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal) || strcmp((const char *)((IMAGE_IMPORT_BY_NAME *)(base + names->u1.AddressOfData))->Name, sym))
+				continue;
+			DWORD old;
+			if (VirtualProtect(&iat->u1.Function, sizeof(void *), PAGE_READWRITE, &old)) {
+				*orig = (void *)(uintptr_t)iat->u1.Function;
+				iat->u1.Function = (uintptr_t)hook;
+				VirtualProtect(&iat->u1.Function, sizeof(void *), old, &old);
+				log_printf("native: seeklog: %s counted", sym);
+			}
+		}
+	}
+}
+void seeklog_install_(void)
+{
+	seeklog_iat("_AIL_set_stream_ms_position@8", (void *)set_ms_hook, (void **)&set_ms_orig);
+	seeklog_iat("_AIL_open_stream@12", (void *)open_stream_hook, (void **)&open_stream_orig);
+	seeklog_iat("_AIL_close_stream@4", (void *)close_stream_hook, (void **)&close_stream_orig);
+	static int done;
+	if (done || game_is_iw4x())
+		return;
+	done = 1;
+	static const uint8_t pro[11] = {0x56, 0x8b, 0x74, 0x24, 0x08, 0x69, 0xf6, 0x1c, 0x01, 0x00, 0x00};
+	log_printf("native: seeklog %s", hook_function(base + XR(0xb2c80), pro, sizeof(pro), (void *)seek_hook, (void **)&seek_orig) ? "on" : "FAILED");
+}
+#endif
 
 // Console commands for the QA bots and for the lobby: mw2coop_native_start [pad], mw2coop_native_stop, mw2coop_native_launch <map> [pad] [start] [player 1 device] (session on, then the map)
 static void native_start_f(void)

@@ -749,3 +749,45 @@ renderer and upscaler in use, the frame rate in that half, and whether the body 
 **NPC jitter in mode 11 (owner: "the same bug as at the airport"), measured 2026-11-16:** Airport, D3D9, 1280x720, `npclog=1;npctype=13;npcwait=25` (the actors as each view's draw placed them; `npc_log` now also runs after player 2's draw in mode 11). Walking AI actors: zero-step draws 0-2 % and speed cv 0.10-0.26 in **both** views (9 actors), the same as the plain game measured on 2026-11-02 (0 %, cv 0.15-0.2) and unlike the old split (20-35 %, cv 1.1-1.8). `entring`: 0 late snapshot reads of 860 000. So the old position jitter is not back in mode 11; what the owner sees as "the same bug" is not this measure (animation of limbs, or a build without these fixes).
 
 **The partner's body leaned over with the player's view (owner's Airport screenshots, 2026-11-16):** player 1 looking down: his body in the bottom half folded to the floor; looking up: thrown back with the gun pointing up. Cause: `p0aim` (my 2026-11-16 night change) wrote the view's pitch into the slot's pose and state angles, which turn the whole model. The 360's own-entity write (0x82102f28) sets the yaw only (pitch and roll 0). `p0aim` now writes the yaw only (`[native] p0aimpitch=1` the pitch too, as before); the torso's aim stays the game's. Not yet checked in the game with a player looking up or down (the Airport intro holds the view). The search for a worker race on player 2's frame (`exp11wait2`: wait for the renderer workers before the next draw) found none: 0 of 12 000 draws had workers still busy; removed. `npcmax=<n>` (npclog: track only entities up to n): on Airport no walking actor has a number of 134 or lower.
+
+### Smoothness and frame rate of mode 11, measured (2026-11-19)
+
+Owner: "the jitter of the other player and the NPCs is still there" (both builds), and work on the split screen's performance. His settings: Direct3D 9Ex in a
+borderless window, MSAA 8x, vsync on a 144 Hz display, no frame cap.
+
+**What was measured** (one copy in mode 11, `tools/qa_native.sh`; `[native] npclog=1` with the new `npcent=<entity>` and a 32-bit form of its line, the camera
+in the 64-bit `npccam` line; scripts `jitan.py`, `pacean.py`, `camjit.py`, `fpsav.py` in the local scratch folder; the QA scenario `walkpair`: the players take
+turns walking with a real Forward press, the other one watching):
+
+* 64-bit: walking AI actors in both halves (No Russian) 0 % frames without movement, speed cv 0.04-0.26 (the single player range); the partner's body as the other half
+  draws it 0 % / cv 0.03-0.18; both render cameras 0 % / cv 0.14-0.16; the two views' cgame times are equal in every frame and follow the wall clock (sd 0.7-0.9 ms).
+  The old actor stutter of mode 10 (entring, transfix) does not come back. With the owner's settings at 144 Hz the game holds 144 frames, but a frame takes about
+  6.8 of the 6.94 ms: little room before a frame misses the display's refresh.
+* Official 32-bit: 32 frames a second on No Russian (19 at worst, 80 % of the frames over 8 ms): the frames were spent inflating sound files (below).
+
+**Fixed:**
+
+1. **The looping sounds' expiry ran in both views' frames (32-bit).** VA 0x49da00 (run from each client frame, VA 0x506b24) calls VA 0x4b24d0, which stops
+   every looping channel whose frame stamp is not the previous pass's. Only context 0's entity pass keeps the loops alive (context 1 starts none: `loopsnd1`, the
+   doubled emitters of Second Sun), so context 1's pass stopped them all and context 0 started each again in every frame. A looping stream packed in an .iwd
+   (No Russian's `emt_airport_traffic1.wav`, `emt_airport_int_flyovers1.wav`) was opened again and set to its play position (`AIL_open_stream`,
+   `AIL_set_stream_ms_position`: about 70 and 40 a second), and the game's `FS_Seek` (VA 0x4b2c80) reaches a position inside a packed file by inflating it
+   from its start: 300-700 MB every 5 s. Found with `[native] seeklog=1` (the seeks per file, the Miles stream calls by caller and context, the stack of context
+   1's stream stops). The pass runs in context 0's frame only now (`loop_expire_hook`; iw4x-sp mapped by the generator, 0x9da00 -> 0xc2e30 checked by its bytes;
+   `[native] loopexpire1=1` the old way). The 64-bit build stops no loops this way (its channel stops in context 1 come from new sounds taking a channel).
+2. **The sun state of player 1 was held at player 2's.** The render thread writes a view's sun blind / glare state while it draws that view's frame, and player
+   2's frame is drawn after his draw has swapped the contexts back: his state went into context 0's copy. QA `sunlook` (Boneyard, player 1 turns once around,
+   player 2 stands; field 5 = view forward . sun direction): player 1's value stayed at player 2's 0.181 through the whole turn, in both builds. The sun range now
+   stays with context 1 after his draw (`ctx_swap_after_p2_draw`, `[native] sunkeep=0` the old way) and goes back at the next frame's first swap, after the wait.
+3. **The 32-bit wait for the render thread** before the sun range moves polled a counter with `Sleep(0)`; it uses the engine's wait now, which runs the workers'
+   jobs meanwhile, as on 64 bits (`[native] rtpoll=1` polls again).
+
+After the fixes (one copy, 1920x1080, 45 s runs): official 32-bit No Russian 259-270 frames a second (32 before), Second Sun 95-97, The Pit 94-102; iw4x-sp No Russian 266-274 (243 before); 64-bit with the owner's display settings No Russian 190-196 and Second Sun 125 (unchanged). The Pit gave 166-174 on 32 bits only while player 1's sun state was held at player 2's; with his own state the frame costs more where he faces the sun (measured; that the sun's glare is the cost is inferred, not proven). No crash or hang in about 25 split runs, and context 1 starts no sound (no doubled emitters).
+
+**Left, with the reason:** the mode-11 frame still waits for the render thread twice: before player 2's frame, until player 1's is drawn (`exp11rtwait`: the scene's
+model records are cleared for player 2's frame, and the back end reads them while it draws player 1's; without the wait the bodies break into shards), and at the
+next frame's first swap for the sun range. Without both, 64-bit No Russian went from 196 to 222 frames a second; a double buffer of the model records would remove
+the first. Six context swaps a frame (the cgame block, 306 KB on 64 bits) cost 30-60 ms a second.
+
+**QA tools added:** `[native] npcent=<n>`, the 32-bit npc line, `npccam`; `seeklog=1` (32-bit official exe); `swapsites=1` now gives each call site's worker
+wait and copy time; player 2's `sunlog` line in mode 11, labelled by the range's owner; the QA scenario `walkpair`.

@@ -235,6 +235,9 @@ main()
 		case "p2walk":
 			p2walk();
 			break;
+		case "walkpair":
+			walkpair();
+			break;
 		case "veil":
 			veil();
 			break;
@@ -929,6 +932,55 @@ airwalk()
 	wait 8;
 	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
 	report( "airwalk: player 2 stopped at " + level.player2.origin );
+}
+
+// walkpair: (native split screen test, [native] p1pad=0 for player 2's pad dvar) from 15 s on the players take turns: one walks 2 s with a real Forward the way with the most
+// free floor, the other looks at him. With [native] npclog=1;npcent=0 (or 1) the log has the walker's body as the other half draws it, frame by frame (jitter of the partner).
+walkpair()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 15;
+	for ( r = 0; r < 4; r++ )
+	{
+		pair_walk( level.player, level.player2 );
+		pair_walk( level.player2, level.player );
+	}
+	report( "walkpair done" );
+}
+
+pair_walk( walker, watcher )
+{
+	yaw = walker GetPlayerAngles()[ 1 ];
+	room = 0;
+	best = yaw;
+	for ( turn = 0; turn < 360; turn += 30 )
+	{
+		from = walker.origin + ( 0, 0, 8 );
+		free = Distance( from, PlayerPhysicsTrace( from, from + AnglesToForward( ( 0, yaw + turn, 0 ) ) * 300 ) );
+		if ( free > room + 1 )
+		{
+			room = free;
+			best = yaw + turn;
+		}
+	}
+	walker SetPlayerAngles( ( 0, best, 0 ) );
+	watcher SetPlayerAngles( ( 0, VectorToAngles( walker.origin - watcher.origin )[ 1 ], 0 ) );
+	wait 0.2;
+	start = walker.origin;
+	if ( walker == level.player2 )
+	{
+		SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 0" );
+		wait 2;
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+	}
+	else
+	{
+		press( walker, "forward", 2000 );
+		wait 1.8;
+	}
+	report( "walkpair: " + player_name( walker ) + " walked " + int( Distance2D( walker.origin, start ) ) + " of " + int( room ) + " free" );
+	wait 1;
 }
 
 // p2walk: (native split screen test) player 1 stands, player 2 walks forward / back / left / right on the pad dvar from 15 s on (1.5 s each, three rounds), the mod's follow and
