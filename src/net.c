@@ -8,12 +8,14 @@
 #include <windows.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "access.h"
 #include "game.h"
 #include "log.h"
 #include "net.h"
+#include "netwatch.h"
 #include "netguard.h"
 #include "settings.h"
 #include "menus.h"
@@ -194,8 +196,15 @@ int net_broadcast_mod(const char *text, uint16_t port)
 // port a NAT gives may differ). The lobby's own packets (access, list of games) are answered as before.
 static volatile LONG ignored_packets;
 
+static const char desync_prefix[] = "\xff\xff\xff\xffmw2coop_desync "; // netwatch.c: the partner's PC found the games apart
+static const char nw_prefix[] = "\xff\xff\xff\xffmw2coop_nw ";	  // netwatch.c: the rest of its messages
+static const char resync_prefix[] = "\xff\xff\xff\xffmw2coop_resync "; // saves.c: the host loads the common checkpoint
 static int is_session_packet(const char *buf, int len)
 {
+	if ((len >= (int)sizeof(desync_prefix) - 1 && memcmp(buf, desync_prefix, sizeof(desync_prefix) - 1) == 0) ||
+	    (len >= (int)sizeof(nw_prefix) - 1 && memcmp(buf, nw_prefix, sizeof(nw_prefix) - 1) == 0) ||
+	    (len >= (int)sizeof(resync_prefix) - 1 && memcmp(buf, resync_prefix, sizeof(resync_prefix) - 1) == 0))
+		return 1;
 	static const char start[] = "\xff\xff\xff\xffmw2coop_start";
 	static const char ready[] = "\xff\xff\xff\xffmw2coop_ready";
 	static const char brief[] = "\xff\xff\xff\xffmw2coop_briefdone";
@@ -237,6 +246,8 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 		log_packet("send", to, pkt, n);
 		send_to(s, pkt, n, flags, to, tolen);
 	}
+	if (netwatch_send_paused() && to && to->sa_family == AF_INET && from_partner(to))
+		return len; // QA (mw2coop_netpause): as if sent
 	log_packet("send", to, buf, len);
 	return send_to(s, buf, len, flags, to, tolen);
 }
@@ -339,6 +350,8 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 	}
 	if (r > 0) {
 		log_packet("recv", from, buf, r);
+		if (from_partner(from))
+			netwatch_partner_packet(); // any packet of his: the lockstep frames, his usercmds, the mod's own
 		// The partner is learnt from his connect only once access.c has let it through (night audit 2026-11-17, NET-1: any packet with the text "coopConnect" anywhere, a
 		// refused connect included, made its sender the partner, and the real partner's start / ready packets were then ignored as a stranger's).
 		const int connect = game_peek(RVA_PARTY_IS_HOST, 1) && is_coop_connect(buf, r);
@@ -366,7 +379,17 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 		if (!ours && is_session_packet(buf, r)) {
 			// consumed either way: the game has nothing to do with it
 			if (from_partner(from)) {
-				if (!progress_on_packet(buf, r) && !saves_on_packet(buf, r))
+				if (r >= (int)sizeof(desync_prefix) - 1 && memcmp(buf, desync_prefix, sizeof(desync_prefix) - 1) == 0) {
+					char t[16] = "";
+					const int k = r - (int)(sizeof(desync_prefix) - 1);
+					memcpy(t, buf + sizeof(desync_prefix) - 1, k < 15 ? k : 15);
+					netwatch_on_desync_packet(atoi(t));
+				} else if (r >= (int)sizeof(nw_prefix) - 1 && memcmp(buf, nw_prefix, sizeof(nw_prefix) - 1) == 0) {
+					char t[32] = "";
+					const int k = r - (int)(sizeof(nw_prefix) - 1);
+					memcpy(t, buf + sizeof(nw_prefix) - 1, k < 31 ? k : 31);
+					netwatch_on_packet(t);
+				} else if (!progress_on_packet(buf, r) && !saves_on_packet(buf, r))
 					menus_on_packet(buf, r);
 			} else if (InterlockedIncrement(&ignored_packets) <= 5)
 				log_printf("net: a start or ready packet from an address that is not the partner's was ignored");
@@ -392,6 +415,14 @@ typedef IMAGE_THUNK_DATA32 THUNK_DATA;
 #define SNAP_BY_ORDINAL IMAGE_SNAP_BY_ORDINAL32
 #define ORDINAL_OF IMAGE_ORDINAL32
 #endif
+
+int net_partner_known(void)
+{
+	EnterCriticalSection(&peer_lock);
+	const int known = peer_socket != INVALID_SOCKET;
+	LeaveCriticalSection(&peer_lock);
+	return known;
+}
 
 void net_install(void)
 {

@@ -37,6 +37,7 @@
 #include "saves.h"
 #include "scrdebug.h"
 #include "settings.h"
+#include "netwatch.h"
 #include "enhopts.h"
 #include "shot.h"
 
@@ -403,6 +404,7 @@ static void script_channel_poll(void)
 	press_poll();
 	weapnext_poll();
 	enhopts_level_tick(); // the options page's field of view is held while a level runs (the menus' tick does not run then)
+	netwatch_poll(); // the partner's silence and the games going apart (network co-op)
 	// a scenario asks both machines for a frame (mw2coop_qa_shot "<name>"): each saves its own
 	if (game_dvar_raw("mw2coop_qa_shot", v, sizeof(v)) && v[0] && strcmp(v, last_shot) != 0) {
 		lstrcpynA(last_shot, v, sizeof(last_shot));

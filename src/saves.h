@@ -10,3 +10,6 @@ void saves_note_checkpoint(const char *tag);
 int saves_on_packet(const char *buf, int len);
 // control.c: the scripts asked for the restart after a failed mission at this game time (maps\_mw2coop::mission_failed, "restart @<time>")
 void saves_note_restart_request(int game_time);
+// The host, after the client found the two games apart from level time <diverged_at> on (netwatch.c): both PCs load the last checkpoint they hold in common, if
+// it is older than that. 1 started, 0 one is on its way, below 0 not possible (<why> says why).
+int saves_resync(int diverged_at, char *why, int why_size);

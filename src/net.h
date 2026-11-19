@@ -15,3 +15,6 @@ void net_log_budget(int packets);
 // Send "\xff\xff\xff\xff<text>" to one address (port in host order) on the game's socket.
 int net_send_mod_to(const uint8_t ip[4], uint16_t port, const char *text);
 int net_broadcast_mod(const char *text, uint16_t port);
+
+// 1 once the co-op partner is known (his connect or the host's accept was seen).
+int net_partner_known(void);

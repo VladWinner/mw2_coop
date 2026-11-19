@@ -7,6 +7,7 @@
 
 #include "access.h"
 #include "enhopts.h"
+#include "netwatch.h"
 #include "control.h"
 #include "crash.h"
 #include "d3dcap.h"
@@ -96,6 +97,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		addr_scratch_check("after menus_install");
 		access_install();
 		enhopts_install();
+		netwatch_install();
 		addr_scratch_check("after access_install");
 		upnp_install();
 		addr_scratch_check("after upnp_install");

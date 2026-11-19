@@ -20,6 +20,7 @@
 #include "window.h"
 #include "access.h"
 #include "enhopts.h"
+#include "netwatch.h"
 #include "firewall.h"
 #include "devices.h"
 #include "console.h"
@@ -236,6 +237,7 @@ static void install_all(void)
 	addr_scratch_check("after menus_install");
 	access_install();
 	enhopts_install();
+	netwatch_install();
 	addr_scratch_check("after access_install");
 	upnp_install();
 	addr_scratch_check("after upnp_install");

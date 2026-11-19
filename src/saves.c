@@ -28,6 +28,7 @@
 #include "log.h"
 #include "native.h"
 #include "net.h"
+#include "netwatch.h"
 #include "progress.h"
 #include "saves.h"
 
@@ -188,8 +189,21 @@ void saves_note_checkpoint(const char *tag)
 
 int saves_on_packet(const char *buf, int len)
 {
-	static const char cp[] = "\xff\xff\xff\xffmw2coop_cp ", retry[] = "\xff\xff\xff\xffmw2coop_retry ";
+	static const char cp[] = "\xff\xff\xff\xffmw2coop_cp ", retry[] = "\xff\xff\xff\xffmw2coop_retry ", resync[] = "\xff\xff\xff\xffmw2coop_resync ";
 	char text[64];
+	if (len > (int)sizeof(resync) - 1 && memcmp(buf, resync, sizeof(resync) - 1) == 0) { // the host loads the last common checkpoint (saves_resync): so does this PC
+		int n = len - ((int)sizeof(resync) - 1) < (int)sizeof(text) - 1 ? len - ((int)sizeof(resync) - 1) : (int)sizeof(text) - 1;
+		memcpy(text, buf + sizeof(resync) - 1, n);
+		text[n] = 0;
+		static DWORD said_at;
+		if (GetTickCount() - said_at > 5000) { // (sent three times)
+			said_at = GetTickCount();
+			log_printf("saves: the host loads the last common checkpoint %s to bring the games together (this PC's %s)", text, own_tag[0] ? own_tag : "none");
+			game_cbuf_addtext("set mw2coop_retry load\n"); // read by fast_restart_cmd when the host's map restart (coopRestart) comes
+			netwatch_resync_started();
+		}
+		return 1;
+	}
 	if (len > (int)sizeof(cp) - 1 && memcmp(buf, cp, sizeof(cp) - 1) == 0) {
 		int n = len - ((int)sizeof(cp) - 1) < (int)sizeof(text) - 1 ? len - ((int)sizeof(cp) - 1) : (int)sizeof(text) - 1;
 		memcpy(text, buf + sizeof(cp) - 1, n);
@@ -213,6 +227,67 @@ int saves_on_packet(const char *buf, int len)
 		return 1;
 	}
 	return 0;
+}
+
+// ---- a divergence goes back to the last checkpoint both PCs took before it (netwatch.c; owner 2026-11-19: "add a way to bring the world back in sync",
+// rather than the host's world held while the other player loads it, as the Cyberpunk 2077 co-op mod Nightcoop does)
+// The lockstep has nothing that brings two simulations together once they differ. A checkpoint both PCs took in the same frame BEFORE the first differing
+// frame holds the same world on both: both load their own copy, as after a failed mission (the host's fast_restart with mw2coop_retry "load", the client's
+// on the coopRestart it sends), and play on from there together. The host decides (the client found the divergence and sent its level time): the checkpoints'
+// tags must be the same and older than that time, saves on (the official 32-bit exe cannot load them). The same checkpoint is loaded for this at most twice in
+// a row: when the games go apart again after it (the cause is still in the world), the players are told to restart the level.
+static int supported; // (defined below: the game's checkpoints can be loaded in a co-op session on this build)
+static char resync_tag[64];
+static int resync_count;
+static DWORD resync_at;
+static int tag_level_time(const char *tag) // <map>_<level time>_<net|split>
+{
+	const char *kind = strrchr(tag, '_');
+	if (!kind || kind == tag)
+		return -1;
+	const char *p = kind - 1;
+	while (p > tag && *p != '_')
+		p--;
+	return *p == '_' ? atoi(p + 1) : -1;
+}
+static DWORD WINAPI resync_restart(LPVOID unused)
+{
+	(void)unused;
+	Sleep(1500); // the players read the notice first ("both PCs load the common checkpoint"), and the client has set its mw2coop_retry before the map restart reaches it
+	game_cbuf_addtext("set mw2coop_retry load\nfast_restart\n");
+	return 0;
+}
+int saves_resync(int diverged_at, char *why, int why_size)
+{
+	char v[8] = "";
+	if (!supported || (game_dvar_raw("mw2coop_saves", v, sizeof(v)) && v[0] == '0')) {
+		snprintf(why, why_size, "the checkpoints are off in this session");
+		return -1;
+	}
+	if (!own_tag[0] || strcmp(own_tag, partner_tag) != 0) {
+		snprintf(why, why_size, "no checkpoint both PCs hold (host %s, client %s)", own_tag[0] ? own_tag : "none", partner_tag[0] ? partner_tag : "none");
+		return -2;
+	}
+	const int t = tag_level_time(own_tag);
+	if (t < 0 || t >= diverged_at) {
+		snprintf(why, why_size, "the last checkpoint %s was taken at or after the divergence (level time %d)", own_tag, diverged_at);
+		return -3;
+	}
+	if (GetTickCount() - resync_at < 15000)
+		return 0; // one is on its way
+	if (!strcmp(resync_tag, own_tag) && resync_count >= 2) {
+		snprintf(why, why_size, "the games went apart again after loading checkpoint %s twice", own_tag);
+		return -4;
+	}
+	resync_count = strcmp(resync_tag, own_tag) ? 1 : resync_count + 1;
+	lstrcpynA(resync_tag, own_tag, sizeof(resync_tag));
+	resync_at = GetTickCount();
+	char text[96];
+	snprintf(text, sizeof(text), "mw2coop_resync %s", own_tag);
+	send_thrice(text);
+	log_printf("saves: the games differ from level time %d on: both PCs load checkpoint %s (taken at %d, load %d of it for this)", diverged_at, own_tag, t, resync_count);
+	CloseHandle(CreateThread(NULL, 0, resync_restart, NULL, 0, NULL));
+	return 1;
 }
 
 // ---- a failed mission goes back to the last checkpoint

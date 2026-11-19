@@ -268,14 +268,6 @@ REFERENCE           MW2COOP_ENH_OFF
 LANG_ENGLISH        "Off"
 LANG_RUSSIAN        "Выкл"
 
-REFERENCE           MW2COOP_ENH_FALLDMG
-LANG_ENGLISH        "Fall damage in co-op"
-LANG_RUSSIAN        "Урон от падения в кооперативе"
-
-REFERENCE           MW2COOP_ENH_BOXVIEW
-LANG_ENGLISH        "Console-style view boxes (split screen)"
-LANG_RUSSIAN        "Виды как на консоли (со сдвигом)"
-
 REFERENCE           MW2COOP_SKILL_P1_TITLE
 LANG_ENGLISH        "Alpha: difficulty"
 LANG_RUSSIAN        "Альфа: сложность"
@@ -287,6 +279,14 @@ LANG_RUSSIAN        "Браво: сложность"
 REFERENCE           MW2COOP_SKILL_LABEL
 LANG_ENGLISH        "Difficulty"
 LANG_RUSSIAN        "Сложность"
+
+REFERENCE           MW2COOP_ENH_FALLDMG
+LANG_ENGLISH        "Fall damage in co-op"
+LANG_RUSSIAN        "Урон от падения в кооперативе"
+
+REFERENCE           MW2COOP_ENH_BOXVIEW
+LANG_ENGLISH        "Console-style view boxes (split screen)"
+LANG_RUSSIAN        "Виды как на консоли (со сдвигом)"
 
 REFERENCE           MW2COOP_ENH_BORDERLESS
 LANG_ENGLISH        "Borderless full screen"
@@ -423,6 +423,34 @@ LANG_RUSSIAN        "ВЫБРАТЬ СОХРАНЕНИЕ"
 REFERENCE           MW2COOP_SAVES
 LANG_ENGLISH        "Saves"
 LANG_RUSSIAN        "Сохранения"
+
+REFERENCE           MW2COOP_NET_SILENT_FMT
+LANG_ENGLISH        "^3No sign of your partner for %d s"
+LANG_RUSSIAN        "^3Напарник не отвечает %d с"
+
+REFERENCE           MW2COOP_NET_BACK_FMT
+LANG_ENGLISH        "^2Your partner is back (a %d s gap)"
+LANG_RUSSIAN        "^2Напарник снова на связи (пауза %d с)"
+
+REFERENCE           MW2COOP_NET_DESYNC_FMT
+LANG_ENGLISH        "^1Out of sync since %d s"
+LANG_RUSSIAN        "^1Рассинхронизация с %d с"
+
+REFERENCE           MW2COOP_NET_RESYNC_FMT
+LANG_ENGLISH        "^3Out of sync since %d s: both PCs load the common checkpoint"
+LANG_RUSSIAN        "^3Рассинхронизация с %d с: оба ПК загружают общую контрольную точку"
+
+REFERENCE           MW2COOP_NET_RESYNCFAIL_FMT
+LANG_ENGLISH        "^1Out of sync since %d s and no common checkpoint: restart the level"
+LANG_RUSSIAN        "^1Рассинхронизация с %d с: общей контрольной точки нет, перезапустите уровень"
+
+REFERENCE           MW2COOP_NET_RESYNCED
+LANG_ENGLISH        "^2Back in sync: the game goes on from the common checkpoint"
+LANG_RUSSIAN        "^2Синхронизация восстановлена: игра продолжается с общей контрольной точки"
+
+REFERENCE           MW2COOP_NET_INSYNC
+LANG_ENGLISH        "^2The two games match again"
+LANG_RUSSIAN        "^2Игры снова совпадают"
 
 REFERENCE           MW2COOP_SAVE_NO_PARTNER
 LANG_ENGLISH        "no partner"
