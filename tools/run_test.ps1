@@ -30,6 +30,15 @@ $env:SteamGameId = '10180'
 # itself used to write: its pid and the signed-in account (volatile key, gone after a reboot).
 $ap = 'HKCU:\Software\Valve\Steam\ActiveProcess'
 $steam = Get-Process steam -ErrorAction SilentlyContinue | Select-Object -First 1
+# No Steam running: a copy that starts iw4sp.exe starts Steam itself and quits with 53, and Steam then starts the REAL install about 20 s later,
+# after this script had already seen every copy gone (2026-11-20: the real game came up on the owner's screen). Refuse instead.
+if (-not $steam -and -not $env:MW2COOP_NO_STEAM_OK) {
+    $direct = @($Dirs | Where-Object { $ExeName -eq 'iw4sp.exe' -or (-not $ExeName -and -not (Test-Path (Join-Path $_ 'iw4x-sp.exe'))) })
+    if ($direct.Count -gt 0) {
+        "[$Tag] Steam is not running: start Steam (signed in) first. A test copy would start it, and Steam would then start the REAL install."
+        exit 2
+    }
+}
 $cur = (Get-ItemProperty $ap -ErrorAction SilentlyContinue).pid
 if ($steam -and $cur -ne $steam.Id) {
     Set-ItemProperty $ap -Name pid -Value $steam.Id -Type DWord
@@ -166,6 +175,16 @@ $left = Get-Process iw4sp,iw4x-sp -ErrorAction SilentlyContinue
 # down, sometimes never made its window (night tour 2026-11-18/19: the host of airport, oilrig and boneyard on iw4x-sp, airport on 64-bit)
 if ($left) { "[$Tag] timeout, killing $($left.Id -join ',')"; $left | Stop-Process -Force; $left | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue }
 else { "[$Tag] all exited after $([int]((Get-Date) - $start).TotalSeconds) s; codes: $(($launched | ForEach-Object { $_.ExitCode }) -join ',')" }
+# Exit code 53 is SteamStub handing the start to Steam, which starts the REAL install some seconds later: keep the guard up for a minute.
+if (@($launched | Where-Object { $_.HasExited -and $_.ExitCode -eq 53 }).Count -gt 0) {
+    "[$Tag] a copy exited with 53 (Steam relaunch): guarding against the real install for 60 s"
+    $until = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $until) {
+        Start-Sleep -Milliseconds 200
+        Get-CimInstance Win32_Process -Filter "name='iw4sp.exe' or name='iw4x-sp.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath -notlike "$root*" } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force; "[$Tag] WRONG INSTALL RUNNING: $($_.ExecutablePath) -> killed" }
+    }
+}
 if ($RealInstall) {
     $touched = Get-ChildItem -Force -Recurse -File $RealInstall | Where-Object { $_.LastWriteTime -ge $start.AddSeconds(-2) }
     if ($touched) { "[$Tag] !!! REAL INSTALL TOUCHED:"; $touched | ForEach-Object { "  $($_.FullName) $($_.Length)" } }
