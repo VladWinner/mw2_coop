@@ -16,6 +16,7 @@
 #include "log.h"
 #include "net.h"
 #include "netwatch.h"
+#include "nick.h"
 #include "netguard.h"
 #include "settings.h"
 #include "menus.h"
@@ -199,10 +200,12 @@ static volatile LONG ignored_packets;
 static const char desync_prefix[] = "\xff\xff\xff\xffmw2coop_desync "; // netwatch.c: the partner's PC found the games apart
 static const char nw_prefix[] = "\xff\xff\xff\xffmw2coop_nw ";	  // netwatch.c: the rest of its messages
 static const char resync_prefix[] = "\xff\xff\xff\xffmw2coop_resync "; // saves.c: the host loads the common checkpoint
+static const char nick_prefix[] = "\xff\xff\xff\xffmw2coop_nick ";	      // nick.c: the partner's name in the lobby
 static int is_session_packet(const char *buf, int len)
 {
 	if ((len >= (int)sizeof(desync_prefix) - 1 && memcmp(buf, desync_prefix, sizeof(desync_prefix) - 1) == 0) ||
 	    (len >= (int)sizeof(nw_prefix) - 1 && memcmp(buf, nw_prefix, sizeof(nw_prefix) - 1) == 0) ||
+	    (len >= (int)sizeof(nick_prefix) - 1 && memcmp(buf, nick_prefix, sizeof(nick_prefix) - 1) == 0) ||
 	    (len >= (int)sizeof(resync_prefix) - 1 && memcmp(buf, resync_prefix, sizeof(resync_prefix) - 1) == 0))
 		return 1;
 	static const char start[] = "\xff\xff\xff\xffmw2coop_start";
@@ -389,6 +392,11 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 					const int k = r - (int)(sizeof(nw_prefix) - 1);
 					memcpy(t, buf + sizeof(nw_prefix) - 1, k < 31 ? k : 31);
 					netwatch_on_packet(t);
+				} else if (r >= (int)sizeof(nick_prefix) - 1 && memcmp(buf, nick_prefix, sizeof(nick_prefix) - 1) == 0) {
+					char t[64] = "";
+					const int k = r - (int)(sizeof(nick_prefix) - 1);
+					memcpy(t, buf + sizeof(nick_prefix) - 1, k < 63 ? k : 63);
+					nick_on_packet(t);
 				} else if (!progress_on_packet(buf, r) && !saves_on_packet(buf, r))
 					menus_on_packet(buf, r);
 			} else if (InterlockedIncrement(&ignored_packets) <= 5)

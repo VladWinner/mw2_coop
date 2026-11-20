@@ -309,6 +309,20 @@ const char *settings_player_id(void)
 	return player_id;
 }
 
+// [player] name in player.ini: the nickname set in the co-op lobby (nick.c), "" when none is
+void settings_player_name(char *out, int size)
+{
+	out[0] = 0;
+	if (player_ini[0])
+		GetPrivateProfileStringA("player", "name", "", out, (DWORD)size, player_ini);
+}
+
+void settings_set_player_name(const char *name)
+{
+	if (!player_ini[0] || !WritePrivateProfileStringA("player", "name", name && name[0] ? name : NULL, player_ini))
+		log_printf("settings: cannot write the nickname to player.ini");
+}
+
 int settings_steam_relay(void)
 {
 	return steam_relay;

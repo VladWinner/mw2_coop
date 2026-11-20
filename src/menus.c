@@ -672,6 +672,51 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 		log_printf("menus: About page added (%d items, icons %s)", n, icons ? "on" : "no picture");
 }
 
+// The Multiplayer button on the iw4x-sp client (owner, 2026-11-20: the official game leads to the official multiplayer, iw4x-sp to iw4x's). The game's own action starts
+// the official iw4mp.exe, which an iw4x-sp install does not play: its multiplayer is IW4x (github.com/iw4x), started by IW4x's launcher next to the game
+// (iw4x-launcher.exe: it updates IW4x and asks which client the first time) or, in an older install, iw4x.exe. The first of them that is there is started from the game's
+// folder and this game quits, as the game's own button does. Without either the button keeps the game's own action.
+static const char *const iw4x_mp_exes[] = {"iw4x-launcher.exe", "iw4x.exe"};
+static int iw4x_mp_path(char *out, size_t size)
+{
+	char dir[MAX_PATH];
+	DWORD n = GetModuleFileNameA(NULL, dir, MAX_PATH);
+	while (n > 0 && dir[n - 1] != '\\')
+		n--;
+	dir[n] = 0;
+	for (size_t i = 0; i < sizeof(iw4x_mp_exes) / sizeof(iw4x_mp_exes[0]); i++) {
+		snprintf(out, size, "%s%s", dir, iw4x_mp_exes[i]);
+		if (GetFileAttributesA(out) != INVALID_FILE_ATTRIBUTES)
+			return 1;
+	}
+	return 0;
+}
+
+static void iw4x_mp_f(void)
+{
+	char exe[MAX_PATH], dir[MAX_PATH], cmd[MAX_PATH + 2];
+	if (!game_is_iw4x() || !iw4x_mp_path(exe, sizeof(exe))) {
+		log_printf("menus: no IW4x launcher next to the game: Multiplayer does nothing here");
+		return;
+	}
+	lstrcpynA(dir, exe, sizeof(dir));
+	char *slash = strrchr(dir, '\\');
+	if (slash)
+		*slash = 0;
+	snprintf(cmd, sizeof(cmd), "\"%s\"", exe);
+	STARTUPINFOA si = {0};
+	PROCESS_INFORMATION pi = {0};
+	si.cb = sizeof(si);
+	if (!CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+		log_printf("menus: IW4x's multiplayer did not start (%s, error %lu)", exe, (unsigned long)GetLastError());
+		return;
+	}
+	CloseHandle(pi.hThread);
+	CloseHandle(pi.hProcess);
+	log_printf("menus: IW4x's multiplayer started (%s); this game quits", exe);
+	game_cbuf_addtext("quit\n");
+}
+
 // The game's own Multiplayer entry: the action of the "game_mp" item of its selection menu (main_selection). The mod's Multiplayer button runs that, so it does what the game's
 // button does; the mod's own modes (co-op, split screen) are on the Campaign page only. NULL if the item is not there.
 static void *original_multiplayer_action(void)
@@ -811,10 +856,16 @@ static void patch_main_menu(void)
 				*(const char **)(item + ITEM_TEXT) = def->text;
 				*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(def->action);
 				if (!strcmp(def->name, "mw2coop_multiplayer_btn")) {
+					char mp[MAX_PATH];
 					void *original = original_multiplayer_action();
-					if (original)
-						*(void **)(item + ITEM_ACTION) = original;
-					log_printf("menus: the Multiplayer button runs %s", original ? "the game's own action" : "the fallback of menus.menu");
+					if (game_is_iw4x() && iw4x_mp_path(mp, sizeof(mp))) {
+						*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_iw4x_mp\" ; ");
+						log_printf("menus: the Multiplayer button starts IW4x (%s)", mp);
+					} else {
+						if (original)
+							*(void **)(item + ITEM_ACTION) = original;
+						log_printf("menus: the Multiplayer button runs %s", original ? "the game's own action" : "the fallback of menus.menu");
+					}
 				}
 				*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
 				*(float *)(item + ITEM_RECT_Y) = y;
@@ -1939,7 +1990,7 @@ static void patch_split_lobby(uint8_t *menu, int spec_split)
 	}
 	if (title_item)
 		*(const char **)(title_item + ITEM_TEXT) = split ? "@MW2COOP_SPLIT_TITLE" : (const char *)title_native;
-	static const char *const online_rows[] = {"invitefriend", "mw2coop_access", "mw2coop_password", "nattype"};
+	static const char *const online_rows[] = {"invitefriend", "mw2coop_access", "mw2coop_password", "nattype", "mw2coop_nick"};
 	if (split || split_was) {
 		for (size_t r = 0; r < sizeof(online_rows) / sizeof(online_rows[0]); r++)
 			for (int i = 0; i < count; i++) {
@@ -3145,6 +3196,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_split_menu", NULL, NULL, split_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_skill", NULL, NULL, split_skill_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_open_url", NULL, NULL, open_url_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_iw4x_mp", NULL, NULL, iw4x_mp_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_specops", NULL, NULL, split_specops_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_go", NULL, NULL, host_go_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},

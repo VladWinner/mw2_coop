@@ -36,9 +36,10 @@
 #include "menus.h"
 #include "menus_ui.h"
 #include "net.h"
+#include "nick.h"
 
 enum { ACCESS_OPEN, ACCESS_PASSWORD, ACCESS_STEAM };
-enum { EDIT_NONE, EDIT_HOST_PASSWORD, EDIT_JOIN_PASSWORD, EDIT_ADDRESS };
+enum { EDIT_NONE, EDIT_HOST_PASSWORD, EDIT_JOIN_PASSWORD, EDIT_ADDRESS, EDIT_NICK };
 
 static uint8_t *base;
 static volatile LONG access_mode = ACCESS_OPEN;
@@ -161,6 +162,8 @@ static void edit_ok_f(void)
 		snprintf(auth, sizeof(auth), "mw2coop_auth %s", text);
 		net_send_mod_to(edit_ip, edit_port, auth); // before the join's coopConnect (next frame)
 		join_now(edit_ip, edit_port);
+	} else if (mode == EDIT_NICK) {
+		nick_set(text); // ("" goes back to the default name)
 	} else if (mode == EDIT_ADDRESS) {
 		uint8_t ip[4];
 		uint16_t port;
@@ -170,6 +173,18 @@ static void edit_ok_f(void)
 		}
 		menus_find_at(ip, port); // learns whether it is locked, then access_join
 	}
+}
+
+// mw2coop_nick_edit: the lobby's Nickname row (host and client, campaign and Spec Ops lobbies): the popup opens with the current nickname in its field
+static void nick_edit_f(void)
+{
+	char now[40], cmd[96];
+	nick_clean(nick_current(), now, sizeof(now));
+	edit_mode = EDIT_NICK;
+	localize_select("MW2COOP_EDIT_TITLE", "MW2COOP_EDIT_NICK");
+	localize_select("MW2COOP_EDIT_LABEL", "MW2COOP_LABEL_NICK");
+	snprintf(cmd, sizeof(cmd), "set mw2coop_edit \"%s\"\nopenmenu mw2coop_edit\n", now);
+	game_cbuf_addtext(cmd);
 }
 
 // mw2coop_join_address: the list's last row
@@ -255,11 +270,11 @@ static uint8_t *lobby_row(uint8_t *from, uint8_t *menu, const char *name, const 
 	return row;
 }
 
-// The Access and Friendly fire rows: inserted into coop_lobby's items while it holds a campaign
-// mission.
-#define LOBBY_ROWS 5 // access, friendly fire, password, and the split screen lobby's two difficulty rows (shown by menus.c)
-#define LOBBY_SHIFT_ROWS 3 // the lines the rows below move down (the first three rows; the difficulty rows only exist in the split screen lobby, which lays them out itself)
-static uint8_t *lobby_menu, **native_items, **campaign_items, *password_row;
+// The Nickname, Access and Friendly fire rows: inserted into coop_lobby's items. The Nickname row (nick.c; owner, 2026-11-20) is in both of its lobbies, the campaign's
+// and Spec Ops', for the host and the client alike, on the free line under Invite a friend; in the campaign lobby the host's rows follow it.
+#define LOBBY_ROWS 6 // nickname, access, friendly fire, password, and the split screen lobby's two difficulty rows (shown by menus.c)
+#define LOBBY_SHIFT_ROWS 4 // the lines the rows below move down (the first four rows; the difficulty rows only exist in the split screen lobby, which lays them out itself)
+static uint8_t *lobby_menu, **native_items, **campaign_items, **specops_items, *password_row;
 static int native_count;
 
 static void patch_lobby_row(int campaign)
@@ -268,7 +283,7 @@ static void patch_lobby_row(int campaign)
 	if (!menu)
 		return;
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
-	if (menu != lobby_menu || (items != native_items && items != campaign_items)) {
+	if (menu != lobby_menu || (items != native_items && items != campaign_items && items != specops_items)) {
 		// first look, or the UI zone was reloaded
 		int at = ui_item_index(menu, "invitefriend");
 		if (at < 0)
@@ -277,27 +292,37 @@ static void patch_lobby_row(int campaign)
 		native_items = items;
 		native_count = *(int *)(menu + MENU_ITEM_COUNT);
 		float y = *(float *)(items[at] + ITEM_RECT_Y) + BUTTON_HEIGHT;
+		uint8_t *nick = lobby_row(items[at], menu, "mw2coop_nick", "@MW2COOP_NICK",
+					  "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_nick_edit\" ; ", y);
+		*(void **)(nick + ITEM_FLOAT_EXPS) = NULL; // (a copy of the invite row, which is greyed out offline: this one is always on)
+		*(void **)(nick + ITEM_DISABLED_EXP) = NULL;
 		uint8_t *access = lobby_row(items[at], menu, "mw2coop_access", "@MW2COOP_ACCESS",
-					    "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_access\" ; ", y);
+					    "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_access\" ; ", y + BUTTON_HEIGHT);
 		uint8_t *ff = lobby_row(items[at], menu, "mw2coop_ff", "@MW2COOP_FF",
-					"\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_ff\" ; ", y + BUTTON_HEIGHT);
+					"\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_ff\" ; ", y + 2 * BUTTON_HEIGHT);
 		password_row = lobby_row(items[at], menu, "mw2coop_password", "@MW2COOP_PW",
-					 "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_password\" ; ", y + 2 * BUTTON_HEIGHT);
+					 "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_password\" ; ", y + 3 * BUTTON_HEIGHT);
 		uint8_t *skill1 = lobby_row(items[at], menu, "mw2coop_skill1", "@MW2COOP_SKILL1",
-					    "\"play\" \"mouse_click\" ; \"open\" \"mw2coop_skill_p1\" ; ", y + 3 * BUTTON_HEIGHT);
+					    "\"play\" \"mouse_click\" ; \"open\" \"mw2coop_skill_p1\" ; ", y + 4 * BUTTON_HEIGHT);
 		uint8_t *skill2 = lobby_row(items[at], menu, "mw2coop_skill2", "@MW2COOP_SKILL2",
-					    "\"play\" \"mouse_click\" ; \"open\" \"mw2coop_skill_p2\" ; ", y + 4 * BUTTON_HEIGHT);
+					    "\"play\" \"mouse_click\" ; \"open\" \"mw2coop_skill_p2\" ; ", y + 5 * BUTTON_HEIGHT);
 		campaign_items = HeapAlloc(GetProcessHeap(), 0, (native_count + LOBBY_ROWS) * sizeof(*campaign_items));
 		memcpy(campaign_items, native_items, (at + 1) * sizeof(*campaign_items));
-		campaign_items[at + 1] = access;
-		campaign_items[at + 2] = ff;
-		campaign_items[at + 3] = password_row;
-		campaign_items[at + 4] = skill1;
-		campaign_items[at + 5] = skill2;
-		memcpy(campaign_items + at + 6, native_items + at + 1, (native_count - at - 1) * sizeof(*campaign_items));
-		// the Friendly fire and Password rows take the line of the lobby's NAT type text
-		// ("nattype", y 126) and the next: the left column's items from that line down (aligned
-		// top-left like the buttons) move two lines lower, and so do the focused button's hint
+		campaign_items[at + 1] = nick;
+		campaign_items[at + 2] = access;
+		campaign_items[at + 3] = ff;
+		campaign_items[at + 4] = password_row;
+		campaign_items[at + 5] = skill1;
+		campaign_items[at + 6] = skill2;
+		memcpy(campaign_items + at + 7, native_items + at + 1, (native_count - at - 1) * sizeof(*campaign_items));
+		// Spec Ops: the game's items with the Nickname row on the free line, nothing moves
+		specops_items = HeapAlloc(GetProcessHeap(), 0, (native_count + 1) * sizeof(*specops_items));
+		memcpy(specops_items, native_items, (at + 1) * sizeof(*specops_items));
+		specops_items[at + 1] = nick;
+		memcpy(specops_items + at + 2, native_items + at + 1, (native_count - at - 1) * sizeof(*specops_items));
+		// the Access, Friendly fire and Password rows take the line of the lobby's NAT type text
+		// ("nattype", y 126) and the next two: the left column's items from that line down (aligned
+		// top-left like the buttons) move three lines lower, and so do the focused button's hint
 		// lines under them ("description", aligned to the bottom, y -262 and -242; the operation
 		// panel starts at -202); copies, so the Spec Ops lobby keeps its layout
 		for (int i = at + LOBBY_ROWS + 1; i < native_count + LOBBY_ROWS; i++) {
@@ -313,14 +338,14 @@ static void patch_lobby_row(int campaign)
 			campaign_items[i] = moved;
 		}
 	}
-	uint8_t **want = campaign ? campaign_items : native_items;
+	uint8_t **want = campaign ? campaign_items : specops_items;
+	const int want_count = campaign ? native_count + LOBBY_ROWS : native_count + 1;
 	if (items != want) {
 		// shrink the count before the array goes back, grow it after the new one is in
-		if (!campaign)
-			*(int *)(menu + MENU_ITEM_COUNT) = native_count;
+		if (want_count < *(int *)(menu + MENU_ITEM_COUNT))
+			*(int *)(menu + MENU_ITEM_COUNT) = want_count;
 		*(uint8_t ***)(menu + MENU_ITEMS) = want;
-		if (campaign)
-			*(int *)(menu + MENU_ITEM_COUNT) = native_count + LOBBY_ROWS;
+		*(int *)(menu + MENU_ITEM_COUNT) = want_count;
 	}
 }
 
@@ -330,6 +355,13 @@ void access_tick(int campaign_lobby, int host)
 		return;
 	add_edit_menu();
 	patch_lobby_row(campaign_lobby);
+	nick_tick();
+	{ // the Nickname row: "Nickname: <the name this PC gives>"
+		const char *fmt = localize_text("MW2COOP_NICK_FMT");
+		char row[96];
+		snprintf(row, sizeof(row), fmt ? fmt : "Nickname: %s", nick_current());
+		localize_set_text("MW2COOP_NICK", row);
+	}
 	InterlockedExchange(&hosting, campaign_lobby && host);
 	if (!campaign_lobby) {
 		// a new lobby starts open; the password is not kept
@@ -475,6 +507,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_join_address", NULL, NULL, join_address_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_access", NULL, NULL, access_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_ff", NULL, NULL, ff_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_nick_edit", NULL, NULL, nick_edit_f CMD_NODE_FLAG},
 };
 
 void access_install(void)

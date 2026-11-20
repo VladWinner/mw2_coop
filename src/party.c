@@ -30,6 +30,7 @@
 #include "log.h"
 #include "settings.h"
 #include "party.h"
+#include "nick.h"
 #include "upnp.h"
 
 static uint8_t *base;
@@ -135,6 +136,7 @@ static void join_f(void)
 	}
 	if (!party_join(addr, port))
 		return;
+	nick_joined_by_address(); // a LAN session: "Player 2" unless a nickname is set (nick.c); before the connect, whose coopConnect carries the name
 	// connect stores its port argument as-is into a network-order field
 	char cmd[64];
 	if (game_is_iw4x()) // the iw4x-sp client replaces `connect` by one that takes the plain port, swaps it and runs the game's own as `connect_coop`

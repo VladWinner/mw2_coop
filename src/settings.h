@@ -91,3 +91,6 @@ const char *settings_discord_id(void);
 const char *settings_discord_image(void);
 // mw2coop\player.ini [player] id: 32 lowercase hex digits, made up once (main thread only).
 const char *settings_player_id(void);
+// [player] name in player.ini: the co-op lobby's nickname (nick.c); "" when none is set
+void settings_player_name(char *out, int size);
+void settings_set_player_name(const char *name);

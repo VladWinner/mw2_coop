@@ -174,6 +174,12 @@ static void register_dvars(void)
 		const opt_t *t = &opts[o];
 		if (!t->own) {
 			dvars[o] = game_find_dvar(t->dvar);
+			// A game dvar on this page is one the player sets here, so the game saves it in its config like the page's own (Vlad, 2026-11-20: the frame rate limit
+			// was lost at every start; the game registers com_maxfps without ARCHIVE). sv_cheats goes the other way (console.c).
+			if (dvars[o] && !(dvars[o]->flags & DVAR_ARCHIVE)) {
+				InterlockedOr((volatile LONG *)&dvars[o]->flags, DVAR_ARCHIVE);
+				log_printf("enhopts: %s is saved in the game's config now", t->dvar);
+			}
 			last[o] = value_of(o);
 			continue;
 		}

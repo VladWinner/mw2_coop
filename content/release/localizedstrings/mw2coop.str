@@ -116,6 +116,18 @@ REFERENCE           MW2COOP_LABEL_ADDRESS
 LANG_ENGLISH        "Address:"
 LANG_RUSSIAN        "Адрес:"
 
+REFERENCE           MW2COOP_NICK_FMT
+LANG_ENGLISH        "Nickname: %s"
+LANG_RUSSIAN        "Ник: %s"
+
+REFERENCE           MW2COOP_EDIT_NICK
+LANG_ENGLISH        "Your nickname"
+LANG_RUSSIAN        "Ваш ник"
+
+REFERENCE           MW2COOP_LABEL_NICK
+LANG_ENGLISH        "Nickname:"
+LANG_RUSSIAN        "Ник:"
+
 REFERENCE           MW2COOP_BY_ADDRESS
 LANG_ENGLISH        "Enter an address..."
 LANG_RUSSIAN        "Ввести адрес вручную..."
@@ -285,8 +297,8 @@ LANG_ENGLISH        "Fall damage in co-op"
 LANG_RUSSIAN        "Урон от падения в кооперативе"
 
 REFERENCE           MW2COOP_ENH_BOXVIEW
-LANG_ENGLISH        "Console-style view boxes (split screen)"
-LANG_RUSSIAN        "Виды как на консоли (со сдвигом)"
+LANG_ENGLISH        "Players in opposite corners (as on consoles)"
+LANG_RUSSIAN        "Игроки по разным углам (как на консолях)"
 
 REFERENCE           MW2COOP_ENH_BORDERLESS
 LANG_ENGLISH        "Borderless full screen"

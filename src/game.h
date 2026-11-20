@@ -86,7 +86,10 @@ int game_is_iw4x(void);
 #define RVA_PARTY_IS_HOST        XRA(0x534448) // uint8: set by listen (0x57a860), cleared by a client's join
 #define RVA_PARTY_ACTIVE         XRA(0x534449) // uint8, gates the party frame (0x4a4be0); lobby +8 must be set too
 #define RVA_PARTY_LAUNCH         XRA(0x53444b) // uint8, set by coopLaunch (0x57aa20); the frame (0x57c800) launches with two members
-#define RVA_PARTY_MEMBER_NAMES   XRA(0x534458) // char[32] per member, stride 0x38 (timers at +0x20, difficulty at +0x28)
+// char[32] per member, stride 0x38. The names begin at 0x534454 (VA 0x934454: 6 references in the code; 0x934458 has none; 1.0.159: VA 0x9379dc). Until 2026-11-20
+// the mod read them at 0x534458, 4 bytes into the name: a lobby name written there showed as "Unkn" + the name (the nickname test). The table key stays 0x534458 (its
+// signatures in addresses-x86.txt, the 1.0.159 entry), the 4 bytes come off here.
+#define RVA_PARTY_MEMBER_NAMES   (XRA(0x534458) - 4)
 #define RVA_PARTY_START_TIME     XRA(0x53444c) // int32
 #define RVA_LOBBY_SLOT_USED      XRA(0x035ff0) // char (lobby, slot): the slot is taken (called in Party_Activate 0x45dde0)
 #define RVA_PARTY_RESET          XRA(0x02f0f0) // void Party_Reset(void)

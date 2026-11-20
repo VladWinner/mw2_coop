@@ -118,6 +118,13 @@ static const ModString strings[] = {
 	// Адрес:
 	{"MW2COOP_LABEL_ADDRESS", "\xc0\xe4\xf0\xe5\xf1:",
 	 "Address:"},
+	// Ник: %s (the lobby's Nickname row, nick.c) / Ваш ник / Ник:
+	{"MW2COOP_NICK_FMT", "\xcd\xe8\xea: %s",
+	 "Nickname: %s"},
+	{"MW2COOP_EDIT_NICK", "\xc2\xe0\xf8 \xed\xe8\xea",
+	 "Your nickname"},
+	{"MW2COOP_LABEL_NICK", "\xcd\xe8\xea:",
+	 "Nickname:"},
 	// Ввести адрес вручную...
 	{"MW2COOP_BY_ADDRESS", "\xc2\xe2\xe5\xf1\xf2\xe8 \xe0\xe4\xf0\xe5\xf1 \xe2\xf0\xf3\xf7\xed\xf3\xfe...",
 	 "Enter an address..."},
@@ -186,7 +193,7 @@ static const ModString strings[] = {
 	{"MW2COOP_SKILL_P2_TITLE", "\xc1\xf0\xe0\xe2\xee\x3a\x20\xf1\xeb\xee\xe6\xed\xee\xf1\xf2\xfc", "Bravo: difficulty"},
 	{"MW2COOP_SKILL_LABEL", "\xd1\xeb\xee\xe6\xed\xee\xf1\xf2\xfc", "Difficulty"},
 	{"MW2COOP_ENH_FALLDMG", "\xd3\xf0\xee\xed \xee\xf2 \xef\xe0\xe4\xe5\xed\xe8\xff \xe2 \xea\xee\xee\xef\xe5\xf0\xe0\xf2\xe8\xe2\xe5", "Fall damage in co-op"},
-	{"MW2COOP_ENH_BOXVIEW", "\xc2\xe8\xe4\xfb\x20\xea\xe0\xea\x20\xed\xe0\x20\xea\xee\xed\xf1\xee\xeb\xe8\x20\x28\xf1\xee\x20\xf1\xe4\xe2\xe8\xe3\xee\xec\x29", "Console-style view boxes (split screen)"},
+	{"MW2COOP_ENH_BOXVIEW", "\xc8\xe3\xf0\xee\xea\xe8\x20\xef\xee\x20\xf0\xe0\xe7\xed\xfb\xec\x20\xf3\xe3\xeb\xe0\xec\x20\x28\xea\xe0\xea\x20\xed\xe0\x20\xea\xee\xed\xf1\xee\xeb\xff\xf5\x29", "Players in opposite corners (as on consoles)"},
 	{"MW2COOP_ENH_BORDERLESS", "\xcd\xe0 \xe2\xe5\xf1\xfc \xfd\xea\xf0\xe0\xed \xe1\xe5\xe7 \xf0\xe0\xec\xea\xe8", "Borderless full screen"},
 	{"MW2COOP_ENH_DARKTITLE", "\xd2\xb8\xec\xed\xfb\xe9 \xe7\xe0\xe3\xee\xeb\xee\xe2\xee\xea \xee\xea\xed\xe0", "Dark title bar"},
 	{"MW2COOP_ENH_MSAA", "\xd1\xe3\xeb\xe0\xe6\xe8\xe2\xe0\xed\xe8\xe5\x20\x4d\x53\x41\x41", "MSAA anti-aliasing"},
@@ -308,6 +315,7 @@ static Alias aliases[] = {
 	{"MW2COOP_ACCESS", "MW2COOP_ACCESS_OPEN", -2, "", {NULL, NULL}},
 	{"MW2COOP_FF", "MW2COOP_FF_ON", -2, "", {NULL, NULL}},
 	{"MW2COOP_PW", "MW2COOP_PW_UNSET", -2, "", {NULL, NULL}},
+	{"MW2COOP_NICK", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_SKILL1", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_SKILL2", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_EDIT_TITLE", "MW2COOP_EDIT_PASSWORD", -2, "", {NULL, NULL}},

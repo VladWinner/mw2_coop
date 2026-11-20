@@ -1,0 +1,15 @@
+#pragma once
+// The player's nickname in the co-op lobby (nick.c).
+#include <stddef.h>
+
+// the name this PC gives now (the nickname, the Steam name, or "Player 1" / "Player 2")
+const char *nick_current(void);
+// a new nickname from the lobby's popup ("" goes back to the default); saved in player.ini and told to the partner
+void nick_set(const char *text);
+void nick_clean(const char *in, char *out, size_t size);
+// party.c: this PC joins a lobby by address (a LAN session), before its connect
+void nick_joined_by_address(void);
+// net.c: the partner's "mw2coop_nick <L|S> <name>"
+void nick_on_packet(const char *text);
+// the menus' tick (main thread)
+void nick_tick(void);

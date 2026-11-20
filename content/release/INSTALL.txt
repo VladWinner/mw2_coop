@@ -54,7 +54,7 @@ Steam. Через VPN подключайтесь через ПРИСОЕДИНИ
 мыши, любую кнопку геймпада для геймпада (Xbox через XInput; PlayStation, Switch и 8BitDo через SDL 3, mw2coop\SDL3.dll). Backspace (клавиатура) или Back (геймпад) отменяет выбор. "Старт"
 ждёт, пока выберут оба. Любой игрок может играть на любом устройстве: два геймпада или геймпад и клавиатура.
 В лобби у каждого игрока своя строка сложности. Экран режется на верхнюю и нижнюю половины (Настройки -> Enhanced ->
-"Виды как на консоли (со сдвигом)" даёт консольную раскладку из двух смещённых окон); при возврате в меню режим
+"Игроки по разным углам (как на консолях)" даёт консольную раскладку из двух смещённых окон); при возврате в меню режим
 выключается сам.
 Геймпад (раскладка консоли): левый стик — движение, правый — обзор, LT — прицел, RT — огонь, A — прыжок, B — стойка
 (удержание — лёжа), X — перезарядка (удержание — использовать), Y — следующее оружие, LB / RB — гранаты, LS — бег,
@@ -120,7 +120,7 @@ Each player presses a button on the device they will play on: a key or the mouse
 a gamepad for a gamepad (Xbox pads through XInput; PlayStation, Switch and 8BitDo pads through SDL 3, mw2coop\SDL3.dll). Backspace (keyboard) or Back (gamepad) takes the choice back. Start waits until both
 have chosen. Either player can play on either device; two gamepads, or one gamepad and the keyboard, both work.
 The lobby has a difficulty row for each player. The screen is cut into a top and a bottom half (Settings -> Enhanced ->
-"Console-style view boxes" gives the console's layout of two offset boxes); the mode switches itself off when you are
+"Players in opposite corners (as on consoles)" gives the console's layout of two offset boxes); the mode switches itself off when you are
 back in the menus.
 Gamepad (the console layout): left stick move, right stick look, LT aim, RT fire, A jump, B stance (hold: prone),
 X reload (hold: use), Y next weapon, LB / RB grenades, LS sprint, RS melee, Back objectives, Start pause, d-pad the

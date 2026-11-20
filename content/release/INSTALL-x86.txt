@@ -27,7 +27,7 @@ https://github.com/stxlvn/mw2_enhanced
 Проблемы: приложите mw2coop\mw2coop.log обоих игроков (и mw2coop\crash.dmp, если игра упала).
 
 Клиент iw4x-sp: этот архив работает и с ним. Положите winmm.dll и папку mw2coop рядом с iw4sp.exe и iw4x-sp.exe (iw4sp.exe версии 1.0.159; в нынешней установке AlterWare 1.0.159 лежит в data\iw4sp.exe, а iw4sp.exe остаётся 64-битным из Steam, так тоже работает) и запускайте игру через iw4x-sp.exe как
-обычно; мод сам узнаёт клиент. iw4x-sp по умолчанию зовёт всех "Unknown Soldier": задайте свой ник командой name <ник> в консоли.
+обычно; мод сам узнаёт клиент. Свой ник задаётся в лобби кооператива, в строке "Ник" (без ника по сети в LAN игроки зовутся Player 1 и Player 2, через Steam - по нику Steam).
 Проверено ботами на клиенте iw4x-sp: сетевой кооператив двух копий на одном ПК (тренировка), разделённый экран
 (тренировка, от "Just Like Old Times" до музея), контрольные точки после проваленной миссии.
 
@@ -57,7 +57,7 @@ checked: playing over the internet between two PCs on this build.
 Problems: attach mw2coop\mw2coop.log from both players (and mw2coop\crash.dmp if the game crashed).
 
 The iw4x-sp client: this archive works with it too. Put winmm.dll and the mw2coop folder next to iw4sp.exe and iw4x-sp.exe (the 1.0.159 iw4sp.exe; AlterWare's current install keeps 1.0.159 in data\iw4sp.exe and leaves Steam's 64-bit iw4sp.exe in place, which works too) and start the game through
-iw4x-sp.exe as usual; the mod recognises the client by itself. iw4x-sp calls everybody "Unknown Soldier" by default: set your own name with name <nick> in the console.
+iw4x-sp.exe as usual; the mod recognises the client by itself. Set your nickname in the co-op lobby, on its "Nickname" row (without one a LAN game calls the players Player 1 and Player 2, a Steam game uses the Steam names).
 Checked with bots on the iw4x-sp client: online co-op of two copies on one PC (the Trainer), the split screen (the
 Trainer, Just Like Old Times to the Museum), the checkpoints after a failed mission.
 
