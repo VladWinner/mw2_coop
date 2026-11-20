@@ -17,6 +17,7 @@
 #include "d3dcap.h"
 #include "crash.h"
 #include "fov.h"
+#include "iw4xtext.h"
 #include "window.h"
 #include "access.h"
 #include "enhopts.h"
@@ -171,6 +172,22 @@ static int iw4x_known(const char *code_hex)
 	return 0;
 }
 
+// The game's own console on the iw4x-sp client (player report 2026-11-20: two consoles open, the game's prompt "iw4x-sp: 0.0.1>" over the mod's). The game's key handler (1.0.159
+// VA 0x442e60) lets ` and ~ open its console only when the dvar monkeytoy ("restrict console access", VA 0x86e7ec) is 0: the official builds register it as 1, iw4x-sp as 0.
+// The mod's window procedure takes the key, but a press that reached the game first (the seconds before the mod is in, the window made again by a vid_restart) opened the
+// game's console, which the key then no longer closed. Here monkeytoy goes to 1, as on the official builds, and a game console already open is closed (key catcher bit 1 of
+// local client 0, 1.0.159 VA 0x929140): the mod's console is the console here too.
+static void iw4x_game_console_off(void)
+{
+	game_cbuf_addtext("set monkeytoy 1\n");
+	volatile unsigned *catchers = (volatile unsigned *)((uint8_t *)GetModuleHandleA(NULL) + XR(0x525bb8));
+	if (*catchers & 1) {
+		*catchers &= ~1u;
+		log_printf("main32: iw4x-sp: the game's own console was open: closed");
+	}
+	log_printf("main32: iw4x-sp: the game's own console is off (monkeytoy 1, as on the official builds); the mod's console opens with `");
+}
+
 static BOOL CALLBACK find_game_window(HWND h, LPARAM out)
 {
 	DWORD pid;
@@ -314,6 +331,8 @@ static DWORD WINAPI identify(LPVOID unused)
 			log_printf("main32: known build: 1.0.159 iw4sp.exe of the iw4x-sp client");
 			addr_use_159();
 			install_all();
+			iw4x_game_console_off();
+			iw4xtext_install();
 			return 0;
 		}
 	}

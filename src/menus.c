@@ -1969,6 +1969,13 @@ static void patch_split_lobby(uint8_t *menu, int spec_split)
 			if (!want)
 				want = kb_material; // (the gamepad picture is made once the keyboard's texture is there)
 		}
+#ifndef _WIN64
+		else { // the online lobby too: the game's own picture is the same empty placeholder there, a white box on the iw4x-sp client (player report 2026-11-20)
+			want = (uint8_t *)padicon_keyboard_material(kb_material);
+			if (!want)
+				want = kb_material;
+		}
+#endif
 		*(uint8_t **)(cards[pl] + ITEM_BACKGROUND_PTR) = want;
 		uint32_t *flags = (uint32_t *)(cards[pl] + ITEM_DYNAMIC_FLAGS);
 		if (shown)

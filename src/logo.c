@@ -285,42 +285,44 @@ void logo_install(void *material, int dump_only)
 
 // A copy of <template_material> (a Material *, here the logo's) with the About page's four icons (mw2coop\about-icons.tga, 512 x 128, straight alpha) as its picture. The game's own
 // material and image are not touched: the copy has its own texture table and image (as padicon.c does for the gamepad picture; copied a little over their ends, as menu copies are).
+// The page is made again after every vid_restart, and the copy with it when the template changed (modtex_snapshot_t: a black box, then errors, before 2026-11-20).
 void *icons_material(void *template_material)
 {
 	static uint8_t *copy;
-	if (copy)
-		return copy;
+	static uint8_t mat[0x100], tab[0x40], img[0x80];
+	static modtex_snapshot_t made_from;
 	uint8_t *src = template_material;
-	if (!src || !readable(src, 0x100))
-		return NULL;
-	uint8_t *table = *(uint8_t **)(src + MATERIAL_TABLE);
+	uint8_t *table = src && readable(src, 0x100) ? *(uint8_t **)(src + MATERIAL_TABLE) : NULL;
 	uint8_t *image = table && readable(table, 0x40) ? *(uint8_t **)(table + DEF_IMAGE) : NULL;
 	if (!image || !readable(image, 0x80) || !(natboot_active() || d3dcap_device()))
-		return NULL;
+		return copy;
+	if (copy && !modtex_snapshot_differs(&made_from, src, table, image))
+		return copy;
 	char path[MAX_PATH];
 	game_dir_file("mw2coop\\about-icons.tga", path, sizeof(path));
 	int w = 0, h = 0;
 	uint32_t *px = read_tga(path, &w, &h);
 	if (!px) {
 		log_printf("logo: %s is missing: no icons on the About page", path);
-		return NULL;
+		return copy;
 	}
 	IDirect3DTexture9 *tex = modtex_create(*(void **)image, (UINT)w, (UINT)h, 1, D3DFMT_A8R8G8B8);
 	if (!tex) {
 		free(px);
-		return NULL;
+		return copy;
 	}
 	D3DLOCKED_RECT lr;
 	if (FAILED(modtex_lock(tex, 0, &lr, 0))) {
 		modtex_release(tex);
 		free(px);
-		return NULL;
+		return copy;
 	}
 	for (int y = 0; y < h; y++)
 		memcpy((uint8_t *)lr.pBits + (size_t)y * lr.Pitch, px + (size_t)y * w, (size_t)w * 4);
 	modtex_unlock(tex, 0);
 	free(px);
-	static uint8_t mat[0x100], tab[0x40], img[0x80];
+	IDirect3DTexture9 *old = copy ? *(IDirect3DTexture9 **)img : NULL;
+	modtex_snapshot_take(&made_from, src, table, image);
 	memcpy(mat, src, 0x100);
 	memcpy(tab, table, 0x40);
 	memcpy(img, image, 0x80);
@@ -330,7 +332,8 @@ void *icons_material(void *template_material)
 			*(uint8_t **)(tab + i * 16 + DEF_IMAGE) = img;
 	*(uint8_t **)(mat + MATERIAL_TABLE) = tab;
 	*(const char **)mat = "mw2coop_about_icons";
+	log_printf("logo: the About page's icons made%s (%dx%d)", copy ? " again (the template changed: a vid_restart)" : "", w, h);
 	copy = mat;
-	log_printf("logo: the About page's icons made (%dx%d)", w, h);
+	modtex_release(old);
 	return copy;
 }

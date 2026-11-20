@@ -1144,8 +1144,7 @@ static void slots_take_out(void)
 }
 
 // (vid_restart) the entries that are out are forgotten (they go back on the new device); one that could not be taken out (something else on top of
-// it) is kept, so a later take-out still knows it is ours (the 64-bit game's vid_restart only)
-#ifdef _WIN64
+// it) is kept, so a later take-out still knows it is ours (vid_restart, both builds since 2026-11-20)
 static void slots_forget_out(void)
 {
 	AcquireSRWLockExclusive(&slots_lock);
@@ -1156,7 +1155,6 @@ static void slots_forget_out(void)
 	nslots = k;
 	ReleaseSRWLockExclusive(&slots_lock);
 }
-#endif
 
 static void slots_put_back(void)
 {
@@ -2010,11 +2008,13 @@ static DWORD WINAPI device_hooks_thread(LPVOID unused)
 	for (int i = 0; i < 600; i++) {
 #ifdef _WIN64
 		if (base && *(void **)(base + RVA_D3D_DEVICE)) {
+#else
+		if (d3dcap_device()) { // (32 bits: started only after a vid_restart, below)
+#endif
 			Sleep(2000); // let the game and Steam overlay finish setting up the device
 			(void)native_present_hooks();
 			return 0;
 		}
-#endif
 		Sleep(500);
 	}
 	return 0;
@@ -2127,7 +2127,29 @@ static void vid_restart_hook(void)
 		}
 	}
 	zones_pools_reset(); // the restart initialises the asset database again: the raised pool sizes of the co-op levels must not be what it builds from
+	// The device hooks out before the restart and back on the new device afterwards, as on 64 bits (above). Until 2026-11-20 the 32-bit builds left them in: once the
+	// console had been opened (its Present hooks go in then), a vid_restart in the menus with the Steam overlay loaded ended in a stack overflow between the overlay's Present
+	// and ours (iw4x-sp test: the console opened and closed, then r_aaSamples 4 and vid_restart; a player's report the same day: "error and heavy freezes" after video changes).
+	const int had_present_hooks = the_device != NULL;
+	if (the_device || bink_fit_device) {
+		log_printf("native: vid_restart: the device hooks are taken out, they go back on the new device");
+		slots_take_out();
+		slots_forget_out();
+		the_device = NULL;
+		bink_fit_device = NULL;
+		comp_not_before = GetTickCount() + 4000;
+	}
 	vid_restart_original();
+	if (cfg("filmfit", 1)) {
+		HANDLE t = CreateThread(NULL, 0, bink_device_hooks_thread, NULL, 0, NULL);
+		if (t)
+			CloseHandle(t);
+	}
+	if (had_present_hooks) {
+		HANDLE t = CreateThread(NULL, 0, device_hooks_thread, NULL, 0, NULL);
+		if (t)
+			CloseHandle(t);
+	}
 }
 static void vid_restart_install(void)
 {

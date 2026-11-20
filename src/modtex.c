@@ -147,6 +147,32 @@ HRESULT modtex_unlock(void *tex, UINT level)
 	return E_FAIL;
 }
 
+void *modtex_device_of(void *tex)
+{
+	if (!tex || natboot_active())
+		return NULL;
+	IDirect3DDevice9 *dev = NULL;
+	if (FAILED(IDirect3DTexture9_GetDevice((IDirect3DTexture9 *)tex, &dev)) || !dev)
+		return NULL;
+	IDirect3DDevice9_Release(dev);
+	return dev;
+}
+
+void modtex_snapshot_take(modtex_snapshot_t *s, const void *material, const void *table, const void *image)
+{
+	memcpy(s->mat, material, sizeof(s->mat));
+	memcpy(s->tab, table, sizeof(s->tab));
+	memcpy(s->img, image, sizeof(s->img));
+	s->device = modtex_device_of(*(void *const *)image);
+	s->taken = 1;
+}
+
+int modtex_snapshot_differs(const modtex_snapshot_t *s, const void *material, const void *table, const void *image)
+{
+	return !s->taken || memcmp(s->mat, material, sizeof(s->mat)) || memcmp(s->tab, table, sizeof(s->tab)) || memcmp(s->img, image, sizeof(s->img)) ||
+	       modtex_device_of(*(void *const *)image) != s->device;
+}
+
 void modtex_release(void *tex)
 {
 	if (!tex)

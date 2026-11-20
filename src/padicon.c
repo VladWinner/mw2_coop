@@ -173,29 +173,34 @@ static void sample_kb(float x, float y, float *grey, float *alpha)
 typedef void (*sample_fn)(float, float, float *, float *);
 static uint8_t *pad_material, *kb_material;
 
+// (made again when the template is not what it was copied from: a vid_restart, modtex_snapshot_t)
 static void *build_material(void *keyboard_material, sample_fn fn, float width, float top, float bottom, const char *name, uint8_t **cache)
 {
-	if (*cache || !keyboard_material)
+	static modtex_snapshot_t made_from[2]; // each copy's template as it was copied
+	const int slot = cache == &kb_material;
+	if (!keyboard_material)
 		return *cache;
 	uint8_t *kb = (uint8_t *)keyboard_material;
 	uint8_t *table = *(uint8_t **)(kb + MATERIAL_TABLE);
 	uint8_t *image = table ? *(uint8_t **)(table + 8) : NULL;
 	IDirect3DTexture9 *old = image ? *(IDirect3DTexture9 **)image : NULL;
 	if (!old)
-		return NULL; // the renderer has not made the keyboard's texture yet
+		return *cache; // the renderer has not made the keyboard's texture yet
+	if (*cache && !modtex_snapshot_differs(&made_from[slot], kb, table, image))
+		return *cache;
 	D3DSURFACE_DESC desc;
 	if (FAILED(modtex_get_level_desc(old, 0, &desc)))
-		return NULL;
+		return *cache;
 	UINT w = desc.Width < 256 ? 256 : desc.Width, h = desc.Height < 256 ? 256 : desc.Height; // (the 32-bit game's placeholder of the card is 16 x 16: too small for a picture)
 	IDirect3DTexture9 *tex = modtex_create(old, w, h, 1, D3DFMT_A8R8G8B8);
 	if (!tex) {
 		log_printf("padicon: cannot make the gamepad texture (%ux%u)", w, h);
-		return NULL;
+		return *cache;
 	}
 	D3DLOCKED_RECT r;
 	if (FAILED(modtex_lock(tex, 0, &r, 0))) {
 		modtex_release(tex);
-		return NULL;
+		return *cache;
 	}
 	// the picture is square; the keyboard and mouse in theirs span about 0.9 of its width and, vertically, 0.36 to 0.88 (measured on a
 	// 1080p screenshot of the lobby): the gamepad gets 0.84 of the width and the same middle, 0.62
@@ -220,8 +225,9 @@ static void *build_material(void *keyboard_material, sample_fn fn, float width, 
 	modtex_unlock(tex, 0);
 	// the copies: the material with its own texture table and image (they are read a little over their ends, as menu copies are)
 	static uint8_t mats[2][0x100], tabs[2][0x40], imgs[2][0x80];
-	int slot = cache == &kb_material;
 	uint8_t *mat = mats[slot], *tab = tabs[slot], *img = imgs[slot];
+	IDirect3DTexture9 *was = *cache ? *(IDirect3DTexture9 **)img : NULL;
+	modtex_snapshot_take(&made_from[slot], kb, table, image);
 	memcpy(mat, kb, 0x100);
 	memcpy(tab, table, 0x40);
 	memcpy(img, image, 0x80);
@@ -231,8 +237,9 @@ static void *build_material(void *keyboard_material, sample_fn fn, float width, 
 			*(uint8_t **)(tab + i * 16 + 8) = img;
 	*(uint8_t **)(mat + MATERIAL_TABLE) = tab;
 	*(const char **)mat = name;
+	log_printf("padicon: %s picture made%s (%ux%u)", name, *cache ? " again (the template changed: a vid_restart)" : "", w, h);
 	*cache = mat;
-	log_printf("padicon: %s picture made (%ux%u)", name, w, h);
+	modtex_release(was);
 	return *cache;
 }
 

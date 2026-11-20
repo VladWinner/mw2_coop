@@ -1028,6 +1028,14 @@ typedef struct {
 static void *height_font[PLAN_COUNT];
 static int height_original[PLAN_COUNT], height_applied[PLAN_COUNT];
 
+int fonts_units_per_pixel(const void *font)
+{
+	for (int p = 0; font && p < PLAN_COUNT; p++)
+		if (height_font[p] == font && height_applied[p] > 0 && height_original[p] > 0 && height_applied[p] % height_original[p] == 0)
+			return height_applied[p] / height_original[p];
+	return 1;
+}
+
 static int job_baseline(const FontJob *j, int m)
 {
 	double adjust = j->face == FACE_TEXT ? TEXT_FACE_Y_ADJUST : 0;

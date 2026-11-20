@@ -14,8 +14,12 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "d3dcap.h"
 #include "game.h"
 #include "hook.h"
+#ifndef _WIN64
+#include "iw4xtext.h"
+#endif
 #include "log.h"
 #include "modtex.h"
 #include "padglyphs.h"
@@ -179,32 +183,48 @@ static void draw_icon(int b, uint8_t *bits, int pitch)
 	}
 }
 
-// the materials, made once the "white" material's texture is there (main thread)
+// the materials, made once the "white" material's texture is there, and made again (copies and pictures) when "white" is not what they were copied from: a vid_restart
+// (modtex_snapshot_t) (main thread). This runs for every binding the texts ask for: "white" is looked at again only when d3dcap saw another device made.
 static void make_materials(void)
 {
 	static int failed;
-	if (materials[0] || failed > 3)
+	static void *seen;                                             // d3dcap's device when this last looked
+	static modtex_snapshot_t made_from;                            // "white" as the copies were made from it
+	static uint8_t *mats[BUTTONS], *tabs[BUTTONS], *imgs[BUTTONS]; // each copy's material, table and image
+	void *now = d3dcap_device();
+	if ((made_from.taken && now == seen) || failed > 3)
 		return;
 	uint8_t *white = ((uint8_t * (*)(int, const char *))(base + RVA_DB_FIND))(ASSET_MATERIAL, "white");
 	uint8_t *table = white ? *(uint8_t **)(white + MATERIAL_TABLE) : NULL;
 	uint8_t *image = table ? *(uint8_t **)(table + 8) : NULL;
 	IDirect3DTexture9 *tex0 = image ? *(IDirect3DTexture9 **)image : NULL;
 	if (!tex0) {
-		failed++;
-		return;
+		if (!made_from.taken)
+			failed++;
+		return; // (the new device's white texture is not there yet: looked at again next time)
 	}
+	seen = now;
+	const int again = made_from.taken;
+	if (again && !modtex_snapshot_differs(&made_from, white, table, image))
+		return;
+	modtex_snapshot_take(&made_from, white, table, image);
 	static char names[BUTTONS][24];
 	for (int b = 0; b < BUTTONS; b++) {
+		IDirect3DTexture9 *was = materials[b] ? *(IDirect3DTexture9 **)imgs[b] : NULL;
+		materials[b] = NULL; // (a copy that cannot be made again is not drawn: it points at what the game let go)
 		IDirect3DTexture9 *tex = modtex_create(tex0, ICON, ICON, 1, D3DFMT_A8R8G8B8);
 		D3DLOCKED_RECT lr;
-		if (!tex || FAILED(modtex_lock(tex, 0, &lr, 0))) {
+		if (!mats[b])
+			mats[b] = HeapAlloc(GetProcessHeap(), 0, 0x100), tabs[b] = HeapAlloc(GetProcessHeap(), 0, 0x40), imgs[b] = HeapAlloc(GetProcessHeap(), 0, 0x80);
+		if (!tex || !mats[b] || !tabs[b] || !imgs[b] || FAILED(modtex_lock(tex, 0, &lr, 0))) {
 			if (tex)
 				modtex_release(tex);
+			modtex_release(was);
 			continue;
 		}
 		draw_icon(b, (uint8_t *)lr.pBits, lr.Pitch);
 		modtex_unlock(tex, 0);
-		uint8_t *mat = HeapAlloc(GetProcessHeap(), 0, 0x100), *tab = HeapAlloc(GetProcessHeap(), 0, 0x40), *img = HeapAlloc(GetProcessHeap(), 0, 0x80);
+		uint8_t *mat = mats[b], *tab = tabs[b], *img = imgs[b];
 		memcpy(mat, white, 0x100); // (the copies read a little over the ends, as the menus' copies do)
 		memcpy(tab, table, 0x40);
 		memcpy(img, image, 0x80);
@@ -218,8 +238,9 @@ static void make_materials(void)
 		lstrcpynA(names[b] + 12, fallback[b], sizeof(names[b]) - 12);
 		*(const char **)mat = names[b];
 		materials[b] = mat;
+		modtex_release(was);
 	}
-	log_printf("padglyphs: %d button pictures made", materials[0] ? BUTTONS : 0);
+	log_printf("padglyphs: %d button pictures made%s", materials[0] ? BUTTONS : 0, again ? " again (\"white\" changed: a vid_restart)" : "");
 }
 
 static unsigned (*binding_original[2])(intptr_t, const char *, char *);
@@ -332,6 +353,13 @@ static int picture_width(void *font)
 static int text_width(char *text, int max_chars, void *font)
 {
 	char buf[2048];
+#ifndef _WIN64
+	if (game_is_iw4x()) { // the iw4x-sp client measuring its own text at scale 1: the width at the size it draws (iw4xtext.c)
+		const int m = iw4xtext_scale_of(__builtin_return_address(0), font);
+		if (m > 1)
+			return width_original(text, max_chars, font) / m;
+	}
+#endif
 	if (!text || !strchr(text, 0x1b) || max_chars > 0)
 		return width_original(text, max_chars, font);
 	int len = convert(text, buf, sizeof(buf), NULL);
