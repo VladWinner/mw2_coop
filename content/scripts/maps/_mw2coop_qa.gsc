@@ -195,6 +195,9 @@ main()
 		case "p2away":
 			p2away();
 			break;
+		case "p2mirror":
+			p2mirror();
+			break;
 		case "tele":
 			thread angles_log();
 			tele();
@@ -1046,6 +1049,23 @@ foleylook()
 		wait 0.05;
 	}
 	report( "foleylook: done, target " + target.name );
+}
+
+// p2mirror (Vlad, 2026-11-20: in the split screen player 2 sees helicopters, targets and doors flicker and jerk, so_killspree_trainer): 20 s into the level player 2 is
+// put next to player 1 with player 1's view angles, once, and both stand still; 2 s later the burst of frames is armed ([native] burst11=-2, burst11n): both halves show
+// nearly the same scene, so a frame-to-frame difference of player 2's half against player 1's is the bug.
+p2mirror()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 20;
+	a = level.player GetPlayerAngles();
+	level.player2 SetOrigin( level.player.origin + AnglesToRight( ( 0, a[ 1 ], 0 ) ) * 32 );
+	level.player2 SetPlayerAngles( a );
+	report( "p2mirror: player 2 at " + level.player2.origin + " with player 1's angles " + a );
+	wait 2;
+	SetDvar( "mw2coop_qa_burst", "1" );
+	report( "p2mirror: burst armed" );
 }
 
 // p2away: (native split screen test) player 2 is put about 350 units away from where he starts, on free ground (the mod's follow and leash are off), 25 s into the level:

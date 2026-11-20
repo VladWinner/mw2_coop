@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## v1.5.1 (2026-11-21)
+
+The release notes: the changes since v1.5.0.
+
+- **iw4x-sp with AlterWare's current install.** The mod recognises the iw4x-sp client when its 1.0.159 exe is `data\iw4sp.exe` next to Steam's 64-bit `iw4sp.exe`, the way AlterWare installs it now; before, nothing of the mod was switched on there.
+- **Nickname in the co-op lobby.** A "Nickname" row in the campaign and Spec Ops lobbies, on every build. Without a nickname a game made through Steam shows the Steam names, and a LAN game (a join by address or from the list of games on the network, and every game on iw4x-sp) shows Player 1 and Player 2. The nickname is kept in `mw2coop\player.ini` and reaches the partner.
+- **Multiplayer on iw4x-sp.** The main menu's Multiplayer starts IW4x's launcher (`iw4x-launcher.exe`) next to the game; the official game keeps its own multiplayer.
+- **iw4x-sp fixes.** The game's own console no longer opens next to the mod's, the "AlterWare IW4x-SP" mark at the top has its normal size again, and the online lobby shows the keyboard and mouse instead of a white box.
+- **After a change of the video settings.** The About page no longer shows a black box instead of its icons and no longer ends in errors and freezes after a few changes (the gamepad pictures had the same fault); the 32-bit game no longer crashes on a video change once the console had been opened.
+- **Player names of the 32-bit lobby** are read right (the host's name in the list of games on the network, the partner's name for the saves).
+- **The frame rate limit** of Settings > Enhanced is kept after a restart.
+- **Russian fonts:** the mod's own fonts are used even when a font of the system has the same family name, the bold font is closer to the game's, and a missing or broken font file falls back to another font (VladWinner).
+- The split screen layout row of Settings > Enhanced is called "Players in opposite corners (as on consoles)".
+- **Minor bug fixes.**
+
+### Every change in detail
+
+- **iw4x-sp's data\iw4sp.exe** (`5b88f10`): `main32.c` hashes `data\iw4sp.exe` first, then `iw4sp.exe`, and takes the known code hash of the 1.0.159 image on its own too. A player's log had the code of 1.0.159 running and Steam's 64-bit exe in `iw4sp.exe`: 366 of 417 addresses by signature, nothing patched.
+- **Video changes and the About page** (`eaeab48`): a vid_restart loads the template material of the About icons again; the copy pointed at what the game had let go, with a texture on the old device. `modtex_snapshot_t` makes the copy again when the template changed (also the gamepad picture and the pad button pictures). 32 bits: the device hooks are taken out before a vid_restart and put back on the new device, as on 64 bits (a stack overflow between the Steam overlay's Present and the mod's).
+- **iw4x-sp** (`eaeab48`): `monkeytoy` goes to 1 as on the official builds (the game's console key handler opens its console only at 0); `src/x86/iw4xtext.c` scales the client's own texts by the mod's font grid; the online lobby card gets the mod's keyboard picture on 32 bits.
+- **Nickname** (`4b6d289`, `src/nick.c`): the game's name comes from `ISteamFriends::GetPersonaName` (replaced on the interface's table), on iw4x-sp from the dvar `name`; the lobby's slots are kept to the names and the partner gets them as the message `mw2coop_nick`. 32 bits: `RVA_PARTY_MEMBER_NAMES` was 4 bytes into the names (`0x534454`, not `0x534458`).
+- **Multiplayer on iw4x-sp** (`4b6d289`): `iw4x-launcher.exe` (or `iw4x.exe`) from the game folder, then the game quits.
+- **com_maxfps** gets ARCHIVE when the Enhanced page is made (Vlad).
+- **QA**: `tools/run_test.ps1` refuses to start a copy that would start Steam (and with it the real install) when Steam is not running (`5da9b32`); split screen diagnostics `bodyadds` and `animlog=2`; the QA scenario `p2mirror`.
+- **Known, not fixed**: in the split screen the partner's body can jitter in player 2's half (measured: a burst of frames with still cameras; the pose alternates between frames when the partner's own context touches his body between player 2's step and player 2's draw). The pause menu showing through in "Players in opposite corners" was not reproduced (Direct3D 9 and 12).
+
 ## v1.5.0 (2026-11-19, the major changes since 1.0.1)
 
 The release notes: the major changes since v1.0.1.

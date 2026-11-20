@@ -8190,6 +8190,19 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 	static int on = -1;
 	if (on < 0)
 		on = cfg("dobjlog", 0);
+	if (CFG_ONCE("bodyadds", 0) && (ctx_current == 0 || ctx_current == 1) && (c & 0xffff) < 2) { // QA ([native] bodyadds=1): which context adds which player body, and with which DObj
+		static LONG adds[2][2];
+		static void *dobjs[2][2];
+		static DWORD at;
+		InterlockedIncrement(&adds[ctx_current][c & 1]);
+		dobjs[ctx_current][c & 1] = a;
+		if (GetTickCount() - at >= 2000) {
+			at = GetTickCount();
+			log_printf("native: bodyadds 2 s: ctx0 adds ent0 %ld (dobj %p) ent1 %ld (dobj %p) | ctx1 adds ent0 %ld (dobj %p) ent1 %ld (dobj %p) | flags %x", adds[0][0], dobjs[0][0], adds[0][1], dobjs[0][1],
+				   adds[1][0], dobjs[1][0], adds[1][1], dobjs[1][1], d);
+			memset(adds, 0, sizeof(adds));
+		}
+	}
 	if (a && CFG_ONCE("dobjmodels", 0) && ((ctx_current == 1 && (c & 0xffff) == 0) || (ctx_current == 0 && (c & 0xffff) == 1)) && !IsBadReadPtr(a, 0xb0)) { // QA: the models of a body's DObj (names), twice a second
 		static DWORD at[2];
 		if (GetTickCount() - at[ctx_current] >= 500) {
@@ -8316,7 +8329,9 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 				const float *f = (const float *)node;
 				len += snprintf(line + len, sizeof(line) - len, " [n%d", idx);
 				for (int j = 0; j < 16; j++)
-					if (f[j] != 0 && fabsf(f[j]) > 1e-6f && fabsf(f[j]) < 1e6f)
+					if (CFG_ONCE("animlog", 0) >= 2) // ([native] animlog=2: every dword of the node, raw)
+						len += snprintf(line + len, sizeof(line) - len, " %08x", ((const uint32_t *)node)[j]);
+					else if (f[j] != 0 && fabsf(f[j]) > 1e-6f && fabsf(f[j]) < 1e6f)
 						len += snprintf(line + len, sizeof(line) - len, " %x:%.3f", j * 4, (double)f[j]);
 				len += snprintf(line + len, sizeof(line) - len, "]");
 				idx = *(const uint16_t *)(node + 0xc);
