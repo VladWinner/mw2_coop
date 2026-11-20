@@ -95,7 +95,7 @@ static int sha256_code(char out[65], unsigned *bytes)
 }
 
 // The iw4x-sp client (docs: games/modern-warfare-2/NOTES.md, "iw4x-sp support") maps the 1.0.159 iw4sp.exe into its own process and patches
-// the code in memory, so the code hash changes with the client's build. The build is known by the SHA-256 of the iw4sp.exe file next to it.
+// the code in memory, so the code hash can change with the client's build. The build is known by the SHA-256 of the 1.0.159 file (iw4x_known).
 static int sha256_file(const char *path, char out[65])
 {
 	HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -137,21 +137,38 @@ static void detect_iw4x_process(void)
 	iw4x_process = n >= 11 && lstrcmpiA(path + n - 11, "iw4x-sp.exe") == 0;
 }
 
+// Where the 1.0.159 file is: AlterWare's current install puts it in data\iw4sp.exe (the client reads that name) and leaves the store's iw4sp.exe where it is, on
+// Steam now the 64-bit exe; older installs replaced iw4sp.exe itself. Only iw4sp.exe was looked at until 2026-11-20: a player's log had the 64-bit iw4sp.exe
+// next to the client and the 1.0.159 code running (code SHA-256 the same as ours), so the build counted as unknown and nothing was patched. Both files are
+// looked at now, data\ first, and the code hash the tested clients give (iw4x_code_sha256: the same code bytes as the known build) is known on its own too.
 static const char iw4x_exe_sha256[] = "9480909B18CF5A4EC483C989AAFCE929D2172C5F9448F8C23B723683D1A43565"; // SP_ALTER_HASH of iw4x-sp
-static int iw4x_known(void)
+static const char iw4x_code_sha256[] = "2706C3C385B954D22FC12F0AC3F6BB497D0C8B557829531356F9D23ADF80B3E2"; // sha256_code() on 1.0.159 under the clients of 2026-10/11
+static int iw4x_known(const char *code_hex)
 {
-	char dir[MAX_PATH], hex[65] = "";
+	char dir[MAX_PATH];
 	DWORD n = GetModuleFileNameA(NULL, dir, MAX_PATH);
 	while (n > 0 && dir[n - 1] != '\\')
 		n--;
 	dir[n] = 0;
-	lstrcatA(dir, "iw4sp.exe");
-	if (!sha256_file(dir, hex)) {
-		log_printf("main32: cannot hash iw4sp.exe next to the client");
-		return 0;
+	static const char *const names[] = {"data\\iw4sp.exe", "iw4sp.exe"};
+	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		char path[MAX_PATH], hex[65] = "";
+		snprintf(path, sizeof(path), "%s%s", dir, names[i]);
+		if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES)
+			continue;
+		if (!sha256_file(path, hex)) {
+			log_printf("main32: cannot hash %s next to the client", names[i]);
+			continue;
+		}
+		log_printf("main32: %s file SHA-256 %s", names[i], hex);
+		if (strcmp(hex, iw4x_exe_sha256) == 0)
+			return 1;
 	}
-	log_printf("main32: iw4sp.exe file SHA-256 %s", hex);
-	return strcmp(hex, iw4x_exe_sha256) == 0;
+	if (strcmp(code_hex, iw4x_code_sha256) == 0) {
+		log_printf("main32: no 1.0.159 file found by its hash, but the code is the known 1.0.159 image of the iw4x-sp client");
+		return 1;
+	}
+	return 0;
 }
 
 static BOOL CALLBACK find_game_window(HWND h, LPARAM out)
@@ -293,7 +310,7 @@ static DWORD WINAPI identify(LPVOID unused)
 	log_printf("main32: image base %p, code sections %u bytes, SHA-256 %s", (void *)GetModuleHandleW(NULL), bytes, hex);
 	int forced_unknown = getenv("MW2COOP_FORCE_UNKNOWN") != NULL; // QA: take the unknown build path on the known build
 	if (game_is_iw4x()) { // the iw4x-sp client: its 1.0.159 exe is known by its file's hash (the client patches the code in memory)
-		if (!forced_unknown && iw4x_known()) {
+		if (!forced_unknown && iw4x_known(hex)) {
 			log_printf("main32: known build: 1.0.159 iw4sp.exe of the iw4x-sp client");
 			addr_use_159();
 			install_all();
