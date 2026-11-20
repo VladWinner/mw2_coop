@@ -59,9 +59,11 @@
 #define FONT_RENDER_SCALE 4
 #define TEXT_FACE_Y_ADJUST 2
 #define BANK_WIDTH_PERCENT 95
+#define SYSTEM_FALLBACK_WIDTH_PERCENT 86
 #define ATLAS_MIN_WIDTH 1024
 #define ATLAS_MAX_SIZE 4096
 #define ATLAS_GLYPH_PADDING 1
+#define FONT_FILE_MARKER "MW2F"
 // Levels of the atlas: 4x, 2x and 1x of the logical size. The packer puts every glyph in a cell whose origin and size are multiples of 4 pixels, so a
 // texel of these levels never covers two cells (a 0.5x level would, and bleed one glyph into its neighbour).
 #define ATLAS_MIPS 3
@@ -121,7 +123,8 @@ static uint8_t *material_image(const uint8_t *material)
 }
 
 // ---- GDI: the faces and their glyphs --------------------------------------------------------------------
-// GDI imports a file privately, then requires its registered face name when creating an HFONT.
+// GDI selects an HFONT by family name, not by file. Give each private in-memory copy a process-unique
+// family name so an installed font with the same original name cannot win GDI font matching.
 static wchar_t font_dir[MAX_PATH];
 static HDC dc;
 static int faces_loaded;
@@ -129,53 +132,342 @@ static SRWLOCK faces_lock = SRWLOCK_INIT;
 static wchar_t family[FACE_COUNT][LF_FACESIZE];
 static LONG face_weight[FACE_COUNT];
 static BYTE face_italic[FACE_COUNT];
-static int font_registered[FACE_COUNT];
+static BYTE face_is_private[FACE_COUNT];
+static int face_width_percent[FACE_COUNT];
+static void *font_memory[FACE_COUNT];
+static HANDLE font_memory_handles[FACE_COUNT];
+static wchar_t system_fallback_family[LF_FACESIZE];
+static int system_fallback_width_percent = SYSTEM_FALLBACK_WIDTH_PERCENT;
 
-typedef BOOL (WINAPI *GetFontResourceInfoWFn)(LPCWSTR, LPDWORD, LPVOID, DWORD);
-
-static int get_file_face(const wchar_t *path, int added_count, LOGFONTW *out)
+static uint16_t font_be16(const uint8_t *p)
 {
-    HMODULE gdi = GetModuleHandleW(L"gdi32.dll");
-    GetFontResourceInfoWFn query = gdi ? (GetFontResourceInfoWFn)GetProcAddress(gdi, "GetFontResourceInfoW") : NULL;
-    if (!query) {
-        log_printf("fonts: GetFontResourceInfoW is unavailable");
-        return 0;
+    return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
+static uint32_t font_be32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+
+// Read a font file once. Files carrying the MW2F marker are restored to the
+// standard TrueType-flavoured SFNT signature in memory; the file on disk is
+// never modified. The marker is accepted for any of the three configured faces.
+static uint8_t *read_font_file(const wchar_t *path, size_t *out_size)
+{
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        log_printf("fonts: cannot open %ls", path);
+        return NULL;
     }
 
-    DWORD bytes = 0;
-    if (!query(path, &bytes, NULL, 2) || bytes < sizeof(LOGFONTW) || bytes > 1024 * 1024) {
-        bytes = (DWORD)(added_count > 0 ? added_count : 1) * (DWORD)sizeof(LOGFONTW);
-    }
-    if (bytes < sizeof(LOGFONTW) || bytes > 1024 * 1024) {
-        log_printf("fonts: invalid font descriptor size for %ls", path);
-        return 0;
+    LARGE_INTEGER file_size;
+    if (!GetFileSizeEx(file, &file_size) || file_size.QuadPart < 12 || file_size.QuadPart > 64 * 1024 * 1024) {
+        log_printf("fonts: invalid or oversized font file %ls", path);
+        CloseHandle(file);
+        return NULL;
     }
 
-    for (int attempt = 0; attempt < 2; attempt++) {
-        LOGFONTW *entries = malloc(bytes);
-        if (!entries) {
-            log_printf("fonts: out of memory reading font descriptor for %ls", path);
-            return 0;
+    size_t size = (size_t)file_size.QuadPart;
+    uint8_t *data = malloc(size);
+    if (!data) {
+        log_printf("fonts: out of memory reading %ls", path);
+        CloseHandle(file);
+        return NULL;
+    }
+
+    size_t received = 0;
+    while (received < size) {
+        DWORD chunk = (DWORD)(size - received > 1024 * 1024 ? 1024 * 1024 : size - received);
+        DWORD actual = 0;
+        if (!ReadFile(file, data + received, chunk, &actual, NULL) || !actual) {
+            log_printf("fonts: failed reading %ls", path);
+            free(data);
+            CloseHandle(file);
+            return NULL;
         }
-        DWORD used = bytes;
-        BOOL ok = query(path, &used, entries, 2);
-        if (ok && used >= sizeof(LOGFONTW) && used <= bytes) {
-            size_t count = used / sizeof(LOGFONTW);
-            for (size_t i = 0; i < count; i++) {
-                if (entries[i].lfFaceName[0]) {
-                    *out = entries[i];
-                    free(entries);
-                    return 1;
-                }
+        received += actual;
+    }
+    CloseHandle(file);
+
+    if (memcmp(data, FONT_FILE_MARKER, 4) == 0) {
+        data[0] = 0x00;
+        data[1] = 0x01;
+        data[2] = 0x00;
+        data[3] = 0x00;
+    }
+
+    *out_size = size;
+    return data;
+}
+
+// Read the weight and italic style from the font's own OS/2 and head tables.
+// This avoids registering the path on disk, which also means marked files can
+// be loaded without creating a temporary unmarked copy.
+static int get_font_face_from_data(const uint8_t *source, size_t source_size, LOGFONTW *out)
+{
+    if (!source || source_size < 12 ||
+        (font_be32(source) != 0x00010000u && memcmp(source, "OTTO", 4) != 0 &&
+         memcmp(source, "true", 4) != 0 && memcmp(source, "typ1", 4) != 0))
+        return 0;
+
+    uint16_t table_count = font_be16(source + 4);
+    size_t directory_size = 12u + (size_t)table_count * 16u;
+    if (!table_count || directory_size > source_size)
+        return 0;
+
+    const uint8_t *os2 = NULL, *head = NULL;
+    uint32_t os2_length = 0, head_length = 0;
+    for (uint16_t i = 0; i < table_count; i++) {
+        const uint8_t *record = source + 12u + (size_t)i * 16u;
+        uint32_t offset = font_be32(record + 8);
+        uint32_t length = font_be32(record + 12);
+        if ((size_t)offset > source_size || (size_t)length > source_size - (size_t)offset)
+            return 0;
+        if (memcmp(record, "OS/2", 4) == 0) {
+            os2 = source + offset;
+            os2_length = length;
+        } else if (memcmp(record, "head", 4) == 0) {
+            head = source + offset;
+            head_length = length;
+        }
+    }
+    if (!head || head_length < 46)
+        return 0;
+
+    uint16_t mac_style = font_be16(head + 44);
+    uint16_t weight = (os2 && os2_length >= 6) ? font_be16(os2 + 4) : 0;
+    uint16_t selection = (os2 && os2_length >= 64) ? font_be16(os2 + 62) : 0;
+
+    memset(out, 0, sizeof(*out));
+    out->lfWeight = (weight >= 1 && weight <= 1000) ? (LONG)weight : ((mac_style & 1u) ? FW_BOLD : FW_NORMAL);
+    out->lfItalic = (BYTE)(((selection & 1u) || (mac_style & 2u)) ? TRUE : FALSE);
+    return 1;
+}
+
+static void font_put_be16(uint8_t *p, uint16_t value)
+{
+    p[0] = (uint8_t)(value >> 8);
+    p[1] = (uint8_t)value;
+}
+
+static void font_put_be32(uint8_t *p, uint32_t value)
+{
+    p[0] = (uint8_t)(value >> 24);
+    p[1] = (uint8_t)(value >> 16);
+    p[2] = (uint8_t)(value >> 8);
+    p[3] = (uint8_t)value;
+}
+
+static uint32_t font_checksum(const uint8_t *data, size_t size)
+{
+    uint32_t sum = 0;
+    for (size_t i = 0; i < size; i += 4) {
+        uint32_t word = (uint32_t)data[i] << 24;
+        if (i + 1 < size) word |= (uint32_t)data[i + 1] << 16;
+        if (i + 2 < size) word |= (uint32_t)data[i + 2] << 8;
+        if (i + 3 < size) word |= data[i + 3];
+        sum += word;
+    }
+    return sum;
+}
+
+static int font_name_id_uses_alias(uint16_t id)
+{
+    // Family names are what GDI uses for selection. Full and PostScript names are
+    // updated as well, so no Windows name record still advertises the old family.
+    return id == 1 || id == 4 || id == 6 || id == 16 || id == 18 || id == 21 || id == 25;
+}
+
+static int font_name_record_is_unicode(uint16_t platform, uint16_t encoding)
+{
+    (void)encoding;
+    return platform == 0 || platform == 3;
+}
+
+// Read a replaceable font and make a private copy whose OpenType family name is
+// unique to this game process. AddFontMemResourceEx lets us register that copy
+// without changing the user's original file in mw2coop\fonts.
+// Takes ownership of source and frees it on both success and failure.
+static uint8_t *make_private_font_data(uint8_t *source, size_t source_size, const wchar_t *path, const char *alias, DWORD *out_size)
+{
+    if (!source || source_size < 12) {
+        free(source);
+        log_printf("fonts: invalid font data for %ls", path);
+        return NULL;
+    }
+
+    // A normal SFNT (TrueType or OpenType/CFF) has a 12-byte offset table
+    // followed by 16-byte table records. TTC collections need a different
+    // per-face offset and are rejected rather than silently loading the wrong face.
+    if (memcmp(source, "ttcf", 4) == 0 ||
+        (font_be32(source) != 0x00010000u && memcmp(source, "OTTO", 4) != 0 &&
+         memcmp(source, "true", 4) != 0 && memcmp(source, "typ1", 4) != 0)) {
+        log_printf("fonts: unsupported font container in %ls", path);
+        free(source);
+        return NULL;
+    }
+
+    uint16_t table_count = font_be16(source + 4);
+    size_t directory_size = 12u + (size_t)table_count * 16u;
+    if (!table_count || directory_size > source_size) {
+        log_printf("fonts: invalid SFNT table directory in %ls", path);
+        free(source);
+        return NULL;
+    }
+
+    uint8_t *name_record = NULL;
+    uint32_t name_offset = 0, name_length = 0, head_offset = 0, head_length = 0;
+    for (uint16_t i = 0; i < table_count; i++) {
+        uint8_t *record = source + 12u + (size_t)i * 16u;
+        uint32_t offset = font_be32(record + 8);
+        uint32_t length = font_be32(record + 12);
+        if ((size_t)offset > source_size || (size_t)length > source_size - (size_t)offset) {
+            log_printf("fonts: invalid SFNT table bounds in %ls", path);
+            free(source);
+            return NULL;
+        }
+        if (memcmp(record, "name", 4) == 0) {
+            name_record = record;
+            name_offset = offset;
+            name_length = length;
+        } else if (memcmp(record, "head", 4) == 0) {
+            head_offset = offset;
+            head_length = length;
+        }
+    }
+    if (!name_record || !name_length || !head_offset || head_length < 12) {
+        log_printf("fonts: missing name/head table in %ls", path);
+        free(source);
+        return NULL;
+    }
+
+    const uint8_t *old_name = source + name_offset;
+    if (name_length < 6) {
+        log_printf("fonts: invalid name table in %ls", path);
+        free(source);
+        return NULL;
+    }
+    uint16_t format = font_be16(old_name);
+    uint16_t name_count = font_be16(old_name + 2);
+    uint16_t strings_offset = font_be16(old_name + 4);
+    size_t records_end = 6u + (size_t)name_count * 12u;
+    if ((format != 0 && format != 1) || records_end > name_length || strings_offset < records_end || strings_offset > name_length) {
+        log_printf("fonts: unsupported or invalid name table in %ls", path);
+        free(source);
+        return NULL;
+    }
+
+    size_t alias_length = strlen(alias);
+    if (!alias_length || alias_length > 31 || name_length > 65535u ||
+        (size_t)name_count > (65535u - name_length) / (alias_length * 2u)) {
+        log_printf("fonts: name table is too large to alias in %ls", path);
+        free(source);
+        return NULL;
+    }
+    size_t name_capacity = (size_t)name_length + (size_t)name_count * alias_length * 2u;
+    uint8_t *new_name = malloc(name_capacity ? name_capacity : 1);
+    if (!new_name) {
+        log_printf("fonts: out of memory rewriting names in %ls", path);
+        free(source);
+        return NULL;
+    }
+    memcpy(new_name, old_name, name_length);
+    size_t new_name_length = name_length;
+    int family_records = 0;
+
+    for (uint16_t i = 0; i < name_count; i++) {
+        uint8_t *record = new_name + 6u + (size_t)i * 12u;
+        uint16_t platform = font_be16(record);
+        uint16_t encoding = font_be16(record + 2);
+        uint16_t name_id = font_be16(record + 6);
+        if (!font_name_id_uses_alias(name_id))
+            continue;
+        if (!font_name_record_is_unicode(platform, encoding) && !(platform == 1 && encoding == 0))
+            continue;
+
+        size_t encoded_length = alias_length * (font_name_record_is_unicode(platform, encoding) ? 2u : 1u);
+        if (new_name_length > 65535u || encoded_length > 65535u - new_name_length ||
+            new_name_length < strings_offset || new_name_length - strings_offset > 65535u) {
+            log_printf("fonts: aliased name table exceeds SFNT limits in %ls", path);
+            free(new_name);
+            free(source);
+            return NULL;
+        }
+        uint16_t relative_offset = (uint16_t)(new_name_length - strings_offset);
+        for (size_t c = 0; c < alias_length; c++) {
+            if (encoded_length == alias_length) {
+                new_name[new_name_length + c] = (uint8_t)alias[c];
+            } else {
+                new_name[new_name_length + c * 2] = 0;
+                new_name[new_name_length + c * 2 + 1] = (uint8_t)alias[c];
             }
         }
-        free(entries);
-        if (used <= bytes || used > 1024 * 1024)
-            break;
-        bytes = used;
+        font_put_be16(record + 8, (uint16_t)encoded_length);
+        font_put_be16(record + 10, relative_offset);
+        new_name_length += encoded_length;
+        if ((name_id == 1 || name_id == 16) && (platform == 0 || platform == 3))
+            family_records++;
     }
-    log_printf("fonts: Windows could not read the face descriptor from %ls", path);
-    return 0;
+
+    if (!family_records) {
+        log_printf("fonts: no Windows family-name records to alias in %ls", path);
+        free(new_name);
+        free(source);
+        return NULL;
+    }
+
+    size_t new_name_offset = (source_size + 3u) & ~(size_t)3u;
+    size_t output_size = (new_name_offset + new_name_length + 3u) & ~(size_t)3u;
+    if (new_name_offset > UINT32_MAX || output_size > MAXDWORD || output_size < new_name_offset) {
+        log_printf("fonts: aliased font is too large for GDI in %ls", path);
+        free(new_name);
+        free(source);
+        return NULL;
+    }
+
+    uint8_t *output = calloc(1, output_size);
+    if (!output) {
+        log_printf("fonts: out of memory building private font %ls", path);
+        free(new_name);
+        free(source);
+        return NULL;
+    }
+    memcpy(output, source, source_size);
+    memcpy(output + new_name_offset, new_name, new_name_length);
+
+    // Point the SFNT directory to the private name table and refresh its
+    // checksum. Recalculate checkSumAdjustment in 'head' for the complete SFNT.
+    size_t name_record_offset = (size_t)(name_record - source);
+    uint8_t *output_name_record = output + name_record_offset;
+    font_put_be32(output_name_record + 4, font_checksum(new_name, new_name_length));
+    font_put_be32(output_name_record + 8, (uint32_t)new_name_offset);
+    font_put_be32(output_name_record + 12, (uint32_t)new_name_length);
+    font_put_be32(output + head_offset + 8, 0);
+    font_put_be32(output + head_offset + 8, 0xB1B0AFBAu - font_checksum(output, output_size));
+
+    free(new_name);
+    free(source);
+    *out_size = (DWORD)output_size;
+    return output;
+}
+
+static void make_font_alias(int index, char *alias, size_t alias_size)
+{
+    static const char suffix[FACE_COUNT] = {'B', 'T', 'D'};
+    _snprintf(alias, alias_size, "MW2E%08lX%c", (unsigned long)GetCurrentProcessId(), suffix[index]);
+    if (alias_size)
+        alias[alias_size - 1] = 0;
+}
+
+static void alias_to_wide(const char *alias, wchar_t *wide, size_t wide_count)
+{
+    size_t i = 0;
+    if (!wide_count) return;
+    while (alias[i] && i + 1 < wide_count) {
+        wide[i] = (wchar_t)(unsigned char)alias[i];
+        i++;
+    }
+    wide[i] = 0;
 }
 
 static int make_font_path(int index, wchar_t *path, size_t path_count)
@@ -190,21 +482,82 @@ static int make_font_path(int index, wchar_t *path, size_t path_count)
     return 1;
 }
 
-static void release_faces(void)
+// Check for an actually installed family instead of relying on CreateFontW's
+// silent font substitution. Nina is the stock Russian-game face; the narrower
+// alternatives are preferred in the stated order when Nina is unavailable.
+typedef struct {
+    const wchar_t *expected;
+    int found;
+} SystemFontQuery;
+
+static int CALLBACK find_system_font_callback(const LOGFONTW *font, const TEXTMETRICW *metrics, DWORD font_type, LPARAM parameter)
 {
-    for (int i = 0; i < FACE_COUNT; i++) {
-        wchar_t path[MAX_PATH];
-        if (font_registered[i] && make_font_path(i, path, MAX_PATH))
-            RemoveFontResourceExW(path, FR_PRIVATE, NULL);
-        font_registered[i] = 0;
-        family[i][0] = 0;
-        face_weight[i] = 0;
-        face_italic[i] = 0;
+    SystemFontQuery *query = (SystemFontQuery *)parameter;
+    (void)metrics;
+    (void)font_type;
+    if (query && font && lstrcmpiW(font->lfFaceName, query->expected) == 0) {
+        query->found = 1;
+        return 0;
     }
-    if (dc) {
-        DeleteDC(dc);
-        dc = NULL;
+    return 1;
+}
+
+static int system_font_is_installed(const wchar_t *name)
+{
+    HDC screen = GetDC(NULL);
+    if (!screen)
+        return 0;
+
+    LOGFONTW request;
+    memset(&request, 0, sizeof(request));
+    request.lfCharSet = DEFAULT_CHARSET;
+    lstrcpynW(request.lfFaceName, name, LF_FACESIZE);
+    SystemFontQuery query = {name, 0};
+    EnumFontFamiliesExW(screen, &request, find_system_font_callback, (LPARAM)&query, 0);
+    ReleaseDC(NULL, screen);
+    return query.found;
+}
+
+static int choose_system_fallback(void)
+{
+    static const struct {
+        const wchar_t *name;
+        int width_percent;
+    } candidates[] = {
+        {L"Nina", 100},
+        {L"XO Oriel", SYSTEM_FALLBACK_WIDTH_PERCENT},
+        {L"Arial", SYSTEM_FALLBACK_WIDTH_PERCENT}
+    };
+
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        if (system_font_is_installed(candidates[i].name)) {
+            lstrcpynW(system_fallback_family, candidates[i].name, LF_FACESIZE);
+            system_fallback_width_percent = candidates[i].width_percent;
+            log_printf("fonts: system fallback family selected: %ls (width %d%%)", system_fallback_family, system_fallback_width_percent);
+            return 1;
+        }
     }
+
+    // Arial is present on normal Windows installations. Keep it as the final
+    // request even on unusual systems so GDI can apply its own last-resort
+    // substitution instead of preventing every game font from being patched.
+    lstrcpynW(system_fallback_family, L"Arial", LF_FACESIZE);
+    system_fallback_width_percent = SYSTEM_FALLBACK_WIDTH_PERCENT;
+    log_printf("fonts: Nina, XO Oriel and Arial were not enumerated; requesting Arial as the final GDI fallback (width %d%%)", SYSTEM_FALLBACK_WIDTH_PERCENT);
+    return 1;
+}
+
+static void use_system_fallback_face(int index, const wchar_t *reason)
+{
+    lstrcpynW(family[index], system_fallback_family, LF_FACESIZE);
+    face_weight[index] = index == FACE_BOLD ? FW_BOLD : FW_NORMAL;
+    face_italic[index] = FALSE;
+    face_is_private[index] = FALSE;
+    face_width_percent[index] = system_fallback_width_percent;
+    if (reason)
+        log_printf("fonts: %ls unavailable (%ls); using system %ls at %d%% width",
+                   index == FACE_BANK ? L"bank.ttf" : index == FACE_TEXT ? L"default.otf" : L"defaultBold.otf",
+                   reason, family[index], face_width_percent[index]);
 }
 
 static int load_faces_unlocked(void)
@@ -212,53 +565,99 @@ static int load_faces_unlocked(void)
     static const wchar_t *const files[FACE_COUNT] = {L"bank.ttf", L"default.otf", L"defaultBold.otf"};
     if (faces_loaded)
         return dc != NULL;
+
+    if (!choose_system_fallback())
+        return 0;
+
     DWORD n = GetModuleFileNameW(NULL, font_dir, MAX_PATH);
-    if (!n || n >= MAX_PATH) {
-        log_printf("fonts: cannot resolve the game executable path");
-        return 0;
+    int have_font_dir = n && n < MAX_PATH;
+    if (have_font_dir) {
+        while (n > 0 && font_dir[n - 1] != L'\\' && font_dir[n - 1] != L'/') n--;
+        if (!n || n + sizeof(L"mw2coop\\fonts\\") / sizeof(wchar_t) > MAX_PATH) {
+            log_printf("fonts: invalid or oversized font directory path; using system fallbacks");
+            have_font_dir = 0;
+        } else {
+            lstrcpyW(font_dir + n, L"mw2coop\\fonts\\");
+        }
+    } else {
+        log_printf("fonts: cannot resolve the game executable path; using system fallbacks");
     }
-    while (n > 0 && font_dir[n - 1] != L'\\' && font_dir[n - 1] != L'/') n--;
-    if (!n || n + sizeof(L"mw2coop\\fonts\\") / sizeof(wchar_t) > MAX_PATH) {
-        log_printf("fonts: invalid or oversized font directory path");
-        font_dir[0] = 0;
-        return 0;
-    }
-    lstrcpyW(font_dir + n, L"mw2coop\\fonts\\");
+
     dc = CreateCompatibleDC(NULL);
     if (!dc) {
         log_printf("fonts: CreateCompatibleDC failed");
         return 0;
     }
 
+    // Initialize each slot with a valid system face first. A successfully
+    // loaded private file replaces only its own slot; another file's failure
+    // can no longer cancel the complete font replacement.
+    for (int i = 0; i < FACE_COUNT; i++)
+        use_system_fallback_face(i, NULL);
+
     for (int i = 0; i < FACE_COUNT; i++) {
+        if (!have_font_dir)
+            continue;
+
         wchar_t path[MAX_PATH];
         if (!make_font_path(i, path, MAX_PATH)) {
-            release_faces();
-            return 0;
+            use_system_fallback_face(i, L"font path is invalid");
+            continue;
         }
+
         DWORD attributes = GetFileAttributesW(path);
         if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            log_printf("fonts: %ls is missing from mw2coop\\fonts", files[i]);
-            release_faces();
-            return 0;
+            use_system_fallback_face(i, L"file is missing");
+            continue;
         }
-        int added = AddFontResourceExW(path, FR_PRIVATE, NULL);
-        if (added <= 0) {
-            log_printf("fonts: Windows could not import %ls", files[i]);
-            release_faces();
-            return 0;
+
+        // Read and inspect the exact file in memory. This also recognizes the
+        // MW2F marker regardless of which face file carries it. The original
+        // family name is never passed to CreateFontW, avoiding system collisions.
+        size_t source_size = 0;
+        uint8_t *source = read_font_file(path, &source_size);
+        if (!source) {
+            use_system_fallback_face(i, L"file could not be read");
+            continue;
         }
-        font_registered[i] = 1;
+
         LOGFONTW descriptor = {0};
-        if (!get_file_face(path, added, &descriptor)) {
-            release_faces();
-            return 0;
+        if (!get_font_face_from_data(source, source_size, &descriptor)) {
+            log_printf("fonts: could not read weight/style from %ls", files[i]);
+            free(source);
+            use_system_fallback_face(i, L"invalid font data");
+            continue;
         }
-        lstrcpynW(family[i], descriptor.lfFaceName, LF_FACESIZE);
+
+        char alias[LF_FACESIZE];
+        make_font_alias(i, alias, sizeof(alias));
+        DWORD font_size = 0;
+        uint8_t *font_data = make_private_font_data(source, source_size, path, alias, &font_size);
+        if (!font_data) {
+            use_system_fallback_face(i, L"private font preparation failed");
+            continue;
+        }
+
+        DWORD memory_added = 0;
+        HANDLE font_handle = AddFontMemResourceEx(font_data, font_size, NULL, &memory_added);
+        if (!memory_added || !font_handle) {
+            log_printf("fonts: Windows could not register private face %ls", files[i]);
+            free(font_data);
+            use_system_fallback_face(i, L"private font registration failed");
+            continue;
+        }
+
+        font_memory[i] = font_data;
+        font_memory_handles[i] = font_handle;
+        alias_to_wide(alias, family[i], LF_FACESIZE);
         face_weight[i] = descriptor.lfWeight;
         face_italic[i] = descriptor.lfItalic;
-        log_printf("fonts: imported %ls (GDI face %ls, weight %ld)", files[i], family[i], face_weight[i]);
+        face_is_private[i] = TRUE;
+        face_width_percent[i] = i == FACE_BANK ? BANK_WIDTH_PERCENT : 100;
+        log_printf("fonts: imported %ls as private GDI face %ls (weight %ld, width %d%%)",
+                   files[i], family[i], face_weight[i], face_width_percent[i]);
     }
+
     faces_loaded = 1;
     return 1;
 }
@@ -273,7 +672,14 @@ static int load_faces(void)
 
 static HFONT make_font(int face, int px)
 {
-    return CreateFontW(-px, 0, 0, 0, face_weight[face] ? face_weight[face] : FW_DONTCARE, face_italic[face] != 0, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_ONLY_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, family[face]);
+    HFONT font = CreateFontW(-px, 0, 0, 0, face_weight[face] ? face_weight[face] : FW_DONTCARE, face_italic[face] != 0, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_ONLY_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, family[face]);
+    if (!font && face_is_private[face]) {
+        // Registration can succeed even when GDI later refuses to instantiate
+        // that face. Fall back only this slot, then retry with the system face.
+        use_system_fallback_face(face, L"GDI could not instantiate the private face");
+        font = CreateFontW(-px, 0, 0, 0, face_weight[face], face_italic[face] != 0, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_ONLY_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE, family[face]);
+    }
+    return font;
 }
 
 // Estimate glyph size from Й where available so the top breve is included in the target cap height.
@@ -702,7 +1108,7 @@ static void free_jobs(FontJob *jobs, int count)
 static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atlas_material)
 {
 	if (!load_faces()) {
-		log_printf("fonts: unable to load all font files; will retry on the next font asset");
+		log_printf("fonts: GDI font context is unavailable; will retry on the next font asset");
 		return;
 	}
 	double ratio[FACE_COUNT];
@@ -747,10 +1153,10 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		int fallback_px = (int)(j->pixel_height * CAP_FACTOR / ratio[fallback_face] + 0.5);
 		if (font_px < 1) font_px = 1;
 		if (fallback_px < 1) fallback_px = 1;
-		int font_width = plan[p].face == FACE_BANK ? BANK_WIDTH_PERCENT : 100;
-		int fallback_width = fallback_face == FACE_BANK ? BANK_WIDTH_PERCENT : 100;
 		HFONT font = make_font(plan[p].face, font_px * FONT_RENDER_SCALE);
 		HFONT fallback = make_font(fallback_face, fallback_px * FONT_RENDER_SCALE);
+		int font_width = face_width_percent[plan[p].face] ? face_width_percent[plan[p].face] : 100;
+		int fallback_width = face_width_percent[fallback_face] ? face_width_percent[fallback_face] : 100;
 		if (!font || !fallback) {
 			log_printf("fonts: GDI could not create the requested font for %s", plan[p].name);
 			if (font) DeleteObject(font);
@@ -891,7 +1297,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			break;
 		}
 	}
-	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph quads grown to each font's grid (bitmap and quad match exactly), advances rounded to that grid, three mip levels, bank width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT);
+	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph quads grown to each font's grid (bitmap and quad match exactly), advances rounded to that grid, three mip levels, bank width %d%%, system fallback width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT, system_fallback_width_percent);
 	if (!atlas_h) {
 		log_printf("fonts: glyphs do not fit supported texture dimensions; will retry on the next font asset");
 		free(unique);
