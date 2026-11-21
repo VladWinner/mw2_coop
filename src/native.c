@@ -2618,6 +2618,70 @@ static void fx_step_hook(int *ctx, int time)
 		return;
 	fx_step_original(ctx, time);
 }
+// The animations advance once per engine frame, as the engine has it (2026-11-21). The cgame draw (64 bits rva 0xbca00) steps the animation of every DObj (rva 0x9d8b0:
+// the time by the client frame time, notetracks) inside `if (local client == 0)`: the entities of cg.nextSnap's list (call 0xbcb24), then the players' entities 0..1
+// (call 0xbcb71). Player 2's view is drawn as local client 0 too, so every animation was stepped twice a frame, ran at twice its speed between two snapshots and was
+// set back by the snapshot's copy of the server's state 20 times a second (measured, animleaf: the partner's body in player 2's half advanced in player 1's draw and
+// again in player 2's, about 8 frames back at each snapshot). The owner: "his idle animation loses frames, in movement it jitters like the airport's terrorists".
+// Measured further (animsteplog): in mode 11 the snapshot's entity list holds both players' entities, so even in one draw player 1's body was stepped twice, by the list
+// and by the players' loop (the engine expects the local player's own entity in no list). Each DObj is now stepped at most once per engine frame, whoever calls first
+// (anim_frame counts the frames, cg_step_hook; [native] animonce=0 off).
+static unsigned anim_frame; // (cg_step_hook: one per engine frame)
+static void (*anim_step_original)(void *dobj, uintptr_t notify);
+static int anim_step_seen(void *dobj)
+{
+	static struct {
+		void *dobj;
+		unsigned frame;
+	} seen[2048];
+	unsigned h = (unsigned)(((uintptr_t)dobj >> 4) * 2654435761u) & 2047;
+	for (int i = 0; i < 32; i++, h = (h + 1) & 2047) {
+		if (seen[h].dobj == dobj) {
+			if (seen[h].frame == anim_frame)
+				return 1;
+			seen[h].frame = anim_frame;
+			return 0;
+		}
+		if (seen[h].frame != anim_frame || !seen[h].dobj) { // (a slot of an earlier frame is free)
+			seen[h].dobj = dobj;
+			seen[h].frame = anim_frame;
+			return 0;
+		}
+	}
+	return 0; // (table crowded: step it)
+}
+static void anim_step_hook(void *dobj, uintptr_t notify)
+{
+#ifdef _WIN64
+	if (CFG_ONCE("animsteplog", 0)) { // QA: the steps of the players' bodies per second: [context][body][site 0xbcb24 snapshot list, 0xbcb71 players]
+		static LONG n[2][2][2];
+		static DWORD at;
+		const int site = __builtin_return_address(0) == (void *)(base + XR(0xbcb76)) ? 1 : 0;
+		for (int k = 0; k < 2; k++)
+			if (dobj == (void *)((const uint8_t *(*)(int))(base + XR(0x1fece0)))(k))
+				n[p2_frame ? 1 : 0][k][site]++;
+		if (GetTickCount() - at >= 2000) {
+			at = GetTickCount();
+			log_printf("native: animsteps 2 s: p1 draw: body0 list %ld players %ld, body1 list %ld players %ld | p2 draw: body0 list %ld players %ld, body1 list %ld players %ld", n[0][0][0], n[0][0][1], n[0][1][0],
+				   n[0][1][1], n[1][0][0], n[1][0][1], n[1][1][0], n[1][1][1]);
+			memset(n, 0, sizeof(n));
+		}
+	}
+#endif
+	static LONG stepped, skipped;
+	static DWORD said;
+	if (CFG_ONCE("animsteplog", 0) && GetTickCount() - said >= 2000) { // QA: all DObjs: steps made and second steps left out, per 2 s
+		said = GetTickCount();
+		log_printf("native: animsteps 2 s: %ld steps made, %ld second steps of the same frame left out", stepped, skipped);
+		stepped = skipped = 0;
+	}
+	if (mode == 11 && split_on && ctx1_ready && anim_frame && dobj && CFG_ONCE("animonce", 1) && anim_step_seen(dobj)) {
+		skipped++;
+		return;
+	}
+	stepped++;
+	anim_step_original(dobj, notify);
+}
 
 static void rs_cgents_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
 {
@@ -2753,6 +2817,7 @@ static void p0dump_diff(const char *what, const uint8_t *a, const uint8_t *b, in
 }
 static float p0cnt_draw_org[3], p0cnt_draw_org_b[3]; // the two origins the last two adds of entity 0 were given (5th argument and the pose at rdx) // [native] p0cnt=1: context 1's draws, and the adds of entity 0's DObj to its scene, per second
 static void cg_draw_hook_inner(unsigned local_client, int a, int b);
+static void animleaf_log(const char *where, int ent, const uint8_t *dobj); // (QA, before dobj_add_hook)
 #ifdef _WIN64
 static double lag_now(void);
 // QA ([native] viewjit=<seconds>): from that many seconds after the split, 150 consecutive draws of each context: the player state's origin, pitch and yaw (what the view is built
@@ -3739,7 +3804,11 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		viewjit_log(0);
 		vehjit_log(0);
 #endif
+		if (CFG_ONCE("animleaf", 0)) // QA: both bodies' trees before and after player 1's view
+			animleaf_log("d0", 0, NULL), animleaf_log("d0", CFG_ONCE("animleafent", 1), NULL);
 		cg_draw_original(local_client, a, b);
+		if (CFG_ONCE("animleaf", 0))
+			animleaf_log("e0", 0, NULL), animleaf_log("e0", CFG_ONCE("animleafent", 1), NULL);
 		if (CFG_ONCE("camlog", 0)) { // QA: player 1's camera (the refdef origin, rva 0x42d310) and his own entity's lerp origin, sampled
 			static unsigned k1;
 			const float *v = (const float *)(base + XR(0x42d310)), *e0 = (const float *)(base + RVA_CENT + 0x18), *e1 = (const float *)(base + RVA_CENT + CENT_SIZE + 0x18);
@@ -3890,6 +3959,8 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			viewjit_log(1);
 			vehjit_log(1);
 #endif
+			if (CFG_ONCE("animleaf", 0)) // QA: both bodies' trees before player 2's view
+				animleaf_log("d1", 0, NULL), animleaf_log("d1", CFG_ONCE("animleafent", 1), NULL);
 			cg_draw_vis(0, a, b);
 			if (CFG_ONCE("npclog", 0) && ctx_current == 1) // QA: the actors as player 2's draw placed them (the frame hook logs context 0 only in mode 11)
 				npc_log();
@@ -4323,6 +4394,17 @@ static int cent_share_on(void)
 {
 	return mode == 11 && CFG_ONCE("centshare", 1);
 }
+// The whole table, not only the players' slots (2026-11-21). The cgame range of the swap ends inside cg_entities (64 bits: 0x44f000, in slot 134; 32 bits: 0x3a0000, in slot
+// 135), so entities 2..134 had a copy per context, while every entity from 135 on was one for both. Context 1 never refreshes the entity states (its snapshot transition is
+// context 0's, see ent_clean_hook), so its copies kept what they held when the split began: a helicopter among them (so_killspree_trainer, entities 26 and 33) was drawn in
+// player 2's half at that old place, interpolated from the same two states with every new snapshot's fraction: the same 50 ms of flight again and again, back to its start
+// at each snapshot (Vlad and the owner, 2026-11-20: "looks stuck, trying to get out, jitter back and forth"; npclog: 16% of player 2's draws went backwards, 0% of player 1's,
+// and the helicopter from entity 698 was smooth in both). The swap now leaves the table in place, as the 360 keeps one cg_entities for all local players
+// ([native] centall=0: the copies of slots 2..134 per context as before).
+static int cent_all_on(void)
+{
+	return cent_share_on() && CFG_ONCE("centall", 1) && RVA_CENT > RANGE_RVA(0) && RVA_CENT < RANGE_RVA(0) + ranges[0].size;
+}
 static int p0copy_on(void)
 {
 	return CFG_ONCE("p0copy", cent_share_on() ? 0 : 1);
@@ -4509,8 +4591,9 @@ static void ctx_swap_mask(int to, unsigned mask)
 		render_wait_idle();
 	}
 #endif
-	uint8_t cent_keep[2 * CENT_SIZE]; // the players' slots, shared by the contexts (cent_share_on)
-	const int cent_keep_on = (need & 1u) && cent_share_on();
+	uint8_t cent_keep[2 * CENT_SIZE]; // the players' slots, shared by the contexts (cent_share_on; with cent_all_on the whole table stays in place)
+	const int cent_all = (need & 1u) && cent_all_on();
+	const int cent_keep_on = (need & 1u) && cent_share_on() && !cent_all;
 	if (cent_keep_on)
 		memcpy(cent_keep, base + RVA_CENT, sizeof(cent_keep));
 	for (size_t i = 0; i < NRANGES; i++) {
@@ -4549,8 +4632,9 @@ static void ctx_swap_mask(int to, unsigned mask)
 		if (i == RANGE_FX)
 			fx_spot_check("as it leaves", range_owner[i]);
 #endif
-		swap_copy(ctx_store[range_owner[i]][i], live, ranges[i].size);
-		swap_copy(live, ctx_store[to][i], ranges[i].size);
+		const size_t swap_size = i == 0 && cent_all ? (size_t)(RVA_CENT - RANGE_RVA(0)) : ranges[i].size; // (cent_all_on: the entity table at the range's end stays live)
+		swap_copy(ctx_store[range_owner[i]][i], live, swap_size);
+		swap_copy(live, ctx_store[to][i], swap_size);
 		range_owner[i] = to;
 #if defined(_WIN64) && defined(RANGE_FX)
 		if (i == RANGE_FX) {
@@ -5983,9 +6067,18 @@ static void xfer_hook(void *src, void *dest, unsigned t)
 			calls[0] = calls[1] = 0;
 			sum[0] = sum[1] = 0;
 		}
-		if (ctx_current == 1 && CFG_ONCE("xferskip", 0) && dest != (void *)((const uint8_t *(*)(int))(base + XR64(0x1fece0)))(0)) {
+		if (ctx_current == 1 && (CFG_ONCE("xferskip", 0) >= 2 || (CFG_ONCE("xferskip", 0) && dest != (void *)((const uint8_t *(*)(int))(base + XR64(0x1fece0)))(0)))) { // (xferskip=2: none at all from context 1)
 			skipped++;
 			return;
+		}
+		if (CFG_ONCE("xferlog01", 0) && split_tick && GetTickCount() - split_tick > (DWORD)CFG_ONCE("animlogat", 30) * 1000) { // QA: the transfers into the players' bodies: who queues them, with which time
+			static int lines;
+			for (int k = 0; k < 2 && lines < 400; k++)
+				if (dest == (void *)((const uint8_t *(*)(int))(base + XR64(0x1fece0)))(k)) {
+					lines++;
+					log_printf("native: xfer01 ent %d ctx %d time %.4f (%08x) cg.time %d cl.serverTime %d snap %d next %d", k, ctx_current, (double)tf, t, *(const int *)(base + XR64(0x422434)),
+						   *(const int *)(base + XR64(0x51dca8)), *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac8)) + 4));
+				}
 		}
 	}
 	xfer_original(src, dest, t);
@@ -8181,6 +8274,56 @@ static void pass2_hook(unsigned lc)
 	pass2_original(lc);
 }
 
+#ifdef _WIN64
+// QA ([native] animleaf=1, animlogat=<s>): the partner's body as player 2 sees it (owner 2026-11-21: "his idle animation loses frames, in movement it jitters like the
+// airport's terrorists did"). The animation tree of a player body's client DObj (entity 0 or 1), every node reachable from the root (first child +0xc, next sibling +0xa,
+// nodes of 0x40 bytes at rva 0x1bc0a30): its index, the u16 links and the floats from +0x14 (the state: time, weights, rate), at points of a frame: after player 1's
+// cgame step ("s0"), after player 2's ("s1"), and when a view adds the body ("add"). 400 frames from animlogat seconds after the split. One line per point.
+static void animleaf_log(const char *where, int ent, const uint8_t *dobj)
+{
+	static unsigned lines;
+	if (!CFG_ONCE("animleaf", 0) || lines >= 9000 || !split_tick || GetTickCount() - split_tick < (DWORD)CFG_ONCE("animlogat", 30) * 1000)
+		return;
+	if (!dobj)
+		dobj = ((const uint8_t *(*)(int))(base + XR64(0x1fece0)))(ent);
+	if (!dobj || IsBadReadPtr(dobj, 0xb0))
+		return;
+	const uint8_t *tree = *(const uint8_t *const *)dobj;
+	if (!tree || IsBadReadPtr(tree, 16))
+		return;
+	lines++;
+	char line[3000];
+	int len = snprintf(line, sizeof(line), "native: animleaf %s ent %d ctx %d t=%.2f cg.time %d dobj %p:", where, ent, ctx_current, lag_now() * 1000.0, *(const int *)(base + XR64(0x422434)), (const void *)dobj);
+	int stack[32], sp = 0, seen = 0;
+	const int root = *(const short *)(tree + 8);
+	if (root > 0)
+		stack[sp++] = root;
+	while (sp > 0 && seen < 24 && len < (int)sizeof(line) - 140) {
+		const int idx = stack[--sp];
+		if (idx <= 0 || idx >= 0x8000)
+			continue;
+		seen++;
+		const uint8_t *node = base + XR64(0x1bc0a30) + (size_t)idx * 0x40;
+		const uint16_t *u = (const uint16_t *)node;
+		const float *f = (const float *)(node + 0x14);
+		len += snprintf(line + len, sizeof(line) - len, " [%d p%u n%u c%u a%u | %.4f %.4f %.4f %.4f %.4f %.4f]", idx, u[7], u[5], u[6], u[8], (double)f[0], (double)f[1], (double)f[3], (double)f[4], (double)f[5], (double)f[6]);
+		if (u[5] && sp < 32)
+			stack[sp++] = u[5];
+		if (u[6] && sp < 32)
+			stack[sp++] = u[6];
+		static int watched;
+		if (!u[6] && !watched && ent == 0 && CFG_ONCE("animwatch", 0) && !strcmp(where, "add")) { // [native] animwatch=1: who writes this leaf's time (+0x20), with the live context
+			watched = 1;
+			control_set_probe(npc_probe_ctx);
+			control_watch_write(XR64(0x1bc0a30) + (uintptr_t)idx * 0x40 + 0x20, 4);
+			log_printf("native: animwatch: watching node %d's time of entity 0", idx);
+		}
+	}
+	log_printf("%s", line);
+}
+#else
+static void animleaf_log(const char *where, int ent, const uint8_t *dobj) { (void)where, (void)ent, (void)dobj; }
+#endif
 // Diagnostics ([native] dobjlog=1): the scene's "add a DObj" function (rva 0x2bb0: DObj in rcx, origin pointer in rdx, entity number as a ushort in r8, flags in r9) logged
 // for context 1's frames, to see which entity a stray model comes from and where it is placed.
 static void *(*dobj_add_original)(void *, void *, unsigned, unsigned, void *, void *, void *, void *);
@@ -8311,6 +8454,8 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			log_printf("%s", line);
 		}
 	}
+	if (CFG_ONCE("animleaf", 0) && ((ctx_current == 1 && (c & 0xffff) == 0) || (ctx_current == 0 && (c & 0xffff) == 1)))
+		animleaf_log("add", (int)(c & 0xffff), (const uint8_t *)a);
 	if (CFG_ONCE("animlog", 0) && a && !IsBadReadPtr(a, 0xb0) && ((ctx_current == 1 && (c & 0xffff) == 0) || (ctx_current == 0 && (c & 0xffff) == 1)) && split_tick && GetTickCount() - split_tick > (DWORD)CFG_ONCE("animlogat", 30) * 1000) {
 		// QA ([native] animlog=1, animlogat=<s>): the other player's body (entity 0 in context 1, entity 1 in context 0): wall clock, the draw origin and the animation tree's first nodes at each
 		// draw, 60 draws per context, to see whether the animation advances every frame or in steps
@@ -10322,9 +10467,14 @@ static void cg_time_hook(unsigned t, unsigned b, unsigned c)
 	cg_time_have = 1;
 	cg_time_original(t, b, c);
 }
+static void animleaf_log(const char *where, int ent, const uint8_t *dobj);
 static void cg_step_hook(unsigned lc)
 {
+	if (ctx_current == 0 && lc == 0)
+		anim_frame++; // (anim_step_hook: a new engine frame)
 	cg_step_original(lc);
+	if (mode == 11 && split_on && ctx1_ready && ctx_current == 0 && lc == 0 && CFG_ONCE("animleaf", 0)) // QA: the partner body's tree after player 1's step
+		animleaf_log("s0", 0, NULL), animleaf_log("s0", CFG_ONCE("animleafent", 1), NULL);
 	if (mode == 11 && split_on && ctx1_ready && ctx_current == 0 && lc == 0 && CFG_ONCE("p2step", 1)) {
 		ctx_swap(1);
 		if (cg_time_have && CFG_ONCE("p2time", 1)) {
@@ -10335,6 +10485,8 @@ static void cg_step_hook(unsigned lc)
 			*t = (int)cg_time_arg;
 		}
 		cg_step_original(0);
+		if (CFG_ONCE("animleaf", 0)) // QA: the partner body's tree after player 2's step
+			animleaf_log("s1", 0, NULL), animleaf_log("s1", CFG_ONCE("animleafent", 1), NULL);
 #ifdef _WIN64
 		if (CFG_ONCE("camlog", 0)) { // QA: player 2's slot after his step, next to his snapshot's player state origin (cg.nextSnap ps, rva 0x40cad8, origin +0x1c)
 			static unsigned ks;
@@ -10372,6 +10524,10 @@ static void hooks_apply32_mode11(void)
 	ok += m11_call32(base + XR(0x17adff), base + XR(0x4a530), (void *)cg_time_hook, (void **)&cg_time_original, "screen update's client time");
 	ok += m11_call32(base + XR(0x17ae05), base + XR(0x4a1b0), (void *)cg_step_hook, (void **)&cg_step_original, "screen update's cgame step");
 	ok += m11_call32(base + XR(0x668b2), base + XR(0x9d120), (void *)fx_step_hook, (void **)&fx_step_original, "cgame's effects step");
+	// (anim_step_hook: the animation steps of the snapshot's entities and of the players, rva 0x170bb0, called by the cgame draw for local client 0; cdecl (dobj, notify))
+	if (m11_call32(base + XR(0x170bda), base + XR(0x605b0), (void *)anim_step_hook, (void **)&anim_step_original, "snapshot entities' animation step") +
+		m11_call32(base + XR(0x170c20), base + XR(0x605b0), (void *)anim_step_hook, (void **)&anim_step_original, "players' animation step") != 2)
+		log_printf("native: mode 11: the animations may advance twice a frame (animonce)");
 	ok += m11_call32(base + XR(0xf319a), base + XR(0x15e7d0), (void *)friend_hook, (void **)&friend_original, "HUD's popup friendly name");
 	ok += m11_call32(base + XR(0x496b7), base + XR(0x107b10), (void *)render_scene_hook, (void **)&render_scene_original, "R_RenderScene");
 	ok += m11_call32(base + XR(0x107b70), base + XR(0xa31e0), (void *)rs_shock_hook, (void **)&rs_shock_original, "R_RenderScene's shellshock");
@@ -10481,6 +10637,17 @@ static int hooks_apply(void)
 #ifdef _WIN64
 	if (mode == 11 && (*(base + XR(0xbccf0)) != 0xe8 || !jhook_call(base + XR(0xbccf0), (void *)fx_step_hook, (void **)&fx_step_original)))
 		log_printf("native: unexpected code at the cgame's effects step (0xbccf0): the effects clock may advance twice a frame (fxclock)");
+	if (mode == 11) { // (anim_step_hook: both calls of the animation step in the cgame draw)
+		uint8_t *const sites[2] = {base + XR(0xbcb24), base + XR(0xbcb71)}; // (written out for the signature tools)
+		int ok = 0;
+		for (int i = 0; i < 2; i++) {
+			uint8_t *s = sites[i];
+			if (s[0] == 0xe8 && *(int32_t *)(s + 1) + (intptr_t)(s + 5) == (intptr_t)(base + XR(0x9d8b0)) && jhook_call(s, (void *)anim_step_hook, (void **)&anim_step_original))
+				ok++;
+		}
+		if (ok != 2)
+			log_printf("native: unexpected code at the cgame draw's animation steps (0xbcb24, 0xbcb71; %d of 2 hooked): the animations may advance twice a frame (animonce)", ok);
+	}
 #endif
 	if (mode == 11 && (*(base + XR(0xd5aaf)) != 0xe8 || !jhook_call(base + XR(0xd5aaf), (void *)end_frame_hook, (void **)&end_frame_original)))
 		log_printf("native: unexpected code at the screen update's end-frame call (0xd5aaf): exp11frames cannot end player 2's frame");
@@ -11015,8 +11182,11 @@ void *native_ctx_addr(int ctx, unsigned rva)
 	if (!native_active || !ctx_on || !ctx1_ready || !ctx_store[0][0] || (ctx != 0 && ctx != 1))
 		return NULL;
 	for (size_t i = 0; i < NRANGES; i++)
-		if (rva >= ranges[i].rva && rva < ranges[i].rva + ranges[i].size)
+		if (rva >= ranges[i].rva && rva < ranges[i].rva + ranges[i].size) {
+			if (i == 0 && cent_all_on() && RANGE_RVA(0) + (rva - ranges[0].rva) >= RVA_CENT) // (the entity table is one for both contexts: always the live one)
+				return base + RANGE_RVA(0) + (rva - ranges[0].rva);
 			return ctx == ctx_current ? (void *)(base + RANGE_RVA(i) + (rva - ranges[i].rva)) : (void *)(ctx_store[ctx][i] + (rva - ranges[i].rva));
+		}
 	return NULL;
 }
 

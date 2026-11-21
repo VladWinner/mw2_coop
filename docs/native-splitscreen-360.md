@@ -791,3 +791,44 @@ the first. Six context swaps a frame (the cgame block, 306 KB on 64 bits) cost 3
 
 **QA tools added:** `[native] npcent=<n>`, the 32-bit npc line, `npccam`; `seeklog=1` (32-bit official exe); `swapsites=1` now gives each call site's worker
 wait and copy time; player 2's `sunlog` line in mode 11, labelled by the range's owner; the QA scenario `walkpair`.
+
+### One entity table for both players: the helicopter that replayed 50 ms of flight (2026-11-21, `centall`)
+
+Report (Vlad on 1.5.0, then the owner): in `so_killspree_trainer` in the split screen, helicopters, targets and doors flicker and jerk in player 2's half; the owner
+narrowed it to a helicopter that "looks stuck and tries to get out, jitter back and forth".
+
+Measured with `[native] npclog=1` (the entity that travelled furthest, its pose in each context's draws; `npcrev.py` in the scratch folder counts the draws whose step goes
+against the step before): helicopters (eType 9) number 26 and 33 went backwards in 16% of player 2's draws and 0% of player 1's, and their mean step in player 2's half was
+2-2.5 times player 1's; the helicopter number 698 was smooth in both halves. In player 2's context entity 33's current and next state never changed (current -19262 -4832,
+next -19302 -4790 through every snapshot) while player 1's moved on (-8308 1638 and on): each snapshot's fraction ran the pose from the same current state to the same next
+one, and at the next snapshot it jumped back to the start. It was also at a place far from where the helicopter really was.
+
+Why: the cgame range the context swap carries (64 bits `0x404450`..`0x44f000`, 32 bits `0x35f280`..`0x3a0000`) ends inside cg_entities (`0x441070`, `0x1a8` each; 32 bits
+`0x392848`, `0x198`), so entities 0..134 had a copy per context and every entity from 135 on one for both. Slots 0 and 1 were already kept in place (`centshare`, the players'
+bodies). Context 1 never refreshes entity states itself: the snapshot transition is context 0's (`ent_clean_hook`, `transfix`), so context 1's copies of 2..134 kept what
+they held when the split began. The 360 keeps one cg_entities for all local players (0x824ae9c0, indexed by entity number only).
+
+Fix: the swap leaves the whole table in place (`cent_all_on`: range 0 is swapped only up to cg_entities; `native_ctx_addr` returns the live table for both contexts;
+`[native] centall=0` the copies as before). Result on the same level: reversals 16% -> 0% for entities 26 and 33, mean step equal in both halves (26: 8.96, 33: 5.01, 698: 6.99).
+The burst capture's most-changing pixel in player 2's half changed in 39-43 of 118 frames instead of 75-79 (the whole-half counts are too noisy between runs to compare).
+
+### Animations stepped twice a frame: the partner's body lost frames (2026-11-21, `animonce`)
+
+Owner, the same morning: in player 2's half the partner's body "constantly moves by itself, sways, checks his pouch, looks around: the normal idle animation, and it
+looks as if frames are lost; in movement it jitters like the airport's terrorists did".
+
+Measured with `[native] animleaf=1` (the animation tree of a body's client DObj, nodes of 0x40 bytes at rva `0x1bc0a30`, the leaf's time at +0x20, logged after each
+player's cgame step, around each view's draw and when a view adds the body; `leafwho.py` / `leafan.py` in the scratch folder): player 1's body (entity 0) advanced in player 1's
+draw and again in player 2's, two steps in each (four a frame); player 2's body one step in each draw (two a frame). At every snapshot (20 a second) the copy of the server's
+state set them back: player 1's body by about 36 of its steps (13 frames of real time a snapshot, 52 steps made), player 2's by about 10.
+
+Why (Ghidra, 64 bits): the cgame draw `0xbca00` steps the animation of every DObj (`0x9d8b0`: the time by the client frame time `0x51dcb4`, then `0x29a3d0`) inside
+`if (local client == 0)`: first the entities of cg.nextSnap's list (call `0xbcb24`), then the players' entities 0..1 (call `0xbcb71`). The 32-bit draw `0x666c0` calls
+`0x170bb0` for it (calls `0x170bda` and `0x170c20` of `0x605b0`, cdecl). The engine steps them once a frame, in local client 0's draw; in mode 11 player 2's view is drawn as
+local client 0 too, so every animation of the level was stepped twice a frame (airport: about 170,000 steps a second made and as many again left out now). The snapshot's
+list also holds both players' entities in mode 11, so player 1's body was stepped twice even in one draw (`[native] animsteplog=1`: per 2 s, body 0 by the list and by the
+players' loop in each draw, body 1 by the list only).
+
+Fix (`anim_step_hook` on both calls, 64 and 32 bits, iw4x-sp through the 159 table): each DObj is stepped at most once per engine frame, whoever calls first (`anim_frame`
+counts the frames in `cg_step_hook`; `[native] animonce=0` off). Result: both bodies one step a frame (+0.23 on the same animation), 0 of 749 draws backwards (before: 57-98),
+a small step forward at a snapshot instead of 8 frames back.

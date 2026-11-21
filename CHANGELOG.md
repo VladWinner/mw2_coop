@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Split screen: animations at their own speed.** Every animation of the level (the characters, the partner's body) was stepped twice a frame and set back by each snapshot 20 times a second: the partner's idle animation in player 2's half seemed to lose frames and jittered in movement. Each animation is now stepped once a frame, as the game does for one player (owner).
+- **Split screen: helicopters and other objects in player 2's half.** Entities numbered below 135 (among them a helicopter in the Spec Ops mission so_killspree_trainer) were kept a second time for player 2 and that copy was never brought up to date: player 2 saw them where they had been when the split began, replaying the same 50 ms of movement ("stuck, trying to get out"). One entity table for both players now, as on the Xbox 360 (Vlad, owner).
+
 ## v1.5.1 (2026-11-21)
 
 The release notes: the changes since v1.5.0.
