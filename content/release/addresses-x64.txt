@@ -8635,7 +8635,6 @@ DATA 0x192d380 rip cap=4 tail=4 delta=1408 sig=74 1F C7 05 ?? ?? ?? ?? FF FF FF 
 DATA 0x192d7e3 rip cap=4 tail=4 delta=285 sig=74 1F C7 05 ?? ?? ?? ?? FF FF FF FF C7 05 56 E6
 DATA 0x192d7e4 rip cap=4 tail=4 delta=284 sig=74 1F C7 05 ?? ?? ?? ?? FF FF FF FF C7 05 56 E6
 DATA 0x192d8f4 rip cap=4 tail=4 delta=12 sig=74 1F C7 05 ?? ?? ?? ?? FF FF FF FF C7 05 56 E6
-DATA 0x192d8f9 rip cap=4 tail=4 delta=7 sig=74 1F C7 05 ?? ?? ?? ?? FF FF FF FF C7 05 56 E6
 DATA 0x19ada98 img cap=4 sig=43 83 BC 34 ?? ?? ?? ?? 03 0F 8C ?? ?? ?? ?? 80 3D 82 06 30
 DATA 0x19c3864 rip cap=4 tail=4 delta=4 sig=03 C3 81 3D ?? ?? ?? ?? 00 00 00 7F 44 89 05 87
 DATA 0x19c6410 rip cap=4 tail=4 delta=-1252 sig=CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 2E 42

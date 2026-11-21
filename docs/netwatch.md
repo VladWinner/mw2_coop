@@ -78,6 +78,8 @@ The hash takes additions only between `0x22dec0` (on) and `0x22ded0` (off): for 
 script's `GetDvar`: the name and the value of every dvar a script reads go into the hash, because a dvar is this PC's own and a script that reads one can take
 another path on the other PC.
 
+The byte that turns the additions on (`0x192d8f9`) is not a resolver address: it is read from the adder's own first instruction (`0x22dee0`: `cmp byte [rip+disp32], 0`), so the records work on a game build the mod was not made for too (checked with `MW2COOP_FORCE_UNKNOWN=1` on both copies: 495 of 495 addresses found by signature, a desync made on purpose on the host named by `netwatch_compare.py` as player 1's health).
+
 All twelve calls are hooked (`hook_call`) and each addition is kept in a ring (65536 entries) with the level time of the lockstep frame executed last. When the
 games go apart, both PCs write the additions of the steps before the first differing frame to the log (`netwatch: add t <time> ent <n> type .. health .. pos ..
 angles ..`, `netwatch: add t <time> at <rva> string ".."`): the client when it finds the difference, the host when the client's report comes. At most four

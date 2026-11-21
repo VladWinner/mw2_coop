@@ -80,7 +80,10 @@ enum { NOTE_NONE, NOTE_SILENT, NOTE_BACK, NOTE_DESYNC, NOTE_INSYNC, NOTE_RESYNC,
 // last; when the games go apart, both PCs write the additions of the step before the first differing frame to the log (the client when it finds it, the host when
 // the client tells it): the two logs side by side name the entity and the value. [native] netwatchrec=0 off.
 #ifdef _WIN64
-#define NW_ACCUM XR(0x192d8f9) // uint8: the hash takes additions
+// The byte that says the hash takes additions (64: rva 0x192d8f9) is read where the adder itself reads it: 0x22dee0 begins with `cmp byte [rip+disp32], 0`, so its
+// address comes from that instruction (nw_rec_install), and the resolver needs no signature for it (as a global it had only one, too few on an unknown build). When
+// the adder does not begin so, every call is recorded.
+static const volatile uint8_t *nw_accum;
 typedef struct {
 	int time;
 	uint32_t site; // the return address's rva: which addition
@@ -94,7 +97,7 @@ static int nw_cur_time, nw_dumps;
 static uint32_t nw_ret_type, nw_ret_str[3]; // the return addresses (rva) of the entity block's first addition and of the string additions
 static void nw_record(uintptr_t ret, const int *v, int n, const char *s)
 {
-	if (!nw_rec || !base[NW_ACCUM])
+	if (!nw_rec || (nw_accum && !*nw_accum))
 		return;
 	nw_rec_t *r = &nw_rec[nw_rec_n++ % NW_REC];
 	r->time = nw_cur_time;
@@ -139,9 +142,13 @@ static void nw_rec_install(void)
 	nw_ret_type = (uint32_t)(ints[4] + 5 - base);
 	for (int i = 0; i < 3; i++)
 		nw_ret_str[i] = (uint32_t)(strs[i] + 5 - base);
+	const uint8_t *adder = base + XR(0x22dee0); // cmp byte [rip+disp32], 0: 80 3d <disp32> 00
+	if (adder[0] == 0x80 && adder[1] == 0x3d && adder[6] == 0x00)
+		nw_accum = adder + 7 + *(const int32_t *)(adder + 2);
 	if (ok == want)
 		nw_rec = (nw_rec_t *)calloc(NW_REC, sizeof(nw_rec_t));
-	log_printf("netwatch: the hash's additions are %s (%d of %d calls hooked)", nw_rec ? "recorded for a divergence" : "NOT recorded", ok, want);
+	log_printf("netwatch: the hash's additions are %s (%d of %d calls hooked; the hash's on-byte %s)", nw_rec ? "recorded for a divergence" : "NOT recorded", ok, want,
+		   nw_accum ? "read from the adder's code" : "not found: every call is recorded");
 }
 // The additions of the steps whose frames were executed at level times from..to, one line per entity (type, number, health, position, angles as the hash took
 // them, raw and as numbers) and one per other addition. At most four dumps a level.
