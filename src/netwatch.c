@@ -73,16 +73,25 @@ static volatile LONG resync_wait;	  // the client: a checkpoint load for this is
 static volatile LONG partner_insync;	  // the host: the client says the games agree again
 enum { NOTE_NONE, NOTE_SILENT, NOTE_BACK, NOTE_DESYNC, NOTE_INSYNC, NOTE_RESYNC, NOTE_RESYNCFAIL, NOTE_RESYNCED };
 
-// --- what went into the hash (64 bits; 2026-11-21, issue 27) ---
-// The hash takes, between 0x22dec0 (on) and 0x22ded0 (off): for each player, vehicle and actor (G_RunFrameForEntity 0x174920) its type, number and health
-// (0x22dee0 at 0x174a82, 0x174a98, 0x174ab0) and its position and angles (0x22dfb0 at 0x174ac9, 0x174ae2); four values of 0x171370 (0x22dee0 at 0x1714d2, 0x171607,
-// 0x17161d, 0x171633) and strings (0x22df10 at 0x190ee9, 0x231026, 0x23103b). Each addition is kept in a ring with the level time of the lockstep frame executed
-// last; when the games go apart, both PCs write the additions of the step before the first differing frame to the log (the client when it finds it, the host when
-// the client tells it): the two logs side by side name the entity and the value. [native] netwatchrec=0 off.
+// --- what went into the hash (2026-11-21, issue 27; 64 bits first, the 32-bit build and iw4x-sp the same day) ---
+// The hash takes, between its on and off functions (64: 0x22dec0 / 0x22ded0): for each player, vehicle and actor (G_RunFrameForEntity, 64: 0x174920, 32: VA 0x5bfdb0)
+// its type, number and health (the int adder: 64 0x22dee0 at 0x174a82, 0x174a98, 0x174ab0; 32 VA 0x47af10 at 0x5bfe44, 0x5bfe58, 0x5bfe6e) and its position and angles
+// (the vector adder: 64 0x22dfb0 at 0x174ac9, 0x174ae2; 32 VA 0x422950 at 0x5bfe84, 0x5bfe9a); four values of the level step (64: 0x171370 at 0x1714d2, 0x171607,
+// 0x17161d, 0x171633; 32: VA 0x4bf8b0 at 0x4bfa01, 0x4bfb4d, 0x4bfb61, 0x4bfb75) and strings (the string adder: 64 0x22df10 at 0x190ee9 and the script's GetDvar
+// 0x231026, 0x23103b; 32 VA 0x42ecc0 at GetDvar's 0x4e4cd7, 0x4e4ce7). All are (value, file, line); on 32 bits cdecl, the caller pops. Each addition is kept in a ring
+// with the level time of the lockstep frame executed last; when the games go apart, both PCs write the additions of the step before the first differing frame to the
+// log (the client when it finds it, the host when the client tells it): the two logs side by side name the entity and the value. [native] netwatchrec=0 off.
+// The byte that says the hash takes additions (64: rva 0x192d8f9, 32: VA 0x1a93324) is read where the int adder reads it: it begins with `cmp byte [addr], 0` (80 3d,
+// 64: rip+disp32, 32: an absolute address), so the resolver needs no signature for it. When the adder does not begin so, every call is recorded.
 #ifdef _WIN64
-// The byte that says the hash takes additions (64: rva 0x192d8f9) is read where the adder itself reads it: 0x22dee0 begins with `cmp byte [rip+disp32], 0`, so its
-// address comes from that instruction (nw_rec_install), and the resolver needs no signature for it (as a global it had only one, too few on an unknown build). When
-// the adder does not begin so, every call is recorded.
+#define NW_ADD_INT XR(0x22dee0)
+#define NW_ADD_VEC XR(0x22dfb0)
+#define NW_ADD_STR XR(0x22df10)
+#else
+#define NW_ADD_INT XR(0x7af10)
+#define NW_ADD_VEC XR(0x22950)
+#define NW_ADD_STR XR(0x2ecc0)
+#endif
 static const volatile uint8_t *nw_accum;
 typedef struct {
 	int time;
@@ -129,22 +138,33 @@ static void nw_rec_install(void)
 {
 	if (!cfg("netwatchrec", 1))
 		return;
+#ifdef _WIN64
 	uint8_t *const ints[] = {base + XR(0x1714d2), base + XR(0x171607), base + XR(0x17161d), base + XR(0x171633), base + XR(0x174a82), base + XR(0x174a98), base + XR(0x174ab0)};
 	uint8_t *const vecs[] = {base + XR(0x174ac9), base + XR(0x174ae2)};
 	uint8_t *const strs[] = {base + XR(0x190ee9), base + XR(0x231026), base + XR(0x23103b)};
+#else
+	uint8_t *const ints[] = {base + XR(0xbfa01), base + XR(0xbfb4d), base + XR(0xbfb61), base + XR(0xbfb75), base + XR(0x1bfe44), base + XR(0x1bfe58), base + XR(0x1bfe6e)};
+	uint8_t *const vecs[] = {base + XR(0x1bfe84), base + XR(0x1bfe9a)};
+	uint8_t *const strs[] = {base + XR(0xe4cd7), base + XR(0xe4ce7)};
+#endif
+	const int nstrs = (int)(sizeof(strs) / sizeof(strs[0]));
 	int ok = 0, want = 0;
 	for (size_t i = 0; i < sizeof(ints) / sizeof(ints[0]); i++, want++)
-		ok += ints[i][0] == 0xe8 && *(const int32_t *)(ints[i] + 1) + (intptr_t)(ints[i] + 5) == (intptr_t)(base + XR(0x22dee0)) && hook_call(ints[i], (void *)nw_add_int, (void **)&nw_add_int_original);
+		ok += ints[i][0] == 0xe8 && *(const int32_t *)(ints[i] + 1) + (intptr_t)(ints[i] + 5) == (intptr_t)(base + NW_ADD_INT) && hook_call(ints[i], (void *)nw_add_int, (void **)&nw_add_int_original);
 	for (size_t i = 0; i < sizeof(vecs) / sizeof(vecs[0]); i++, want++)
-		ok += vecs[i][0] == 0xe8 && *(const int32_t *)(vecs[i] + 1) + (intptr_t)(vecs[i] + 5) == (intptr_t)(base + XR(0x22dfb0)) && hook_call(vecs[i], (void *)nw_add_vec, (void **)&nw_add_vec_original);
+		ok += vecs[i][0] == 0xe8 && *(const int32_t *)(vecs[i] + 1) + (intptr_t)(vecs[i] + 5) == (intptr_t)(base + NW_ADD_VEC) && hook_call(vecs[i], (void *)nw_add_vec, (void **)&nw_add_vec_original);
 	for (size_t i = 0; i < sizeof(strs) / sizeof(strs[0]); i++, want++)
-		ok += strs[i][0] == 0xe8 && *(const int32_t *)(strs[i] + 1) + (intptr_t)(strs[i] + 5) == (intptr_t)(base + XR(0x22df10)) && hook_call(strs[i], (void *)nw_add_str, (void **)&nw_add_str_original);
+		ok += strs[i][0] == 0xe8 && *(const int32_t *)(strs[i] + 1) + (intptr_t)(strs[i] + 5) == (intptr_t)(base + NW_ADD_STR) && hook_call(strs[i], (void *)nw_add_str, (void **)&nw_add_str_original);
 	nw_ret_type = (uint32_t)(ints[4] + 5 - base);
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < nstrs; i++)
 		nw_ret_str[i] = (uint32_t)(strs[i] + 5 - base);
-	const uint8_t *adder = base + XR(0x22dee0); // cmp byte [rip+disp32], 0: 80 3d <disp32> 00
+	const uint8_t *adder = base + NW_ADD_INT; // cmp byte [addr], 0: 80 3d <4 bytes> 00
 	if (adder[0] == 0x80 && adder[1] == 0x3d && adder[6] == 0x00)
-		nw_accum = adder + 7 + *(const int32_t *)(adder + 2);
+#ifdef _WIN64
+		nw_accum = adder + 7 + *(const int32_t *)(adder + 2); // (rip-relative)
+#else
+		nw_accum = (const uint8_t *)(uintptr_t) * (const uint32_t *)(adder + 2); // (absolute)
+#endif
 	if (ok == want)
 		nw_rec = (nw_rec_t *)calloc(NW_REC, sizeof(nw_rec_t));
 	log_printf("netwatch: the hash's additions are %s (%d of %d calls hooked; the hash's on-byte %s)", nw_rec ? "recorded for a divergence" : "NOT recorded", ok, want,
@@ -183,7 +203,6 @@ static void nw_dump(int from, int to, const char *who)
 	}
 	log_printf("netwatch: %s: %d lines", who, lines);
 }
-#endif
 
 // --- divergence (the frame executor's hook: main thread, every lockstep frame) ---
 static void (*exec_original)(int, int);
@@ -201,9 +220,7 @@ static void diverged(int time, int was, int now, int host_hash, int ours)
 			   (unsigned)host_hash, (unsigned)ours, (unsigned)was, (unsigned)now, dv.matched, dv.changes);
 	dv.matched = 0;
 	dv.steady_since = GetTickCount();
-#ifdef _WIN64
 	nw_dump(dv.last_frame - 50, dv.last_frame, "this PC (the client, it found the difference)"); // the step after the frame before: its additions made the difference
-#endif
 	if (!dv.said) {
 		dv.said = 1;
 		InterlockedExchange(&desync_since, time ? time : 1); // netwatch_poll shows it and tells the host, who loads the common checkpoint (saves_resync)
@@ -214,13 +231,11 @@ static void diverged(int time, int was, int now, int host_hash, int ours)
 static void exec_hook(int server_id, int time)
 {
 	InterlockedExchange(&last_exec, (LONG)GetTickCount());
-#ifdef _WIN64
 	static int rec_last;
 	if (time < rec_last)
 		nw_dumps = 0; // (a new level or a load)
 	rec_last = time;
 	nw_cur_time = time; // the additions that follow belong to the step of this frame
-#endif
 	if (enabled && !base[NW_IS_HOST]) {
 		if (server_id != dv.server_id || time < dv.last_time) { // a new session or a new level: begin again
 			if (dv.frames)
@@ -283,9 +298,7 @@ void netwatch_partner_packet(void)
 void netwatch_on_desync_packet(int time)
 {
 	log_printf("netwatch: the partner's PC says the games differ from level time %d on", time);
-#ifdef _WIN64
 	nw_dump(time - 100, time - 50, "this PC (the host, told by the client)");
-#endif
 	InterlockedExchange(&partner_desync_time, time ? time : 1);
 }
 
@@ -425,13 +438,11 @@ static void netqa_desync_f(void)
 {
 #ifdef _WIN64
 	int *health = (int *)(base + XR(0xd9e070) + 0x90); // gentity 0 (player 1), +0x90: the value G_RunFrameForEntity puts in the hash after the number and +0x7e
+#else
+	int *health = (int *)(base + XR(0xaa76b8) + 0x90); // (32 bits: the gentities at VA 0xea76b8, the same +0x90 the hash takes, VA 0x5bfe5d)
+#endif
 	log_printf("netwatch: QA: player 1's entity value at +0x90 %d -> %d on this PC only", *health, *health - 3);
 	*health -= 3;
-#else
-	// 32 bits (the gentity layout differs): the state hash itself moves on this PC, which the other PC sees as a divergence from this frame on (the world stays the same)
-	*(volatile int *)(base + NW_HASH) += 0x1234;
-	log_printf("netwatch: QA: the state hash moved by 0x1234 on this PC only");
-#endif
 }
 static void netqa_say_f(void) // QA: mw2coop_netqa_say <flags> <text name>: one of the notices at once, with those flags of CG_GameMessage
 {
@@ -462,7 +473,5 @@ void netwatch_install(void)
 		return;
 	}
 	log_printf("netwatch: the partner's silence (3 s) and the games' divergence (the host's state hash in each frame) are watched");
-#ifdef _WIN64
 	nw_rec_install();
-#endif
 }

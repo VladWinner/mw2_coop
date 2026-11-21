@@ -70,7 +70,7 @@ Resync (`mw2coop_netqa_desync` on the host 50 s into The Pit; the level's start 
 * iw4x-sp: the same (divergence at 26450, load, agree again after 3.4 s).
 * Official 32-bit (saves off there): the host answered "the checkpoints are off in this session", both PCs showed the restart-the-level notice.
 
-## What went into the hash (64-bit, 2026-11-21)
+## What went into the hash (2026-11-21; 64-bit, official 32-bit and iw4x-sp)
 
 The hash takes additions only between `0x22dec0` (on) and `0x22ded0` (off): for each player, vehicle and actor (`0x174920`) its type, number and health
 (`0x22dee0` called at `0x174a82`, `0x174a98`, `0x174ab0`), position and angles (`0x22dfb0` at `0x174ac9`, `0x174ae2`); four values of `0x171370` (`0x22dee0` at
@@ -122,5 +122,5 @@ session (`menus_poll`). Both PCs and both builds (the code is shared).
 
 ## Open
 
-* The records are 64-bit only; the 32-bit build still says only that the hashes differ.
+* (Done the same day: the records on the official 32-bit build and iw4x-sp too. 32-bit VAs: the int adder `0x47af10` at `0x4bfa01`, `0x4bfb4d`, `0x4bfb61`, `0x4bfb75` (the level step `0x4bf8b0`) and `0x5bfe44`, `0x5bfe58`, `0x5bfe6e` (G_RunFrameForEntity `0x5bfdb0`), the vector adder `0x422950` at `0x5bfe84`, `0x5bfe9a`, the string adder `0x42ecc0` at GetDvar's `0x4e4cd7`, `0x4e4ce7`; cdecl (value, file, line), the caller pops; the on-byte `0x1a93324` from the int adder's `cmp byte [abs32], 0`. iw4x-sp through the 159 table; `mw2coop_netqa_desync` changes player 1's health (+0x90) on 32 bits too.)
 * Vlad's own case: his and his friend's logs of a session where it happened (both `mw2coop.log`, the lines `netwatch:`).
