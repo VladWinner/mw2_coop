@@ -73,10 +73,115 @@ static volatile LONG resync_wait;	  // the client: a checkpoint load for this is
 static volatile LONG partner_insync;	  // the host: the client says the games agree again
 enum { NOTE_NONE, NOTE_SILENT, NOTE_BACK, NOTE_DESYNC, NOTE_INSYNC, NOTE_RESYNC, NOTE_RESYNCFAIL, NOTE_RESYNCED };
 
+// --- what went into the hash (64 bits; 2026-11-21, issue 27) ---
+// The hash takes, between 0x22dec0 (on) and 0x22ded0 (off): for each player, vehicle and actor (G_RunFrameForEntity 0x174920) its type, number and health
+// (0x22dee0 at 0x174a82, 0x174a98, 0x174ab0) and its position and angles (0x22dfb0 at 0x174ac9, 0x174ae2); four values of 0x171370 (0x22dee0 at 0x1714d2, 0x171607,
+// 0x17161d, 0x171633) and strings (0x22df10 at 0x190ee9, 0x231026, 0x23103b). Each addition is kept in a ring with the level time of the lockstep frame executed
+// last; when the games go apart, both PCs write the additions of the step before the first differing frame to the log (the client when it finds it, the host when
+// the client tells it): the two logs side by side name the entity and the value. [native] netwatchrec=0 off.
+#ifdef _WIN64
+#define NW_ACCUM XR(0x192d8f9) // uint8: the hash takes additions
+typedef struct {
+	int time;
+	uint32_t site; // the return address's rva: which addition
+	int v[3];
+	char s[16];
+} nw_rec_t;
+#define NW_REC 65536
+static nw_rec_t *nw_rec;
+static unsigned nw_rec_n;
+static int nw_cur_time, nw_dumps;
+static uint32_t nw_ret_type, nw_ret_str[3]; // the return addresses (rva) of the entity block's first addition and of the string additions
+static void nw_record(uintptr_t ret, const int *v, int n, const char *s)
+{
+	if (!nw_rec || !base[NW_ACCUM])
+		return;
+	nw_rec_t *r = &nw_rec[nw_rec_n++ % NW_REC];
+	r->time = nw_cur_time;
+	r->site = (uint32_t)(ret - (uintptr_t)base);
+	r->v[0] = n > 0 ? v[0] : 0, r->v[1] = n > 1 ? v[1] : 0, r->v[2] = n > 2 ? v[2] : 0;
+	r->s[0] = 0;
+	if (s)
+		lstrcpynA(r->s, s, sizeof(r->s));
+}
+static void (*nw_add_int_original)(int, const char *, int);
+static void nw_add_int(int v, const char *file, int line)
+{
+	nw_record((uintptr_t)__builtin_return_address(0), &v, 1, NULL);
+	nw_add_int_original(v, file, line);
+}
+static void (*nw_add_vec_original)(const int *, const char *, int);
+static void nw_add_vec(const int *v, const char *file, int line)
+{
+	nw_record((uintptr_t)__builtin_return_address(0), v, 3, NULL);
+	nw_add_vec_original(v, file, line);
+}
+static void (*nw_add_str_original)(const char *, const char *, int);
+static void nw_add_str(const char *s, const char *file, int line)
+{
+	nw_record((uintptr_t)__builtin_return_address(0), NULL, 0, s);
+	nw_add_str_original(s, file, line);
+}
+static void nw_rec_install(void)
+{
+	if (!cfg("netwatchrec", 1))
+		return;
+	uint8_t *const ints[] = {base + XR(0x1714d2), base + XR(0x171607), base + XR(0x17161d), base + XR(0x171633), base + XR(0x174a82), base + XR(0x174a98), base + XR(0x174ab0)};
+	uint8_t *const vecs[] = {base + XR(0x174ac9), base + XR(0x174ae2)};
+	uint8_t *const strs[] = {base + XR(0x190ee9), base + XR(0x231026), base + XR(0x23103b)};
+	int ok = 0, want = 0;
+	for (size_t i = 0; i < sizeof(ints) / sizeof(ints[0]); i++, want++)
+		ok += ints[i][0] == 0xe8 && *(const int32_t *)(ints[i] + 1) + (intptr_t)(ints[i] + 5) == (intptr_t)(base + XR(0x22dee0)) && hook_call(ints[i], (void *)nw_add_int, (void **)&nw_add_int_original);
+	for (size_t i = 0; i < sizeof(vecs) / sizeof(vecs[0]); i++, want++)
+		ok += vecs[i][0] == 0xe8 && *(const int32_t *)(vecs[i] + 1) + (intptr_t)(vecs[i] + 5) == (intptr_t)(base + XR(0x22dfb0)) && hook_call(vecs[i], (void *)nw_add_vec, (void **)&nw_add_vec_original);
+	for (size_t i = 0; i < sizeof(strs) / sizeof(strs[0]); i++, want++)
+		ok += strs[i][0] == 0xe8 && *(const int32_t *)(strs[i] + 1) + (intptr_t)(strs[i] + 5) == (intptr_t)(base + XR(0x22df10)) && hook_call(strs[i], (void *)nw_add_str, (void **)&nw_add_str_original);
+	nw_ret_type = (uint32_t)(ints[4] + 5 - base);
+	for (int i = 0; i < 3; i++)
+		nw_ret_str[i] = (uint32_t)(strs[i] + 5 - base);
+	if (ok == want)
+		nw_rec = (nw_rec_t *)calloc(NW_REC, sizeof(nw_rec_t));
+	log_printf("netwatch: the hash's additions are %s (%d of %d calls hooked)", nw_rec ? "recorded for a divergence" : "NOT recorded", ok, want);
+}
+// The additions of the steps whose frames were executed at level times from..to, one line per entity (type, number, health, position, angles as the hash took
+// them, raw and as numbers) and one per other addition. At most four dumps a level.
+static void nw_dump(int from, int to, const char *who)
+{
+	if (!nw_rec || nw_dumps >= 4)
+		return;
+	nw_dumps++;
+	log_printf("netwatch: %s: the hash's additions of the steps after the frames %d..%d (compare this block with the other PC's log):", who, from, to);
+	const unsigned n = nw_rec_n, first = n > NW_REC ? n - NW_REC : 0;
+	int lines = 0;
+	char line[400];
+	for (unsigned i = first; i < n && lines < 3000; i++) {
+		const nw_rec_t *r = &nw_rec[i % NW_REC];
+		if (r->time < from || r->time > to)
+			continue;
+		if (r->site == nw_ret_type && i + 4 < n) { // an entity's block: type (0x174a82), number, health, position, angles
+			const nw_rec_t *e = &nw_rec[(i + 1) % NW_REC], *h = &nw_rec[(i + 2) % NW_REC], *o = &nw_rec[(i + 3) % NW_REC], *a = &nw_rec[(i + 4) % NW_REC];
+			float of[3], af[3];
+			memcpy(of, o->v, sizeof(of));
+			memcpy(af, a->v, sizeof(af));
+			snprintf(line, sizeof(line), "netwatch: add t %d ent %d type %d health %d pos %08x %08x %08x (%.3f %.3f %.3f) angles %08x %08x %08x (%.3f %.3f %.3f)", r->time, e->v[0], r->v[0], h->v[0],
+				 (unsigned)o->v[0], (unsigned)o->v[1], (unsigned)o->v[2], (double)of[0], (double)of[1], (double)of[2], (unsigned)a->v[0], (unsigned)a->v[1], (unsigned)a->v[2],
+				 (double)af[0], (double)af[1], (double)af[2]);
+			i += 4;
+		} else if (r->s[0] || r->site == nw_ret_str[0] || r->site == nw_ret_str[1] || r->site == nw_ret_str[2])
+			snprintf(line, sizeof(line), "netwatch: add t %d at %x string \"%s\"", r->time, r->site, r->s);
+		else
+			snprintf(line, sizeof(line), "netwatch: add t %d at %x value %d %d %d", r->time, r->site, r->v[0], r->v[1], r->v[2]);
+		log_printf("%s", line);
+		lines++;
+	}
+	log_printf("netwatch: %s: %d lines", who, lines);
+}
+#endif
+
 // --- divergence (the frame executor's hook: main thread, every lockstep frame) ---
 static void (*exec_original)(int, int);
 static struct {
-	int server_id, last_time, have_diff, diff, frames, changes, said;
+	int server_id, last_time, last_frame, have_diff, diff, frames, changes, said;
 	DWORD steady_since;
 	unsigned long long matched;
 } dv;
@@ -89,6 +194,9 @@ static void diverged(int time, int was, int now, int host_hash, int ours)
 			   (unsigned)host_hash, (unsigned)ours, (unsigned)was, (unsigned)now, dv.matched, dv.changes);
 	dv.matched = 0;
 	dv.steady_since = GetTickCount();
+#ifdef _WIN64
+	nw_dump(dv.last_frame - 50, dv.last_frame, "this PC (the client, it found the difference)"); // the step after the frame before: its additions made the difference
+#endif
 	if (!dv.said) {
 		dv.said = 1;
 		InterlockedExchange(&desync_since, time ? time : 1); // netwatch_poll shows it and tells the host, who loads the common checkpoint (saves_resync)
@@ -99,6 +207,13 @@ static void diverged(int time, int was, int now, int host_hash, int ours)
 static void exec_hook(int server_id, int time)
 {
 	InterlockedExchange(&last_exec, (LONG)GetTickCount());
+#ifdef _WIN64
+	static int rec_last;
+	if (time < rec_last)
+		nw_dumps = 0; // (a new level or a load)
+	rec_last = time;
+	nw_cur_time = time; // the additions that follow belong to the step of this frame
+#endif
 	if (enabled && !base[NW_IS_HOST]) {
 		if (server_id != dv.server_id || time < dv.last_time) { // a new session or a new level: begin again
 			if (dv.frames)
@@ -108,6 +223,7 @@ static void exec_hook(int server_id, int time)
 			InterlockedExchange(&desync_since, 0);
 			InterlockedExchange(&desync_state, 0); // (a checkpoint load for it keeps resync_wait: the comparison after it says whether it worked)
 		}
+		dv.last_frame = dv.last_time;
 		dv.last_time = time;
 		const uint8_t *e = base + NW_RING;
 		for (int i = 0; i < NW_RING_ENTRIES; i++, e += NW_RING_STRIDE) {
@@ -160,6 +276,9 @@ void netwatch_partner_packet(void)
 void netwatch_on_desync_packet(int time)
 {
 	log_printf("netwatch: the partner's PC says the games differ from level time %d on", time);
+#ifdef _WIN64
+	nw_dump(time - 100, time - 50, "this PC (the host, told by the client)");
+#endif
 	InterlockedExchange(&partner_desync_time, time ? time : 1);
 }
 
@@ -336,4 +455,7 @@ void netwatch_install(void)
 		return;
 	}
 	log_printf("netwatch: the partner's silence (3 s) and the games' divergence (the host's state hash in each frame) are watched");
+#ifdef _WIN64
+	nw_rec_install();
+#endif
 }

@@ -93,10 +93,225 @@ static int contains_word(const char *buf, int len, const char *word)
 	return 0;
 }
 
+// QA (2026-11-21, issue 27: "out of sync" over Steam while both games look the same): an internet link between two test copies on one PC. The environment
+// variables MW2COOP_QALAG (one-way delay in ms), MW2COOP_QAJITTER (up to that many ms more for each packet, the order kept) and MW2COOP_QALOSS (packets lost per
+// 1000) hold this copy's packets to IPv4 addresses other than loopback in a queue that a thread sends when they are due. Unset (players): nothing changes.
+typedef struct {
+	LONGLONG due;
+	SOCKET s;
+	int len, flags, tolen;
+	struct sockaddr_storage to;
+	char data[1500];
+} lag_packet_t;
+#define LAG_Q 512
+static lag_packet_t *lag_q;
+static int lag_head, lag_count, qa_lag, qa_jitter, qa_loss, lag_on;
+static LONGLONG lag_last_due;
+static long lag_lost, lag_sent;
+static CRITICAL_SECTION lag_lock;
+static LONGLONG lag_now_us(void)
+{
+	static LARGE_INTEGER hz;
+	LARGE_INTEGER c;
+	if (!hz.QuadPart)
+		QueryPerformanceFrequency(&hz);
+	QueryPerformanceCounter(&c);
+	return c.QuadPart * 1000000 / hz.QuadPart;
+}
+static int env_int(const char *name)
+{
+	char v[32];
+	const DWORD n = GetEnvironmentVariableA(name, v, sizeof(v));
+	return n && n < sizeof(v) ? atoi(v) : 0;
+}
+static DWORD WINAPI lag_thread(LPVOID unused)
+{
+	(void)unused;
+	static lag_packet_t p;
+	DWORD said = GetTickCount();
+	for (;;) {
+		Sleep(1);
+		for (;;) {
+			int have = 0;
+			EnterCriticalSection(&lag_lock);
+			if (lag_count && lag_now_us() >= lag_q[lag_head].due) {
+				p = lag_q[lag_head];
+				lag_head = (lag_head + 1) % LAG_Q;
+				lag_count--;
+				have = 1;
+			}
+			LeaveCriticalSection(&lag_lock);
+			if (!have)
+				break;
+			real_sendto(p.s, p.data, p.len, p.flags, (const struct sockaddr *)&p.to, p.tolen);
+			lag_sent++;
+		}
+		if (GetTickCount() - said >= 10000) {
+			said = GetTickCount();
+			log_printf("net: QA link: %ld packets sent late, %ld lost in the last 10 s", lag_sent, lag_lost);
+			lag_sent = lag_lost = 0;
+		}
+	}
+	return 0;
+}
+static void lag_install(void)
+{
+	qa_lag = env_int("MW2COOP_QALAG"), qa_jitter = env_int("MW2COOP_QAJITTER"), qa_loss = env_int("MW2COOP_QALOSS");
+	if (qa_lag <= 0 && qa_jitter <= 0 && qa_loss <= 0)
+		return;
+	lag_q = (lag_packet_t *)calloc(LAG_Q, sizeof(lag_packet_t));
+	if (!lag_q)
+		return;
+	InitializeCriticalSection(&lag_lock);
+	CreateThread(NULL, 0, lag_thread, NULL, 0, NULL);
+	lag_on = 1;
+	log_printf("net: QA link: this copy's packets %d ms late, up to %d ms more, %d of 1000 lost", qa_lag, qa_jitter, qa_loss);
+}
+static int lag_send(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen) // 1: queued or lost (the caller returns len)
+{
+	if (!lag_on || !to || to->sa_family != AF_INET || ((const struct sockaddr_in *)to)->sin_addr.S_un.S_un_b.s_b1 == 127 || len <= 0 || len > 1500 ||
+	    tolen > (int)sizeof(struct sockaddr_storage))
+		return 0;
+	if (qa_loss > 0 && rand() % 1000 < qa_loss) {
+		lag_lost++;
+		return 1;
+	}
+	LONGLONG due = lag_now_us() + (LONGLONG)qa_lag * 1000 + (qa_jitter > 0 ? (LONGLONG)(rand() % (qa_jitter + 1)) * 1000 : 0);
+	EnterCriticalSection(&lag_lock);
+	if (due < lag_last_due)
+		due = lag_last_due; // (the order kept)
+	if (lag_count == LAG_Q) { // full: this one goes now
+		LeaveCriticalSection(&lag_lock);
+		return 0;
+	}
+	lag_packet_t *p = &lag_q[(lag_head + lag_count) % LAG_Q];
+	p->due = due, p->s = s, p->len = len, p->flags = flags, p->tolen = tolen;
+	memcpy(&p->to, to, (size_t)tolen);
+	memcpy(p->data, buf, (size_t)len);
+	lag_count++;
+	lag_last_due = due;
+	LeaveCriticalSection(&lag_lock);
+	return 1;
+}
+
+// QA (2026-11-21): the real internet between two test copies on one PC, through a relay on a server (tools/qa_relay.py). MW2COOP_QARELAY=<ip>:<port>: every game packet to a
+// private (LAN) address and a game port (28900-29099) goes to the relay as "MWR1" + destination ip (4) + port (2) + the packet; the relay sends it to the copy that registered
+// that port, as "MWR1" + the sender's ip and port + the packet, and the receive below gives the game the packet as from that address. Each copy registers its game sockets
+// ("MWRH" + its port) every second from those sockets, so only outgoing packets leave this PC: the router lets the answers in, nothing to forward on it.
+static int relay_on;
+static struct sockaddr_in relay_addr;
+static SOCKET relay_sockets[4];
+static uint16_t relay_ports[4];
+static volatile LONG relay_out, relay_in, relay_acks;
+static int private_ipv4(const uint8_t *a)
+{
+	return a[0] == 10 || (a[0] == 172 && (a[1] & 0xf0) == 16) || (a[0] == 192 && a[1] == 168);
+}
+static void relay_note_socket(SOCKET s)
+{
+	for (int i = 0; i < 4; i++) {
+		if (relay_sockets[i] == s)
+			return;
+		if (!relay_sockets[i]) {
+			struct sockaddr_in me;
+			int ml = sizeof(me);
+			if (getsockname(s, (struct sockaddr *)&me, &ml) != 0 || me.sin_family != AF_INET)
+				return;
+			relay_ports[i] = ntohs(me.sin_port);
+			relay_sockets[i] = s;
+			log_printf("net: QA relay: game socket on port %u registers at the relay", (unsigned)relay_ports[i]);
+			return;
+		}
+	}
+}
+static DWORD WINAPI relay_thread(LPVOID unused)
+{
+	(void)unused;
+	DWORD said = GetTickCount();
+	for (;;) {
+		Sleep(1000);
+		for (int i = 0; i < 4; i++)
+			if (relay_sockets[i]) {
+				char hello[6] = {'M', 'W', 'R', 'H', (char)(relay_ports[i] >> 8), (char)(relay_ports[i] & 0xff)};
+				real_sendto(relay_sockets[i], hello, sizeof(hello), 0, (const struct sockaddr *)&relay_addr, sizeof(relay_addr));
+			}
+		if (GetTickCount() - said >= 10000) {
+			said = GetTickCount();
+			log_printf("net: QA relay: %ld packets out, %ld in, %ld answers to the registrations, in the last 10 s", (long)InterlockedExchange(&relay_out, 0), (long)InterlockedExchange(&relay_in, 0),
+				   (long)InterlockedExchange(&relay_acks, 0));
+		}
+	}
+	return 0;
+}
+static void relay_install(void)
+{
+	char v[64];
+	const DWORD n = GetEnvironmentVariableA("MW2COOP_QARELAY", v, sizeof(v));
+	if (!n || n >= sizeof(v))
+		return;
+	char *colon = strchr(v, ':');
+	unsigned a[4];
+	if (!colon || sscanf(v, "%u.%u.%u.%u", &a[0], &a[1], &a[2], &a[3]) != 4 || a[0] > 255 || a[1] > 255 || a[2] > 255 || a[3] > 255)
+		return;
+	memset(&relay_addr, 0, sizeof(relay_addr));
+	relay_addr.sin_family = AF_INET;
+	relay_addr.sin_port = htons((u_short)atoi(colon + 1));
+	uint8_t *ip = (uint8_t *)&relay_addr.sin_addr;
+	ip[0] = (uint8_t)a[0], ip[1] = (uint8_t)a[1], ip[2] = (uint8_t)a[2], ip[3] = (uint8_t)a[3];
+	relay_on = 1;
+	CreateThread(NULL, 0, relay_thread, NULL, 0, NULL);
+	log_printf("net: QA relay: game packets to LAN addresses go through the relay at port %u", (unsigned)ntohs(relay_addr.sin_port));
+}
+static int relay_send(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to) // 1: sent through the relay
+{
+	if (!relay_on || !to || to->sa_family != AF_INET || len <= 0 || len > 1490)
+		return 0;
+	const struct sockaddr_in *in = (const struct sockaddr_in *)to;
+	const uint16_t port = ntohs(in->sin_port);
+	if (!private_ipv4((const uint8_t *)&in->sin_addr) || port < 28900 || port > 29099)
+		return 0;
+	relay_note_socket(s);
+	char pkt[1500];
+	memcpy(pkt, "MWR1", 4);
+	memcpy(pkt + 4, &in->sin_addr, 4);
+	pkt[8] = (char)(port >> 8), pkt[9] = (char)(port & 0xff);
+	memcpy(pkt + 10, buf, (size_t)len);
+	InterlockedIncrement(&relay_out);
+	if (lag_on && lag_send(s, pkt, len + 10, flags, (const struct sockaddr *)&relay_addr, sizeof(relay_addr)))
+		return 1;
+	real_sendto(s, pkt, len + 10, flags, (const struct sockaddr *)&relay_addr, sizeof(relay_addr));
+	return 1;
+}
+static int relay_receive(char *buf, int r, struct sockaddr *from, int *fromlen) // the packet's length for the game: unwrapped when it came through the relay; 0 a relay's own packet
+{
+	if (!relay_on || r < 6 || !from || from->sa_family != AF_INET)
+		return r;
+	struct sockaddr_in *in = (struct sockaddr_in *)from;
+	if (in->sin_addr.s_addr != relay_addr.sin_addr.s_addr || in->sin_port != relay_addr.sin_port)
+		return r;
+	if (memcmp(buf, "MWRA", 4) == 0) { // the relay's answer to a registration: the way in works
+		InterlockedIncrement(&relay_acks);
+		return 0;
+	}
+	if (r < 10 || memcmp(buf, "MWR1", 4) != 0)
+		return r;
+	memcpy(&in->sin_addr, buf + 4, 4);
+	in->sin_port = htons((u_short)(((uint8_t)buf[8] << 8) | (uint8_t)buf[9]));
+	if (fromlen)
+		*fromlen = sizeof(struct sockaddr_in);
+	memmove(buf, buf + 10, (size_t)(r - 10));
+	InterlockedIncrement(&relay_in);
+	return r - 10;
+}
+
 // every send of the game and of mw2coop: a Steam peer's virtual address goes through Steam
 static int send_to(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
 {
 	if (steamnet_send(buf, len, to))
+		return len;
+	if (relay_on && relay_send(s, buf, len, flags, to))
+		return len;
+	if (lag_on && lag_send(s, buf, len, flags, to, tolen))
 		return len;
 	return real_sendto(s, buf, len, flags, to, tolen);
 }
@@ -335,6 +550,13 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 	int r = steamnet_receive(buf, len, from, fromlen);
 	if (r <= 0)
 		r = real_recvfrom(s, buf, len, flags, from, fromlen);
+	if (relay_on) {
+		relay_note_socket(s); // (the game polls its sockets every frame: they register at the relay before anything is sent or received)
+		if (r > 0 && (r = relay_receive(buf, r, from, fromlen)) == 0) {
+			WSASetLastError(WSAEWOULDBLOCK); // (the relay's own answer: nothing for the game)
+			return SOCKET_ERROR;
+		}
+	}
 	if (r > 0 && settings_netguard()) {
 		// packets no co-op session sends and the game would act on (netguard.c): the game never sees them
 		EnterCriticalSection(&peer_lock);
@@ -437,6 +659,8 @@ void net_install(void)
 	InitializeCriticalSection(&peer_lock);
 	InitializeCriticalSection(&hold_lock);
 	CreateThread(NULL, 0, hold_drain_thread, NULL, 0, NULL);
+	lag_install(); // (QA: MW2COOP_QALAG and the others; nothing when unset)
+	relay_install(); // (QA: MW2COOP_QARELAY; nothing when unset)
 	BYTE *base = (BYTE *)GetModuleHandleA(NULL);
 	NT_HEADERS *nt = (NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
 	IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];

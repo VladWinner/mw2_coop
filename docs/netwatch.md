@@ -70,8 +70,55 @@ Resync (`mw2coop_netqa_desync` on the host 50 s into The Pit; the level's start 
 * iw4x-sp: the same (divergence at 26450, load, agree again after 3.4 s).
 * Official 32-bit (saves off there): the host answered "the checkpoints are off in this session", both PCs showed the restart-the-level notice.
 
+## What went into the hash (64-bit, 2026-11-21)
+
+The hash takes additions only between `0x22dec0` (on) and `0x22ded0` (off): for each player, vehicle and actor (`0x174920`) its type, number and health
+(`0x22dee0` called at `0x174a82`, `0x174a98`, `0x174ab0`), position and angles (`0x22dfb0` at `0x174ac9`, `0x174ae2`); four values of `0x171370` (`0x22dee0` at
+`0x1714d2`, `0x171607`, `0x17161d`, `0x171633`); and strings (`0x22df10` at `0x190ee9`, `0x231026`, `0x23103b`). The two at `0x231026` / `0x23103b` are the
+script's `GetDvar`: the name and the value of every dvar a script reads go into the hash, because a dvar is this PC's own and a script that reads one can take
+another path on the other PC.
+
+All twelve calls are hooked (`hook_call`) and each addition is kept in a ring (65536 entries) with the level time of the lockstep frame executed last. When the
+games go apart, both PCs write the additions of the steps before the first differing frame to the log (`netwatch: add t <time> ent <n> type .. health .. pos ..
+angles ..`, `netwatch: add t <time> at <rva> string ".."`): the client when it finds the difference, the host when the client's report comes. At most four
+dumps a level; `[native] netwatchrec=0` off. `python -I tools/netwatch_compare.py <host log> <client log>` puts the two dumps side by side and lists what differs.
+
+## QA over an internet-like link
+
+`MW2COOP_QALAG` (one-way delay in ms), `MW2COOP_QAJITTER` (up to that many ms more per packet, the order kept) and `MW2COOP_QALOSS` (packets lost per 1000),
+environment variables of the test copies (net.c): each copy holds its packets to non-loopback IPv4 addresses in a queue a thread sends when they are due.
+`export MW2COOP_QALAG=60 MW2COOP_QAJITTER=40 MW2COOP_QALOSS=10` before `tools/qa_pair.sh` makes the pair talk as over the internet (no relay, nothing for the
+firewall to ask about).
+
+## QA over the real internet: a relay on a server
+
+`tools/qa_relay.py` runs on a server (Python 3, standard library): `python3 qa_relay.py <udp port> <the PC's public address> [seconds] [bind address]`. The test
+copies get `MW2COOP_QARELAY=<server address>:<port>` (net.c): every game packet to a LAN address and a game port (28900-29099) goes to the relay wrapped with its
+destination, and the relay sends it to the copy that registered that port; each copy registers its game sockets every second from those sockets. Only outgoing
+packets leave the PC, so the home router lets the answers in with no port forwarding, and the game's own socket receives them (no new program for the firewall
+to ask about). Every packet crosses the internet twice (PC to server to PC). The server's firewall needs the one UDP port open, for the PC's address only.
+
+On a server with several addresses, give the relay the address the copies send to as [bind address]: bound to 0.0.0.0 its answers left from the server's main
+address, and the home router's NAT dropped every one (nothing came back; a plain UDP test from the PC showed the same). The copies log `net: QA relay: N packets
+out, N in, N answers to the registrations` every 10 s: answers 0 means the way back is closed.
+
+## Issue 27: the climb of Cliffhanger went apart at the same spot after every load (found and fixed 2026-11-21)
+
+Report: over Steam, any mission, "out of sync" and a checkpoint load many times a mission; the Cliffhanger jump had to be done three times, both players
+climbed up fine and then it went out of sync and loaded the top again.
+
+Reproduced: `tools/qa_pair.sh climb "" 420 cliffhanger` with the QA link above: the games went apart at level time 87.5-87.7 s (the pull-up at the end of the
+first wall, `climb_pullup`) three times, each after the load of the common checkpoint (50.5 s). The dumps of both PCs (`netwatch_compare.py`): every entity the
+same, but in the step after frame 87550 the script's `GetDvar( "specialops" )` gave "0" on the host and "1" on the client, and the client's script went on
+reading `coop` and `mapname` where the host's read `scr_damagefeedback`.
+
+Cause (`menus.c`): the co-op lobby is Spec Ops' and its menu sets `specialops` to 1; the launch of a campaign co-op sets it to 0 for the whole session
+(`campaign_loading_begin`), and the menu poll gives the old value back when the session is over. On a client, whose party is not the active one, the poll right
+after the host's start packet (the client's level server not yet running, `sv_running` 0) took the session for over: `specialops` went back to 1 15 ms after
+the launch, and the client played every level with 1 while the host had 0. Fix: while the launch keeps it at 0, the engine's `coop` dvar at 1 also keeps the
+session (`menus_poll`). Both PCs and both builds (the code is shared).
+
 ## Open
 
-* Which value first differs: the hash is one number for all entities. A rolling record of each entity's additions on both PCs, dumped when a divergence is
-  found, would name the entity and the frame (compare the two logs).
+* The records are 64-bit only; the 32-bit build still says only that the hashes differ.
 * Vlad's own case: his and his friend's logs of a session where it happened (both `mw2coop.log`, the lines `netwatch:`).

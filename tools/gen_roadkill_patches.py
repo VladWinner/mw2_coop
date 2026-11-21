@@ -183,6 +183,18 @@ hunks.append(('''5. The crash at the end of the ride knocks both players down: t
 old = unique(main, '\tlevel.player SetStance( "prone" );\n\tlevel.player AllowCrouch( true );\n\tlevel.player AllowProne( true );\n')
 hunks.append(('   (same)', old, '\tforeach ( mw2coop_player in level.players )\n\t{\n\t\tmw2coop_player SetStance( "prone" );\n'
               '\t\tmw2coop_player AllowCrouch( true );\n\t\tmw2coop_player AllowProne( true );\n\t}\n'))
+# the start (newintro): the player wakes up on the ground, Shepherd pulls him up; the shell shock (blur), the fade from black and the lowered weapon were player 1's only
+i = main.index('\t\tlevel.player ShellShock( "default", 5.8 );\n')
+j = main.index('\t\t//level.player setstance( "stand" );\n', i) + len('\t\t//level.player setstance( "stand" );\n')
+old = unique(main, main[i:j])
+hunks.append(('''6. The start: both players wake up the same way, at the same time (issue 26: player 2 had no blur and no fade from black).
+   The shell shock, a fade from black for each player, the weapon lowered until "get_on_the_line".''', old,
+              '\t\tforeach ( mw2coop_player in level.players )\n\t\t{\n\t\t\tmw2coop_player ShellShock( "default", 5.8 );\n\t\t\tmw2coop_player disableweapons();\n\t\t}\n'
+              '\t\tmw2coop_overlays = [];\n\t\tforeach ( mw2coop_player in level.players )\n\t\t{\n'
+              '\t\t\tblack_overlay = create_client_overlay( "black", 0, mw2coop_player );\n\t\t\tblack_overlay.alpha = 1;\n'
+              '\t\t\tmw2coop_overlays[ mw2coop_overlays.size ] = black_overlay;\n\t\t}\n\t\twait( 1 );\n'
+              '\t\tforeach ( black_overlay in mw2coop_overlays )\n\t\t{\n\t\t\tblack_overlay FadeOverTime( 2 );\n\t\t\tblack_overlay.alpha = 0;\n\t\t}\n'
+              '\t\tlevel waittill ( "get_on_the_line" );\n\t\tforeach ( mw2coop_player in level.players )\n\t\t\tmw2coop_player enableweapons();\n'))
 write('roadkill.gsc.patch', '''mw2coop patch for maps/roadkill.gsc (Team Player, Modern Warfare 2, 64-bit Steam build)''', hunks)
 
 # ---------------------------------------------------------------- _minigun_viewmodel.gsc

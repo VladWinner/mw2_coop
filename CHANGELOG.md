@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Network co-op: "out of sync" and checkpoint loads again and again** (issue 27). The client played every campaign level with the dvar `specialops` at 1 while the host had 0 (the Spec Ops lobby sets it, and on the client the mod gave it back right after the launch); a script that reads it took another path on each PC, so the games went apart at the same spot after every load (Cliffhanger: the pull-up at the top of the first wall). Both PCs keep it at 0 now. When the games go apart, both logs now name what differed (each entity's values and the dvars the scripts read, `netwatch: add` lines; `tools/netwatch_compare.py`).
+- **Team Player: both players wake up the same way** (issue 26): the start's blur, the fade from black and the lowered weapon were player 1's only.
 - **Split screen: animations at their own speed.** Every animation of the level (the characters, the partner's body) was stepped twice a frame and set back by each snapshot 20 times a second: the partner's idle animation in player 2's half seemed to lose frames and jittered in movement. Each animation is now stepped once a frame, as the game does for one player (owner).
 - **Split screen: helicopters and other objects in player 2's half.** Entities numbered below 135 (among them a helicopter in the Spec Ops mission so_killspree_trainer) were kept a second time for player 2 and that copy was never brought up to date: player 2 saw them where they had been when the split began, replaying the same 50 ms of movement ("stuck, trying to get out"). One entity table for both players now, as on the Xbox 360 (Vlad, owner).
 

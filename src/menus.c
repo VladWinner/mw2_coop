@@ -3644,7 +3644,11 @@ void menus_poll(void)
 		int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
 		if (split_so)
 			campaign = 0;
-		if (!split_so && (campaign || native_split_active() || split_lobby_returning || (specialops_forced && v[0] == '1')))
+		// (a client: its party is not the active one and its level server starts after the host's start packet (sv_running 0 for about a second): without the engine's co-op dvar
+		// here the dvar went back to 1 15 ms after the launch had set it to 0, and the client played the whole level with specialops 1 while the host had 0. A script that reads it
+		// (Cliffhanger's climb at the pull-up) took another path on each PC: the games went apart at the same spot after every checkpoint load (issue 27; found with the hash records
+		// of netwatch.c: GetDvar("specialops") "0" on the host, "1" on the client).)
+		if (!split_so && (campaign || native_split_active() || split_lobby_returning || (specialops_forced && (v[0] == '1' || coop[0] == '1'))))
 			sticky = 1;
 		else
 			sticky = 0; // a Spec Ops lobby, or the player has left the campaign lobby

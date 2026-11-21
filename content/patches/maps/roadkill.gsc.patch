@@ -137,3 +137,47 @@ mw2coop patch for maps/roadkill.gsc (Team Player, Modern Warfare 2, 64-bit Steam
 		mw2coop_player AllowProne( true );
 	}
 @@@ end
+
+6. The start: both players wake up the same way, at the same time (issue 26: player 2 had no blur and no fade from black).
+   The shell shock, a fade from black for each player, the weapon lowered until "get_on_the_line".
+@@@ replace
+		level.player ShellShock( "default", 5.8 );
+		//struct = getstruct( "player_intro_struct", "targetname" );
+		//level.player SetOrigin( struct.origin );
+		//level.player SetPlayerAngles( struct.angles );
+		//level.player setstance( "prone" );
+	//	level.player freezecontrols( true );
+		level.player disableweapons();
+
+		black_overlay = create_client_overlay( "black", 0, level.player );
+		black_overlay.alpha = 1;
+		wait( 1 );
+		black_overlay FadeOverTime( 2 );
+		black_overlay.alpha = 0;		
+		level waittill ( "get_on_the_line" );
+//		level.player freezecontrols( false );
+		level.player enableweapons();
+		//level.player setstance( "stand" );
+@@@ with
+		foreach ( mw2coop_player in level.players )
+		{
+			mw2coop_player ShellShock( "default", 5.8 );
+			mw2coop_player disableweapons();
+		}
+		mw2coop_overlays = [];
+		foreach ( mw2coop_player in level.players )
+		{
+			black_overlay = create_client_overlay( "black", 0, mw2coop_player );
+			black_overlay.alpha = 1;
+			mw2coop_overlays[ mw2coop_overlays.size ] = black_overlay;
+		}
+		wait( 1 );
+		foreach ( black_overlay in mw2coop_overlays )
+		{
+			black_overlay FadeOverTime( 2 );
+			black_overlay.alpha = 0;
+		}
+		level waittill ( "get_on_the_line" );
+		foreach ( mw2coop_player in level.players )
+			mw2coop_player enableweapons();
+@@@ end
