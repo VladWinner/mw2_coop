@@ -44,6 +44,7 @@
 #include "upnp.h"
 
 int proxy_init(void);
+int proxy_host_is_game(void);
 
 // The official exe is wrapped by Steam's DRM and Steam rewrites that wrapper for each account at the first start
 // (the file in a test copy grew from 3,497,984 to 3,503,672 bytes and its hash changed), so the file's hash
@@ -383,6 +384,8 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 	if (reason != DLL_PROCESS_ATTACH)
 		return TRUE;
 	DisableThreadLibraryCalls(self);
+	if (!proxy_host_is_game()) // not the single-player game (the multiplayer iw4mp.exe, IW4x's iw4x.exe, a tool): only the system's winmm calls passed through (proxy.c)
+		return proxy_init() ? TRUE : FALSE;
 	log_open();
 	settings_load(); // before the game registers net_port
 	SYSTEMTIME day;
