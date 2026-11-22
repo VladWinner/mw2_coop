@@ -58,7 +58,6 @@
 #define GLYPH_SIZE 24
 #define FONT_RENDER_SCALE 4
 #define TEXT_FACE_Y_ADJUST 2
-#define BANK_WIDTH_PERCENT 95
 #define SYSTEM_FALLBACK_WIDTH_PERCENT 86
 #define ATLAS_MIN_WIDTH 1024
 #define ATLAS_MAX_SIZE 4096
@@ -653,7 +652,7 @@ static int load_faces_unlocked(void)
         face_weight[i] = descriptor.lfWeight;
         face_italic[i] = descriptor.lfItalic;
         face_is_private[i] = TRUE;
-        face_width_percent[i] = i == FACE_BANK ? BANK_WIDTH_PERCENT : 100;
+        face_width_percent[i] = 100;
         log_printf("fonts: imported %ls as private GDI face %ls (weight %ld, width %d%%)",
                    files[i], family[i], face_weight[i], face_width_percent[i]);
     }
@@ -1305,7 +1304,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			break;
 		}
 	}
-	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph quads grown to each font's grid (bitmap and quad match exactly), advances rounded to that grid, three mip levels, bank width %d%%, system fallback width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, BANK_WIDTH_PERCENT, system_fallback_width_percent);
+	log_printf("fonts: %d fonts, %d glyph renders, %d distinct bitmaps, atlas %d x %d (content height %d), native raster %dx, ABC advances with GDI fallback, glyph quads grown to each font's grid (bitmap and quad match exactly), advances rounded to that grid, three mip levels, system fallback width %d%%", njobs, bitmap_count, nuniq, atlas_width, atlas_h, content_h, FONT_RENDER_SCALE, system_fallback_width_percent);
 	if (!atlas_h) {
 		log_printf("fonts: glyphs do not fit supported texture dimensions; will retry on the next font asset");
 		free(unique);
