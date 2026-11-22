@@ -14,8 +14,9 @@ x86)	sh build.sh x86 release
 	DLL=build/x86/winmm.dll; NAME=$VERSION-x86; INSTALL=content/release/INSTALL-x86.txt ;;
 *)	echo "unknown build $2 (x86)"; exit 1 ;;
 esac
-# the release DLL must not carry local paths (debug info, pdb names)
-if grep -a -q -i -e 'users' -e '\.pdb' $DLL; then
+# the release DLL must not carry local paths (debug info, pdb names): a Windows profile path, a Linux home or a pdb name. Not the bare word "users": the
+# console's dvar descriptions (src/dvar_descriptions_gen.h) say "number of users", and the nightly of 72f44bb stopped on it (2026-11-22)
+if grep -a -q -i -E -e '[a-z]:[\\/]users[\\/]' -e '/home/' -e '\.pdb' $DLL; then
 	echo "release winmm.dll contains local paths or a pdb name"; exit 1
 fi
 OUT=dist/mw2coop-$NAME

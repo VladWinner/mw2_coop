@@ -11,8 +11,8 @@ cd "$(dirname "$0")/.."
 VERSION=${1:?version, e.g. v1.0.2}
 sh src/dlss/build_dlss.sh release
 DLL=build/mw2coop_dlss.dll
-# no local paths or pdb names in the published DLL
-if grep -a -q -i -e 'users' -e '\.pdb' $DLL; then
+# no local paths or pdb names in the published DLL (a Windows profile path, a Linux home, a pdb name; the same check as tools/make_release.sh)
+if grep -a -q -i -E -e '[a-z]:[\\/]users[\\/]' -e '/home/' -e '\.pdb' $DLL; then
 	echo "mw2coop_dlss.dll contains local paths or a pdb name"; exit 1
 fi
 OUT=dist/mw2coop-dlss-$VERSION
