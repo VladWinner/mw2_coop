@@ -8,6 +8,12 @@
 
 static HANDLE log_file = INVALID_HANDLE_VALUE;
 static CRITICAL_SECTION log_lock;
+static void (*volatile log_mirror)(const char *line);
+
+void log_set_mirror(void (*mirror)(const char *line))
+{
+	log_mirror = mirror;
+}
 
 void log_open(void)
 {
@@ -59,4 +65,6 @@ void log_printf(const char *fmt, ...)
 	line[n++] = '\n';
 	line[n] = 0;
 	log_raw(line);
+	if (log_mirror)
+		log_mirror(line);
 }

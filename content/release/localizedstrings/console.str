@@ -229,9 +229,105 @@ REFERENCE           CON_MENU_CLEAR_OUTPUT
 LANG_ENGLISH        "Clear Output"
 LANG_RUSSIAN        "Очистить вывод"
 
+REFERENCE           CON_MENU_ZOOM_IN
+LANG_ENGLISH        "Zoom In"
+LANG_RUSSIAN        "Увеличить"
+
+REFERENCE           CON_MENU_ZOOM_OUT
+LANG_ENGLISH        "Zoom Out"
+LANG_RUSSIAN        "Уменьшить"
+
+REFERENCE           CON_MENU_ZOOM_RESET
+LANG_ENGLISH        "Reset Zoom (100%)"
+LANG_RUSSIAN        "Сбросить масштаб (100%)"
+
+REFERENCE           CON_MENU_TRANSPARENCY
+LANG_ENGLISH        "Transparency"
+LANG_RUSSIAN        "Прозрачность"
+
+REFERENCE           CON_MENU_WRAP_OFF
+LANG_ENGLISH        "Turn Word Wrap Off"
+LANG_RUSSIAN        "Выключить перенос слов"
+
+REFERENCE           CON_MENU_WRAP_ON
+LANG_ENGLISH        "Turn Word Wrap On"
+LANG_RUSSIAN        "Включить перенос слов"
+
+REFERENCE           CON_MENU_COLOR_OFF
+LANG_ENGLISH        "Turn Colors Off"
+LANG_RUSSIAN        "Выключить цвета"
+
+REFERENCE           CON_MENU_COLOR_ON
+LANG_ENGLISH        "Turn Colors On"
+LANG_RUSSIAN        "Включить цвета"
+
+REFERENCE           CON_MENU_MOD_OFF
+LANG_ENGLISH        "Hide Mod Messages"
+LANG_RUSSIAN        "Скрыть сообщения мода"
+
+REFERENCE           CON_MENU_MOD_ON
+LANG_ENGLISH        "Show Mod Messages"
+LANG_RUSSIAN        "Показать сообщения мода"
+
+REFERENCE           CON_RESET_BUTTON
+LANG_ENGLISH        "Reset"
+LANG_RUSSIAN        "Сбросить"
+
+REFERENCE           CON_VALUE_LABEL
+LANG_ENGLISH        "Value"
+LANG_RUSSIAN        "Значение"
+
+REFERENCE           CON_STATE_ON
+LANG_ENGLISH        "On"
+LANG_RUSSIAN        "Вкл"
+
+REFERENCE           CON_STATE_OFF
+LANG_ENGLISH        "Off"
+LANG_RUSSIAN        "Выкл"
+
+REFERENCE           CON_MENU_SAVE_OUTPUT
+LANG_ENGLISH        "Save Output"
+LANG_RUSSIAN        "Сохранить вывод"
+
+REFERENCE           CON_MENU_LINES_ON
+LANG_ENGLISH        "Show Line Numbers"
+LANG_RUSSIAN        "Показать номера строк"
+
+REFERENCE           CON_MENU_LINES_OFF
+LANG_ENGLISH        "Hide Line Numbers"
+LANG_RUSSIAN        "Скрыть номера строк"
+
+REFERENCE           CON_SAVED_OUTPUT
+LANG_ENGLISH        "Saved %d lines of output to %s"
+LANG_RUSSIAN        "Сохранено строк вывода: %d, файл: %s"
+
+REFERENCE           CON_SAVE_FAILED
+LANG_ENGLISH        "Could not write %s"
+LANG_RUSSIAN        "Не удалось записать %s"
+
+REFERENCE           CON_SEARCH_NO_RESULTS
+LANG_ENGLISH        "No results"
+LANG_RUSSIAN        "Нет результатов"
+
+REFERENCE           CON_SEARCH_INVALID
+LANG_ENGLISH        "Invalid regex"
+LANG_RUSSIAN        "Ошибка regex"
+
+REFERENCE           CON_SEARCH_COUNT
+LANG_ENGLISH        "%d of %d"
+LANG_RUSSIAN        "%d из %d"
+
 REFERENCE           CON_FIND_PREFIX
 LANG_ENGLISH        "Find: "
 LANG_RUSSIAN        "Поиск: "
+
+REFERENCE           CON_INPUT_HINT
+LANG_ENGLISH        "Enter command..."
+LANG_RUSSIAN        "Введите команду..."
+
+REFERENCE           CON_SEND
+LANG_ENGLISH        "Send"
+LANG_RUSSIAN        "Отправить"
 
 REFERENCE           CON_PAUSE_WATERMARK
 LANG_ENGLISH        "|| Game pause activated"

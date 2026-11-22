@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <d3d9.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -35,18 +36,26 @@
 #define COMPLETION_NAME_LEN 64
 #define COMPLETION_VALUE_LEN 256
 #define CONSOLE_LINE_HEIGHT 19
+#define CONSOLE_ZOOM_MIN 50
+#define CONSOLE_ZOOM_MAX 300
+#define CONSOLE_OPACITY_MIN 30
 #define SCAN_TILDE 0x29 // the key left of 1, whatever the layout puts on it
 #define CONSOLE_DVAR_INIT_FLAG 0x00000800u
 #define DVAR_ARCHIVE_FLAG          0x00000001u
 #define DVAR_LATCH_FLAG            0x00000002u
 #define DVAR_CHEAT_FLAG            0x00000004u
-#define DVAR_USER_CREATED_FLAG     0x00000100u
-#define DVAR_SAVED_FLAG            0x00000200u
+#define DVAR_CODINFO_FLAG          0x00000008u
+#define DVAR_SCRIPTINFO_FLAG       0x00000010u
+#define DVAR_TEMP_FLAG             0x00000020u
+#define DVAR_SAVED_FLAG            0x00000040u
+#define DVAR_INTERNAL_FLAG         0x00000080u
+#define DVAR_EXTERNAL_FLAG         0x00000100u
+#define DVAR_USERINFO_FLAG         0x00000200u
 #define DVAR_SERVERINFO_FLAG       0x00000400u
 #define DVAR_INIT_FLAG             0x00000800u
-#define DVAR_CHANGEABLE_RESET_FLAG 0x00001000u
+#define DVAR_SYSTEMINFO_FLAG       0x00001000u
 #define DVAR_ROM_FLAG              0x00002000u
-#define DVAR_EXTERNAL_FLAG         0x00004000u
+#define DVAR_CHANGEABLE_RESET_FLAG 0x00004000u
 #define DVAR_AUTOEXEC_FLAG         0x00008000u
 #define AUTO_CHEATS_PENDING        1
 #define AUTO_CHEATS_USER_OVERRIDE  2
@@ -55,7 +64,7 @@
 #define CONSOLE_CONTEXT_INPUT  1
 #define CONSOLE_CONTEXT_OUTPUT 2
 #define CONSOLE_CONTEXT_ITEM_H 23
-#define CONSOLE_CONTEXT_OUTPUT_WIDTH  248
+#define CONSOLE_CONTEXT_OUTPUT_WIDTH  340
 #define CONSOLE_CONTEXT_INPUT_WIDTH   260
 #define INPUT_UNDO_DEPTH 64
 #define OUTPUT_SEARCH_LEN 128
@@ -78,6 +87,23 @@ enum {
 static CRITICAL_SECTION lock;
 static char lines[MAX_LINES][LINE_LEN];
 static UINT line_codepage[MAX_LINES];
+/* The logical line a stored row begins (0 for a continuation row); numbers keep counting after rows leave the buffer. */
+static unsigned line_number[MAX_LINES];
+static unsigned console_line_serial, console_store_number;
+static int console_store_first;
+static volatile int console_line_numbers;
+static int console_gutter_px;
+/* The find panel (toggles, match count, previous/next/close), the round jump buttons and the middle-button autoscroll. */
+static volatile int console_search_case, console_search_word, console_search_regex, console_search_panel_open;
+static int console_search_bad, console_search_total, console_search_index;
+static RECT console_sp_rect, console_sp_case, console_sp_word, console_sp_regex, console_sp_prev, console_sp_next, console_sp_close;
+static RECT console_jump_rect[2];
+static int console_jump_valid[2];
+static volatile LONG console_jump_hover = -1;
+static volatile LONG console_mid_active, console_mid_sticky, console_mid_moved;
+static int console_mid_x, console_mid_y;
+static DWORD console_mid_start, console_mid_last;
+static float console_mid_accum;
 static char *source_lines[MAX_LINES];
 static size_t source_line_lengths[MAX_LINES];
 static UINT source_codepage[MAX_LINES];
@@ -99,6 +125,7 @@ static void clear_source_lines(void)
 	}
 	source_bytes = 0;
 	source_count = source_next = 0;
+	console_line_serial = 0;
 	LeaveCriticalSection(&lock);
 }
 static char input[INPUT_LEN + 1];
@@ -189,6 +216,31 @@ static volatile LONG dirty = 1;
 static volatile LONG ignore_tilde;
 static volatile LONG console_wrap_columns = 110;
 static volatile LONG console_font_cell_width = 9;
+static volatile int console_zoom_pct = 100;
+static volatile int console_opacity_pct = 100;
+static volatile int console_word_wrap = 1;
+static volatile int console_colorize = 1;
+static volatile int console_show_mod_messages = 1;
+static void console_apply_mod_messages(void);
+static volatile int console_hscroll;
+static RECT completion_slider_rect;
+static int completion_slider_left, completion_slider_right;
+static float completion_slider_min, completion_slider_max;
+static char completion_slider_name[COMPLETION_NAME_LEN];
+static int completion_slider_integer;
+static float completion_slider_default;
+/* The detail popup of the dvar the input or the highlighted completion refers to: description, value, a slider or a switch. */
+static RECT console_detail_rect, console_detail_reset_rect, console_detail_toggle_rect;
+static int console_hscroll_max;
+static RECT console_hscroll_rect; /* the horizontal scrollbar's track; empty while there is nothing to scroll */
+static int console_hscroll_thumb_w;
+static char completion_match_text[96];
+static volatile LONG console_send_width = 70;
+static RECT console_send_rect;
+static void console_save_view(void);
+static void console_set_zoom(int pct);
+static void console_rescale_window(int old_pct, int new_pct);
+static void console_set_opacity(int pct);
 static volatile LONG console_input_left_offset = INPUT_TEXT_OFFSET;
 static volatile LONG console_panel_height;
 static volatile LONG virtual_mouse_x = -1, virtual_mouse_y = -1;
@@ -278,10 +330,19 @@ static UINT console_window_dpi(HWND h)
 	return dpi;
 }
 
+/* The window's DPI scaled by the console zoom: everything is drawn in 96-dpi logical units, so one factor scales all of it. */
+static UINT console_ui_dpi(HWND h)
+{
+	long long dpi = ((long long)console_window_dpi(h) * console_zoom_pct + 50) / 100;
+	if (dpi < 24) dpi = 24;
+	if (dpi > 2400) dpi = 2400;
+	return (UINT)dpi;
+}
+
 static int console_dpi_logical(int physical, UINT dpi)
 {
 	if (physical <= 0) return 0;
-	if (dpi < 96) dpi = 96;
+	if (dpi < 24) dpi = 24;
 	return (int)(((long long)physical * 96 + dpi / 2) / dpi);
 }
 
@@ -307,6 +368,8 @@ static void console_header_button_activate(int button);
 static void console_window_minimize_toggle(void);
 static void console_window_maximize_toggle(void);
 static int console_pointer_over_ui(HWND h, int x, int y);
+static int console_output_page_lines(void);
+static void console_output_search_step_ex(int direction, int quiet);
 static void console_update_pointer_cursor(HWND h, int x, int y);
 static void console_init_virtual_mouse(HWND h);
 static void console_update_pointer_cursor_from_os(HWND h);
@@ -345,6 +408,8 @@ static int console_watch_unpin_hit(int x, int y, int *index);
 static int console_watch_remove_at(int x, int y);
 static int console_save_qol_lists(void);
 static void console_output_search_step(int direction);
+static void console_hscroll_drag_to(int x);
+static int console_hscroll_hit(int x, int y);
 static void console_output_search_cancel(void);
 static void run_line(char *cmd);
 
@@ -421,10 +486,24 @@ static void console_store_line(const char *text, size_t length, UINT codepage)
 	memcpy(lines[line_next], text, length);
 	lines[line_next][length] = 0;
 	line_codepage[line_next] = codepage;
+	line_number[line_next] = console_store_first ? console_store_number : 0;
+	console_store_first = 0;
 	line_next = (line_next + 1) % MAX_LINES;
 	if (line_count < MAX_LINES)
 		line_count++;
 	console_output_toast_add_locked(text, length, codepage);
+}
+
+/* Width of the line number column (0 when the numbers are off): three digits at least. */
+static int console_gutter_width(void)
+{
+	int digits = 1, cell = (int)InterlockedCompareExchange(&console_font_cell_width, 0, 0);
+	unsigned n = console_line_serial;
+	if (!console_line_numbers)
+		return 0;
+	while (n >= 10) { n /= 10; digits++; }
+	if (digits < 3) digits = 3;
+	return digits * (cell > 0 ? cell : 9) + 14;
 }
 
 static int console_char_bytes(const char *text, const char *end, UINT codepage)
@@ -476,7 +555,9 @@ static void console_store_wrapped_line(const char *begin, const char *end, int c
 		source_codepage[slot] = codepage;
 		source_next = (source_next + 1) % MAX_LINES;
 		if (source_count < MAX_LINES) source_count++;
+		console_store_number = ++console_line_serial;
 	}
+	console_store_first = 1;
 	if (start == end) {
 		console_store_line("", 0, codepage);
 		return;
@@ -553,6 +634,7 @@ static void console_reflow_output_locked(int columns)
 	for (int i = 0; i < source_count; i++) {
 		int index = (first + i) % MAX_LINES;
 		const char *text = source_lines[index];
+		console_store_number = console_line_serial - (unsigned)source_count + 1u + (unsigned)i;
 		if (text)
 			console_store_wrapped_line(text, text + source_line_lengths[index], columns,
 				source_codepage[index] ? source_codepage[index] : console_codepage());
@@ -626,6 +708,22 @@ static int glob_match(const char *pattern, const char *text)
 	while (*p == '*')
 		p++;
 	return *p == 0;
+}
+
+static const char *console_find_ci(const char *text, const char *needle)
+{
+	size_t n = strlen(needle);
+	if (!n)
+		return text;
+	for (; *text; text++)
+		if (!_strnicmp(text, needle, n))
+			return text;
+	return NULL;
+}
+
+static int console_contains_ci(const char *text, const char *needle)
+{
+	return console_find_ci(text, needle) != NULL;
 }
 
 static int name_matches(const char *filter, const char *name)
@@ -736,10 +834,11 @@ static void dvar_flags_text(const dvar_t *d, char *buf, size_t size)
 {
 	static const struct { uint32_t bit; const char *name; } flags[] = {
 		{DVAR_ARCHIVE_FLAG, "ARCHIVE"}, {DVAR_LATCH_FLAG, "LATCH"}, {DVAR_CHEAT_FLAG, "CHEAT"},
-		{DVAR_USER_CREATED_FLAG, "USER_CREATED"}, {DVAR_SAVED_FLAG, "SAVED"},
-		{DVAR_SERVERINFO_FLAG, "SERVERINFO"}, {DVAR_INIT_FLAG, "INIT"},
-		{DVAR_CHANGEABLE_RESET_FLAG, "CHANGEABLE_RESET"}, {DVAR_ROM_FLAG, "ROM"},
-		{DVAR_EXTERNAL_FLAG, "EXTERNAL"}, {DVAR_AUTOEXEC_FLAG, "AUTOEXEC"}
+		{DVAR_CODINFO_FLAG, "CODINFO"}, {DVAR_SCRIPTINFO_FLAG, "SCRIPTINFO"}, {DVAR_TEMP_FLAG, "TEMP"},
+		{DVAR_SAVED_FLAG, "SAVED"}, {DVAR_INTERNAL_FLAG, "INTERNAL"}, {DVAR_EXTERNAL_FLAG, "EXTERNAL"},
+		{DVAR_USERINFO_FLAG, "USERINFO"}, {DVAR_SERVERINFO_FLAG, "SERVERINFO"}, {DVAR_INIT_FLAG, "INIT"},
+		{DVAR_SYSTEMINFO_FLAG, "SYSTEMINFO"}, {DVAR_ROM_FLAG, "ROM"},
+		{DVAR_CHANGEABLE_RESET_FLAG, "CHANGEABLE_RESET"}, {DVAR_AUTOEXEC_FLAG, "AUTOEXEC"}
 	};
 	size_t used = 0;
 	uint32_t known = 0;
@@ -822,6 +921,33 @@ static char *dvar_value_dup(const dvar_t *d, const dvar_value_t *value)
 	}
 }
 
+/* Descriptions of the game's dvars. The 64-bit dvar has no description field (the register calls get it as an argument),
+   so the table made from the executable (tools/gen_dvar_descriptions.py) is used; a 32-bit dvar carries its own. */
+#include "dvar_descriptions_gen.h"
+
+static const char *console_dvar_description_by_name(const char *name)
+{
+	size_t low = 0, high = sizeof(dvar_description_table) / sizeof(dvar_description_table[0]);
+	while (low < high) {
+		size_t mid = low + (high - low) / 2;
+		int order = _stricmp(dvar_description_table[mid][0], name);
+		if (!order)
+			return dvar_description_table[mid][1];
+		if (order < 0) low = mid + 1;
+		else high = mid;
+	}
+	return NULL;
+}
+
+static const char *console_dvar_description(const dvar_t *d)
+{
+#ifndef _WIN64
+	if (d->description && d->description[0])
+		return d->description;
+#endif
+	return d->name ? console_dvar_description_by_name(d->name) : NULL;
+}
+
 static void print_dvar_line(const dvar_t *d, int with_default)
 {
 	char flags[320], meta[448];
@@ -895,6 +1021,14 @@ static void print_dvar_line(const dvar_t *d, int with_default)
 		free(line);
 	} else {
 		console_print("Unable to allocate dvar output buffer");
+	}
+	{
+		const char *description = console_dvar_description(d);
+		if (description && description[0]) {
+			char text[COMPLETION_VALUE_LEN + 16];
+			snprintf(text, sizeof(text), "^4  %s^7", description);
+			console_print(text);
+		}
 	}
 	free(value);
 	free(def);
@@ -1143,6 +1277,9 @@ typedef struct {
 	const char *filter;
 	size_t len;
 	int wildcard;
+	int partial;
+	int prefix_n;
+	int tail; /* second pass: names that merely contain the text */
 	int value_search;
 	int n, stored;
 	char common[96];
@@ -1235,10 +1372,19 @@ static void completion_add_match(comp_ctx *c, const completion_source_t *source)
 		game_dvar_value_text(source->dvar, &source->dvar->current, current, sizeof(current));
 		if (!completion_value_matches(c->filter, current))
 			return;
-	} else if (c->wildcard ? !name_matches(c->filter, name) : _strnicmp(name, c->filter, c->len) != 0) {
+	} else if (c->wildcard) {
+		if (!name_matches(c->filter, name))
+			return;
+	} else if (c->tail) {
+		if (_strnicmp(name, c->filter, c->len) == 0 || !console_contains_ci(name, c->filter))
+			return;
+	} else if (_strnicmp(name, c->filter, c->len) != 0) {
 		return;
 	}
-	if (c->n == 0) {
+	if (c->tail) {
+		if (c->n == 0)
+			lstrcpynA(c->common, name, sizeof(c->common));
+	} else if (c->n == 0) {
 		lstrcpynA(c->common, name, sizeof(c->common));
 	} else {
 		size_t k = 0;
@@ -1317,6 +1463,8 @@ static void refresh_completions(int apply_common)
 	c.len = strlen(c.filter);
 	c.value_search = value_search;
 	c.wildcard = value_search || strchr(word, '*') != NULL || strchr(word, '?') != NULL;
+	c.partial = !c.wildcard && !value_search;
+	lstrcpynA(completion_match_text, value_search || c.wildcard ? "" : c.filter, sizeof(completion_match_text));
 	if (value_search || c.wildcard) {
 		/* Value matching and wildcard name matching both require a full cached scan. */
 		for (int i = 0; i < completion_catalog_count; i++)
@@ -1336,6 +1484,11 @@ static void refresh_completions(int apply_common)
 				break;
 			completion_add_match(&c, &completion_catalog[i]);
 		}
+		/* Names that only contain the text follow the prefix matches. */
+		c.prefix_n = c.n;
+		c.tail = 1;
+		for (int i = 0; i < completion_catalog_count; i++)
+			completion_add_match(&c, &completion_catalog[i]);
 	}
 
 	completion_total = c.n;
@@ -1355,7 +1508,7 @@ static void refresh_completions(int apply_common)
 		int add = (int)strlen(c.common);
 		/* A wildcard query is a search, not a partially typed prefix. Do not replace it
 		   with a common prefix when several names match; a unique match may be accepted. */
-		if ((!c.wildcard || c.n == 1) && add > 0 && input_len - n + add <= INPUT_LEN) {
+		if ((!c.wildcard || c.n == 1) && (c.prefix_n > 0 || c.n == 1) && add > 0 && input_len - n + add <= INPUT_LEN) {
 			memmove(input + add, input + n, (size_t)(input_len - n + 1));
 			memcpy(input, c.common, (size_t)add);
 			input_len += add - n;
@@ -1382,6 +1535,40 @@ static void tab_complete(void)
 	input_state_capture(&after);
 	if (!input_state_equal(&before, &after))
 		input_undo_push_snapshot(&before, 0);
+}
+
+/* Splits text into lines of at most max_width pixels at spaces; a word wider than that is cut. */
+static int console_wrap_pixels(HDC dc, const char *text, int max_width, char lines_out[][192], int max_lines)
+{
+	int count = 0;
+	const char *p = text;
+	while (*p == ' ') p++;
+	while (*p && count < max_lines) {
+		const char *end = p, *last_space = NULL;
+		SIZE size = {0, 0};
+		int len;
+		while (*end) {
+			len = (int)(end - p) + 1;
+			if (len > 190)
+				break;
+			console_text_width(dc, p, len, &size);
+			if (size.cx > max_width)
+				break;
+			if (*end == ' ') last_space = end;
+			end++;
+		}
+		if (*end && last_space && last_space > p)
+			end = last_space;
+		else if (end == p)
+			end = p + 1;
+		len = (int)(end - p);
+		memcpy(lines_out[count], p, (size_t)len);
+		lines_out[count][len] = 0;
+		count++;
+		p = end;
+		while (*p == ' ') p++;
+	}
+	return count;
 }
 
 static int completion_fit_value(HDC dc, const char *source, int max_width, char *out, size_t capacity, SIZE *result)
@@ -1963,6 +2150,12 @@ static volatile LONG raw_mouse_first_packet_logged;
 
 // Cursor capture uses a virtual pointer in relative mouse mode; the physical cursor is never warped.
 
+/* The flush call (all-NULL arguments) reports FALSE with a stale error code even when it works, so its result is not a failure. */
+static void console_ini_flush(void)
+{
+	(void)WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file);
+}
+
 static int console_settings_path_init(void)
 {
 	char exe_path[MAX_PATH];
@@ -1982,6 +2175,11 @@ static int console_settings_path_init(void)
 	if (snprintf(console_settings_file, sizeof(console_settings_file), "%s\\mw2coop\\settings.ini", exe_path) >= (int)sizeof(console_settings_file)) {
 		console_settings_file[0] = 0;
 		return 0;
+	}
+	{
+		char dir[MAX_PATH];
+		snprintf(dir, sizeof(dir), "%s\\mw2coop", exe_path);
+		CreateDirectoryA(dir, NULL);
 	}
 	return 1;
 }
@@ -2086,7 +2284,7 @@ static int console_save_qol_lists(void)
 		if (!WritePrivateProfileStringA("console", key, i < watch_count ? watches[i] : "", console_settings_file)) ok = 0;
 	}
 	free(watches);
-	if (!WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file)) ok = 0;
+	console_ini_flush();
 	return ok;
 }
 
@@ -2113,6 +2311,19 @@ static void console_load_layout(void)
 	InterlockedExchange(&console_pause_mode,
 		GetPrivateProfileIntA("console", "pause_mode", 0, console_settings_file) == 1);
 	console_load_qol_lists();
+	{
+		int zoom = GetPrivateProfileIntA("console", "zoom_pct", 100, console_settings_file);
+		int opacity = GetPrivateProfileIntA("console", "opacity_pct", 100, console_settings_file);
+		if (zoom < CONSOLE_ZOOM_MIN || zoom > CONSOLE_ZOOM_MAX) zoom = 100;
+		if (opacity < CONSOLE_OPACITY_MIN || opacity > 100) opacity = 100;
+		console_zoom_pct = zoom;
+		console_opacity_pct = opacity;
+		console_word_wrap = GetPrivateProfileIntA("console", "word_wrap", 1, console_settings_file) != 0;
+		console_colorize = GetPrivateProfileIntA("console", "colorize", 1, console_settings_file) != 0;
+		console_line_numbers = GetPrivateProfileIntA("console", "line_numbers", 0, console_settings_file) != 0;
+		console_show_mod_messages = GetPrivateProfileIntA("console", "show_mod_messages", 1, console_settings_file) != 0;
+		console_apply_mod_messages();
+	}
 	if (GetPrivateProfileIntA("console", "window_custom", 0, console_settings_file) == 1) {
 		int left = GetPrivateProfileIntA("console", "window_left_pct", -1, console_settings_file);
 		int top = GetPrivateProfileIntA("console", "window_top_pct", -1, console_settings_file);
@@ -2138,8 +2349,97 @@ static void console_save_layout(void)
 		log_printf("console: failed to save layout setting (error %lu)", (unsigned long)GetLastError());
 		return;
 	}
-	WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file); // (the flush returns 0 when it works: not an error, and the old error code is stale)
-	log_printf("console: saved %s layout to settings.ini", value);
+	console_ini_flush();
+}
+
+/* The mod's own log lines, printed gray in the console when the option is on. */
+static __thread int console_mirror_busy;
+
+static void console_mirror_log(const char *line)
+{
+	char text[LINE_LEN];
+	size_t n;
+	if (console_mirror_busy)
+		return;
+	console_mirror_busy = 1;
+	n = (size_t)snprintf(text, sizeof(text), "^4%s", line);
+	while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == '\r'))
+		text[--n] = 0;
+	console_print(text);
+	console_mirror_busy = 0;
+}
+
+static void console_apply_mod_messages(void)
+{
+	log_set_mirror(console_show_mod_messages ? console_mirror_log : NULL);
+}
+
+static void console_save_view(void)
+{
+	char value[16];
+	if (!console_settings_path_init())
+		return;
+	snprintf(value, sizeof(value), "%d", (int)console_zoom_pct);
+	WritePrivateProfileStringA("console", "zoom_pct", value, console_settings_file);
+	snprintf(value, sizeof(value), "%d", (int)console_opacity_pct);
+	WritePrivateProfileStringA("console", "opacity_pct", value, console_settings_file);
+	WritePrivateProfileStringA("console", "word_wrap", console_word_wrap ? "1" : "0", console_settings_file);
+	WritePrivateProfileStringA("console", "colorize", console_colorize ? "1" : "0", console_settings_file);
+	WritePrivateProfileStringA("console", "line_numbers", console_line_numbers ? "1" : "0", console_settings_file);
+	WritePrivateProfileStringA("console", "show_mod_messages", console_show_mod_messages ? "1" : "0", console_settings_file);
+	console_ini_flush();
+}
+
+static const int console_zoom_steps[] = {50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300};
+
+/* One step up (direction > 0) or down along the zoom ladder. */
+static void console_zoom_step(int direction)
+{
+	int count = (int)(sizeof(console_zoom_steps) / sizeof(console_zoom_steps[0]));
+	int next = console_zoom_pct;
+	if (direction > 0) {
+		for (int i = 0; i < count; i++)
+			if (console_zoom_steps[i] > console_zoom_pct) { next = console_zoom_steps[i]; break; }
+	} else {
+		for (int i = count - 1; i >= 0; i--)
+			if (console_zoom_steps[i] < console_zoom_pct) { next = console_zoom_steps[i]; break; }
+	}
+	console_set_zoom(next);
+}
+
+/* The window keeps its physical size and place while the logical scale changes. */
+static void console_rescale_window(int old_pct, int new_pct)
+{
+	volatile LONG *fields[] = {&console_window_left, &console_window_top, &console_window_width, &console_window_height,
+		&console_min_restore_left, &console_min_restore_top, &console_min_restore_width, &console_min_restore_height};
+	if (old_pct <= 0 || new_pct <= 0)
+		return;
+	for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+		LONG v = InterlockedCompareExchange(fields[i], 0, 0);
+		InterlockedExchange(fields[i], (LONG)(((long long)v * old_pct + new_pct / 2) / new_pct));
+	}
+}
+
+static void console_set_zoom(int pct)
+{
+	if (pct < CONSOLE_ZOOM_MIN) pct = CONSOLE_ZOOM_MIN;
+	if (pct > CONSOLE_ZOOM_MAX) pct = CONSOLE_ZOOM_MAX;
+	if (pct == console_zoom_pct)
+		return;
+	console_rescale_window(console_zoom_pct, pct);
+	console_zoom_pct = pct;
+	console_save_view();
+	InterlockedExchange(&dirty, 1);
+}
+
+static void console_set_opacity(int pct)
+{
+	if (pct < CONSOLE_OPACITY_MIN) pct = CONSOLE_OPACITY_MIN;
+	if (pct > 100) pct = 100;
+	if (pct == console_opacity_pct)
+		return;
+	console_opacity_pct = pct;
+	InterlockedExchange(&dirty, 1);
 }
 
 static void console_save_language(void)
@@ -2149,8 +2449,7 @@ static void console_save_language(void)
 		log_printf("console: failed to save UI language (error %lu)", (unsigned long)GetLastError());
 		return;
 	}
-	WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file); // (the flush returns 0 when it works: not an error, and the old error code is stale)
-	log_printf("console: saved %s UI language to settings.ini", value);
+	console_ini_flush();
 }
 
 static void console_save_pause_mode(void)
@@ -2160,8 +2459,7 @@ static void console_save_pause_mode(void)
 		log_printf("console: failed to save Pause mode (error %lu)", (unsigned long)GetLastError());
 		return;
 	}
-	WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file); // (the flush returns 0 when it works: not an error, and the old error code is stale)
-	log_printf("console: saved Pause mode %s to settings.ini", value);
+	console_ini_flush();
 }
 
 static void console_save_window_geometry(void)
@@ -2198,8 +2496,7 @@ static void console_save_window_geometry(void)
 	WRITE_GEOMETRY_VALUE("window_height_pct", height_pct);
 	WRITE_GEOMETRY_VALUE("window_custom", 1);
 #undef WRITE_GEOMETRY_VALUE
-	if (!WritePrivateProfileStringA(NULL, NULL, NULL, console_settings_file))
-		goto failed;
+	console_ini_flush();
 	return;
 failed:
 	(void)WritePrivateProfileStringA("console", "window_custom", "0", console_settings_file);
@@ -2316,18 +2613,26 @@ static int console_pause_blocked_by_coop(void)
 	return game_dvar_raw("coop", v, sizeof(v)) && v[0] == '1';
 }
 
+/* Like the game's own pause, the console's only works while a map is being simulated. */
+static int console_pause_server_running(void)
+{
+	char v[8];
+	return game_dvar_raw("sv_running", v, sizeof(v)) && v[0] == '1';
+}
+
 static void console_pause_apply_mode(void)
 {
-	int paused = 0;
+	int paused = 0, want;
 	if (!is_open)
 		return;
+	want = InterlockedCompareExchange(&console_pause_mode, 0, 0) && console_pause_server_running();
 	if (InterlockedCompareExchange(&console_pause_mode, 0, 0) && console_pause_blocked_by_coop()) {
 		static LONG told;
 		if (!InterlockedExchange(&told, 1))
 			console_print_text("CON_PAUSE_OFF_COOP");
 		return;
 	}
-	if (InterlockedCompareExchange(&console_pause_mode, 0, 0)) {
+	if (want) {
 		if (!InterlockedCompareExchange(&console_pause_session_known, 0, 0)) {
 			if (!console_pause_read_state(&paused)) {
 				log_printf("console: Pause mode could not read cl_paused; leaving game state unchanged");
@@ -2369,7 +2674,7 @@ static void console_pause_mode_toggle(void)
 	console_save_pause_mode();
 	if (is_open) {
 		console_pause_apply_mode();
-		if (enabled)
+		if (enabled && console_pause_server_running())
 			console_pause_capture_acquire(game_window);
 		else
 			console_pause_capture_release(game_window, 0);
@@ -2406,7 +2711,7 @@ static void set_open(int on)
 		console_pause_apply_mode();
 		if (active) {
 			console_init_virtual_mouse(game_window);
-			if (InterlockedCompareExchange(&console_pause_mode, 0, 0))
+			if (InterlockedCompareExchange(&console_pause_mode, 0, 0) && console_pause_server_running())
 				console_pause_capture_acquire(game_window);
 		} else {
 			InterlockedExchange(&virtual_mouse_relative_mode, 0);
@@ -2417,6 +2722,7 @@ static void set_open(int on)
 			console_print_version_once();
 	} else {
 		console_pause_end_session();
+		InterlockedExchange(&console_mid_active, 0);
 		InterlockedExchange(&console_pause_button_pressed, 0);
 		InterlockedExchange(&console_button_pressed, 0);
 		console_pause_capture_release(game_window, 1);
@@ -2449,7 +2755,6 @@ static void set_open(int on)
 		LeaveCriticalSection(&lock);
 	}
 	InterlockedExchange(&dirty, 1);
-	log_printf("console: %s", on ? "open" : "closed");
 }
 
 
@@ -2534,6 +2839,42 @@ static int clipboard_copy_output(void)
 	return ok;
 }
 
+static int clipboard_copy_text(const char *text)
+{
+	wchar_t wide[COMPLETION_VALUE_LEN + 1];
+	int chars = MultiByteToWideChar(console_codepage(), 0, text, -1, wide, COMPLETION_VALUE_LEN);
+	HGLOBAL data;
+	int copied = 0;
+	if (chars <= 0 || !OpenClipboard(game_window))
+		return 0;
+	data = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)chars * sizeof(wchar_t));
+	if (data) {
+		wchar_t *dst = (wchar_t *)GlobalLock(data);
+		if (dst) {
+			memcpy(dst, wide, (SIZE_T)chars * sizeof(wchar_t));
+			GlobalUnlock(data);
+			EmptyClipboard();
+			if (SetClipboardData(CF_UNICODETEXT, data)) copied = 1;
+			else GlobalFree(data);
+		} else GlobalFree(data);
+	}
+	CloseClipboard();
+	return copied;
+}
+
+static void console_watch_copy_value(int index)
+{
+	char value[COMPLETION_VALUE_LEN] = "";
+	dvar_t *dvar;
+	if (index < 0 || (size_t)index >= console_watch_capacity || !console_watch_names[index][0])
+		return;
+	dvar = game_find_dvar(console_watch_names[index]);
+	if (!dvar)
+		return;
+	game_dvar_value_text(dvar, &dvar->current, value, sizeof(value));
+	(void)clipboard_copy_text(value);
+}
+
 static int clipboard_copy_selection(void)
 {
 	if (!has_selection())
@@ -2611,17 +2952,28 @@ static int clipboard_read(char *out, int size)
 
 static int context_menu_count(int mode)
 {
-	return mode == CONSOLE_CONTEXT_INPUT ? 7 : mode == CONSOLE_CONTEXT_OUTPUT ? 4 : 0;
+	return mode == CONSOLE_CONTEXT_INPUT ? 7 : mode == CONSOLE_CONTEXT_OUTPUT ? 13 : 0;
 }
 
 static const char *context_menu_label(int mode, int index)
 {
 	static const char *const input_items[] = {"CON_MENU_UNDO", "CON_MENU_REDO", "CON_MENU_CUT", "CON_MENU_COPY", "CON_MENU_PASTE", "CON_MENU_DELETE", "CON_MENU_SELECT_ALL"};
-	static const char *const output_items[] = {"CON_MENU_COPY", "CON_MENU_COPY_LINE", "CON_MENU_SELECT_ALL", "CON_MENU_CLEAR_OUTPUT"};
+	static const char *const output_items[] = {"CON_MENU_COPY", "CON_MENU_COPY_LINE", "CON_MENU_SELECT_ALL", "CON_MENU_CLEAR_OUTPUT",
+		"CON_MENU_ZOOM_IN", "CON_MENU_ZOOM_OUT", "CON_MENU_ZOOM_RESET", "CON_MENU_TRANSPARENCY"};
 	int russian = console_ui_is_russian();
 	if (mode == CONSOLE_CONTEXT_INPUT && index >= 0 && index < 7)
 		return ctexts_get(input_items[index], russian);
-	if (mode == CONSOLE_CONTEXT_OUTPUT && index >= 0 && index < 4)
+	if (mode == CONSOLE_CONTEXT_OUTPUT && index == 11)
+		return ctexts_get("CON_MENU_SAVE_OUTPUT", russian);
+	if (mode == CONSOLE_CONTEXT_OUTPUT && index == 12)
+		return ctexts_get(console_line_numbers ? "CON_MENU_LINES_OFF" : "CON_MENU_LINES_ON", russian);
+	if (mode == CONSOLE_CONTEXT_OUTPUT && index == 10)
+		return ctexts_get(console_show_mod_messages ? "CON_MENU_MOD_OFF" : "CON_MENU_MOD_ON", russian);
+	if (mode == CONSOLE_CONTEXT_OUTPUT && index == 8)
+		return ctexts_get(console_word_wrap ? "CON_MENU_WRAP_OFF" : "CON_MENU_WRAP_ON", russian);
+	if (mode == CONSOLE_CONTEXT_OUTPUT && index == 9)
+		return ctexts_get(console_colorize ? "CON_MENU_COLOR_OFF" : "CON_MENU_COLOR_ON", russian);
+	if (mode == CONSOLE_CONTEXT_OUTPUT && index >= 0 && index < 8)
 		return ctexts_get(output_items[index], russian);
 	return "";
 }
@@ -2629,10 +2981,10 @@ static const char *context_menu_label(int mode, int index)
 static const char *context_menu_shortcut(int mode, int index)
 {
 	static const char *const input_keys[] = {"", "", "Ctrl+X", "Ctrl+C", "Ctrl+V", "Del", "Ctrl+A"};
-	static const char *const output_keys[] = {"Ctrl+C", "", "Ctrl+A", "Ctrl+L"};
+	static const char *const output_keys[] = {"Ctrl+C", "", "Ctrl+A", "Ctrl+L", "Ctrl++", "Ctrl+-", "Ctrl+0", "", "", "", "", "", ""};
 	if (mode == CONSOLE_CONTEXT_INPUT && index >= 0 && index < 7)
 		return input_keys[index];
-	if (mode == CONSOLE_CONTEXT_OUTPUT && index >= 0 && index < 4)
+	if (mode == CONSOLE_CONTEXT_OUTPUT && index >= 0 && index < 13)
 		return output_keys[index];
 	return "";
 }
@@ -2655,6 +3007,11 @@ static int context_menu_item_enabled(int mode, int index)
 		case 1: return output_context_line >= 0 && output_context_line < line_count;
 		case 2: return line_count > 0;
 		case 3: return line_count > 0;
+		case 4: return console_zoom_pct < CONSOLE_ZOOM_MAX;
+		case 5: return console_zoom_pct > CONSOLE_ZOOM_MIN;
+		case 6: return console_zoom_pct != 100;
+		case 7: case 8: case 9: case 10: case 12: return 1;
+		case 11: return line_count > 0;
 		}
 	}
 	return 0;
@@ -2675,6 +3032,60 @@ static void output_select_all(void)
 	output_sel_b_col = line_visible_length_cp(lines[last_physical],
 		line_codepage[last_physical] ? line_codepage[last_physical] : console_codepage());
 	output_selecting = 0;
+}
+
+/* Writes the whole output (the unwrapped lines, color codes removed) to mw2coop\console-<date>-<time>.txt next to the settings. */
+static void console_save_output(void)
+{
+	char path[MAX_PATH], message[MAX_PATH + 96], message_ru[MAX_PATH + 96];
+	SYSTEMTIME now;
+	FILE *file;
+	int first = (source_next - source_count + MAX_LINES * 2) % MAX_LINES, written = 0;
+	if (!console_settings_path_init() || source_count <= 0)
+		return;
+	lstrcpynA(path, console_settings_file, sizeof(path));
+	{
+		char *slash = strrchr(path, '\\');
+		if (slash) *slash = 0;
+	}
+	GetLocalTime(&now);
+	{
+		size_t n = strlen(path);
+		snprintf(path + n, sizeof(path) - n, "\\console-%04d%02d%02d-%02d%02d%02d.txt",
+			now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
+	}
+	file = fopen(path, "wb");
+	if (!file) {
+		snprintf(message, sizeof(message), ctexts_get("CON_SAVE_FAILED", 0), path);
+		snprintf(message_ru, sizeof(message_ru), ctexts_get("CON_SAVE_FAILED", 1), path);
+		console_print_localized(message, message_ru);
+		return;
+	}
+	fwrite("\xEF\xBB\xBF", 1, 3, file);
+	for (int i = 0; i < source_count; i++) {
+		int index = (first + i) % MAX_LINES;
+		const char *text = source_lines[index];
+		UINT codepage = source_codepage[index] ? source_codepage[index] : console_codepage();
+		char plain[LINE_LEN * 2];
+		WCHAR wide[LINE_LEN * 2];
+		char utf8[LINE_LEN * 6];
+		int used = 0, wide_n, utf8_n;
+		if (!text) continue;
+		for (const char *c = text; *c && used < (int)sizeof(plain) - 1; c++) {
+			if (*c == '^' && c[1] >= '0' && c[1] <= '9') { c++; continue; }
+			if (*c == '\r') continue;
+			plain[used++] = *c;
+		}
+		wide_n = MultiByteToWideChar(codepage, 0, plain, used, wide, (int)(sizeof(wide) / sizeof(wide[0])));
+		utf8_n = wide_n > 0 ? WideCharToMultiByte(CP_UTF8, 0, wide, wide_n, utf8, (int)sizeof(utf8), NULL, NULL) : 0;
+		if (utf8_n > 0) fwrite(utf8, 1, (size_t)utf8_n, file);
+		fwrite("\r\n", 1, 2, file);
+		written++;
+	}
+	fclose(file);
+	snprintf(message, sizeof(message), ctexts_get("CON_SAVED_OUTPUT", 0), written, path);
+	snprintf(message_ru, sizeof(message_ru), ctexts_get("CON_SAVED_OUTPUT", 1), written, path);
+	console_print_localized(message, message_ru);
 }
 
 static void console_context_menu_execute(int mode, int index)
@@ -2772,6 +3183,33 @@ static void console_context_menu_execute(int mode, int index)
 			SetRectEmpty(&output_toast_rect);
 			SetRectEmpty(&output_toast_close_rect);
 			break;
+		case 4: console_zoom_step(1); break;
+		case 5: console_zoom_step(-1); break;
+		case 6: console_set_zoom(100); break;
+		case 7: break; /* the transparency slider acts on the pointer and the arrow keys */
+		case 8:
+			console_word_wrap = !console_word_wrap;
+			console_hscroll = 0;
+			console_save_view();
+			InterlockedExchange(&console_wrap_columns, 0); /* Reflow the output for the new wrapping mode. */
+			break;
+		case 9:
+			console_colorize = !console_colorize;
+			console_save_view();
+			break;
+		case 10:
+			console_show_mod_messages = !console_show_mod_messages;
+			console_apply_mod_messages();
+			console_save_view();
+			break;
+		case 11:
+			console_save_output();
+			break;
+		case 12:
+			console_line_numbers = !console_line_numbers;
+			console_save_view();
+			InterlockedExchange(&console_wrap_columns, 0); /* The gutter narrows the text: reflow. */
+			break;
 		}
 	}
 	InterlockedExchange(&dirty, 1);
@@ -2861,7 +3299,6 @@ static void edit_key(WPARAM vk)
 		if (cursor > input_len) cursor = input_len;
 		selection_anchor = output_search_saved_selection;
 		if (selection_anchor < -1 || selection_anchor > input_len) selection_anchor = -1;
-		output_search_match_seq = -1;
 		refresh_completions(0);
 		LeaveCriticalSection(&lock);
 		console_output_search_step(1);
@@ -2870,6 +3307,9 @@ static void edit_key(WPARAM vk)
 	}
 	if (output_search_mode && vk == VK_ESCAPE) {
 		output_search_mode = 0;
+		console_search_panel_open = 0;
+		output_search_query[0] = 0;
+		output_search_match_seq = -1;
 		lstrcpynA(input, output_search_saved_input, INPUT_LEN + 1);
 		input_len = (int)strlen(input);
 		cursor = output_search_saved_cursor;
@@ -2886,6 +3326,18 @@ static void edit_key(WPARAM vk)
 		history_filter_active = 0;
 	if (ctrl) {
 		switch (vk) {
+		case VK_OEM_PLUS:
+		case VK_ADD:
+			console_zoom_step(1);
+			break;
+		case VK_OEM_MINUS:
+		case VK_SUBTRACT:
+			console_zoom_step(-1);
+			break;
+		case '0':
+		case VK_NUMPAD0:
+			console_set_zoom(100);
+			break;
 		case 'Z':
 			if (shift) (void)input_undo_apply_locked(1);
 			else (void)input_undo_apply_locked(0);
@@ -2904,6 +3356,7 @@ static void edit_key(WPARAM vk)
 			else (void)clipboard_copy_selection();
 			break;
 		case 'F':
+			console_search_panel_open = 1;
 			if (!output_search_mode) {
 				output_search_mode = 1;
 				lstrcpynA(output_search_saved_input, input, sizeof(output_search_saved_input));
@@ -3715,7 +4168,7 @@ static int output_hit(HWND h, int x, int y, int *line, int *column)
 	RECT window_rect;
 	console_window_geometry(backbuffer_width, height, &window_rect);
 	const int header_bottom = window_rect.top + 36;
-	const int text_left = window_rect.left + 16;
+	const int text_left = window_rect.left + 16 + console_gutter_px;
 	const int input_y = window_rect.bottom - console_bottom_reserved_height() - CONSOLE_BOTTOM_PAD - CONSOLE_INPUT_PAD - CONSOLE_LINE_HEIGHT;
 	const int input_top_y = input_y - (console_input_line_count(&window_rect) - 1) * CONSOLE_LINE_HEIGHT;
 	const int output_gap = 8;
@@ -3741,7 +4194,7 @@ static int output_hit(HWND h, int x, int y, int *line, int *column)
 		int cell_width = (int)InterlockedCompareExchange(&console_font_cell_width, 0, 0);
 		int col;
 		if (cell_width < 1) cell_width = 9;
-		col = (x - text_left) / cell_width;
+		col = (x - text_left + (int)console_hscroll) / cell_width;
 		if (col < 0) col = 0;
 		if (col > len) col = len;
 		LeaveCriticalSection(&lock);
@@ -3758,14 +4211,14 @@ static int console_window_drag_blank_hit(int x, int y)
 	int width = (int)InterlockedCompareExchange(&console_backbuffer_width, 0, 0);
 	int panel_h = (int)InterlockedCompareExchange(&console_panel_height, 0, 0);
 	int input_y, input_top_y, output_top, output_bottom;
-	int line = -1, column = 0;
 	if (width <= 0 || panel_h <= 0 || console_window_collapsed || full_console)
 		return 0;
 	if (!TryEnterCriticalSection(&lock))
 		return 0;
 	{
 		POINT pt = {x, y};
-		int popup_hit = PtInRect(&completion_rect, pt) || PtInRect(&output_toast_rect, pt) ||
+		int popup_hit = PtInRect(&completion_rect, pt) || PtInRect(&console_detail_rect, pt) || PtInRect(&output_toast_rect, pt) ||
+			PtInRect(&console_sp_rect, pt) || PtInRect(&console_jump_rect[0], pt) || PtInRect(&console_jump_rect[1], pt) ||
 			(InterlockedCompareExchange(&context_menu_open, 0, 0) && PtInRect(&context_menu_rect, pt));
 		LeaveCriticalSection(&lock);
 		if (popup_hit) return 0;
@@ -3776,18 +4229,25 @@ static int console_window_drag_blank_hit(int x, int y)
 	output_top = rect.top + 36 + 9;
 	output_bottom = input_top_y - 8;
 	if (y >= output_top && y < output_bottom && x >= rect.left + 8 && x < rect.right - 8) {
-		if (!output_hit(game_window, x, y, &line, &column))
-			return 1;
+		/* The visible text counts as one invisible rectangle (gutter plus the widest visible line), so a click
+		   anywhere inside it selects text and only the area around it drags the window. */
+		int rows = (output_bottom - output_top) / CONSOLE_LINE_HEIGHT, widest = 0, cell = (int)InterlockedCompareExchange(&console_font_cell_width, 0, 0);
+		int row = (output_bottom - 1 - y) / CONSOLE_LINE_HEIGHT, left, right;
+		if (cell < 1) cell = 9;
 		EnterCriticalSection(&lock);
-		if (line >= 0 && line < line_count) {
-			int physical = (line_next - line_count + line + MAX_LINES * 2) % MAX_LINES;
-			int length = line_visible_text_columns_cp(lines[physical], line_codepage[physical] ? line_codepage[physical] : console_codepage());
-			int blank = column >= length;
+		if (scroll + row >= line_count) {
 			LeaveCriticalSection(&lock);
-			return blank;
+			return 1;
+		}
+		for (int i = 0; i < rows && scroll + i < line_count; i++) {
+			int physical = (line_next - 1 - scroll - i + MAX_LINES * 2) % MAX_LINES;
+			int length = line_visible_text_columns_cp(lines[physical], line_codepage[physical] ? line_codepage[physical] : console_codepage());
+			if (length > widest) widest = length;
 		}
 		LeaveCriticalSection(&lock);
-		return 1;
+		left = rect.left + 16;
+		right = rect.left + 16 + console_gutter_px + widest * cell - (int)console_hscroll;
+		return x < left || x >= right;
 	}
 	/* Only the real status strip is a drag handle; favorites stay informational except for their hover-revealed unpin glyph. */
 	{
@@ -3802,6 +4262,27 @@ static int console_window_drag_blank_hit(int x, int y)
 	return 0;
 }
 
+
+#define CONSOLE_MENU_OPACITY_ROW 7
+
+/* The transparency slider's track inside the menu; the value is the share of transparency, 0 to 100 - minimum opacity. */
+static void console_menu_slider_track(int *left, int *right)
+{
+	*left = context_menu_rect.left + 150;
+	*right = context_menu_rect.right - 62;
+}
+
+static void console_menu_slider_set(int x)
+{
+	int left, right, span = 100 - CONSOLE_OPACITY_MIN, transparency;
+	console_menu_slider_track(&left, &right);
+	if (right <= left)
+		return;
+	transparency = ((x - left) * span + (right - left) / 2) / (right - left);
+	if (transparency < 0) transparency = 0;
+	if (transparency > span) transparency = span;
+	console_set_opacity(100 - transparency);
+}
 
 static int console_context_menu_hit(int x, int y, int *index)
 {
@@ -3936,7 +4417,8 @@ static int console_input_columns(const RECT *rect)
 	int cell_width = (int)InterlockedCompareExchange(&console_font_cell_width, 0, 0);
 	int available;
 	if (cell_width < 1) cell_width = 9;
-	available = rect->right - rect->left - (int)InterlockedCompareExchange(&console_input_left_offset, 0, 0) - 18;
+	available = rect->right - rect->left - (int)InterlockedCompareExchange(&console_input_left_offset, 0, 0) - 18 -
+		(int)InterlockedCompareExchange(&console_send_width, 0, 0) - 6;
 	if (available < cell_width) available = cell_width;
 	return max(1, available / cell_width);
 }
@@ -3986,7 +4468,8 @@ static int console_input_hit(int x, int y, int *index)
 	input_y = rect.bottom - console_bottom_reserved_height() - CONSOLE_BOTTOM_PAD - CONSOLE_INPUT_PAD - CONSOLE_LINE_HEIGHT;
 	top_y = input_y - (lines - 1) * CONSOLE_LINE_HEIGHT;
 	if (y < top_y - 5 || y >= input_y + CONSOLE_LINE_HEIGHT + 5 ||
-		x < rect.left + 40 || x >= rect.right - 10 || console_header_pause_hit(x, y))
+		x < rect.left + 40 || x >= rect.right - 10 || console_header_pause_hit(x, y) ||
+		x >= rect.right - 14 - (int)InterlockedCompareExchange(&console_send_width, 0, 0))
 		return 0;
 	if (index) *index = console_input_index_at(x, y);
 	return 1;
@@ -4063,6 +4546,123 @@ static void console_window_drag_update(int x, int y)
 }
 
 
+/* The dvar named by the input line once the cursor has moved past its name ("name value", "set name value"). */
+static int console_input_dvar_name(char *name, size_t size)
+{
+	static const char *const setters[] = {"set", "seta", "sets", "setu", "toggle", "reset", "setfromdvar", "dvarcompare"};
+	const char *p = input, *end = input + input_len;
+	char word[COMPLETION_NAME_LEN];
+	int n, setter = 0;
+	for (int pass = 0; pass < 2; pass++) {
+		while (p < end && (*p == '\\' || *p == '/' || *p == ' ')) p++;
+		n = 0;
+		while (p < end && *p != ' ' && n < (int)sizeof(word) - 1) word[n++] = *p++;
+		word[n] = 0;
+		if (!n || p >= end || *p != ' ')
+			return 0;
+		if (pass == 0) {
+			for (size_t i = 0; i < sizeof(setters) / sizeof(setters[0]); i++)
+				if (!_stricmp(word, setters[i])) setter = 1;
+			if (!setter) break;
+		}
+	}
+	if (strchr(word, '*') || !game_find_dvar(word))
+		return 0;
+	lstrcpynA(name, word, (int)size);
+	return 1;
+}
+
+static int console_detail_focus(char *name, size_t size)
+{
+	if (completion_selected >= 0 && completion_selected < completion_count && completion_items[completion_selected].is_dvar) {
+		lstrcpynA(name, completion_items[completion_selected].name, (int)size);
+		return 1;
+	}
+	return console_input_dvar_name(name, size);
+}
+
+/* The range of a numeric dvar's slider: its declared domain, else a known range, else a span around its default. */
+static int console_dvar_slider_range(const dvar_t *d, float *lo, float *hi, int *integer)
+{
+	static const struct { const char *name; float lo, hi; } known[] = {
+		{"cg_fov", 65.0f, 125.0f}, {"cg_fovscale", 0.5f, 2.0f}, {"sensitivity", 0.0f, 10.0f}, {"r_gamma", 0.5f, 3.0f},
+		{"s_volume", 0.0f, 1.0f}, {"s_musicvolume", 0.0f, 1.0f}, {"r_contrast", 0.0f, 4.0f}, {"cg_hudalpha", 0.0f, 1.0f}
+	};
+	if (!d || !d->name || (d->flags & (DVAR_ROM_FLAG | DVAR_INIT_FLAG)))
+		return 0;
+	if (d->type == DVAR_TYPE_INT) {
+		int32_t a, b;
+		memcpy(&a, d->domain, sizeof(a));
+		memcpy(&b, d->domain + 4, sizeof(b));
+		if (b <= a || (long long)b - a > 100000)
+			return 0;
+		*lo = (float)a; *hi = (float)b; *integer = 1;
+		return 1;
+	}
+	if (d->type == DVAR_TYPE_FLOAT) {
+		float a, b, current = d->current.value, reset = d->reset.value;
+		size_t n = strlen(d->name);
+		*integer = 0;
+		memcpy(&a, d->domain, sizeof(a));
+		memcpy(&b, d->domain + 4, sizeof(b));
+		if (a == a && b == b && b > a && b - a < 1.0e6f && a > -1.0e6f) {
+			*lo = a; *hi = b;
+			return 1;
+		}
+		for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); i++)
+			if (!_stricmp(d->name, known[i].name)) { a = known[i].lo; b = known[i].hi; goto found; }
+		if (!(reset == reset) || reset > 1.0e5f || reset < -1.0e5f)
+			return 0;
+		a = reset * 2 < 0.0f ? reset * 2 : 0.0f;
+		b = reset * 2 > 1.0f ? reset * 2 : 1.0f;
+		if (n >= 6 && !_stricmp(d->name + n - 6, "volume")) { a = 0.0f; b = 1.0f; }
+found:
+		if (current == current) {
+			if (current < a) a = current;
+			if (current > b) b = current;
+		}
+		*lo = a; *hi = b;
+		return b > a;
+	}
+	return 0;
+}
+
+static void console_slider_apply(int x)
+{
+	char command[COMPLETION_NAME_LEN + 48], text[32];
+	float value, fraction;
+	int width;
+	EnterCriticalSection(&lock);
+	width = completion_slider_right - completion_slider_left;
+	if (width <= 0 || !completion_slider_name[0]) {
+		LeaveCriticalSection(&lock);
+		return;
+	}
+	fraction = (float)(x - completion_slider_left) / (float)width;
+	if (fraction < 0) fraction = 0;
+	if (fraction > 1) fraction = 1;
+	value = completion_slider_min + fraction * (completion_slider_max - completion_slider_min);
+	{
+		/* Round to a step that follows the range, so a drag gives clean values. */
+		float range = completion_slider_max - completion_slider_min;
+		float step = completion_slider_integer ? 1.0f : range >= 1000.0f ? 1.0f : range >= 100.0f ? 0.1f : range >= 10.0f ? 0.01f : 0.001f;
+		value = (float)((long long)(value / step + (value >= 0 ? 0.5f : -0.5f))) * step;
+		if (value < completion_slider_min) value = completion_slider_min;
+		if (value > completion_slider_max) value = completion_slider_max;
+	}
+	if (completion_slider_integer)
+		snprintf(text, sizeof(text), "%d", (int)(value >= 0 ? value + 0.5f : value - 0.5f));
+	else
+		snprintf(text, sizeof(text), "%.4g", (double)value);
+	snprintf(command, sizeof(command), "set %s %s\n", completion_slider_name, text);
+	for (int i = 0; i < completion_count; i++)
+		if (completion_items[i].is_dvar && !_stricmp(completion_items[i].name, completion_slider_name))
+			lstrcpynA(completion_items[i].value, text, sizeof(completion_items[i].value));
+	LeaveCriticalSection(&lock);
+	game_cbuf_addtext(command);
+	InterlockedExchange(&dirty, 1);
+}
+
 static void console_mouse_move_at(HWND h, int x, int y)
 {
 	int idx = -1, selecting, input_dragging;
@@ -4072,9 +4672,30 @@ static void console_mouse_move_at(HWND h, int x, int y)
 		console_header_hover_tick = GetTickCount();
 		InterlockedExchange(&dirty, 1);
 	}
+	{
+		POINT pt = {x, y};
+		LONG hover = console_jump_valid[0] && PtInRect(&console_jump_rect[0], pt) ? 0 :
+			console_jump_valid[1] && PtInRect(&console_jump_rect[1], pt) ? 1 : -1;
+		if (hover != InterlockedCompareExchange(&console_jump_hover, hover, hover)) {
+			InterlockedExchange(&console_jump_hover, hover);
+			InterlockedExchange(&dirty, 1);
+		}
+	}
 	if (console_scrollbar_drag_mode) {
 		int track_height, thumb_height, travel, max_scroll;
 		LONG mode = InterlockedCompareExchange(&console_scrollbar_drag_mode, 0, 0);
+		if (mode == 3) {
+			console_slider_apply(x);
+			return;
+		}
+		if (mode == 4) {
+			console_menu_slider_set(x);
+			return;
+		}
+		if (mode == 5) {
+			console_hscroll_drag_to(x);
+			return;
+		}
 		EnterCriticalSection(&lock);
 		if (mode == 1) {
 			track_height = output_scroll_track.bottom - output_scroll_track.top;
@@ -4105,7 +4726,12 @@ static void console_mouse_move_at(HWND h, int x, int y)
 		return;
 	}
 	if (InterlockedCompareExchange(&context_menu_open, 0, 0)) {
-		int hover = console_context_menu_hit(x, y, &idx) ? idx : -1;
+		int hover;
+		if (InterlockedCompareExchange(&console_scrollbar_drag_mode, 0, 0) == 4) {
+			console_menu_slider_set(x);
+			return;
+		}
+		hover = console_context_menu_hit(x, y, &idx) ? idx : -1;
 		EnterCriticalSection(&lock);
 		if (context_menu_open && context_menu_selected != hover) {
 			InterlockedExchange(&context_menu_selected, hover);
@@ -4203,6 +4829,60 @@ static void console_input_double_click_at(int x, int y)
 	LeaveCriticalSection(&lock);
 }
 
+static void console_mid_down_at(int x, int y)
+{
+	RECT rect;
+	POINT pt = {x, y};
+	int width = (int)InterlockedCompareExchange(&console_backbuffer_width, 0, 0);
+	int panel_h = (int)InterlockedCompareExchange(&console_panel_height, 0, 0);
+	int input_y, input_top_y, output_top, output_bottom, rows, busy;
+	if (InterlockedCompareExchange(&console_mid_active, 0, 0)) {
+		InterlockedExchange(&console_mid_active, 0);
+		InterlockedExchange(&dirty, 1);
+		return;
+	}
+	if (width <= 0 || panel_h <= 0 || console_window_collapsed || InterlockedCompareExchange(&context_menu_open, 0, 0))
+		return;
+	console_window_geometry(width, panel_h, &rect);
+	input_y = rect.bottom - console_bottom_reserved_height() - CONSOLE_BOTTOM_PAD - CONSOLE_INPUT_PAD - CONSOLE_LINE_HEIGHT;
+	input_top_y = input_y - (console_input_line_count(&rect) - 1) * CONSOLE_LINE_HEIGHT;
+	output_top = rect.top + 36 + 9;
+	output_bottom = input_top_y - 8;
+	rows = (output_bottom - output_top) / CONSOLE_LINE_HEIGHT;
+	if (y < output_top || y >= output_bottom || x < rect.left + 8 || x >= rect.right - 20)
+		return;
+	if (!TryEnterCriticalSection(&lock))
+		return;
+	busy = PtInRect(&completion_rect, pt) || PtInRect(&console_detail_rect, pt) || PtInRect(&output_toast_rect, pt) ||
+		PtInRect(&console_sp_rect, pt) || (console_jump_valid[0] && PtInRect(&console_jump_rect[0], pt)) ||
+		(console_jump_valid[1] && PtInRect(&console_jump_rect[1], pt)) || line_count <= rows;
+	if (!busy) {
+		console_mid_x = x;
+		console_mid_y = y;
+		console_mid_moved = 0;
+		console_mid_sticky = 0;
+		console_mid_start = console_mid_last = GetTickCount();
+		console_mid_accum = 0;
+		InterlockedExchange(&console_mid_active, 1);
+		InterlockedExchange(&dirty, 1);
+	}
+	LeaveCriticalSection(&lock);
+}
+
+static void console_mid_up_at(int x, int y)
+{
+	if (!InterlockedCompareExchange(&console_mid_active, 0, 0))
+		return;
+	(void)x;
+	if (GetTickCount() - console_mid_start < 250 && abs(y - console_mid_y) < 5 && !console_mid_sticky) {
+		InterlockedExchange(&console_mid_sticky, 1); /* a quick click keeps the scrolling on until the next click */
+		return;
+	}
+	InterlockedExchange(&console_mid_active, 0);
+	InterlockedExchange(&dirty, 1);
+}
+
+
 static void console_mouse_down_at(HWND h, int x, int y, int capture_legacy)
 {
 	int idx = -1, completion;
@@ -4241,9 +4921,88 @@ static void console_mouse_down_at(HWND h, int x, int y, int capture_legacy)
 			return;
 		}
 	}
+	{
+		POINT slider_pt = {x, y};
+		if (PtInRect(&completion_slider_rect, slider_pt)) {
+			InterlockedExchange(&console_scrollbar_drag_mode, 3);
+			console_slider_apply(x);
+			return;
+		}
+	}
+	{
+		POINT detail_pt = {x, y};
+		int reset_hit = PtInRect(&console_detail_reset_rect, detail_pt), toggle_hit = PtInRect(&console_detail_toggle_rect, detail_pt);
+		if (reset_hit || toggle_hit) {
+			char command[COMPLETION_NAME_LEN + COMPLETION_VALUE_LEN + 16], name[COMPLETION_NAME_LEN];
+			dvar_t *target;
+			EnterCriticalSection(&lock);
+			target = console_detail_focus(name, sizeof(name)) ? game_find_dvar(name) : NULL;
+			command[0] = 0;
+			if (target && reset_hit) {
+				char text[COMPLETION_VALUE_LEN];
+				game_dvar_value_text(target, &target->reset, text, sizeof(text));
+				snprintf(command, sizeof(command), "set %s %s\n", target->name, text);
+			} else if (target && toggle_hit && target->type == DVAR_TYPE_BOOL) {
+				snprintf(command, sizeof(command), "set %s %d\n", target->name, target->current.enabled ? 0 : 1);
+			}
+			LeaveCriticalSection(&lock);
+			if (command[0])
+				game_cbuf_addtext(command);
+			InterlockedExchange(&dirty, 1);
+			return;
+		}
+	}
+	if (InterlockedCompareExchange(&console_mid_active, 0, 0))
+		InterlockedExchange(&console_mid_active, 0);
+	{
+		POINT pt = {x, y};
+		if (PtInRect(&console_sp_rect, pt)) {
+			int redo = 0;
+			if (PtInRect(&console_sp_case, pt)) { console_search_case = !console_search_case; redo = 1; }
+			else if (PtInRect(&console_sp_word, pt)) { console_search_word = !console_search_word; redo = 1; }
+			else if (PtInRect(&console_sp_regex, pt)) { console_search_regex = !console_search_regex; redo = 1; }
+			else if (PtInRect(&console_sp_prev, pt)) console_output_search_step(-1);
+			else if (PtInRect(&console_sp_next, pt)) console_output_search_step(1);
+			else if (PtInRect(&console_sp_close, pt)) {
+				if (output_search_mode) console_output_search_cancel();
+				EnterCriticalSection(&lock);
+				console_search_panel_open = 0;
+				output_search_query[0] = 0;
+				output_search_match_seq = -1;
+				LeaveCriticalSection(&lock);
+			}
+			if (redo) {
+				EnterCriticalSection(&lock);
+				output_search_match_seq = -1;
+				LeaveCriticalSection(&lock);
+				console_output_search_step_ex(1, 1);
+			}
+			InterlockedExchange(&dirty, 1);
+			return;
+		}
+		for (int i = 0; i < 2; i++) {
+			if (console_jump_valid[i] && PtInRect(&console_jump_rect[i], pt)) {
+				EnterCriticalSection(&lock);
+				if (i == 0) scroll = 0;
+				else {
+					int page = console_output_page_lines();
+					scroll = line_count > page ? line_count - page : 0;
+				}
+				LeaveCriticalSection(&lock);
+				InterlockedExchange(&dirty, 1);
+				return;
+			}
+		}
+	}
 	if (InterlockedCompareExchange(&context_menu_open, 0, 0)) {
 		int mode = (int)InterlockedCompareExchange(&context_menu_mode, 0, 0);
 		if (console_context_menu_hit(x, y, &idx)) {
+			if (mode == CONSOLE_CONTEXT_OUTPUT && idx == CONSOLE_MENU_OPACITY_ROW) {
+				InterlockedExchange(&console_scrollbar_drag_mode, 4);
+				console_menu_slider_set(x);
+				InterlockedExchange(&dirty, 1);
+				return;
+			}
 			console_context_menu_execute(mode, idx);
 			return;
 		}
@@ -4320,8 +5079,40 @@ static void console_mouse_down_at(HWND h, int x, int y, int capture_legacy)
 		(void)console_watch_remove_at(x, y);
 		return;
 	}
-	if (console_watch_chip_hit(x, y, NULL))
-		return; /* Favorite labels are informational; only the hover-revealed unpin icon is clickable. */
+	{
+		int chip = -1;
+		if (console_watch_chip_hit(x, y, &chip)) {
+			EnterCriticalSection(&lock);
+			console_watch_copy_value(chip);
+			LeaveCriticalSection(&lock);
+			return; /* A click on a favorite copies its value; the hover-revealed unpin icon removes it. */
+		}
+	}
+	if (console_hscroll_hit(x, y)) {
+		InterlockedExchange(&console_scrollbar_drag_mode, 5);
+		console_hscroll_drag_to(x);
+		return;
+	}
+	{
+		POINT send_pt = {x, y};
+		if (PtInRect(&console_send_rect, send_pt)) {
+			char cmd[INPUT_LEN + 1];
+			EnterCriticalSection(&lock);
+			lstrcpynA(cmd, input, sizeof(cmd));
+			if (input_len > 0) {
+				input_undo_push(0);
+				input[0] = 0, input_len = cursor = 0;
+				history_pos = history_count;
+				history_draft_valid = 0;
+				clear_selection();
+				hide_completion();
+			}
+			LeaveCriticalSection(&lock);
+			if (cmd[0]) run_line(cmd);
+			InterlockedExchange(&dirty, 1);
+			return;
+		}
+	}
 	if (console_header_pause_hit(x, y)) {
 		InterlockedExchange(&console_button_pressed, 4);
 		InterlockedExchange(&console_pause_button_pressed, 1);
@@ -4493,7 +5284,8 @@ static void console_mouse_up(void)
 	}
 	InterlockedExchange(&console_pause_button_pressed, 0);
 	InterlockedExchange(&console_button_pressed, 0);
-	InterlockedExchange(&console_scrollbar_drag_mode, 0);
+	if (InterlockedExchange(&console_scrollbar_drag_mode, 0) == 4)
+		console_save_view();
 	InterlockedExchange(&dirty, 1);
 	if (drag_mode == 7) {
 		console_pending_title_click_tick = GetTickCount();
@@ -4537,29 +5329,362 @@ static int console_output_page_lines(void)
 	return rows;
 }
 
+/* A small backtracking regular expression matcher for the output search: literals, . [] [^] \d \w \s \b \B ^ $ | ( ) (?: ) and the
+   quantifiers * + ? {n} {n,} {n,m} with lazy forms. No back references; a step limit keeps a bad pattern from stalling the game. */
+enum { RX_CHAR, RX_ANY, RX_CLASS, RX_BOL, RX_EOL, RX_WORDB, RX_NWORDB, RX_SPLIT, RX_JMP, RX_MATCH };
+#define RX_MAX_INST 1200
+#define RX_MAX_CLASS 40
+#define RX_MAX_STACK 4096
+#define RX_STEP_LIMIT 200000
+typedef struct { unsigned char op, ch; short x, y; } rx_inst_t;
+typedef struct {
+	rx_inst_t code[RX_MAX_INST];
+	unsigned char classes[RX_MAX_CLASS][32];
+	int count, class_count, error, icase;
+	const char *p;
+} rx_prog_t;
+
+static int rx_emit(rx_prog_t *g, int op, int ch, int x, int y)
+{
+	if (g->count >= RX_MAX_INST) { g->error = 1; return 0; }
+	g->code[g->count].op = (unsigned char)op;
+	g->code[g->count].ch = (unsigned char)ch;
+	g->code[g->count].x = (short)x;
+	g->code[g->count].y = (short)y;
+	return g->count++;
+}
+
+static int rx_is_word(int c) { return c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+
+static void rx_class_set(unsigned char *set, int c) { set[(c & 255) >> 3] |= (unsigned char)(1u << (c & 7)); }
+
+static void rx_class_shorthand(unsigned char *set, int kind)
+{
+	for (int c = 0; c < 256; c++) {
+		int in = kind == 'd' || kind == 'D' ? (c >= '0' && c <= '9') :
+			kind == 'w' || kind == 'W' ? rx_is_word(c) : (c == ' ' || (c >= 9 && c <= 13));
+		if (kind >= 'A' && kind <= 'Z') in = !in;
+		if (in) rx_class_set(set, c);
+	}
+}
+
+static int rx_escape_char(int c)
+{
+	return c == 'n' ? '\n' : c == 't' ? '\t' : c == 'r' ? '\r' : c;
+}
+
+static const char *rx_skip_atom(const char *p)
+{
+	if (*p == '\\') return p[1] ? p + 2 : p + 1;
+	if (*p == '[') {
+		p++;
+		if (*p == '^') p++;
+		if (*p == ']') p++;
+		while (*p && *p != ']') p += (*p == '\\' && p[1]) ? 2 : 1;
+		return *p ? p + 1 : p;
+	}
+	if (*p == '(') {
+		int depth = 0;
+		for (; *p; p++) {
+			if (*p == '\\' && p[1]) { p++; continue; }
+			if (*p == '[') { p = rx_skip_atom(p) - 1; continue; }
+			if (*p == '(') depth++;
+			else if (*p == ')' && --depth == 0) return p + 1;
+		}
+		return p;
+	}
+	return p + 1;
+}
+
+static void rx_parse_alt(rx_prog_t *g);
+
+static void rx_emit_atom(rx_prog_t *g)
+{
+	const char *p = g->p;
+	if (*p == '(') {
+		p++;
+		if (p[0] == '?' && p[1] == ':') p += 2;
+		g->p = p;
+		rx_parse_alt(g);
+		if (*g->p == ')') g->p++; else g->error = 1;
+		return;
+	}
+	if (*p == '[') {
+		unsigned char *set;
+		int negate = 0;
+		if (g->class_count >= RX_MAX_CLASS) { g->error = 1; return; }
+		set = g->classes[g->class_count];
+		memset(set, 0, 32);
+		p++;
+		if (*p == '^') { negate = 1; p++; }
+		for (int first = 1; *p && (*p != ']' || first); first = 0) {
+			int lo = (unsigned char)*p++;
+			if (lo == '\\' && *p) {
+				int e = *p++;
+				if (strchr("dDwWsS", e)) { rx_class_shorthand(set, e); continue; }
+				lo = rx_escape_char(e);
+			}
+			if (*p == '-' && p[1] && p[1] != ']') {
+				int hi = (unsigned char)p[1];
+				p += 2;
+				if (hi == '\\' && *p) hi = rx_escape_char(*p++);
+				for (int c = lo; c <= hi; c++) rx_class_set(set, c);
+			} else {
+				rx_class_set(set, lo);
+			}
+		}
+		if (*p == ']') p++; else g->error = 1;
+		if (g->icase)
+			for (int c = 'a'; c <= 'z'; c++)
+				if (set[c >> 3] & (1u << (c & 7)) || set[(c - 32) >> 3] & (1u << ((c - 32) & 7))) {
+					rx_class_set(set, c);
+					rx_class_set(set, c - 32);
+				}
+		if (negate)
+			for (int i = 0; i < 32; i++) set[i] = (unsigned char)~set[i];
+		rx_emit(g, RX_CLASS, 0, g->class_count++, 0);
+		g->p = p;
+		return;
+	}
+	if (*p == '.') { rx_emit(g, RX_ANY, 0, 0, 0); g->p = p + 1; return; }
+	if (*p == '^') { rx_emit(g, RX_BOL, 0, 0, 0); g->p = p + 1; return; }
+	if (*p == '$') { rx_emit(g, RX_EOL, 0, 0, 0); g->p = p + 1; return; }
+	if (*p == '\\' && p[1]) {
+		int e = p[1];
+		g->p = p + 2;
+		if (strchr("dDwWsS", e)) {
+			if (g->class_count >= RX_MAX_CLASS) { g->error = 1; return; }
+			memset(g->classes[g->class_count], 0, 32);
+			rx_class_shorthand(g->classes[g->class_count], e);
+			rx_emit(g, RX_CLASS, 0, g->class_count++, 0);
+		} else if (e == 'b') {
+			rx_emit(g, RX_WORDB, 0, 0, 0);
+		} else if (e == 'B') {
+			rx_emit(g, RX_NWORDB, 0, 0, 0);
+		} else {
+			rx_emit(g, RX_CHAR, rx_escape_char(e), 0, 0);
+		}
+		return;
+	}
+	if (*p == '*' || *p == '+' || *p == '?') { g->error = 1; return; }
+	rx_emit(g, RX_CHAR, (unsigned char)*p, 0, 0);
+	g->p = p + 1;
+}
+
+static int rx_parse_bounds(const char *p, int *min, int *max, const char **after)
+{
+	int a = 0, b;
+	if (*p != '{' || p[1] < '0' || p[1] > '9') return 0;
+	p++;
+	while (*p >= '0' && *p <= '9') a = a * 10 + (*p++ - '0');
+	b = a;
+	if (*p == ',') {
+		p++;
+		if (*p == '}') b = -1;
+		else {
+			b = 0;
+			while (*p >= '0' && *p <= '9') b = b * 10 + (*p++ - '0');
+		}
+	}
+	if (*p != '}') return 0;
+	if (a > 100 || b > 100 || (b >= 0 && b < a)) return 0;
+	*min = a; *max = b; *after = p + 1;
+	return 1;
+}
+
+static void rx_parse_seq(rx_prog_t *g)
+{
+	while (*g->p && *g->p != '|' && *g->p != ')' && !g->error) {
+		const char *atom = g->p, *after = rx_skip_atom(atom);
+		int min = 1, max = 1, lazy = 0;
+		if (*after == '*') { min = 0; max = -1; after++; }
+		else if (*after == '+') { min = 1; max = -1; after++; }
+		else if (*after == '?') { min = 0; max = 1; after++; }
+		else if (*after == '{') {
+			const char *q;
+			int lo, hi;
+			if (rx_parse_bounds(after, &lo, &hi, &q)) { min = lo; max = hi; after = q; }
+		}
+		if (after != rx_skip_atom(atom) && *after == '?') { lazy = 1; after++; }
+		for (int i = 0; i < min && !g->error; i++) { g->p = atom; rx_emit_atom(g); }
+		if (max < 0) {
+			int l1 = g->count, split = rx_emit(g, RX_SPLIT, 0, 0, 0);
+			g->p = atom;
+			rx_emit_atom(g);
+			rx_emit(g, RX_JMP, 0, l1, 0);
+			g->code[split].x = (short)(lazy ? g->count : split + 1);
+			g->code[split].y = (short)(lazy ? split + 1 : g->count);
+		} else if (max > min) {
+			int splits[101], n = 0;
+			for (int i = min; i < max && !g->error; i++) {
+				splits[n] = rx_emit(g, RX_SPLIT, 0, 0, 0);
+				g->p = atom;
+				rx_emit_atom(g);
+				n++;
+			}
+			for (int i = 0; i < n; i++) {
+				g->code[splits[i]].x = (short)(lazy ? g->count : splits[i] + 1);
+				g->code[splits[i]].y = (short)(lazy ? splits[i] + 1 : g->count);
+			}
+		}
+		g->p = after;
+	}
+}
+
+static void rx_parse_alt(rx_prog_t *g)
+{
+	int jumps[32], n = 0;
+	for (;;) {
+		int split = -1;
+		const char *save = g->p;
+		/* A SPLIT before each alternative but the last; the choice is found by looking for a top-level '|' ahead. */
+		{
+			const char *q = save;
+			int depth = 0, has_bar = 0;
+			for (; *q; q++) {
+				if (*q == '\\' && q[1]) { q++; continue; }
+				if (*q == '[') { q = rx_skip_atom(q) - 1; continue; }
+				if (*q == '(') depth++;
+				else if (*q == ')') { if (depth == 0) break; depth--; }
+				else if (*q == '|' && depth == 0) { has_bar = 1; break; }
+			}
+			if (has_bar) split = rx_emit(g, RX_SPLIT, 0, 0, 0);
+		}
+		rx_parse_seq(g);
+		if (split >= 0) {
+			if (n < 32) jumps[n++] = rx_emit(g, RX_JMP, 0, 0, 0);
+			g->code[split].x = (short)(split + 1);
+			g->code[split].y = (short)g->count;
+		}
+		if (*g->p == '|') { g->p++; continue; }
+		break;
+	}
+	for (int i = 0; i < n; i++) g->code[jumps[i]].x = (short)g->count;
+}
+
+static int rx_compile(rx_prog_t *g, const char *pattern, int icase)
+{
+	g->count = g->class_count = g->error = 0;
+	g->icase = icase;
+	g->p = pattern;
+	rx_parse_alt(g);
+	if (*g->p) g->error = 1;
+	rx_emit(g, RX_MATCH, 0, 0, 0);
+	return !g->error;
+}
+
+static int rx_lower(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+
+static int rx_run(const rx_prog_t *g, const char *text, int length, int start, int *end_out)
+{
+	int stack_pc[RX_MAX_STACK], stack_sp[RX_MAX_STACK], top = 0, pc = 0, sp = start, steps = 0;
+	for (;;) {
+		const rx_inst_t *in = &g->code[pc];
+		int ok = 0;
+		if (++steps > RX_STEP_LIMIT) return 0;
+		switch (in->op) {
+		case RX_CHAR:
+			ok = sp < length && (g->icase ? rx_lower((unsigned char)text[sp]) == rx_lower(in->ch) : (unsigned char)text[sp] == in->ch);
+			break;
+		case RX_ANY: ok = sp < length; break;
+		case RX_CLASS: ok = sp < length && (g->classes[in->x][(unsigned char)text[sp] >> 3] & (1u << (text[sp] & 7))) != 0; break;
+		case RX_BOL: if (sp == 0) { pc++; continue; } break;
+		case RX_EOL: if (sp == length) { pc++; continue; } break;
+		case RX_WORDB:
+		case RX_NWORDB: {
+			int before = sp > 0 && rx_is_word((unsigned char)text[sp - 1]), here = sp < length && rx_is_word((unsigned char)text[sp]);
+			if ((before != here) == (in->op == RX_WORDB)) { pc++; continue; }
+			break;
+		}
+		case RX_SPLIT:
+			if (top >= RX_MAX_STACK) return 0;
+			stack_pc[top] = in->y; stack_sp[top] = sp; top++;
+			pc = in->x;
+			continue;
+		case RX_JMP: pc = in->x; continue;
+		case RX_MATCH: *end_out = sp; return 1;
+		}
+		if (ok) { pc++; sp++; continue; }
+		if (!top) return 0;
+		top--;
+		pc = stack_pc[top];
+		sp = stack_sp[top];
+	}
+}
+
+/* The output search: the options are the three toggles of the find panel. */
+static rx_prog_t console_rx;
+static char console_rx_key[OUTPUT_SEARCH_LEN + 8];
+static int console_rx_ok;
+
+static int console_search_prepare(const char *query)
+{
+	char key[OUTPUT_SEARCH_LEN + 8];
+	snprintf(key, sizeof(key), "%d%d%s", console_search_case ? 1 : 0, console_search_word ? 1 : 0, query);
+	if (!console_search_regex) {
+		console_search_bad = 0;
+		return 1;
+	}
+	if (strcmp(key, console_rx_key)) {
+		char pattern[OUTPUT_SEARCH_LEN + 16];
+		lstrcpynA(console_rx_key, key, sizeof(console_rx_key));
+		if (console_search_word)
+			snprintf(pattern, sizeof(pattern), "\\b(?:%s)\\b", query);
+		else
+			lstrcpynA(pattern, query, sizeof(pattern));
+		console_rx_ok = rx_compile(&console_rx, pattern, !console_search_case);
+	}
+	console_search_bad = !console_rx_ok;
+	return console_rx_ok;
+}
+
+/* The first match at or after `from` in the visible text: its start and length (a match of nothing is skipped). */
+static int console_search_find(const char *plain, int used, int from, const char *query, int *at, int *length)
+{
+	int qn = (int)strlen(query);
+	if (!qn) return 0;
+	if (console_search_regex) {
+		if (!console_rx_ok) return 0;
+		for (int i = from; i <= used; i++) {
+			int end = 0;
+			if (rx_run(&console_rx, plain, used, i, &end) && end > i) {
+				*at = i; *length = end - i;
+				return 1;
+			}
+		}
+		return 0;
+	}
+	for (int i = from; i + qn <= used; i++) {
+		int equal = console_search_case ? strncmp(plain + i, query, (size_t)qn) == 0 : _strnicmp(plain + i, query, (size_t)qn) == 0;
+		if (!equal) continue;
+		if (console_search_word &&
+			((i > 0 && rx_is_word((unsigned char)plain[i - 1])) || (i + qn < used && rx_is_word((unsigned char)plain[i + qn]))))
+			continue;
+		*at = i; *length = qn;
+		return 1;
+	}
+	return 0;
+}
+
 static int console_output_find_in_line(const char *source, const char *query, int *match_at)
 {
 	char plain[LINE_LEN];
-	int used = 0;
+	int used = 0, at = 0, length = 0;
 	if (!source || !query || !*query) return 0;
 	for (const char *p = source; *p && used < LINE_LEN - 1; p++) {
 		if (*p == '^' && p[1] >= '0' && p[1] <= '9') { p++; continue; }
 		plain[used++] = *p;
 	}
 	plain[used] = 0;
-	{
-		int qn = (int)strlen(query);
-		for (int i = 0; i + qn <= used; i++) {
-			if (!_strnicmp(plain + i, query, (size_t)qn)) {
-				if (match_at) *match_at = i;
-				return qn;
-			}
-		}
-	}
-	return 0;
+	if (!console_search_prepare(query))
+		return 0;
+	if (!console_search_find(plain, used, 0, query, &at, &length))
+		return 0;
+	if (match_at) *match_at = at;
+	return length;
 }
 
-static void console_output_search_step(int direction)
+static void console_output_search_step_ex(int direction, int quiet)
 {
 	int count, found = -1, start, rows;
 	char query[OUTPUT_SEARCH_LEN];
@@ -4570,7 +5695,7 @@ static void console_output_search_step(int direction)
 	if (!query[0] || count <= 0) {
 		output_search_match_seq = -1;
 		LeaveCriticalSection(&lock);
-		MessageBeep(MB_ICONEXCLAMATION);
+		if (!quiet) MessageBeep(MB_ICONEXCLAMATION);
 		return;
 	}
 	if (output_search_match_seq >= 0)
@@ -4600,14 +5725,96 @@ static void console_output_search_step(int direction)
 		}
 	}
 	LeaveCriticalSection(&lock);
-	if (found < 0)
+	if (found < 0 && !quiet)
 		MessageBeep(MB_ICONEXCLAMATION);
 	InterlockedExchange(&dirty, 1);
+}
+
+static void console_output_search_step(int direction)
+{
+	console_output_search_step_ex(direction, 0);
+}
+
+/* Counts the rows that hold a match, and which of them is the current one. */
+static void console_search_recount(void)
+{
+	static char counted_query[OUTPUT_SEARCH_LEN];
+	static int counted_options = -1, counted_lines = -1, counted_next = -1, counted_seq = -2;
+	int options = (console_search_case ? 1 : 0) | (console_search_word ? 2 : 0) | (console_search_regex ? 4 : 0);
+	if (!output_search_query[0]) {
+		console_search_total = console_search_index = 0;
+		console_search_bad = 0;
+		counted_query[0] = 0;
+		return;
+	}
+	if (!strcmp(counted_query, output_search_query) && counted_options == options && counted_lines == line_count &&
+		counted_next == line_next && counted_seq == output_search_match_seq)
+		return;
+	lstrcpynA(counted_query, output_search_query, sizeof(counted_query));
+	counted_options = options; counted_lines = line_count; counted_next = line_next; counted_seq = output_search_match_seq;
+	console_search_total = console_search_index = 0;
+	for (int seq = 0; seq < line_count; seq++) {
+		int physical = (line_next - line_count + seq + MAX_LINES * 2) % MAX_LINES;
+		if (console_output_find_in_line(lines[physical], output_search_query, NULL)) {
+			console_search_total++;
+			if (seq == output_search_match_seq) console_search_index = console_search_total;
+		}
+	}
+}
+
+static void console_hscroll_set(int value)
+{
+	if (value > console_hscroll_max) value = console_hscroll_max;
+	if (value < 0) value = 0;
+	if (value != console_hscroll) {
+		console_hscroll = value;
+		InterlockedExchange(&dirty, 1);
+	}
+}
+
+/* Moves the output sideways by a number of character cells (positive is to the right). */
+static void console_hscroll_cells(int cells)
+{
+	int cell = (int)InterlockedCompareExchange(&console_font_cell_width, 0, 0);
+	console_hscroll_set(console_hscroll + cells * (cell > 0 ? cell : 9));
+}
+
+static int console_key_down(int vk)
+{
+	return ((GetKeyState(vk) | GetAsyncKeyState(vk)) & 0x8000) != 0;
+}
+
+/* A click or drag on the horizontal scrollbar: the thumb centers on the pointer. */
+static void console_hscroll_drag_to(int x)
+{
+	int travel = (console_hscroll_rect.right - console_hscroll_rect.left) - console_hscroll_thumb_w;
+	if (travel <= 0 || console_hscroll_max <= 0)
+		return;
+	console_hscroll_set((int)((long long)(x - console_hscroll_rect.left - console_hscroll_thumb_w / 2) * console_hscroll_max / travel));
+}
+
+static int console_hscroll_hit(int x, int y)
+{
+	POINT pt = {x, y};
+	RECT grab = console_hscroll_rect;
+	if (console_hscroll_max <= 0 || console_hscroll_rect.right <= console_hscroll_rect.left)
+		return 0;
+	grab.top -= 4;
+	grab.bottom += 2;
+	return PtInRect(&grab, pt);
 }
 
 static void console_mouse_wheel_at(int x, int y, int delta)
 {
 	POINT pt = {x, y};
+	if (console_key_down(VK_CONTROL)) {
+		console_zoom_step(delta > 0 ? 1 : -1);
+		return;
+	}
+	if (!console_word_wrap && (console_key_down(VK_SHIFT) || console_hscroll_hit(x, y))) {
+		console_hscroll_cells(-(delta > 0 ? 1 : -1) * 6);
+		return;
+	}
 	EnterCriticalSection(&lock);
 	if ((PtInRect(&completion_rect, pt) && completion_count > 1) ||
 		(context_menu_open && PtInRect(&context_menu_rect, pt))) {
@@ -4723,13 +5930,13 @@ static int console_header_button_hit(int x, int y, int left_offset, int right_of
 	int height = (int)InterlockedCompareExchange(&console_panel_height, 0, 0);
 	if (width <= 0 || height <= 0) return 0;
 	console_window_geometry(width, height, &rect);
-	return y >= rect.top + 5 && y < rect.top + 31 &&
+	return y >= rect.top + 1 && y < rect.top + 33 &&
 		x >= rect.right - right_offset && x < rect.right - left_offset;
 }
 
-static int console_header_close_hit(int x, int y) { return console_header_button_hit(x, y, 8, 32); }
-static int console_header_max_hit(int x, int y) { return console_header_button_hit(x, y, 34, 58); }
-static int console_header_min_hit(int x, int y) { return console_header_button_hit(x, y, 60, 84); }
+static int console_header_close_hit(int x, int y) { return console_header_button_hit(x, y, 1, 47); }
+static int console_header_max_hit(int x, int y) { return console_header_button_hit(x, y, 47, 93); }
+static int console_header_min_hit(int x, int y) { return console_header_button_hit(x, y, 93, 139); }
 
 static void console_pause_button_rect(const RECT *window_rect, RECT *pause_rect)
 {
@@ -4764,7 +5971,7 @@ static int console_header_layout_hit(int x, int y)
 	int height = (int)InterlockedCompareExchange(&console_panel_height, 0, 0);
 	if (width <= 0 || height <= 0) return 0;
 	console_window_geometry(width, height, &rect);
-	return y >= rect.top + 5 && y < rect.top + 31 && x >= rect.right - 182 && x < rect.right - 88;
+	return y >= rect.top + 5 && y < rect.top + 31 && x >= rect.right - 241 && x < rect.right - 147;
 }
 
 static int console_header_language_hit(int x, int y)
@@ -4774,7 +5981,7 @@ static int console_header_language_hit(int x, int y)
 	int height = (int)InterlockedCompareExchange(&console_panel_height, 0, 0);
 	if (width <= 0 || height <= 0) return 0;
 	console_window_geometry(width, height, &rect);
-	return y >= rect.top + 5 && y < rect.top + 31 && x >= rect.right - 236 && x < rect.right - 186;
+	return y >= rect.top + 5 && y < rect.top + 31 && x >= rect.right - 295 && x < rect.right - 245;
 }
 
 static int console_header_button_at(int x, int y)
@@ -4856,7 +6063,7 @@ static int console_pointer_over_ui(HWND h, int x, int y)
 	if (!TryEnterCriticalSection(&lock))
 		return 1; /* Prefer consuming one ambiguous pointer event over leaking a UI click to the game. */
 	{
-		int inside = PtInRect(&completion_rect, pt) || PtInRect(&output_toast_rect, pt) ||
+		int inside = PtInRect(&completion_rect, pt) || PtInRect(&console_detail_rect, pt) || PtInRect(&output_toast_rect, pt) ||
 			(context_menu_open && PtInRect(&context_menu_rect, pt));
 		LeaveCriticalSection(&lock);
 		if (inside) return 1;
@@ -5060,6 +6267,10 @@ static int console_handle_raw_input(HWND h, HRAWINPUT raw_handle)
 		}
 		if (raw.data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP)
 			console_mouse_up();
+		if (raw.data.mouse.usButtonFlags & 0x0010) /* RI_MOUSE_MIDDLE_BUTTON_DOWN */
+			console_mid_down_at(x, y);
+		if (raw.data.mouse.usButtonFlags & 0x0020) /* RI_MOUSE_MIDDLE_BUTTON_UP */
+			console_mid_up_at(x, y);
 		if (raw.data.mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) {
 			if (!console_watch_chip_hit(x, y, NULL) && console_pointer_over_ui(h, x, y))
 				console_context_menu_open_at(h, x, y);
@@ -5067,6 +6278,10 @@ static int console_handle_raw_input(HWND h, HRAWINPUT raw_handle)
 		if (raw.data.mouse.usButtonFlags & RI_MOUSE_WHEEL) {
 			if (console_pointer_over_ui(h, x, y))
 				console_mouse_wheel_at(x, y, (SHORT)raw.data.mouse.usButtonData);
+		}
+		if ((raw.data.mouse.usButtonFlags & 0x0800) && !console_word_wrap) { /* RI_MOUSE_HWHEEL */
+			if (console_pointer_over_ui(h, x, y))
+				console_hscroll_cells(((SHORT)raw.data.mouse.usButtonData > 0 ? 1 : -1) * 6);
 		}
 	}
 	return 1;
@@ -5213,6 +6428,10 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 					}
 					if (count > 0 && context_menu_item_enabled(mode, next))
 						InterlockedExchange(&context_menu_selected, next);
+					InterlockedExchange(&dirty, 1);
+				} else if ((w == VK_LEFT || w == VK_RIGHT) && mode == CONSOLE_CONTEXT_OUTPUT && selected == CONSOLE_MENU_OPACITY_ROW) {
+					console_set_opacity(console_opacity_pct + (w == VK_LEFT ? 5 : -5));
+					console_save_view();
 					InterlockedExchange(&dirty, 1);
 				} else if (w == VK_RETURN && selected >= 0) {
 					console_context_menu_execute(mode, selected);
@@ -5411,7 +6630,24 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 			LeaveCriticalSection(&lock);
 			return 0;
 		case WM_MBUTTONDOWN:
-		case WM_MBUTTONUP:
+		case WM_MBUTTONUP: {
+			int x, y;
+			if (InterlockedCompareExchange(&virtual_mouse_raw_seen, 0, 0))
+				return 0; /* WM_INPUT already delivered this click. */
+			if (InterlockedCompareExchange(&virtual_mouse_relative_mode, 0, 0))
+				console_virtual_mouse_position(h, &x, &y);
+			else {
+				x = (short)LOWORD(l); y = (short)HIWORD(l);
+			}
+			console_mouse_to_backbuffer(h, &x, &y);
+			if (msg == WM_MBUTTONDOWN) {
+				if (console_pointer_over_ui(h, x, y))
+					console_mid_down_at(x, y);
+			} else {
+				console_mid_up_at(x, y);
+			}
+			return 0;
+		}
 		case WM_XBUTTONDOWN:
 		case WM_XBUTTONUP:
 			return 0;
@@ -5442,6 +6678,9 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 				return DefWindowProcA(h, msg, w, l);
 			return CallWindowProcA(game_proc, h, msg, w, l);
 		case WM_MOUSEHWHEEL:
+			if (!console_word_wrap && !InterlockedCompareExchange(&virtual_mouse_raw_seen, 0, 0))
+				console_hscroll_cells(((short)HIWORD(w) > 0 ? 1 : -1) * 6);
+			return 0;
 		case WM_NCMOUSEMOVE:
 		case WM_NCLBUTTONDOWN:
 		case WM_NCLBUTTONUP:
@@ -5629,6 +6868,40 @@ static void console_fill_button(HDC dc, const RECT *rect, int button_id, HBRUSH 
 		FillRect(dc, rect, brush);
 }
 
+/* A filled disc, or a ring when ring is set, blended with analytic edge coverage. */
+static void console_draw_aa_disc(float cx, float cy, float radius, int ring, COLORREF color)
+{
+	int left = (int)(cx - radius) - 2, right = (int)(cx + radius) + 2, top = (int)(cy - radius) - 2, bottom = (int)(cy + radius) + 2;
+	unsigned cr = GetRValue(color), cg = GetGValue(color), cb = GetBValue(color);
+	if (!dib_bits || dib_w <= 0 || dib_h <= 0) return;
+	GdiFlush();
+	if (left < 0) left = 0;
+	if (top < 0) top = 0;
+	if (right >= dib_w) right = dib_w - 1;
+	if (bottom >= dib_h) bottom = dib_h - 1;
+	for (int y = top; y <= bottom; y++) {
+		for (int x = left; x <= right; x++) {
+			float dx = (float)x + 0.5f - cx, dy = (float)y + 0.5f - cy, d = sqrtf(dx * dx + dy * dy), cover;
+			if (ring) {
+				cover = 1.0f - fabsf(d - (radius - 0.5f)) + 0.0f;
+				if (cover > 1.0f) cover = 1.0f;
+			} else {
+				cover = radius + 0.5f - d;
+				if (cover > 1.0f) cover = 1.0f;
+			}
+			if (cover > 0.0f) {
+				uint32_t *pixel = &dib_bits[(size_t)y * (size_t)dib_w + (size_t)x];
+				unsigned a = (unsigned)(cover * 255.0f), old = *pixel;
+				unsigned r = (old >> 16) & 255u, g = (old >> 8) & 255u, b = old & 255u;
+				r = (r * (255u - a) + cr * a + 127u) / 255u;
+				g = (g * (255u - a) + cg * a + 127u) / 255u;
+				b = (b * (255u - a) + cb * a + 127u) / 255u;
+				*pixel = (old & 0xff000000u) | (r << 16) | (g << 8) | b;
+			}
+		}
+	}
+}
+
 static void console_draw_aa_line(int x0, int y0, int x1, int y1, float thickness, COLORREF color)
 {
 	const int samples = 16;
@@ -5731,7 +7004,7 @@ static int paint(int w, int panel_h)
 	const int popup_gap = 14;
 	const int output_gap = 8;
 	int window_left, window_right, window_bottom, window_top, input_y, input_top_y, input_lines, input_columns, output_top;
-	int rows, show_single_default = 0, cellw = 1, cols = 1, total_rows = 0;
+	int rows, cellw = 1, cols = 1, total_rows = 0;
 	int visible = 0, popup_h = 0, popup_top = panel_h + popup_gap, popup_width = 0;
 	int available_width;
 	int popup_side = 0; /* 1 = left of console, 2 = right of console */
@@ -5785,6 +7058,7 @@ static int paint(int w, int panel_h)
 			LeaveCriticalSection(&lock);
 			return 0;
 		}
+		if (font) DeleteObject(font);
 		font = created;
 		SetBkMode(mem_dc, TRANSPARENT);
 	}
@@ -5818,7 +7092,6 @@ static int paint(int w, int panel_h)
 		int below_rows, above_rows, inside_rows;
 		int max_visible;
 		int input_line = input_top_y;
-		show_single_default = completion_count == 1 && completion_items[0].is_dvar;
 		// Every name and value of the list was measured on every repaint (up to 4,096 of them, three measures each); the widest pair is kept for
 		// the list it was measured for and the font's line height (audit 2026-11-18, console C4).
 		static LONG measured_serial = -1;
@@ -5836,11 +7109,6 @@ static int paint(int w, int panel_h)
 					console_text_width(mem_dc, completion_items[i].value, (int)strlen(completion_items[i].value), &value_size);
 					pair_width += 24 + value_size.cx;
 				}
-				if (show_single_default && completion_items[i].default_value[0]) {
-					SIZE default_size = {0, 0};
-					console_text_width(mem_dc, completion_items[i].default_value, (int)strlen(completion_items[i].default_value), &default_size);
-					if (default_size.cx + 24 > pair_width) pair_width = default_size.cx + 24;
-				}
 				if (pair_width > max_pair_width) max_pair_width = pair_width;
 			}
 		}
@@ -5850,7 +7118,7 @@ static int paint(int w, int panel_h)
 			measured_lh = lh;
 			measured_width = max_pair_width;
 		}
-		total_rows = show_single_default ? 2 : completion_count;
+		total_rows = completion_count;
 
 		/* The panel texture always stays at the fixed compact/fullscreen height.
 		   Pick the roomiest valid dropdown location: below, above, or inside the
@@ -5906,7 +7174,7 @@ static int paint(int w, int panel_h)
 		/* Use columns only when all rows cannot fit. If the list still exceeds
 		   four columns, retain a scrollable subset rather than growing off-screen. */
 		cols = 1;
-		if (!show_single_default && max_visible > 0 && total_rows > max_visible) {
+		if (max_visible > 0 && total_rows > max_visible) {
 			int desired_cols = (total_rows + max_visible - 1) / max_visible;
 			int min_cell_width = max_pair_width + 48;
 			int max_cols;
@@ -6000,11 +7268,12 @@ static int paint(int w, int panel_h)
 		WCHAR sample = L'M';
 		int columns = 110;
 		if (GetTextExtentPoint32W(mem_dc, &sample, 1, &cell) && cell.cx > 0) {
-			columns = (window_right - window_left - 32) / cell.cx;
+			columns = (window_right - window_left - 32 - console_gutter_width()) / cell.cx;
 			InterlockedExchange(&console_font_cell_width, cell.cx);
 		}
 		if (columns < 20) columns = 20;
 		if (columns > 1500) columns = 1500;
+		if (!console_word_wrap) columns = 1500;
 		if (columns != (int)InterlockedCompareExchange(&console_wrap_columns, 0, 0)) {
 			console_reflow_output_locked(columns);
 			InterlockedExchange(&dirty, 1);
@@ -6028,6 +7297,7 @@ static int paint(int w, int panel_h)
 	input_rect.right = window_right - 10;
 	input_rect.top = input_top_y - 5;
 	input_rect.bottom = input_y + lh + 5;
+	SetRectEmpty(&console_send_rect);
 	console_pause_button_rect(&window_rect, &pause_rect);
 
 	back = panel_brush(PANEL_BRUSH_BACKGROUND, RGB(37, 40, 42));
@@ -6060,7 +7330,7 @@ static int paint(int w, int panel_h)
 	if (!console_window_collapsed &&
 		InterlockedCompareExchange(&is_open, 0, 0) &&
 		InterlockedCompareExchange(&console_pause_mode, 0, 0) &&
-		InterlockedCompareExchange(&console_pause_command_active, 0, 0)) {
+		InterlockedCompareExchange(&console_pause_command_active, 0, 0) && console_pause_server_running()) {
 		int paused = 0;
 		if (console_pause_read_state(&paused) && paused) {
 			static HFONT watermark_fonts[4];
@@ -6152,6 +7422,25 @@ static int paint(int w, int panel_h)
 			InterlockedCompareExchange(&console_pause_mode, 0, 0) ? PANEL_BRUSH_PAUSE_ACTIVE_ICON : PANEL_BRUSH_PAUSE_INACTIVE_ICON,
 			InterlockedCompareExchange(&console_pause_mode, 0, 0) ? RGB(229, 169, 91) : RGB(136, 139, 139));
 		if (input_brush) FillRect(mem_dc, &input_rect, input_brush);
+		{
+			const char *label = ctexts_get("CON_SEND", console_ui_is_russian());
+			SIZE label_size = {0, 0};
+			HBRUSH send_brush = CreateSolidBrush(RGB(52, 56, 58));
+			int send_w;
+			console_text_width(mem_dc, label, (int)strlen(label), &label_size);
+			send_w = label_size.cx + 24;
+			InterlockedExchange(&console_send_width, send_w);
+			console_send_rect.right = input_rect.right - 4;
+			console_send_rect.left = console_send_rect.right - send_w;
+			console_send_rect.top = input_top_y - 1;
+			console_send_rect.bottom = input_top_y + lh + 1;
+			if (send_brush) {
+				FillRect(mem_dc, &console_send_rect, send_brush);
+				DeleteObject(send_brush);
+			}
+			SetTextColor(mem_dc, RGB(190, 190, 186));
+			console_ui_text_out_centered(mem_dc, console_send_rect.left + 12, console_send_rect.top, lh + 2, label);
+		}
 		if (accent_brush) {
 			RECT input_accent = {input_rect.left, input_rect.top, input_rect.left + 2, input_rect.bottom};
 			FillRect(mem_dc, &input_accent, accent_brush);
@@ -6273,13 +7562,13 @@ static int paint(int w, int panel_h)
 		const char *language_label = console_ui_is_russian() ? "RU" : "EN";
 		char time_text[64] = "";
 		SYSTEMTIME local_time;
-		RECT layout_rect = {window_right - 182, window_top + 6, window_right - 88, window_top + 30};
-		RECT language_rect = {window_right - 236, window_top + 6, window_right - 186, window_top + 30};
-		RECT time_rect = {window_left + 164, window_top + 6, window_right - 244, window_top + 30};
+		RECT layout_rect = {window_right - 241, window_top + 6, window_right - 147, window_top + 30};
+		RECT language_rect = {window_right - 295, window_top + 6, window_right - 245, window_top + 30};
+		RECT time_rect = {window_left + 164, window_top + 6, window_right - 303, window_top + 30};
 		RECT buttons[3] = {
-			{window_right - 84, window_top + 5, window_right - 60, window_top + 31},
-			{window_right - 58, window_top + 5, window_right - 34, window_top + 31},
-			{window_right - 32, window_top + 5, window_right - 8, window_top + 31}
+			{window_right - 139, window_top + 1, window_right - 93, window_top + 33},
+			{window_right - 93, window_top + 1, window_right - 47, window_top + 33},
+			{window_right - 47, window_top + 1, window_right - 1, window_top + 33}
 		};
 		SIZE layout_size = {0, 0}, language_size = {0, 0}, time_size = {0, 0};
 		HBRUSH button_brush = panel_brush(PANEL_BRUSH_INPUT, RGB(27, 30, 32));
@@ -6296,7 +7585,21 @@ static int paint(int w, int panel_h)
 		}
 		console_fill_button(mem_dc, &language_rect, 6, button_brush);
 		console_fill_button(mem_dc, &layout_rect, 5, button_brush);
-		for (int i = 0; i < 3; i++) console_fill_button(mem_dc, &buttons[i], i + 1, button_brush);
+		for (int i = 0; i < 3; i++) {
+			/* Flat caption buttons: a fill only while hovered or pressed, red for close. */
+			LONG pressed = InterlockedCompareExchange(&console_button_pressed, 0, 0);
+			LONG hovered = InterlockedCompareExchange(&console_header_hover_button, 0, 0);
+			int close_button = i == 2;
+			if (pressed == i + 1 || hovered == i + 1) {
+				COLORREF color = pressed == i + 1 ? (close_button ? RGB(160, 38, 26) : RGB(46, 50, 52)) :
+					(close_button ? RGB(196, 43, 28) : RGB(56, 60, 62));
+				HBRUSH hot = CreateSolidBrush(color);
+				if (hot) {
+					FillRect(mem_dc, &buttons[i], hot);
+					DeleteObject(hot);
+				}
+			}
+		}
 		if (edge) {
 			RECT r = language_rect;
 			r.bottom = r.top + 1; FillRect(mem_dc, &r, edge);
@@ -6307,12 +7610,6 @@ static int paint(int w, int panel_h)
 			r = layout_rect; r.top = r.bottom - 1; FillRect(mem_dc, &r, edge);
 			r = layout_rect; r.right = r.left + 1; FillRect(mem_dc, &r, edge);
 			r = layout_rect; r.left = r.right - 1; FillRect(mem_dc, &r, edge);
-			for (int i = 0; i < 3; i++) {
-				r = buttons[i]; r.bottom = r.top + 1; FillRect(mem_dc, &r, edge);
-				r = buttons[i]; r.top = r.bottom - 1; FillRect(mem_dc, &r, edge);
-				r = buttons[i]; r.right = r.left + 1; FillRect(mem_dc, &r, edge);
-				r = buttons[i]; r.left = r.right - 1; FillRect(mem_dc, &r, edge);
-			}
 		}
 		SetTextColor(mem_dc, RGB(229, 169, 91));
 		console_text_out_centered(mem_dc, language_rect.left + (language_rect.right - language_rect.left - language_size.cx) / 2,
@@ -6322,38 +7619,41 @@ static int paint(int w, int panel_h)
 		SetTextColor(mem_dc, RGB(166, 160, 149));
 		console_text_out_centered(mem_dc, time_rect.left + (time_rect.right - time_rect.left - time_size.cx) / 2,
 			time_rect.top, time_rect.bottom - time_rect.top, time_text, (int)strlen(time_text));
-		/* Minimize and maximize/restore glyphs share the 16×16 coverage rasterizer
-		   used by the close and collapsed chevron icons. */
-		console_draw_aa_line(buttons[0].left + 6, buttons[0].top + 18,
-			buttons[0].right - 6, buttons[0].top + 18, 1.7f, RGB(202, 164, 105));
-		if (full_console) {
-			/* Restore glyph: two offset, unfilled window outlines. */
-			console_draw_aa_line(buttons[1].left + 10, buttons[1].top + 7,
-				buttons[1].right - 5, buttons[1].top + 7, 1.5f, RGB(202, 164, 105));
-			console_draw_aa_line(buttons[1].right - 5, buttons[1].top + 7,
-				buttons[1].right - 5, buttons[1].bottom - 9, 1.5f, RGB(202, 164, 105));
-			console_draw_aa_line(buttons[1].left + 7, buttons[1].top + 10,
-				buttons[1].left + 7, buttons[1].bottom - 7, 1.5f, RGB(202, 164, 105));
-			console_draw_aa_line(buttons[1].left + 7, buttons[1].bottom - 7,
-				buttons[1].right - 8, buttons[1].bottom - 7, 1.5f, RGB(202, 164, 105));
-			console_draw_aa_line(buttons[1].right - 8, buttons[1].bottom - 7,
-				buttons[1].right - 8, buttons[1].top + 10, 1.5f, RGB(202, 164, 105));
-			console_draw_aa_line(buttons[1].right - 8, buttons[1].top + 10,
-				buttons[1].left + 7, buttons[1].top + 10, 1.5f, RGB(202, 164, 105));
-		} else {
-			console_draw_aa_line(buttons[1].left + 7, buttons[1].top + 7,
-				buttons[1].right - 7, buttons[1].top + 7, 1.5f, RGB(202, 164, 105));
-			console_draw_aa_line(buttons[1].right - 7, buttons[1].top + 7,
-				buttons[1].right - 7, buttons[1].bottom - 7, 1.5f, RGB(202, 164, 105));
-			console_draw_aa_line(buttons[1].right - 7, buttons[1].bottom - 7,
-				buttons[1].left + 7, buttons[1].bottom - 7, 1.5f, RGB(202, 164, 105));
-			console_draw_aa_line(buttons[1].left + 7, buttons[1].bottom - 7,
-				buttons[1].left + 7, buttons[1].top + 7, 1.5f, RGB(202, 164, 105));
+		{
+			const COLORREF glyph = RGB(232, 230, 224);
+			int mx = (buttons[0].left + buttons[0].right) / 2, my = (buttons[0].top + buttons[0].bottom) / 2;
+			RECT g = {mx - 5, my, mx + 5, my + 1};
+			HBRUSH gb = CreateSolidBrush(glyph);
+			if (gb) {
+				#define GLYPH_FRAME(l, t, r, b) do { RECT q; \
+					q = (RECT){l, t, (r) + 1, (t) + 1}; FillRect(mem_dc, &q, gb); \
+					q = (RECT){l, b, (r) + 1, (b) + 1}; FillRect(mem_dc, &q, gb); \
+					q = (RECT){l, t, (l) + 1, (b) + 1}; FillRect(mem_dc, &q, gb); \
+					q = (RECT){r, t, (r) + 1, (b) + 1}; FillRect(mem_dc, &q, gb); } while (0)
+				FillRect(mem_dc, &g, gb);
+				mx = (buttons[1].left + buttons[1].right) / 2;
+				my = (buttons[1].top + buttons[1].bottom) / 2;
+				if (full_console) {
+					RECT q;
+					GLYPH_FRAME(mx - 5, my - 2, mx + 2, my + 5);
+					q = (RECT){mx - 2, my - 5, mx + 6, my - 4}; FillRect(mem_dc, &q, gb);
+					q = (RECT){mx + 5, my - 5, mx + 6, my + 3}; FillRect(mem_dc, &q, gb);
+					q = (RECT){mx - 2, my - 4, mx - 1, my - 2}; FillRect(mem_dc, &q, gb);
+					q = (RECT){mx + 2, my + 2, mx + 6, my + 3}; FillRect(mem_dc, &q, gb);
+				} else {
+					GLYPH_FRAME(mx - 5, my - 5, mx + 4, my + 4);
+				}
+				#undef GLYPH_FRAME
+				DeleteObject(gb);
+			}
+			mx = (buttons[2].left + buttons[2].right) / 2;
+			my = (buttons[2].top + buttons[2].bottom) / 2;
+			{
+				COLORREF close_glyph = InterlockedCompareExchange(&console_header_hover_button, 0, 0) == 3 ? RGB(255, 255, 255) : glyph;
+				console_draw_aa_line(mx - 5, my - 5, mx + 5, my + 5, 1.1f, close_glyph);
+				console_draw_aa_line(mx + 5, my - 5, mx - 5, my + 5, 1.1f, close_glyph);
+			}
 		}
-		console_draw_aa_line(buttons[2].left + 5, buttons[2].top + 6,
-			buttons[2].right - 5, buttons[2].bottom - 6, 1.8f, RGB(202, 164, 105));
-		console_draw_aa_line(buttons[2].right - 5, buttons[2].top + 6,
-			buttons[2].left + 5, buttons[2].bottom - 6, 1.8f, RGB(202, 164, 105));
 		{
 			int hover = (int)InterlockedCompareExchange(&console_header_hover_button, 0, 0);
 			if (hover && !console_window_collapsed && (DWORD)(GetTickCount() - console_header_hover_tick) >= 550) {
@@ -6425,6 +7725,51 @@ static int paint(int w, int panel_h)
 		return 1;
 	}
 
+	console_gutter_px = console_gutter_width();
+	if (output_search_mode && strcmp(input, output_search_query)) {
+		/* The query follows the input line while it is typed. */
+		lstrcpynA(output_search_query, input, sizeof(output_search_query));
+		output_search_match_seq = -1;
+		console_output_search_step_ex(1, 1);
+	}
+	if (console_mid_active && rows > 0) {
+		int mx = 0, my = 0;
+		DWORD now = GetTickCount();
+		float dt = (float)(now - console_mid_last);
+		int dy;
+		console_virtual_mouse_position(game_window, &mx, &my);
+		console_mouse_to_backbuffer(game_window, &mx, &my);
+		dy = my - console_mid_y;
+		if (dt > 100.0f) dt = 100.0f;
+		console_mid_last = now;
+		if (abs(dy) > 8) {
+			int whole, max_scroll = line_count > rows ? line_count - rows : 0;
+			console_mid_moved = 1;
+			console_mid_accum += (dy > 0 ? -1.0f : 1.0f) * (float)(abs(dy) - 8) * 0.4f * dt / 1000.0f;
+			whole = (int)console_mid_accum;
+			if (whole) {
+				console_mid_accum -= (float)whole;
+				scroll += whole;
+				if (scroll > max_scroll) scroll = max_scroll;
+				if (scroll < 0) scroll = 0;
+			}
+		}
+		InterlockedExchange(&dirty, 1);
+	}
+	console_hscroll_max = 0;
+	if (!console_word_wrap && rows > 0) {
+		int widest = 0, cell = (int)InterlockedCompareExchange(&console_font_cell_width, 0, 0);
+		if (cell < 1) cell = 9;
+		for (int k = 0; k < line_count; k++) {
+			int idx = (line_next - 1 - k + MAX_LINES * 2) % MAX_LINES;
+			int len = line_visible_length_cp(lines[idx], line_codepage[idx] ? line_codepage[idx] : console_codepage());
+			if (len > widest) widest = len;
+		}
+		console_hscroll_max = widest * cell + 24 + console_gutter_px - (window_right - window_left - 28);
+		if (console_hscroll_max < 0) console_hscroll_max = 0;
+	}
+	if (console_hscroll > console_hscroll_max) console_hscroll = console_hscroll_max;
+	if (console_hscroll < 0) console_hscroll = 0;
 	{
 		int output_dc_state = SaveDC(mem_dc);
 		IntersectClipRect(mem_dc, window_left + 8, output_top, window_right - 14, input_top_y - output_gap);
@@ -6464,8 +7809,8 @@ static int paint(int w, int panel_h)
 					SIZE aa = {0, 0}, bb = {0, 0};
 					console_text_width_cp(mem_dc, text, visible_byte_offset_cp(text, from, text_codepage), &aa, text_codepage);
 					console_text_width_cp(mem_dc, text, visible_byte_offset_cp(text, to, text_codepage), &bb, text_codepage);
-					RECT selected = {window_left + 16 + aa.cx, y, window_right - 12, y + lh};
-					selected.right = window_left + 16 + bb.cx;
+					RECT selected = {window_left + 16 + console_gutter_px - console_hscroll + aa.cx, y, window_right - 12, y + lh};
+					selected.right = window_left + 16 + console_gutter_px - console_hscroll + bb.cx;
 					HBRUSH selection = panel_brush(PANEL_BRUSH_SELECTION, RGB(75, 64, 48));
 					if (selection) FillRect(mem_dc, &selected, selection);
 				}
@@ -6479,8 +7824,8 @@ static int paint(int w, int panel_h)
 				console_text_width_cp(mem_dc, text, match_at, &prefix_size, text_codepage);
 				console_text_width_cp(mem_dc, text + match_at, match_len, &match_size, text_codepage);
 				{
-					RECT mark = {window_left + 15 + prefix_size.cx, y + 1,
-						window_left + 16 + prefix_size.cx + match_size.cx, y + lh - 1};
+					RECT mark = {window_left + 15 - console_hscroll + prefix_size.cx, y + 1,
+						window_left + 16 + console_gutter_px - console_hscroll + prefix_size.cx + match_size.cx, y + lh - 1};
 					HBRUSH search_brush = panel_brush(PANEL_BRUSH_SELECTED, RGB(111, 82, 43));
 					if (search_brush) FillRect(mem_dc, &mark, search_brush);
 				}
@@ -6488,7 +7833,7 @@ static int paint(int w, int panel_h)
 		}
 		{
 			int source_pos = 0, run_start = 0;
-			int draw_x = window_left + 16;
+			int draw_x = window_left + 16 + console_gutter_px - console_hscroll;
 			COLORREF run_color = palette[7];
 			for (const char *c = source; *c && source_pos < n; c++) {
 				if (*c == '^' && c[1] >= '0' && c[1] <= '9') {
@@ -6499,7 +7844,7 @@ static int paint(int w, int panel_h)
 						console_text_width_cp(mem_dc, text + run_start, source_pos - run_start, &run_size, text_codepage);
 						draw_x += run_size.cx;
 					}
-					run_color = palette[c[1] - '0'];
+					run_color = console_colorize ? palette[c[1] - '0'] : palette[7];
 					run_start = source_pos;
 					c++;
 				} else {
@@ -6513,6 +7858,45 @@ static int paint(int w, int panel_h)
 		}
 		}
 		if (output_dc_state) RestoreDC(mem_dc, output_dc_state);
+	}
+	if (console_gutter_px > 0 && rows > 0) {
+		RECT gutter = {window_left + 8, output_top, window_left + 12 + console_gutter_px, input_top_y - output_gap};
+		RECT edge_line = {gutter.right - 1, gutter.top, gutter.right, gutter.bottom};
+		HBRUSH gutter_brush = back;
+		if (gutter_brush) FillRect(mem_dc, &gutter, gutter_brush);
+		{
+			HBRUSH line_brush = CreateSolidBrush(RGB(52, 56, 58));
+			if (line_brush) { FillRect(mem_dc, &edge_line, line_brush); DeleteObject(line_brush); }
+		}
+		SetTextColor(mem_dc, RGB(110, 114, 114));
+		for (int k = 0; k < rows; k++) {
+			int offset = scroll + k, seq = line_count - 1 - offset, idx;
+			char number[16];
+			SIZE size = {0, 0};
+			if (seq < 0 || seq >= line_count) continue;
+			idx = (line_next - 1 - offset + MAX_LINES * 2) % MAX_LINES;
+			if (!line_number[idx]) continue;
+			snprintf(number, sizeof(number), "%u", line_number[idx]);
+			console_text_width(mem_dc, number, (int)strlen(number), &size);
+			console_text_out(mem_dc, gutter.right - 6 - size.cx, input_top_y - lh - output_gap - lh * k, number, (int)strlen(number));
+		}
+	}
+	SetRectEmpty(&console_hscroll_rect);
+	if (console_hscroll_max > 0 && rows > 0) {
+		int track_w = window_right - window_left - 28, thumb_w, thumb_x;
+		RECT bar = {window_left + 10, input_top_y - output_gap - 7, window_left + 10 + track_w, input_top_y - output_gap - 1};
+		HBRUSH track = panel_brush(PANEL_BRUSH_POPUP, RGB(24, 27, 29));
+		HBRUSH thumb = panel_brush(PANEL_BRUSH_ACCENT, RGB(155, 119, 72));
+		thumb_w = (int)((long long)track_w * track_w / (track_w + console_hscroll_max));
+		if (thumb_w < 18) thumb_w = 18;
+		console_hscroll_rect = bar;
+		console_hscroll_thumb_w = thumb_w;
+		thumb_x = bar.left + (int)((long long)(track_w - thumb_w) * console_hscroll / console_hscroll_max);
+		if (track) FillRect(mem_dc, &bar, track);
+		if (thumb) {
+			RECT t = {thumb_x, bar.top, thumb_x + thumb_w, bar.bottom};
+			FillRect(mem_dc, &t, thumb);
+		}
 	}
 	/* Output scrollbar: its thumb tracks the visible portion of the scrollback. */
 	if (line_count > rows && rows > 0) {
@@ -6568,8 +7952,106 @@ static int paint(int w, int panel_h)
 			if (count > 0)
 				console_text_out(mem_dc, text_left, line_y, input + first, count);
 		}
+		if (!input_len && !output_search_mode) {
+			SetTextColor(mem_dc, RGB(120, 118, 112));
+			console_ui_text_out_centered(mem_dc, text_left, input_top_y, lh,
+				ctexts_get("CON_INPUT_HINT", console_ui_is_russian()));
+		}
 	}
+	/* Find panel: option toggles, the match count and previous/next/close. */
+	SetRectEmpty(&console_sp_rect);
+	if (console_search_panel_open && !console_window_collapsed && rows >= 2) {
+		int avail = window_right - window_left - 40, pw = avail < 300 ? avail : 300;
+		if (pw >= 240) {
+			int px = window_right - 22 - pw, py = output_top + 4, by = py + 4, x, bh = 22;
+			char count[48];
+			HBRUSH on_brush = panel_brush(PANEL_BRUSH_SELECTED, RGB(81, 67, 47));
+			const COLORREF dim = RGB(170, 166, 156), lit = RGB(240, 200, 140);
+			POINT mouse = {(int)InterlockedCompareExchange(&virtual_mouse_x, 0, 0), (int)InterlockedCompareExchange(&virtual_mouse_y, 0, 0)};
+			int on[3] = {console_search_case, console_search_word, console_search_regex};
+			RECT *toggles[3] = {&console_sp_case, &console_sp_word, &console_sp_regex};
+			static const char *const toggle_text[3] = {"Aa", "ab", ".*"};
+			(void)mouse;
+			console_sp_rect.left = px; console_sp_rect.right = px + pw; console_sp_rect.top = py; console_sp_rect.bottom = py + 30;
+			if (popup_brush) FillRect(mem_dc, &console_sp_rect, popup_brush);
+			if (edge) {
+				RECT l = console_sp_rect;
+				l.bottom = l.top + 1; FillRect(mem_dc, &l, edge);
+				l = console_sp_rect; l.top = l.bottom - 1; FillRect(mem_dc, &l, edge);
+			}
+			x = px + 6;
+			for (int i = 0; i < 3; i++, x += 24) {
+				toggles[i]->left = x; toggles[i]->right = x + 22; toggles[i]->top = by; toggles[i]->bottom = by + bh;
+				if (on[i] && on_brush) FillRect(mem_dc, toggles[i], on_brush);
+				SetTextColor(mem_dc, on[i] ? lit : dim);
+				console_text_out_centered(mem_dc, x + 4, by, bh, toggle_text[i], 2);
+			}
+			console_sp_close.right = px + pw - 6; console_sp_close.left = console_sp_close.right - 22;
+			console_sp_next.right = console_sp_close.left - 2; console_sp_next.left = console_sp_next.right - 22;
+			console_sp_prev.right = console_sp_next.left; console_sp_prev.left = console_sp_prev.right - 22;
+			console_sp_close.top = console_sp_next.top = console_sp_prev.top = by;
+			console_sp_close.bottom = console_sp_next.bottom = console_sp_prev.bottom = by + bh;
+			console_search_recount();
+			if (console_search_bad) snprintf(count, sizeof(count), "%s", ctexts_get("CON_SEARCH_INVALID", console_ui_is_russian()));
+			else if (!output_search_query[0]) count[0] = 0;
+			else if (!console_search_total) snprintf(count, sizeof(count), "%s", ctexts_get("CON_SEARCH_NO_RESULTS", console_ui_is_russian()));
+			else snprintf(count, sizeof(count), ctexts_get("CON_SEARCH_COUNT", console_ui_is_russian()), console_search_index, console_search_total);
+			SetTextColor(mem_dc, console_search_bad || (output_search_query[0] && !console_search_total) ? RGB(235, 120, 110) : RGB(190, 186, 176));
+			console_ui_text_out_centered(mem_dc, console_sp_regex.right + 10, by, bh, count);
+			{
+				COLORREF arrow = console_search_total ? RGB(205, 200, 188) : RGB(90, 94, 94);
+				int cx = (console_sp_prev.left + console_sp_prev.right) / 2, cy = (console_sp_prev.top + console_sp_prev.bottom) / 2;
+				console_draw_aa_line(cx - 5, cy + 2, cx, cy - 3, 1.6f, arrow);
+				console_draw_aa_line(cx, cy - 3, cx + 5, cy + 2, 1.6f, arrow);
+				cx = (console_sp_next.left + console_sp_next.right) / 2; cy = (console_sp_next.top + console_sp_next.bottom) / 2;
+				console_draw_aa_line(cx - 5, cy - 2, cx, cy + 3, 1.6f, arrow);
+				console_draw_aa_line(cx, cy + 3, cx + 5, cy - 2, 1.6f, arrow);
+				cx = (console_sp_close.left + console_sp_close.right) / 2; cy = (console_sp_close.top + console_sp_close.bottom) / 2;
+				console_draw_aa_line(cx - 4, cy - 4, cx + 4, cy + 4, 1.6f, dim);
+				console_draw_aa_line(cx + 4, cy - 4, cx - 4, cy + 4, 1.6f, dim);
+			}
+		}
+	}
+
+	/* Round buttons that jump to the newest or the oldest output, shown once the view has left the end. */
+	console_jump_valid[0] = console_jump_valid[1] = 0;
+	if (!console_window_collapsed && rows > 0) {
+		int cx = window_right - 34, cy = input_top_y - output_gap - 20 - (console_hscroll_rect.right > console_hscroll_rect.left ? 8 : 0);
+		int from_top = line_count - rows - scroll, slot = 0;
+		for (int which = 0; which < 2; which++) {
+			int show = which == 0 ? scroll >= rows : (scroll > 0 && from_top >= rows);
+			int d = which == 0 ? 1 : -1;
+			COLORREF fill_color, rim = RGB(112, 105, 92), glyph = RGB(232, 230, 224);
+			if (!show) continue;
+			fill_color = console_jump_hover == which ? RGB(64, 68, 70) : RGB(38, 41, 43);
+			console_draw_aa_disc((float)cx, (float)cy, 14.0f, 0, fill_color);
+			console_draw_aa_disc((float)cx, (float)cy, 14.0f, 1, rim);
+			console_draw_aa_line(cx - 5, cy - 3 * d - 2, cx, cy + d - 2, 1.6f, glyph);
+			console_draw_aa_line(cx, cy + d - 2, cx + 5, cy - 3 * d - 2, 1.6f, glyph);
+			console_draw_aa_line(cx - 5, cy - 3 * d + 4, cx, cy + d + 4, 1.6f, glyph);
+			console_draw_aa_line(cx, cy + d + 4, cx + 5, cy - 3 * d + 4, 1.6f, glyph);
+			console_jump_rect[which].left = cx - 14; console_jump_rect[which].right = cx + 14;
+			console_jump_rect[which].top = cy - 14; console_jump_rect[which].bottom = cy + 14;
+			console_jump_valid[which] = 1;
+			cy -= 34;
+			slot++;
+		}
+		(void)slot;
+	}
+	if (console_mid_active) {
+		console_draw_aa_disc((float)console_mid_x, (float)console_mid_y, 11.0f, 0, RGB(38, 41, 43));
+		console_draw_aa_disc((float)console_mid_x, (float)console_mid_y, 11.0f, 1, RGB(199, 146, 72));
+		console_draw_aa_line(console_mid_x, console_mid_y - 6, console_mid_x - 3, console_mid_y - 3, 1.3f, RGB(232, 230, 224));
+		console_draw_aa_line(console_mid_x, console_mid_y - 6, console_mid_x + 3, console_mid_y - 3, 1.3f, RGB(232, 230, 224));
+		console_draw_aa_line(console_mid_x, console_mid_y + 6, console_mid_x - 3, console_mid_y + 3, 1.3f, RGB(232, 230, 224));
+		console_draw_aa_line(console_mid_x, console_mid_y + 6, console_mid_x + 3, console_mid_y + 3, 1.3f, RGB(232, 230, 224));
+	}
+
 	SetRectEmpty(&completion_rect);
+	SetRectEmpty(&completion_slider_rect);
+	SetRectEmpty(&console_detail_rect);
+	SetRectEmpty(&console_detail_reset_rect);
+	SetRectEmpty(&console_detail_toggle_rect);
 	completion_rows = completion_columns = completion_cell_width = 0;
 	SetTextColor(mem_dc, RGB(229, 169, 91));
 	if (output_search_mode)
@@ -6668,20 +8150,6 @@ static int paint(int w, int panel_h)
 		}
 		for (int r = 0; r < visible; r++) {
 			int y = popup_top + header_h + r * lh;
-			if (show_single_default && r == 1) {
-				completion_item_t *item = &completion_items[0];
-				char shown[COMPLETION_VALUE_LEN];
-				SIZE value_size = {0, 0};
-				int room = cellw - 68;
-				SetTextColor(mem_dc, RGB(153, 140, 140));
-				console_ui_text_out_centered(mem_dc, popup_rect.left + 12, y, lh, ctexts_get("CON_DEFAULT_LABEL", console_ui_is_russian()));
-				if (room > 20 && completion_fit_value(mem_dc, item->default_value, room, shown, sizeof(shown), &value_size) > 0) {
-					int value_x = popup_rect.left + cellw - 8 - value_size.cx;
-					SetTextColor(mem_dc, RGB(188, 173, 147));
-					console_text_out_centered(mem_dc, value_x, y, lh, shown, (int)strlen(shown));
-				}
-				continue;
-			}
 			for (int col = 0; col < cols; col++) {
 				int idx = (completion_scroll + r) * cols + col;
 				int x = popup_rect.left + 8 + col * cellw;
@@ -6703,8 +8171,29 @@ static int paint(int w, int panel_h)
 						int text_dc_state = SaveDC(mem_dc);
 						if (text_dc_state) IntersectClipRect(mem_dc, x, y, text_right, y + lh);
 						console_text_width(mem_dc, item->name, (int)strlen(item->name), &name_size);
-						SetTextColor(mem_dc, idx == completion_selected ? RGB(255, 246, 229) : RGB(218, 214, 204));
-						console_text_out_centered(mem_dc, x + 8, y, lh, item->name, (int)strlen(item->name));
+						{
+							const char *hit = completion_match_text[0] ? console_find_ci(item->name, completion_match_text) : NULL;
+							COLORREF typed = idx == completion_selected ? RGB(255, 246, 229) : RGB(218, 214, 204);
+							COLORREF rest = idx == completion_selected ? RGB(176, 168, 152) : RGB(126, 124, 118);
+							int name_len = (int)strlen(item->name);
+							if (hit) {
+								int pre = (int)(hit - item->name), mid = (int)strlen(completion_match_text);
+								SIZE a = {0, 0}, b = {0, 0};
+								if (mid > name_len - pre) mid = name_len - pre;
+								console_text_width(mem_dc, item->name, pre, &a);
+								console_text_width(mem_dc, item->name, pre + mid, &b);
+								SetTextColor(mem_dc, rest);
+								if (pre > 0) console_text_out_centered(mem_dc, x + 8, y, lh, item->name, pre);
+								SetTextColor(mem_dc, typed);
+								console_text_out_centered(mem_dc, x + 8 + a.cx, y, lh, item->name + pre, mid);
+								SetTextColor(mem_dc, rest);
+								if (pre + mid < name_len)
+									console_text_out_centered(mem_dc, x + 8 + b.cx, y, lh, item->name + pre + mid, name_len - pre - mid);
+							} else {
+								SetTextColor(mem_dc, typed);
+								console_text_out_centered(mem_dc, x + 8, y, lh, item->name, name_len);
+							}
+						}
 						if (item->is_dvar && item->value[0]) {
 							char shown[COMPLETION_VALUE_LEN];
 							SIZE value_size = {0, 0};
@@ -6759,6 +8248,185 @@ static int paint(int w, int panel_h)
 				HBRUSH thumb = panel_brush(PANEL_BRUSH_ACCENT, RGB(155, 119, 72));
 				if (track) FillRect(mem_dc, &completion_scroll_track, track);
 				if (thumb) FillRect(mem_dc, &completion_scroll_thumb, thumb);
+			}
+		}
+	}
+
+	/* The detail popup: description, value and default, with a slider (numeric dvars) or a switch (booleans). */
+	if (!output_search_mode && !console_window_collapsed) {
+		char detail_name[COMPLETION_NAME_LEN];
+		dvar_t *detail = console_detail_focus(detail_name, sizeof(detail_name)) ? game_find_dvar(detail_name) : NULL;
+		if (detail) {
+			const char *description = console_dvar_description(detail);
+			char desc_lines[4][192], value_text[COMPLETION_VALUE_LEN], default_text[COMPLETION_VALUE_LEN];
+			int desc_count = 0, have_slider, slider_integer = 0, is_bool = detail->type == DVAR_TYPE_BOOL, can_reset;
+			float lo = 0, hi = 1;
+			int detail_width = window_right - window_left - 20, detail_left = window_left + 10;
+			int bottom = (completion_count > 0 && visible > 0 && placement == 3) ? popup_top - 6 : input_top_y - 8;
+			int limit = bottom - (window_top + header_h + 4), control_h, height, top, rows_fit;
+			if (detail_width > 480) detail_width = 480;
+			have_slider = console_dvar_slider_range(detail, &lo, &hi, &slider_integer);
+			game_dvar_value_text(detail, &detail->current, value_text, sizeof(value_text));
+			game_dvar_value_text(detail, &detail->reset, default_text, sizeof(default_text));
+			can_reset = (have_slider || is_bool) && !(detail->flags & (DVAR_ROM_FLAG | DVAR_INIT_FLAG)) && strcmp(value_text, default_text) != 0;
+			control_h = (have_slider || (is_bool && !(detail->flags & (DVAR_ROM_FLAG | DVAR_INIT_FLAG)))) ? lh + 10 : 0;
+			rows_fit = (limit - 16 - 2 * lh - control_h) / lh;
+			if (description && description[0] && rows_fit > 0)
+				desc_count = console_wrap_pixels(mem_dc, description, detail_width - 28, desc_lines, rows_fit < 4 ? rows_fit : 4);
+			height = 16 + 2 * lh + desc_count * lh + control_h;
+			if (detail_width >= 200 && height <= limit) {
+				RECT box, line;
+				int y;
+				top = bottom - height;
+				box.left = detail_left; box.right = detail_left + detail_width; box.top = top; box.bottom = bottom;
+				console_detail_rect = box;
+				if (shadow_brush) {
+					RECT shadow = {box.left + 3, box.top + 3, box.right + 3, box.bottom + 3};
+					FillRect(mem_dc, &shadow, shadow_brush);
+				}
+				if (popup_brush) FillRect(mem_dc, &box, popup_brush);
+				if (edge) { line = box; line.bottom = line.top + 1; FillRect(mem_dc, &line, edge); }
+				if (accent_brush) { line = box; line.right = line.left + 3; FillRect(mem_dc, &line, accent_brush); }
+				y = top + 6;
+				SetTextColor(mem_dc, RGB(229, 169, 91));
+				console_text_out_centered(mem_dc, box.left + 12, y, lh, detail->name, (int)strlen(detail->name));
+				if (can_reset) {
+					const char *label = ctexts_get("CON_RESET_BUTTON", console_ui_is_russian());
+					SIZE label_size = {0, 0};
+					console_ui_text_width(mem_dc, label, &label_size);
+					console_detail_reset_rect.right = box.right - 10;
+					console_detail_reset_rect.left = console_detail_reset_rect.right - label_size.cx - 18;
+					console_detail_reset_rect.top = y;
+					console_detail_reset_rect.bottom = y + lh;
+					console_fill_button(mem_dc, &console_detail_reset_rect, 0, panel_brush(PANEL_BRUSH_INPUT, RGB(27, 30, 32)));
+					SetTextColor(mem_dc, RGB(229, 169, 91));
+					console_ui_text_out_centered(mem_dc, console_detail_reset_rect.left + 9, y, lh, label);
+				}
+				y += lh;
+				{
+					char shown[COMPLETION_VALUE_LEN], line_text[COMPLETION_VALUE_LEN * 2 + 64];
+					SIZE value_size = {0, 0};
+					const char *value_label = ctexts_get("CON_VALUE_LABEL", console_ui_is_russian());
+					const char *default_label = ctexts_get("CON_DEFAULT_LABEL", console_ui_is_russian());
+					SetTextColor(mem_dc, RGB(153, 140, 140));
+					console_ui_text_out_centered(mem_dc, box.left + 12, y, lh, value_label);
+					console_ui_text_width(mem_dc, value_label, &value_size);
+					snprintf(line_text, sizeof(line_text), "%s", value_text);
+					if (completion_fit_value(mem_dc, line_text, detail_width - 36 - value_size.cx, shown, sizeof(shown), &value_size) > 0) {
+						SIZE lab = {0, 0};
+						int vx;
+						console_ui_text_width(mem_dc, value_label, &lab);
+						vx = box.left + 12 + lab.cx + 10;
+						SetTextColor(mem_dc, RGB(247, 220, 178));
+						console_text_out_centered(mem_dc, vx, y, lh, shown, (int)strlen(shown));
+						if (strcmp(value_text, default_text) != 0) {
+							char fitted[COMPLETION_VALUE_LEN];
+							char label_text[96];
+							SIZE vs = {0, 0}, ls = {0, 0}, fs = {0, 0};
+							int lx;
+							/* The label is UTF-8 from the string table; the value is in the game's code page. */
+							snprintf(label_text, sizeof(label_text), "   %s ", default_label);
+							console_text_width(mem_dc, shown, (int)strlen(shown), &vs);
+							console_ui_text_width(mem_dc, label_text, &ls);
+							lx = vx + vs.cx;
+							if (lx + ls.cx + 20 < box.right - 12) {
+								SetTextColor(mem_dc, RGB(126, 124, 118));
+								console_ui_text_out_centered(mem_dc, lx, y, lh, label_text);
+								if (completion_fit_value(mem_dc, default_text, box.right - 12 - (lx + ls.cx), fitted, sizeof(fitted), &fs) > 0)
+									console_text_out_centered(mem_dc, lx + ls.cx, y, lh, fitted, (int)strlen(fitted));
+							}
+						}
+					}
+				}
+				y += lh;
+				SetTextColor(mem_dc, RGB(150, 148, 141));
+				for (int i = 0; i < desc_count; i++, y += lh)
+					console_text_out_centered(mem_dc, box.left + 12, y, lh, desc_lines[i], (int)strlen(desc_lines[i]));
+				y += 4;
+				if (have_slider) {
+					char min_label[32], max_label[32];
+					SIZE min_size = {0, 0}, max_size = {0, 0};
+					float span = hi - lo, current, reset;
+					int cy = y + lh / 2, left, right, thumb_x, default_x;
+					HBRUSH rail_brush = CreateSolidBrush(RGB(78, 82, 84));
+					HBRUSH tick_brush = CreateSolidBrush(RGB(153, 140, 140));
+					HBRUSH thumb_brush = panel_brush(PANEL_BRUSH_ACCENT, RGB(199, 146, 72));
+					{
+						/* A latched dvar keeps its old value until restart; the thumb follows the pending one. */
+						const dvar_value_t *shown = (detail->flags & DVAR_LATCH_FLAG) ? &detail->latched : &detail->current;
+						if (slider_integer)
+							current = (float)shown->integer;
+						else
+							current = shown->value;
+					}
+					if (slider_integer) {
+						reset = (float)detail->reset.integer;
+						snprintf(min_label, sizeof(min_label), "%d", (int)lo);
+						snprintf(max_label, sizeof(max_label), "%d", (int)hi);
+					} else {
+						reset = detail->reset.value;
+						snprintf(min_label, sizeof(min_label), "%g", (double)lo);
+						snprintf(max_label, sizeof(max_label), "%g", (double)hi);
+					}
+					console_text_width(mem_dc, min_label, (int)strlen(min_label), &min_size);
+					console_text_width(mem_dc, max_label, (int)strlen(max_label), &max_size);
+					left = box.left + 12 + min_size.cx + 10;
+					right = box.right - 12 - max_size.cx - 10;
+					SetTextColor(mem_dc, RGB(153, 140, 140));
+					console_text_out_centered(mem_dc, box.left + 12, y, lh, min_label, (int)strlen(min_label));
+					console_text_out_centered(mem_dc, right + 10, y, lh, max_label, (int)strlen(max_label));
+					if (right - left > 20 && span > 0) {
+						float fc = (current - lo) / span, fd = (reset - lo) / span;
+						if (fc < 0) fc = 0;
+						if (fc > 1) fc = 1;
+						if (fd < 0) fd = 0;
+						if (fd > 1) fd = 1;
+						thumb_x = left + (int)((right - left) * fc);
+						default_x = left + (int)((right - left) * fd);
+						completion_slider_left = left;
+						completion_slider_right = right;
+						completion_slider_min = lo;
+						completion_slider_max = hi;
+						completion_slider_integer = slider_integer;
+						completion_slider_default = reset;
+						lstrcpynA(completion_slider_name, detail->name, sizeof(completion_slider_name));
+						completion_slider_rect.left = left - 8;
+						completion_slider_rect.right = right + 8;
+						completion_slider_rect.top = y;
+						completion_slider_rect.bottom = y + lh;
+						if (rail_brush) {
+							RECT rail = {left, cy - 1, right, cy + 1}, filled = {left, cy - 1, thumb_x, cy + 1};
+							FillRect(mem_dc, &rail, rail_brush);
+							if (accent_brush) FillRect(mem_dc, &filled, accent_brush);
+						}
+						if (tick_brush) {
+							RECT t0 = {left, cy - 4, left + 1, cy + 4}, t1 = {right - 1, cy - 4, right, cy + 4}, td = {default_x - 1, cy - 5, default_x + 1, cy + 5};
+							FillRect(mem_dc, &t0, tick_brush);
+							FillRect(mem_dc, &t1, tick_brush);
+							FillRect(mem_dc, &td, tick_brush);
+						}
+						if (thumb_brush) {
+							RECT thumb = {thumb_x - 3, y + 3, thumb_x + 4, y + lh - 3};
+							FillRect(mem_dc, &thumb, thumb_brush);
+						}
+					}
+					if (rail_brush) DeleteObject(rail_brush);
+					if (tick_brush) DeleteObject(tick_brush);
+				} else if (is_bool && !(detail->flags & (DVAR_ROM_FLAG | DVAR_INIT_FLAG))) {
+					int on = detail->current.enabled != 0;
+					const char *state = ctexts_get(on ? "CON_STATE_ON" : "CON_STATE_OFF", console_ui_is_russian());
+					HBRUSH pill = CreateSolidBrush(on ? RGB(199, 146, 72) : RGB(78, 82, 84));
+					HBRUSH knob = CreateSolidBrush(RGB(232, 230, 224));
+					RECT sw = {box.left + 12, y + 3, box.left + 48, y + lh - 3};
+					int ky = sw.left + (on ? sw.right - sw.left - 14 : 2);
+					RECT kn = {ky, sw.top + 2, ky + 12, sw.bottom - 2};
+					console_detail_toggle_rect = sw;
+					InflateRect(&console_detail_toggle_rect, 4, 3);
+					if (pill) { FillRect(mem_dc, &sw, pill); DeleteObject(pill); }
+					if (knob) { FillRect(mem_dc, &kn, knob); DeleteObject(knob); }
+					SetTextColor(mem_dc, on ? RGB(247, 220, 178) : RGB(153, 140, 140));
+					console_ui_text_out_centered(mem_dc, sw.right + 10, y, lh, state);
+				}
 			}
 		}
 	}
@@ -6887,7 +8555,30 @@ static int paint(int w, int panel_h)
 				const char *shortcut = context_menu_shortcut(mode, i);
 				SIZE shortcut_size = {0, 0};
 				console_ui_text_out(mem_dc, context_menu_rect.left + 12, y + 3, label);
-				if (shortcut[0]) {
+				if (mode == CONSOLE_CONTEXT_OUTPUT && i == CONSOLE_MENU_OPACITY_ROW) {
+					int tl, tr, span = 100 - CONSOLE_OPACITY_MIN, transparency = 100 - console_opacity_pct;
+					int mid = y + CONSOLE_CONTEXT_ITEM_H / 2, thumb;
+					char value_text[16];
+					SIZE value_size = {0, 0};
+					HBRUSH rail = panel_brush(PANEL_BRUSH_EDGE, RGB(112, 105, 92));
+					HBRUSH fill_brush = panel_brush(PANEL_BRUSH_ACCENT, RGB(199, 146, 72));
+					console_menu_slider_track(&tl, &tr);
+					thumb = tl + (tr - tl) * transparency / span;
+					{
+						RECT rail_rect = {tl, mid - 1, tr, mid + 1};
+						RECT fill_rect = {tl, mid - 1, thumb, mid + 1};
+						RECT thumb_rect = {thumb - 3, mid - 7, thumb + 4, mid + 8};
+						if (rail) FillRect(mem_dc, &rail_rect, rail);
+						if (fill_brush) {
+							FillRect(mem_dc, &fill_rect, fill_brush);
+							FillRect(mem_dc, &thumb_rect, fill_brush);
+						}
+					}
+					snprintf(value_text, sizeof(value_text), "%d%%", transparency);
+					console_text_width(mem_dc, value_text, (int)strlen(value_text), &value_size);
+					SetTextColor(mem_dc, RGB(220, 215, 203));
+					console_text_out(mem_dc, context_menu_rect.right - 12 - value_size.cx, y + 3, value_text, (int)strlen(value_text));
+				} else if (shortcut[0]) {
 					console_text_width(mem_dc, shortcut, (int)strlen(shortcut), &shortcut_size);
 					SetTextColor(mem_dc, enabled ? RGB(145, 137, 122) : RGB(91, 87, 80));
 					console_text_out(mem_dc, context_menu_rect.right - 12 - shortcut_size.cx, y + 3,
@@ -6928,10 +8619,11 @@ static int paint(int w, int panel_h)
 	GdiFlush();
 	/* Alpha is applied only to the actual window and detached dropdown. Pixels in
 	   the gap and around the floating window remain transparent over the game. */
+	const uint32_t window_alpha = (uint32_t)(0xE8 * console_opacity_pct / 100) << 24;
 	for (int y = window_rect.top; y < window_rect.bottom; y++) {
 		uint32_t *row = dib_bits + (size_t)y * (size_t)w;
 		for (int x = window_rect.left; x < window_rect.right; x++)
-			row[x] = (row[x] & 0x00ffffffu) | 0xE8000000u;
+			row[x] = (row[x] & 0x00ffffffu) | window_alpha;
 	}
 	/* The short shadow below the floating window is intentionally translucent too. */
 	for (int y = window_rect.bottom; y < window_rect.bottom + 4 && y < bitmap_h; y++) {
@@ -6950,7 +8642,7 @@ static int paint(int w, int panel_h)
 		for (int y = completion_rect.top; y < completion_rect.bottom && y < bitmap_h; y++) {
 			uint32_t *row = dib_bits + (size_t)y * (size_t)w;
 			for (int x = completion_rect.left; x < completion_rect.right && x < w; x++)
-				row[x] = (row[x] & 0x00ffffffu) | 0xE8000000u;
+				row[x] = (row[x] & 0x00ffffffu) | window_alpha;
 		}
 	}
 	if (context_menu_open && context_menu_rect.right > context_menu_rect.left && context_menu_rect.bottom > context_menu_rect.top) {
@@ -7068,7 +8760,7 @@ static void draw_panel(IDirect3DDevice9 *dev, int trace)
 	IDirect3DSurface9_Release(bb);
 	if (trace)
 		log_printf("console: panel back buffer %ux%u", desc.Width, desc.Height);
-	dpi = console_window_dpi(game_window);
+	dpi = console_ui_dpi(game_window);
 	{
 		LONG previous_dpi = InterlockedExchange(&console_current_dpi, (LONG)dpi);
 		if (previous_dpi != (LONG)dpi) InterlockedExchange(&dirty, 1);
@@ -7314,7 +9006,7 @@ int console_native_frame(unsigned back_width, unsigned back_height, void (*show)
 	if (InterlockedCompareExchange(&panel_draw_busy, 1, 0) != 0)
 		return 0;
 	int drawn = 0;
-	UINT dpi = console_window_dpi(game_window);
+	UINT dpi = console_ui_dpi(game_window);
 	{
 		LONG previous_dpi = InterlockedExchange(&console_current_dpi, (LONG)dpi);
 		if (previous_dpi != (LONG)dpi)

@@ -1,6 +1,12 @@
 # Hand-written descriptions for tools/gen_settings_reference.py: "section.key text". They win over every other source.
 # Say only what the code shows; a key whose meaning is not clear stays without a line here (the generator then says so).
 console.favorites_defaults_initialized Written by the console (1) once it has added its default pinned commands (mapname, viewposNow), so they do not come back after you unpin them. Not for editing.
+console.zoom_pct Console scale, 50-300 (percent): the whole interface (text, controls, spacing); Ctrl++, Ctrl+-, Ctrl+mouse wheel, Ctrl+0 resets to 100, or the output context menu.
+console.opacity_pct Console window opacity, 30-100 (percent); the Transparency slider in the output context menu.
+console.word_wrap 1 (the default): output lines wrap at the window width; 0: they keep their full length and the output scrolls sideways (Shift+mouse wheel, horizontal wheel, the bar under the output). Output context menu.
+console.colorize 1 (the default): the ^ color codes in the output are drawn; 0: everything uses the default color. Output context menu.
+console.line_numbers 1: a line-number column left of the output (a wrapped line keeps one number); 0 (the default): none. Output context menu.
+console.show_mod_messages 1 (the default): the mod's own log lines (mw2coop.log) are also printed in the console, gray; 0: not. Output context menu.
 console.window_custom 1: the console window opens at the position and size saved in window_left_pct, window_top_pct, window_width_pct and window_height_pct (the console writes them when you move or resize it). Not for editing.
 console.window_left_pct Saved left edge of the console window, 0-10000 (hundredths of a percent of the screen); -1 = not set. Used only with window_custom=1; written by the console.
 console.window_top_pct Saved top edge of the console window, 0-10000 (hundredths of a percent of the screen); -1 = not set. Used only with window_custom=1; written by the console.
