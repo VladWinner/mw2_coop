@@ -274,16 +274,16 @@ static uint8_t *lobby_row(uint8_t *from, uint8_t *menu, const char *name, const 
 // and Spec Ops', for the host and the client alike, on the free line under Invite a friend; in the campaign lobby the host's rows follow it.
 #define LOBBY_ROWS 6 // nickname, access, friendly fire, password, and the split screen lobby's two difficulty rows (shown by menus.c)
 #define LOBBY_SHIFT_ROWS 4 // the lines the rows below move down (the first four rows; the difficulty rows only exist in the split screen lobby, which lays them out itself)
-static uint8_t *lobby_menu, **native_items, **campaign_items, **specops_items, *password_row;
+static uint8_t *lobby_menu, **native_items, **campaign_items, **specops_items, **spec_split_items, *password_row;
 static int native_count;
 
-static void patch_lobby_row(int campaign)
+static void patch_lobby_row(int campaign, int spec_split)
 {
 	uint8_t *menu = ui_find_menu("coop_lobby");
 	if (!menu)
 		return;
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
-	if (menu != lobby_menu || (items != native_items && items != campaign_items && items != specops_items)) {
+	if (menu != lobby_menu || (items != native_items && items != campaign_items && items != specops_items && items != spec_split_items)) {
 		// first look, or the UI zone was reloaded
 		int at = ui_item_index(menu, "invitefriend");
 		if (at < 0)
@@ -320,6 +320,23 @@ static void patch_lobby_row(int campaign)
 		memcpy(specops_items, native_items, (at + 1) * sizeof(*specops_items));
 		specops_items[at + 1] = nick;
 		memcpy(specops_items + at + 2, native_items + at + 1, (native_count - at - 1) * sizeof(*specops_items));
+		// a split screen Spec Ops lobby: also each player's difficulty row, after the game's difficulty rows in the list (menus.c puts them in that row's place and hides it)
+		int diff_at = -1;
+		for (int i = 0; i < native_count; i++) {
+			const char *name = *(const char **)native_items[i];
+			if (name && (!strcmp(name, "selectdiff") || !strcmp(name, "dont_selectdiff")))
+				diff_at = i;
+		}
+		spec_split_items = HeapAlloc(GetProcessHeap(), 0, (native_count + 3) * sizeof(*spec_split_items));
+		for (int i = 0, k = 0; i < native_count; i++) {
+			spec_split_items[k++] = native_items[i];
+			if (i == (diff_at >= 0 ? diff_at : at)) {
+				spec_split_items[k++] = skill1;
+				spec_split_items[k++] = skill2;
+			}
+			if (i == at)
+				spec_split_items[k++] = nick;
+		}
 		// the Access, Friendly fire and Password rows take the line of the lobby's NAT type text
 		// ("nattype", y 126) and the next two: the left column's items from that line down (aligned
 		// top-left like the buttons) move three lines lower, and so do the focused button's hint
@@ -338,8 +355,8 @@ static void patch_lobby_row(int campaign)
 			campaign_items[i] = moved;
 		}
 	}
-	uint8_t **want = campaign ? campaign_items : specops_items;
-	const int want_count = campaign ? native_count + LOBBY_ROWS : native_count + 1;
+	uint8_t **want = campaign ? campaign_items : spec_split ? spec_split_items : specops_items;
+	const int want_count = campaign ? native_count + LOBBY_ROWS : spec_split ? native_count + 3 : native_count + 1;
 	if (items != want) {
 		// shrink the count before the array goes back, grow it after the new one is in
 		if (want_count < *(int *)(menu + MENU_ITEM_COUNT))
@@ -349,12 +366,12 @@ static void patch_lobby_row(int campaign)
 	}
 }
 
-void access_tick(int campaign_lobby, int host)
+void access_tick(int campaign_lobby, int host, int spec_split)
 {
 	if (!base)
 		return;
 	add_edit_menu();
-	patch_lobby_row(campaign_lobby);
+	patch_lobby_row(campaign_lobby, spec_split);
 	nick_tick();
 	{ // the Nickname row: "Nickname: <the name this PC gives>"
 		const char *fmt = localize_text("MW2COOP_NICK_FMT");

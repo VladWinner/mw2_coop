@@ -119,8 +119,13 @@ static void load_level_zones(const char *map, int flag)
 	transplant_new_level();
 	char coop[8] = "";
 	game_dvar_string("coop", coop, sizeof(coop)); // a bool: "0" / "1"
-	log_printf("zones: loading level zones for '%s' (coop '%s', flag %d)", map ? map : "", coop, flag);
-	if (coop[0] == '1' && map) {
+	// A split screen session counts as co-op whatever the dvar says at this moment: the dvar is the engine's 0 there, held at 1 by a thread of native.c every 20 ms, and the map
+	// command puts it back to 0 just before the zones load, so it read 0 here (the Spec Ops zone did not load, the players' bodies were the engine's two-bone placeholder: on
+	// Cliffhanger's snowmobiles the rider, made from it, stretched into a red band across both halves; owner 2026-11-21, "we fixed this once")
+	char qa[4] = "";
+	const int split = native_split_active() && !(GetEnvironmentVariableA("MW2COOP_SPLITZONES", qa, sizeof(qa)) && qa[0] == '0'); // (QA: =0 the old way)
+	log_printf("zones: loading level zones for '%s' (coop '%s'%s, flag %d)", map ? map : "", coop, split ? ", split screen session" : "", flag);
+	if ((coop[0] == '1' || split) && map) {
 		// once, before the first co-op level's zones: the database thread is idle here
 		if (!pools_extended++)
 			pool_extend(ASSET_TYPE_LOADED_SOUND, 650, sizeof(void *) == 8 ? 64 : 0); // 64: the pool's span / 1350; 0: found

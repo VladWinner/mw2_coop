@@ -8,9 +8,9 @@ set -e
 cd "$(dirname "$0")/.."
 VERSION=${1:?version, e.g. v0.2.0-alpha}
 case "$2" in
-'')	sh build.sh release
+'')	MW2COOP_VERSION=$VERSION sh build.sh release
 	DLL=build/winmm.dll; NAME=$VERSION; INSTALL=content/release/INSTALL.txt ;;
-x86)	sh build.sh x86 release
+x86)	MW2COOP_VERSION=$VERSION sh build.sh x86 release
 	DLL=build/x86/winmm.dll; NAME=$VERSION-x86; INSTALL=content/release/INSTALL-x86.txt ;;
 *)	echo "unknown build $2 (x86)"; exit 1 ;;
 esac
@@ -40,6 +40,20 @@ cp "$SDL" "$OUT/mw2coop/SDL3.dll"
 cp "$(dirname "$SDL")/LICENSE.txt" "$OUT/mw2coop/SDL3-LICENSE.txt"
 sed "s/{VERSION}/$VERSION/" $INSTALL | sed 's/$/\r/' > "$OUT/INSTALL.txt"
 sed 's/$/\r/' LICENSE > "$OUT/LICENSE.txt"
+# the manifest the in-game updater reads (src/update.c): the release, then "<sha256> <path>" for every file of the archive; the next update moves out a file
+# this release had and the next one has not (when the player did not change it)
+python -I -c "
+import hashlib, os, sys
+root, version = sys.argv[1], sys.argv[2]
+lines = ['mw2coop release ' + version]
+for d, _, files in os.walk(root):
+    for f in sorted(files):
+        p = os.path.join(d, f)
+        rel = os.path.relpath(p, root).replace(os.sep, chr(92))
+        if rel != 'mw2coop' + chr(92) + 'release.txt':
+            lines.append(hashlib.sha256(open(p, 'rb').read()).hexdigest() + ' ' + rel)
+open(os.path.join(root, 'mw2coop', 'release.txt'), 'w', newline='').write(''.join(l + chr(13) + chr(10) for l in lines))
+" "$OUT" "$VERSION"
 ( cd dist && python -I -c "
 import os, sys, zipfile
 root = sys.argv[1]

@@ -605,10 +605,11 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 			// consumed either way: the game has nothing to do with it
 			if (from_partner(from)) {
 				if (r >= (int)sizeof(desync_prefix) - 1 && memcmp(buf, desync_prefix, sizeof(desync_prefix) - 1) == 0) {
-					char t[16] = "";
+					char t[40] = "", *e = NULL; // "<level time> <server id>" (an older build: the time only)
 					const int k = r - (int)(sizeof(desync_prefix) - 1);
-					memcpy(t, buf + sizeof(desync_prefix) - 1, k < 15 ? k : 15);
-					netwatch_on_desync_packet(atoi(t));
+					memcpy(t, buf + sizeof(desync_prefix) - 1, k < 39 ? k : 39);
+					const long time = strtol(t, &e, 10);
+					netwatch_on_desync_packet((int)time, e ? (int)strtol(e, NULL, 10) : 0);
 				} else if (r >= (int)sizeof(nw_prefix) - 1 && memcmp(buf, nw_prefix, sizeof(nw_prefix) - 1) == 0) {
 					char t[32] = "";
 					const int k = r - (int)(sizeof(nw_prefix) - 1);

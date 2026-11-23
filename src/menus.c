@@ -31,6 +31,7 @@
 #include "pads.h"
 #include "access.h"
 #include "firewall.h"
+#include "update.h"
 #include "hook.h"
 #include "ctexts.h"
 #include "localize.h"
@@ -123,6 +124,21 @@ int ui_menu_instances(const char *name, uint8_t **out, int max)
 			out[n++] = menus[i];
 	}
 	return n;
+}
+
+// The mod's own popups wait while it is open: the firewall question once opened on top of "the connection to the other player was lost" (2026-11-21, a client
+// whose host had crashed: the client became the host of its own lobby, and the question covered the error's text).
+int ui_error_popup_open(void)
+{
+	static const char *const names[] = {"error_popmenu", "error_popmenu_lobby", "error_popmenu_submenu"};
+	for (size_t k = 0; k < sizeof(names) / sizeof(names[0]); k++) {
+		uint8_t *inst[8];
+		const int n = ui_menu_instances(names[k], inst, 8);
+		for (int i = 0; i < n; i++)
+			if (*(const uint32_t *)(inst[i] + ITEM_DYNAMIC_FLAGS) & WINDOW_VISIBLE)
+				return 1;
+	}
+	return 0;
 }
 
 int ui_item_index(uint8_t *menu, const char *name)
@@ -355,6 +371,11 @@ void menus_log_items(const char *menu_name)
 			log_printf("menus:   floatExps %p disabledExp %p flags %x action %.200s", fexp,
 				   *(void **)(it + ITEM_DISABLED_EXP), *(uint32_t *)(it + ITEM_DYNAMIC_FLAGS), script ? script : "-");
 #ifdef _WIN64
+		{ // QA: the text made by an expression ("exp text"), e.g. a popup title taken from a string of the game
+			const uint8_t *te = *(uint8_t **)(it + ITEM_TEXT_EXP);
+			if (te && !IsBadReadPtr(te, 0x18))
+				log_statement("textExp", te);
+		}
 		{ // QA: the item's type and its background material
 			uint8_t *mat = *(uint8_t **)(it + ITEM_BACKGROUND_PTR);
 			const char *mn = mat && !IsBadReadPtr(mat, 8) ? *(const char **)mat : NULL;
@@ -2061,17 +2082,23 @@ static void patch_split_lobby(uint8_t *menu, int spec_split)
 			*(void **)(ff + ITEM_DISABLED_EXP) = split && !spec_split ? NULL : ff_disabled_exp;
 		}
 	}
-	// the two difficulty rows of the console's split screen lobby (its menu_splitscreen_setup has a difficulty button for each player, each opening its own popup): under the friendly fire
-	// row, shown only in a split screen lobby that holds a campaign mission (a Special Ops one keeps the game's own difficulty row)
+	// the two difficulty rows of the console's split screen lobby (its menu_splitscreen_setup has a difficulty button for each player, each opening its own popup): in a campaign
+	// mission's lobby under the friendly fire row; in a Special Ops op's lobby in the place of the game's one difficulty row and the (hidden) invite row under it, the game's
+	// row hidden (Vlad 2026-11-21: one row set player 1's difficulty only, and the lobby said the players had different ones; the console's lobby has one popup for each,
+	// popmenu_specialops_splitscreen_difficulty_p1 / _p2)
 	{
-		uint8_t *ff = NULL;
+		uint8_t *ff = NULL, *diff = NULL;
 		for (int i = 0; i < count; i++) {
 			const char *name = *(const char **)items[i];
-			if (name && !strcmp(name, "mw2coop_ff")) {
+			if (name && !strcmp(name, "mw2coop_ff") && !ff)
 				ff = items[i];
-				break;
-			}
+			if (name && !strcmp(name, "selectdiff") && !diff)
+				diff = items[i];
+			if (name && (!strcmp(name, "selectdiff") || !strcmp(name, "dont_selectdiff")) && split && spec_split)
+				*(uint32_t *)(items[i] + ITEM_DYNAMIC_FLAGS) &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
 		}
+		if (split && spec_split)
+			ff = NULL; // (placed from the difficulty row below)
 		for (int pl = 0; pl < 2; pl++) {
 			uint8_t *row = NULL;
 			char want[24];
@@ -2084,9 +2111,10 @@ static void patch_split_lobby(uint8_t *menu, int spec_split)
 			if (!row)
 				continue;
 			uint32_t *flags = (uint32_t *)(row + ITEM_DYNAMIC_FLAGS);
-			const int show = split && !spec_split;
-			if (show && ff) {
-				const float y = *(float *)(ff + ITEM_RECT_Y) + (float)(pl + 1) * BUTTON_HEIGHT, cy = *(float *)(ff + ITEM_RECT_CLIENT_Y) + (float)(pl + 1) * BUTTON_HEIGHT;
+			uint8_t *above = spec_split ? diff : ff; // the row this one is placed from
+			const float step = (float)(spec_split ? pl : pl + 1) * BUTTON_HEIGHT;
+			if (split && above) {
+				const float y = *(float *)(above + ITEM_RECT_Y) + step, cy = *(float *)(above + ITEM_RECT_CLIENT_Y) + step;
 				*(float *)(row + ITEM_RECT_Y) = y;
 				*(float *)(row + ITEM_RECT_CLIENT_Y) = cy;
 				*(void **)(row + ITEM_FLOAT_EXPS) = NULL; // (a copy of the invite row, which is greyed out offline: this one is always on)
@@ -2626,7 +2654,8 @@ static void update_texts(void)
 		localize_set_text("MW2COOP_READY", "");
 	else
 		localize_select("MW2COOP_READY", my_ready ? "MW2COOP_READY_UNSET" : "MW2COOP_READY_SET");
-	show_row(ui_find_menu("coop_lobby"), "dont_selectdiff", !split_mode || spec_split_lobby()); // (Special Ops keeps its difficulty row)
+	if (!split_mode)
+		show_row(ui_find_menu("coop_lobby"), "dont_selectdiff", 1); // (a split screen lobby: patch_split_lobby hides it; each player has a difficulty row there)
 	const char *start;
 	if (split_mode)
 		start = split_devices_chosen() ? "MW2COOP_START_GO" : "MW2COOP_START_NEED_DEVICES";
@@ -2669,6 +2698,46 @@ void menus_split_changed(void)
 
 // The split screen's Start (src/native.c): the second player is on this PC, in this process. The lobby's party is let go, the game becomes a two local players game and the
 // mission the lobby shows starts as a normal level.
+// The Special Ops ops with two roles, one player in the air and one on the ground (Overwatch: the AC-130; Big Brother: the helicopter's gun; specOpsTable.csv column 11 is 2).
+// The game's lobby Start opens its popup so_character_select_coop ("Select the AC130 gunship" / the helicopter, rows player1 and player2 with the players' names); a row runs
+// `setdvar coop_start so_char_host` (player 1 in the air) or `so_char_client` (player 2), then coopLaunch, and the level reads coop_start (with nothing there Overwatch put player
+// 1 and Big Brother player 2 in the air). The split screen lobby's Start is ours: it opens the same popup, whose rows run mw2coop_split_role instead there (patch_role_popup),
+// which sets coop_start and starts the split screen session (Vlad, 2026-11-21: "you cannot choose who flies the AC-130 and who runs"; owner: as the game does it).
+static int split_role = -1; // 0 Alpha (player 1) in the air, 1 Bravo; -1 not asked yet for this start
+static int two_role_op(const char *map)
+{
+	return !strcmp(map, "so_ac130_co_hunted") || !strcmp(map, "so_chopper_invasion");
+}
+
+// The rows of the game's role popup: in a split screen lobby they start our session (coopLaunch is the online launch); the game's own actions everywhere else
+static void patch_role_popup(int split)
+{
+	static const char *const rows[2] = {"player1", "player2"};
+	static const char *const scripts[2] = {"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_split_role 1\" ; ",
+					       "\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_split_role 2\" ; "};
+	static uint8_t *seen[2];
+	static void *native[2], *ours[2];
+	uint8_t *menu = ui_find_menu("so_character_select_coop");
+	if (!menu)
+		return;
+	for (int r = 0; r < 2; r++) {
+		int at = ui_item_index(menu, rows[r]);
+		if (at < 0)
+			continue;
+		uint8_t *item = (*(uint8_t ***)(menu + MENU_ITEMS))[at];
+		void **field = (void **)(item + ITEM_ACTION);
+		if (item != seen[r]) { // first look, or the UI zone was reloaded
+			seen[r] = item;
+			native[r] = *field;
+		}
+		if (!ours[r])
+			ours[r] = ui_script_set(scripts[r]);
+		void *want = split ? ours[r] : native[r];
+		if (want && *field != want)
+			*field = want;
+	}
+}
+
 static volatile LONG native_started; // tick count of the launch, for tick_f's check that the session ends
 static volatile LONG native_level_seen; // set by menus_poll while the server runs; tick_f is not queued during a level
 static void native_launch(void)
@@ -2684,6 +2753,12 @@ static void native_launch(void)
 	if (!map[0] || strpbrk(map, " \t;\"\n"))
 		lstrcpyA(map, "trainer");
 	int specops = so_name(map);
+	if (specops && two_role_op(map) && split_role < 0) { // who is in the air: the game's own popup asks first (its row runs mw2coop_split_role here, which starts again)
+		patch_role_popup(1);
+		game_cbuf_addtext("openmenu so_character_select_coop\n");
+		log_printf("menus: Start: '%s' has two roles, asking who is in the air", map);
+		return;
+	}
 	// the second player is a member of the save like a partner who joins it (a Special Ops op has no save)
 	if (!specops) {
 		progress_begin(continuing, "split-screen", 0x53504c4954ULL, "Player 2", 1);
@@ -2709,18 +2784,33 @@ static void native_launch(void)
 	devices_end();
 	InterlockedExchange(&split_mode, 0);
 	((void (*)(void))(base + RVA_PARTY_RESET))();
-	{ // each player's difficulty for the level (progress_split_skill): Special Ops' one difficulty row for both, a campaign mission each player's row
+	{ // each player's difficulty for the level (progress_split_skill): each player's row of the lobby (a campaign mission and a Special Ops op alike)
 		const int lobby = progress_skill_lobby();
-		const int p1 = specops ? lobby : (split_skill[0] >= 0 ? (int)split_skill[0] : lobby), p2 = specops ? lobby : (split_skill[1] >= 0 ? (int)split_skill[1] : lobby);
+		const int p1 = split_skill[0] >= 0 ? (int)split_skill[0] : lobby, p2 = split_skill[1] >= 0 ? (int)split_skill[1] : lobby;
 		if (p1 >= 0 && p2 >= 0)
 			progress_split_skill(p1, p2);
 	}
-	char cmd[160];
+	char cmd[224], role[48] = "";
 	if (!specops)
 		campaign_loading_begin(); // (a Special Ops op keeps its own loading screen: specialops stays 1)
-	snprintf(cmd, sizeof(cmd), "stopListening\nset mw2coop_split_view 0\n%smap %s\n", specops ? "set specialops 1\n" : "", map);
+	if (specops && two_role_op(map)) { // the scripts read the role from coop_start: so_char_host puts player 1 in the air, so_char_client player 2
+		snprintf(role, sizeof(role), "set coop_start %s\n", split_role == 1 ? "so_char_client" : "so_char_host");
+		log_printf("menus: Start: %s is in the air", split_role == 1 ? "player 2" : "player 1");
+	}
+	split_role = -1; // (asked again at the next start)
+	snprintf(cmd, sizeof(cmd), "stopListening\nset mw2coop_split_view 0\n%s%smap %s\n", role, specops ? "set specialops 1\n" : "", map);
 	game_cbuf_addtext(cmd);
 	InterlockedExchange(&native_started, (LONG)GetTickCount() | 1);
+}
+
+// mw2coop_split_role <1|2>: the role popup's row (the player in the air), then the Start goes on
+static void split_role_f(void)
+{
+	const int pl = game_cmd_argc() > 1 ? atoi(game_cmd_argv(1)) : 0;
+	if (pl < 1 || pl > 2 || !split_mode)
+		return;
+	split_role = pl - 1;
+	native_launch();
 }
 
 // tick_f: the session ends once the game is back in the menus (or when the level never started)
@@ -2935,6 +3025,16 @@ static void yes_no_popup(const char *name)
 	log_printf("menus: popup %s added", name);
 }
 
+void menus_yes_no_popup(const char *name)
+{
+	yes_no_popup(name);
+}
+
+void menus_show_row(uint8_t *menu, const char *row, int visible)
+{
+	show_row(menu, row, visible);
+}
+
 // Start with a partner who is not a member of the save: continue with him? Then: add him to this
 // playthrough's members? No to that: start a new game from the very beginning? No anywhere closes
 // the popup and nothing starts.
@@ -3093,6 +3193,17 @@ static void player_info_hook(int lc, int *args, int *out)
 	if (!strcmp(field, "exists")) {
 		out[0] = 0;
 		out[PI_VALUE] = 1;
+	} else if (!strcmp(field, "skill") && split_skill[n] >= 0) { // each player's own pick (the lobby's "different difficulties" note and stars compare these)
+		out[0] = 0;
+		out[PI_VALUE] = (int)split_skill[n];
+	} else if (n == 1 && (!strcmp(field, "percentcompleteso") || !strcmp(field, "missionsohighestdifficulty"))) {
+		// both players play from this PC's profile: player 2's Spec Ops progress and stars are player 1's (the party's second slot held nothing, and the lobby said "this op is
+		// locked for your partner, he will not earn stars" for every op past the first ones)
+		int copy[PI_COUNT + 1];
+		memcpy(copy, args, sizeof(copy));
+		copy[0] = 0;
+		copy[PI_VALUE] = 0;
+		player_info_original(lc, copy, out);
 	} else if (!strcmp(field, "name")) {
 		static char names[2][32];
 		const char *t = localize_text(n ? "MW2COOP_CALLSIGN_B" : "MW2COOP_CALLSIGN_A");
@@ -3195,6 +3306,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_menu", NULL, NULL, split_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_skill", NULL, NULL, split_skill_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_split_role", NULL, NULL, split_role_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_open_url", NULL, NULL, open_url_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_iw4x_mp", NULL, NULL, iw4x_mp_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_split_specops", NULL, NULL, split_specops_f CMD_NODE_FLAG},
@@ -3710,6 +3822,7 @@ static void tick_f(void)
 	int split_lobby = campaign || spec_split; // the lobby of a split screen game of ours: the return to it is looked after for a Special Ops op too
 	int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
 	patch_lobby(campaign, spec_split);
+	patch_role_popup(InterlockedCompareExchange(&split_mode, 0, 0) != 0); // (the game's role popup starts our session in a split screen lobby)
 	leave_warning_patch(campaign);
 	if (split_lobby && lobby_ui == 0x0b && InterlockedCompareExchange(&split_lobby_returning, 0, 0)) {
 		// The lobby is now live: restore both device cards once, against the final menu.
@@ -3761,8 +3874,9 @@ static void tick_f(void)
 		} else
 			InterlockedExchange(&campaign_lobby_return_queued, 0);
 	}
-	access_tick(campaign, base[RVA_PARTY_IS_HOST]);
+	access_tick(campaign, base[RVA_PARTY_IS_HOST], spec_split);
 	firewall_tick(campaign && base[RVA_PARTY_IS_HOST] && !split_mode); // the second player is on this PC: nothing to let in
+	update_tick(lobby_ui == 1 && !campaign && !spec_split && !split_mode && !base[RVA_PARTY_ACTIVE]); // the updater's popups: at the main menu only
 	if (!campaign) {
 		InterlockedExchange(&my_ready, 0);
 		InterlockedExchange(&partner_ready, 0);

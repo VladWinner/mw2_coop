@@ -180,3 +180,5 @@ EXPORTS
 	waveOutSetVolume
 	waveOutUnprepareHeader
 	waveOutWrite
+	; the updater's restart helper (src/update.c): rundll32 "<winmm.dll>",mw2coop_relaunch <file>
+	mw2coop_relaunch

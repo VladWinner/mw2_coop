@@ -400,6 +400,94 @@ REFERENCE           MW2COOP_FIREWALL_TEXT
 LANG_ENGLISH        "The other player cannot get in.\nAllow access?"
 LANG_RUSSIAN        "Второй игрок не сможет войти.\nРазрешить доступ?"
 
+REFERENCE           MW2COOP_UPDATE_TITLE
+LANG_ENGLISH        "Mod update"
+LANG_RUSSIAN        "Обновление мода"
+
+REFERENCE           MW2COOP_UPDATE_FMT
+LANG_ENGLISH        "Modern Warfare 2 Enhanced %s is out (you have %s).\nDownload and install it now?\nBoth players need the same version."
+LANG_RUSSIAN        "Вышла версия %s мода Modern Warfare 2 Enhanced\n(у вас %s). Скачать и установить её сейчас?\nУ обоих игроков должна быть одна версия."
+
+REFERENCE           MW2COOP_UPDATE_YES
+LANG_ENGLISH        "Update"
+LANG_RUSSIAN        "Обновить"
+
+REFERENCE           MW2COOP_UPDATE_LATER
+LANG_ENGLISH        "Later"
+LANG_RUSSIAN        "Позже"
+
+REFERENCE           MW2COOP_UPDATE_HIDE
+LANG_ENGLISH        "Hide"
+LANG_RUSSIAN        "Скрыть"
+
+REFERENCE           MW2COOP_UPDATE_DL_FMT
+LANG_ENGLISH        "Downloading %s: %d%%"
+LANG_RUSSIAN        "Загрузка %s: %d%%"
+
+REFERENCE           MW2COOP_UPDATE_INSTALLING
+LANG_ENGLISH        "Installing the files..."
+LANG_RUSSIAN        "Установка файлов..."
+
+REFERENCE           MW2COOP_UPDATE_DONE_FMT
+LANG_ENGLISH        "Version %s is installed.\nThe game starts again to use it."
+LANG_RUSSIAN        "Версия %s установлена.\nИгра запустится заново, чтобы работать с ней."
+
+REFERENCE           MW2COOP_UPDATE_RESTART
+LANG_ENGLISH        "Restart"
+LANG_RUSSIAN        "Перезапустить"
+
+REFERENCE           MW2COOP_UPDATE_QUIT
+LANG_ENGLISH        "Quit the game"
+LANG_RUSSIAN        "Выйти из игры"
+
+REFERENCE           MW2COOP_UPDATE_CLOSE
+LANG_ENGLISH        "Close"
+LANG_RUSSIAN        "Закрыть"
+
+REFERENCE           MW2COOP_UPDATE_NEWEST_FMT
+LANG_ENGLISH        "You have the newest version of the mod (%s)."
+LANG_RUSSIAN        "У вас последняя версия мода (%s)."
+
+REFERENCE           MW2COOP_UPDATE_DEV
+LANG_ENGLISH        "This is a development build:\nno updates are offered for it."
+LANG_RUSSIAN        "Это сборка для разработки:\nобновления для неё не предлагаются."
+
+REFERENCE           MW2COOP_UPDATE_NOCHECK
+LANG_ENGLISH        "Could not find out whether there is an update\n(no connection to GitHub)."
+LANG_RUSSIAN        "Не удалось узнать, есть ли обновление\n(нет связи с GitHub)."
+
+REFERENCE           MW2COOP_UPDATE_FAIL_FMT
+LANG_ENGLISH        "The update was not installed:\n%s.\nThe mod is as it was; mw2coop.log has the details."
+LANG_RUSSIAN        "Обновление не установлено:\n%s.\nМод остался прежним, подробности в mw2coop.log."
+
+REFERENCE           MW2COOP_UPDATE_E_NET
+LANG_ENGLISH        "No connection to GitHub"
+LANG_RUSSIAN        "Нет связи с GitHub"
+
+REFERENCE           MW2COOP_UPDATE_E_HASH
+LANG_ENGLISH        "The download does not match its checksum"
+LANG_RUSSIAN        "Загруженный файл не совпал с контрольной суммой"
+
+REFERENCE           MW2COOP_UPDATE_E_ARCHIVE
+LANG_ENGLISH        "The archive is damaged"
+LANG_RUSSIAN        "Архив повреждён"
+
+REFERENCE           MW2COOP_UPDATE_E_WRITE
+LANG_ENGLISH        "The files in the game folder could not be replaced"
+LANG_RUSSIAN        "Файлы в папке игры не удалось заменить"
+
+REFERENCE           MW2COOP_UPDATE_E_ASSET
+LANG_ENGLISH        "The release has no archive for this game build"
+LANG_RUSSIAN        "В выпуске нет архива для этой версии игры"
+
+REFERENCE           MW2COOP_ENH_UPDATE
+LANG_ENGLISH        "Check for updates"
+LANG_RUSSIAN        "Проверять обновления"
+
+REFERENCE           MW2COOP_ENH_G_MOD
+LANG_ENGLISH        "Mod"
+LANG_RUSSIAN        "Мод"
+
 REFERENCE           MW2COOP_PARTNER_TITLE
 LANG_ENGLISH        "Different partner"
 LANG_RUSSIAN        "Другой напарник"
@@ -484,3 +572,9 @@ LANG_RUSSIAN        "Бонусный уровень: свободное исс�
 
 REFERENCE           FAVELA_ESCAPE_OBJ_FOLLOW_SOAP
 LANG_RUSSIAN        "Доберитесь с капитаном Мактавишем и отрядом до зоны посадки."
+
+REFERENCE           SPECIAL_OPS_SO_SELECT_AC130_GUNNER
+LANG_RUSSIAN        "Выбрать стрелка AC-130"
+
+REFERENCE           SPECIAL_OPS_SO_SELECT_CHOPPER_GUNNER
+LANG_RUSSIAN        "Выбрать стрелка вертолёта"

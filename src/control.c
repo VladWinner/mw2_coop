@@ -454,6 +454,7 @@ static void watch_poll(void)
 static volatile uintptr_t watchw_addrs[4];
 static volatile int watchw_count;
 static volatile int watchw_exec; // "!watchx": the slots are execute breakpoints (the hit logs the caller and the first arguments)
+static volatile uintptr_t watchx_peek; // "!watchx ... @<rva>": the int at this rva goes into each hit's line too
 static int (*watchw_probe)(void); // set by native.c: a number the hit lines carry (the live client context)
 void control_set_probe(int (*fn)(void))
 {
@@ -472,10 +473,18 @@ static LONG CALLBACK watchw_veh(EXCEPTION_POINTERS *ep)
 	for (int w = 0; w < 4; w++) {
 		if (!(ep->ContextRecord->Dr6 & (1u << w)))
 			continue;
-		if (watchw_exec) { // an execute breakpoint at a function's entry: its return address and its first stack arguments (32 bits: cdecl / stdcall)
+		if (watchw_exec) { // an execute breakpoint at a function's entry: its return address and its first arguments (64 bits: rcx rdx r8; 32 bits: the stack, cdecl / stdcall)
 			const uintptr_t *st = (const uintptr_t *)sp;
-			log_printf("watchx: rva 0x%x executed (thread %lu), called from rva 0x%x, args %08lx %08lx %08lx", (unsigned)(ip - (uintptr_t)base), GetCurrentThreadId(),
-				   (unsigned)(st[0] - (uintptr_t)base), (unsigned long)st[1], (unsigned long)st[2], (unsigned long)st[3]);
+#ifdef _WIN64
+			const unsigned long long a1 = ep->ContextRecord->Rcx, a2 = ep->ContextRecord->Rdx, a3 = ep->ContextRecord->R8;
+#else
+			const unsigned long long a1 = st[1], a2 = st[2], a3 = st[3];
+#endif
+			char peek[48] = "";
+			if (watchx_peek)
+				snprintf(peek, sizeof(peek), ", [0x%x] = %d", (unsigned)watchx_peek, *(const volatile int *)(base + watchx_peek));
+			log_printf("watchx: rva 0x%x executed (thread %lu, ctx %d), called from rva 0x%x, args %llx %llx %llx%s", (unsigned)(ip - (uintptr_t)base), GetCurrentThreadId(),
+				   watchw_probe ? watchw_probe() : -1, (unsigned)(st[0] - (uintptr_t)base), a1, a2, a3, peek);
 			continue;
 		}
 		char line[1500];
@@ -627,11 +636,16 @@ static void run_line(char *line)
 		scrdebug_trace_method((uintptr_t)strtoull(line + 7, NULL, 16));
 		return;
 	}
-	if (strncmp(line, "!watchx ", 8) == 0) { // QA: "!watchx <rva> [<rva> ..]" (hex, up to 4): execute breakpoints in every thread; each hit logs the caller and the first arguments
+	if (strncmp(line, "!watchx ", 8) == 0) { // QA: "!watchx <rva> [<rva> ..] [@<rva>]" (hex, up to 4): execute breakpoints in every thread; each hit logs the caller, the first
+		// arguments, the client context and (with @) the int at that rva
 		uintptr_t r[4];
 		int n = 0;
-		for (char *t = strtok(line + 8, " "); t && n < 4; t = strtok(NULL, " "))
-			r[n++] = (uintptr_t)strtoul(t, NULL, 16);
+		for (char *t = strtok(line + 8, " "); t; t = strtok(NULL, " ")) {
+			if (t[0] == '@')
+				watchx_peek = (uintptr_t)strtoul(t + 1, NULL, 16);
+			else if (n < 4)
+				r[n++] = (uintptr_t)strtoul(t, NULL, 16);
+		}
 		if (n) {
 			watchw_exec = 1;
 			control_watch_multi(r, n);

@@ -47,6 +47,8 @@ static int cfg(const char *key, int def) // [native] in settings.ini, as native.
 #define NW_IS_HOST XR(0x1905302)      // uint8: this PC is the host of the lockstep session
 #define NW_GAME_MESSAGE XR(0xa6400)   // void CG_GameMessage(int localClientNum, const char *text, int flags): channel 2 (gamenotify), message window 0
 #define NW_CLS_STATE XR(0x533cb8)     // int: the client's connection state; 6 and up: a level runs
+#define NW_PUMP XR(0x2308a0)          // void (void): the UDP-only co-op packet dispatcher of the engine's waiting loops (0x22e7a0, 0x22e920): the host's frames go into the ring
+#define NW_PUMP_RESOLVED() addr_resolved(0x2308a0)
 static const uint8_t exec_bytes[] = {0x89, 0x54, 0x24, 0x10, 0x53, 0x41, 0x57, 0x48, 0x81, 0xec, 0x88, 0x08, 0x00, 0x00}; // mov [rsp+10],edx; push rbx; push r15; sub rsp,0x888
 #else
 #define NW_EXEC XR(0xc4f0)            // VA 0x40c4f0, cdecl
@@ -56,6 +58,8 @@ static const uint8_t exec_bytes[] = {0x89, 0x54, 0x24, 0x10, 0x53, 0x41, 0x57, 0
 #define NW_IS_HOST (XV(0x1a7f0d9) - 0x400000u)
 #define NW_GAME_MESSAGE XR(0x87010)   // VA 0x487010, cdecl (localClientNum, text, flags)
 #define NW_CLS_STATE XR(0x525bc0)
+#define NW_PUMP XR(0xacca0)           // VA 0x4acca0, cdecl (void): the same dispatcher (the partner's wait 0x49d360 calls it first)
+#define NW_PUMP_RESOLVED() addr_resolved(0xacca0)
 static const uint8_t exec_bytes[] = {0x51, 0x53, 0x8b, 0x5c, 0x24, 0x0c, 0x55, 0x8b, 0x6c, 0x24, 0x14}; // push ecx; push ebx; mov ebx,[esp+0xc]; push ebp; mov ebp,[esp+0x14]
 #endif
 #define NW_RING_ENTRIES 20
@@ -71,6 +75,11 @@ static volatile LONG desync_since;	  // the client: the level time of the first 
 static volatile LONG desync_state;	  // the client: 1 found (the host is told), 2 the host loads the common checkpoint, 3 it cannot
 static volatile LONG resync_wait;	  // the client: a checkpoint load for this is on its way: say so when the hashes agree after it
 static volatile LONG partner_insync;	  // the host: the client says the games agree again
+static volatile LONG desync_sid;	  // the client: the lockstep frames' serverId of the level where it found the difference (sent with the report)
+static volatile LONG exec_sid;		  // the serverId of the last lockstep frame executed here
+static volatile LONG switching;		  // a restart or a load runs here (netwatch_level_switch) and no frame of the level after it has been executed yet
+static volatile LONG switch_sid, switch_time; // the last frame's serverId and level time when it began
+static volatile LONG level_gen;		  // the number of level switches
 enum { NOTE_NONE, NOTE_SILENT, NOTE_BACK, NOTE_DESYNC, NOTE_INSYNC, NOTE_RESYNC, NOTE_RESYNCFAIL, NOTE_RESYNCED };
 
 // --- what went into the hash (2026-11-21, issue 27; 64 bits first, the 32-bit build and iw4x-sp the same day) ---
@@ -223,19 +232,70 @@ static void diverged(int time, int was, int now, int host_hash, int ours)
 	nw_dump(dv.last_frame - 50, dv.last_frame, "this PC (the client, it found the difference)"); // the step after the frame before: its additions made the difference
 	if (!dv.said) {
 		dv.said = 1;
+		InterlockedExchange(&desync_sid, dv.server_id);
 		InterlockedExchange(&desync_since, time ? time : 1); // netwatch_poll shows it and tells the host, who loads the common checkpoint (saves_resync)
 		InterlockedExchange(&desync_state, 1);
 	}
 }
 
+static int ring_has(int server_id, int time)
+{
+	const uint8_t *e = base + NW_RING;
+	for (int i = 0; i < NW_RING_ENTRIES; i++, e += NW_RING_STRIDE)
+		if (*(const int *)e == time && *(const int *)(e + 4) == server_id)
+			return 1;
+	return 0;
+}
+
+// The partner's first frame after a checkpoint load (Favela, network tour 2026-11-23): the partner runs the frame executor for its own level time each frame
+// (64: 0x15c9e0 -> 0x2302d0, 32: 0x5b3790 -> 0x40c4f0) and its step loop waits for the host's frame (0x22e120 / 0x22e7a0 look at the ring), but the
+// first frame after the load runs at once: a client that loaded faster than the host asked for a frame the host had not sent yet, and the engine ended the
+// session ("Unable to find player data for server time 350, serverId 19"; the 9 loads where the host was first were fine). NOT REPRODUCED that way: with the
+// host held 400 ms after its load (dvar mw2coop_qa_loaddelay), after a resync load and after a real failed mission, the client waited for the host's frame by
+// itself. So this is a guard, and the ring is logged when the frame is missing, for the next case: the frame is waited for here (the packets are taken in
+// until it is in the ring, at most 5 s; the engine's own error follows after that).
+static void wait_for_frame(int server_id, int time)
+{
+	if (base[NW_IS_HOST] || ring_has(server_id, time))
+		return;
+	char ring[NW_RING_ENTRIES * 24] = "";
+	size_t n = 0;
+	const uint8_t *e = base + NW_RING;
+	for (int i = 0; i < NW_RING_ENTRIES && n + 24 < sizeof(ring); i++, e += NW_RING_STRIDE)
+		if (*(const int *)e)
+			n += (size_t)snprintf(ring + n, sizeof(ring) - n, " %d/%d", *(const int *)e, *(const int *)(e + 4));
+	log_printf("netwatch: the frame %d (serverId %d) this partner runs is not in its ring (time/serverId:%s)", time, server_id, n ? ring : " empty");
+	static int pump_ok = -1;
+	if (pump_ok < 0) // (QA: MW2COOP_QA_NOFRAMEWAIT=1 leaves the wait out, to see the engine's error again)
+		pump_ok = NW_PUMP_RESOLVED() && !GetEnvironmentVariableA("MW2COOP_QA_NOFRAMEWAIT", NULL, 0);
+	if (!pump_ok)
+		return;
+	const DWORD t0 = GetTickCount();
+	int got = 0;
+	while (GetTickCount() - t0 < 5000) {
+		((void (*)(void))(base + NW_PUMP))();
+		if (ring_has(server_id, time)) {
+			got = 1;
+			break;
+		}
+		Sleep(1);
+	}
+	log_printf("netwatch: the host's frame %d (serverId %d) was not here yet: %s after %lu ms", time, server_id, got ? "it came" : "still missing, the engine stops the session",
+		   (unsigned long)(GetTickCount() - t0));
+}
+
 static void exec_hook(int server_id, int time)
 {
+	wait_for_frame(server_id, time);
 	InterlockedExchange(&last_exec, (LONG)GetTickCount());
 	static int rec_last;
 	if (time < rec_last)
 		nw_dumps = 0; // (a new level or a load)
 	rec_last = time;
 	nw_cur_time = time; // the additions that follow belong to the step of this frame
+	InterlockedExchange(&exec_sid, server_id);
+	if (switching && (server_id != switch_sid || time < switch_time))
+		InterlockedExchange(&switching, 0); // the first frame of the level after the restart or the load
 	if (enabled && !base[NW_IS_HOST]) {
 		if (server_id != dv.server_id || time < dv.last_time) { // a new session or a new level: begin again
 			if (dv.frames)
@@ -243,6 +303,7 @@ static void exec_hook(int server_id, int time)
 			memset(&dv, 0, sizeof(dv));
 			dv.server_id = server_id;
 			InterlockedExchange(&desync_since, 0);
+			InterlockedExchange(&desync_sid, 0);
 			InterlockedExchange(&desync_state, 0); // (a checkpoint load for it keeps resync_wait: the comparison after it says whether it worked)
 		}
 		dv.last_frame = dv.last_time;
@@ -295,8 +356,19 @@ void netwatch_partner_packet(void)
 	InterlockedExchange(&last_packet, (LONG)GetTickCount());
 }
 
-void netwatch_on_desync_packet(int time)
+// A report about the level before a restart or a load is dropped: the restart brings both games back to one start anyway, and the checkpoint load it would ask for
+// came on top of that restart as a second one (2026-11-21, network tour of Roadkill: the client found the games apart in the last frames before the tour's
+// restart, its report reached the host 220 ms after that restart, and the host restarted the level again 1.7 s into it and crashed in the entity spawn).
+void netwatch_on_desync_packet(int time, int sid)
 {
+	if (switching || (sid && exec_sid && sid != exec_sid)) {
+		static DWORD said;
+		if (GetTickCount() - said > 5000) // (three copies of each report, and the client repeats it every 15 s)
+			log_printf("netwatch: the partner's report of a difference at level time %d is about the level before the restart or load here (%s): left alone", time,
+				   switching ? "the next level is not running yet" : "another server id");
+		said = GetTickCount();
+		return;
+	}
 	log_printf("netwatch: the partner's PC says the games differ from level time %d on", time);
 	nw_dump(time - 100, time - 50, "this PC (the host, told by the client)");
 	InterlockedExchange(&partner_desync_time, time ? time : 1);
@@ -390,7 +462,7 @@ void netwatch_poll(void)
 		InterlockedExchange(&pending, st == 3 ? NOTE_RESYNCFAIL : NOTE_DESYNC);
 		if (st == 1) {
 			char text[64];
-			snprintf(text, sizeof(text), "mw2coop_desync %ld", (long)ds);
+			snprintf(text, sizeof(text), "mw2coop_desync %ld %ld", (long)ds, (long)desync_sid);
 			net_send_mod(text);
 		}
 	} else if (!ds)
@@ -462,16 +534,31 @@ void netwatch_install(void)
 		return;
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	enabled = cfg("netwatch", 1) != 0;
-	if (!enabled) {
-		log_printf("netwatch: off ([native] netwatch=0)");
+	if (enabled)
+		for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
+			game_add_command(&commands[i]);
+	// (hooked with the watch off too: the hook also makes the partner wait for the host's frame, wait_for_frame)
+	if (!hook_function(base + NW_EXEC, exec_bytes, sizeof(exec_bytes), (void *)exec_hook, (void **)&exec_original)) {
+		log_printf("netwatch: the lockstep frame executor is not as expected: no divergence check (the silence check stays), no wait for the host's frame");
 		return;
 	}
-	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
-		game_add_command(&commands[i]);
-	if (!hook_function(base + NW_EXEC, exec_bytes, sizeof(exec_bytes), (void *)exec_hook, (void **)&exec_original)) {
-		log_printf("netwatch: the lockstep frame executor is not as expected: no divergence check (the silence check stays)");
+	if (!enabled) {
+		log_printf("netwatch: off ([native] netwatch=0); the partner still waits for the host's frame after a load");
 		return;
 	}
 	log_printf("netwatch: the partner's silence (3 s) and the games' divergence (the host's state hash in each frame) are watched");
 	nw_rec_install();
+}
+
+// saves.c: a fast_restart or a map command runs here (any session): until the first frame of the level after it, a report of a difference is about the level before
+void netwatch_level_switch(void)
+{
+	InterlockedExchange(&switch_sid, exec_sid);
+	InterlockedExchange(&switch_time, nw_cur_time);
+	InterlockedExchange(&switching, 1);
+	InterlockedIncrement(&level_gen);
+}
+unsigned netwatch_level_gen(void)
+{
+	return (unsigned)level_gen;
 }

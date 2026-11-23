@@ -120,6 +120,66 @@ after the host's start packet (the client's level server not yet running, `sv_ru
 the launch, and the client played every level with 1 while the host had 0. Fix: while the launch keeps it at 0, the engine's `coop` dvar at 1 also keeps the
 session (`menus_poll`). Both PCs and both builds (the code is shared).
 
+## A report about the level before a restart (found and fixed 2026-11-21)
+
+The 64-bit network tour (`tools/qa_pair.sh tour`, Team Player) crashed the host at the change to the section "ambush": the tour's restart request ran at
+level time 16300 (`fast_restart`, `coopRestart` to the client at 18:33:43.728); the client had found the hashes apart at level time 16350, the last frames
+before that restart, and its `mw2coop_desync` reached the host 220 ms after it. The host took it as a divergence of the running level: `saves_resync` sent
+`mw2coop_resync` and 1.5 s later ran `set mw2coop_retry load; fast_restart` 1.7 s into the restarted level. There was no checkpoint of the level in memory
+any more, so `loadgame_continue_missionfailed` restarted the level once more, and the host faulted in that restart's entity spawn (rva 0x220d8c, the entity
+field list lookup under G_ParseSpawnVars 0x19a560 reading 0x58e88f8; the crash dump itself failed). The client was left in its lobby with the engine's error
+popup, and the firewall question opened on top of it (`ui_error_popup_open` now holds the mod's popups back while `error_popmenu*` is open).
+
+* `netwatch_level_switch()` (saves.c: every `fast_restart` and `map` command, any session) marks a restart or a load until the first lockstep frame of the
+  next level (a new serverId, or a level time lower than the last frame's); `netwatch_on_desync_packet` leaves a report alone while that mark is up.
+* The client sends the serverId of the frames it compared with the report (`mw2coop_desync <level time> <serverId>`); the host leaves a report with another
+  serverId than its last executed frame's alone. An older build's report has no serverId and is taken as before.
+* `resync_restart` does not run the load when a restart or a load came during its 1.5 s (`netwatch_level_gen`).
+
+Found on 2026-11-23 (the client of the stale-report test, `MW2COOP_QA_LATE` with `mw2coop_netqa_desync` and `fast_restart` 20 ms apart, crashed at the same
+rva 0x220d8c right after "saves: fast_restart after a failed mission: no checkpoint of this map in memory, the level restarts"): the crash is not the second
+restart, it is what that path ran. With no commit of the map in memory `fast_restart_cmd` still called `loadgame_continue_missionfailed` (0x22c6c0 with 0, 1),
+and that one, finding no commit (0x1aef00), looks for the map's save on disk (0x1adc50 opens `players\save\<name>.svg` and checks its header 0x1cd) and
+restarts the map loading it (0x22c340 -> 0x22c970 with 1). The test copies had old ones (the host's `roadkill.svg` of 2026-11-13, the client's `trainer.svg` of
+2026-11-17), and a player has his own single-player saves there: the load of a save of another session crashed in the entity spawn (0x220d70, the field name
+lookup under 0x19a820). Now that case runs the plain `fast_restart`, as its log line says. Still open: the engine also refuses a commit in memory whose name
+is not the save name it asks for (0x1aef00 compares them unless the commit is a co-op one and the session is co-op) and then goes to the disk the same way;
+the mod's own check (map checksum and a name) does not compare the names.
+
+## The partner's first frame after a checkpoint load (found and fixed 2026-11-23)
+
+The 64-bit network tour of Takedown (favela, section "chase") ended the session: the runner got away, the mission failed, both PCs loaded the last checkpoint,
+and the client's engine stopped with "Unable to find player data for server time 350, serverId 19" (the frame executor found no ring entry of that time and
+serverId), sent `coopDis`, and both went back to the lobby. The client had finished its load 42 ms before the host. All 9 other checkpoint loads in the tour
+logs had the host finish first and went on normally.
+
+* The restart (0x22c970) sends `coopRestart` with the old serverId, then raises the serverId's low nibble on both PCs; the ring is emptied (0x22f2d0).
+* The partner's step loop waits for the host's frames (0x22e120, 0x22e7a0: the ring's head with this serverId and a time past the partner's), but the
+  partner's frame executor call (64: 0x15c9e0 -> 0x2302d0, 32: 0x5b3790 -> 0x40c4f0) runs for its level time with no such wait. INFERRED from the timing:
+  the first frame after a load runs right away, so a client whose load ended first asked for a frame the host had not built yet.
+* Guard, NOT a verified fix (`wait_for_frame` in the executor hook): on the partner, when the ring has no entry of that serverId and time, the packets are taken in with the
+  engine's own waiting-loop dispatcher (64: 0x2308a0, 32: VA 0x4acca0, iw4x-sp 0x22e60 through `addr159.c`) until it is there, at most 5 s; the log says
+  how long it took. The hook stays installed with `[native] netwatch=0`.
+* QA: the dvar `mw2coop_qa_loaddelay <ms>` (host only, `saves.c` after G_LoadGame) holds the host's first frame after a load, so the client finishes first;
+  `MW2COOP_QA_NOFRAMEWAIT=1` leaves the wait out to see the engine's error.
+* **Not reproduced that way.** The control run (wait left out, the host held 400 ms after each of 2 resync loads on S.S.D.D., the client done 24 ms
+  first) had no error: the client re-sent `coopLoaded` and waited for the host's first frame as it should. So the inference above is wrong or incomplete:
+  the Favela load came from a real failed mission (the deadquote "the runner got away") and the client ran its frame 44 ms after the host acknowledged its
+  `coopLoaded`; what made it run without the host's frame is not found. The guard only acts when the frame is missing, the case that otherwise ends the
+  session at once.
+* A real failed mission did not reproduce it either (QA `restart` on S.S.D.D.: both players down, the checkpoint load, the host held 400 ms, the client
+  done first; with and without the wait: no error, the client waited by itself). The guard now logs the partner's ring (time/serverId of each entry)
+  whenever the frame it runs is missing, so the next case says whether the host's frames carried another serverId or time.
+
+## A resync's load overtaken by a plain restart (found and fixed 2026-11-23)
+
+The network tour of Second Sun (dcburning, section change to "crash") dropped the client: at the section change the client found the games apart (level
+time 16350) and the host started the resync (`mw2coop_resync` sets the client's `mw2coop_retry` to "load"); 20 ms later the tour's own restart ran on the
+host, which overtook the resync's load (`resync_restart`: "the load is left out") and restarted the level. The client took that `coopRestart` as the
+resync's load and loaded checkpoint `dcburning_10600_net`; the two PCs ran different levels, the client sent nothing for 3 s, and the host dropped it with
+COOP_CLIENTDROP 10 s later. Fix (`saves.c` `fast_restart_cmd`): a network host's plain restart sends "mw2coop_retry restart" first, and a client whose
+`mw2coop_retry` is "load" follows it (`host_decision`). Not run in the game yet.
+
 ## Open
 
 * (Done the same day: the records on the official 32-bit build and iw4x-sp too. 32-bit VAs: the int adder `0x47af10` at `0x4bfa01`, `0x4bfb4d`, `0x4bfb61`, `0x4bfb75` (the level step `0x4bf8b0`) and `0x5bfe44`, `0x5bfe58`, `0x5bfe6e` (G_RunFrameForEntity `0x5bfdb0`), the vector adder `0x422950` at `0x5bfe84`, `0x5bfe9a`, the string adder `0x42ecc0` at GetDvar's `0x4e4cd7`, `0x4e4ce7`; cdecl (value, file, line), the caller pops; the on-byte `0x1a93324` from the int adder's `cmp byte [abs32], 0`. iw4x-sp through the 159 table; `mw2coop_netqa_desync` changes player 1's health (+0x90) on 32 bits too.)

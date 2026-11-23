@@ -73,6 +73,8 @@
 uint8_t *ui_find_menu(const char *name);
 // Every instance of the menu <name> in the UI's list (a level's zone has its own copies of the game's menus), up to <max>; the count.
 int ui_menu_instances(const char *name, uint8_t **out, int max);
+// 1 while one of the engine's error popups (error_popmenu*: a lost connection, a failed join) is open. Main thread.
+int ui_error_popup_open(void);
 // Index of the item named <name> in <menu>, or -1.
 int ui_item_index(uint8_t *menu, const char *name);
 // A handler set running one menu script (the zone's parsed form: quoted tokens, ';' ends a command).

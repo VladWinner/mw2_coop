@@ -148,7 +148,7 @@ void firewall_tick(int hosting)
 		InterlockedExchange(&check_state, 1);
 		CloseHandle(CreateThread(NULL, 0, check_thread, NULL, 0, NULL));
 	}
-	if (hosting && popup_wanted) {
+	if (hosting && popup_wanted && !ui_error_popup_open()) { // (after an error popup is closed, not on top of it)
 		InterlockedExchange(&popup_wanted, 0);
 		game_cbuf_addtext("openmenu mw2coop_firewall\n");
 	}

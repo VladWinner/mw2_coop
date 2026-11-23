@@ -116,6 +116,8 @@ snowmobile_looks()
 	if ( isdefined( level.mw2coop_snow_looks ) )
 		return;
 	level.mw2coop_snow_looks = true;
+	if ( GetDvar( "mw2coop_qa_nosnowcopy" ) == "1" )	// QA: no third-person copies (what a rider sees of his own snowmobile)
+		return;
 	for ( ;; )
 	{
 		wait 0.25;

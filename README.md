@@ -101,6 +101,8 @@ Modern Warfare 2 Enhanced grows into an improvement mod for the original game, n
 
 `INSTALL.txt` in the archive says the same in English and Russian. To uninstall, delete `winmm.dll` and the `mw2coop` folder.
 
+**Updates from the game:** at start the mod asks GitHub which release is the newest; when it is newer than yours, the main menu offers it. **Update** downloads the archive of your build (and the DLSS archive if you use it), checks it against the SHA-256 GitHub gives for it, puts the files in place (your `settings.ini`, saves and logs stay) and restarts the game. If anything goes wrong, every file is put back as it was. The request carries nothing about you but the mod's version; Settings → Enhanced → "Check for updates" (`[update] check=0` in `mw2coop\settings.ini`) turns it off, and the console command `mw2coop_update` checks when you ask. Both players need the same version: update both PCs.
+
 ## 🌐 Playing over the internet
 
 The host needs UDP port **28960** reachable. The mod opens it on the router by itself when UPnP is on; otherwise forward the port or play over a shared VPN. The port can be changed in `mw2coop\settings.ini` (the same on both PCs).

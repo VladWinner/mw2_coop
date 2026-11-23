@@ -61,8 +61,8 @@
 enum { K_SLIDER, K_YESNO, K_UPSCALER, K_DIRECTX }; // K_UPSCALER and K_DIRECTX: choice rows
 enum { LIVE_NONE, LIVE_FOV, LIVE_SHARP, LIVE_HUDTEXT, LIVE_NAMETAG, LIVE_FALL };
 // What a row applies to; the page lists the rows by these groups (in this order), each under its name, not by how a change takes effect.
-enum { GROUP_PICTURE, GROUP_WINDOW, GROUP_UPSCALING, GROUP_HUD, GROUP_CONTROLS, GROUP_COOP, GROUPS };
-static const char *const group_names[GROUPS] = {"@MW2COOP_ENH_G_PICTURE", "@MW2COOP_ENH_G_WINDOW", "@MW2COOP_ENH_G_UPSCALING", "@MW2COOP_ENH_G_HUD", "@MW2COOP_ENH_G_CONTROLS", "@MW2COOP_ENH_G_COOP"};
+enum { GROUP_PICTURE, GROUP_WINDOW, GROUP_UPSCALING, GROUP_HUD, GROUP_CONTROLS, GROUP_COOP, GROUP_MOD, GROUPS };
+static const char *const group_names[GROUPS] = {"@MW2COOP_ENH_G_PICTURE", "@MW2COOP_ENH_G_WINDOW", "@MW2COOP_ENH_G_UPSCALING", "@MW2COOP_ENH_G_HUD", "@MW2COOP_ENH_G_CONTROLS", "@MW2COOP_ENH_G_COOP", "@MW2COOP_ENH_G_MOD"};
 enum { OPT_FOV, OPT_MAXFPS }; // positions in opts[] (the order in the page is the group's, then this one); the others are found by their dvar (opt_index)
 
 typedef struct {
@@ -103,6 +103,7 @@ static const opt_t opts[] = {
 #endif
     {"mw2coop_opt_borderless", "@MW2COOP_ENH_BORDERLESS", K_YESNO, 0, 1, 1, "display", "borderless", 1, LIVE_NONE, 1, "Enhanced: full screen as a borderless window (next start)", GROUP_WINDOW},
     {"mw2coop_opt_darktitle", "@MW2COOP_ENH_DARKTITLE", K_YESNO, 0, 1, 1, "display", "darktitle", 1, LIVE_NONE, 1, "Enhanced: dark title bar (next start)", GROUP_WINDOW},
+    {"mw2coop_opt_update", "@MW2COOP_ENH_UPDATE", K_YESNO, 0, 1, 1, "update", "check", 1, LIVE_NONE, 0, "Enhanced: ask GitHub for a newer release of the mod at start and offer it at the main menu", GROUP_MOD},
 };
 #define OPTS ((int)(sizeof(opts) / sizeof(opts[0])))
 

@@ -192,3 +192,5 @@ EXPORTS
 	waveOutWrite
 	wid32Message
 	wod32Message
+	; the updater's restart helper (src/update.c): rundll32 "<winmm.dll>",mw2coop_relaunch <file>
+	mw2coop_relaunch=mw2coop_relaunch@16

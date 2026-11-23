@@ -5,7 +5,7 @@
 // host's check of each coopConnect.
 void access_install(void);
 // Menu tick (main thread): campaign_lobby = this PC is in a lobby holding a campaign mission.
-void access_tick(int campaign_lobby, int host);
+void access_tick(int campaign_lobby, int host, int spec_split); // spec_split: a split screen lobby holding a Special Ops op (its two difficulty rows)
 // The host's answer to a lobby query: 0 = do not answer (Steam friends only), 'p' = password, '-' = open.
 char access_lobby_flag(void);
 // Join a lobby found on the network (asks for the password first if it is locked).

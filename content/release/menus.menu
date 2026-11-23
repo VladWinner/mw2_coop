@@ -253,6 +253,73 @@ menuDef {
 	}
 }
 
+// The mod's updates (src/update.c), at the main menu: a newer release was found (Update / Later); the download's progress (one row: Hide); installed (Restart / Quit:
+// the game must start again to use it); a note (one row: Close) for "the newest version is installed" and "the update could not be installed". The questions are
+// made by the mod (versions, progress). The one-row popups' second row (no) is hidden by the mod.
+menuDef {
+	name "mw2coop_update"
+	title "@MW2COOP_UPDATE_TITLE"
+	question "@MW2COOP_UPDATE_Q"
+	itemDef {
+		name "yes"
+		text "@MW2COOP_UPDATE_YES"
+		action { play "mouse_click"; close self; exec "mw2coop_update_go"; }
+	}
+	itemDef {
+		name "no"
+		text "@MW2COOP_UPDATE_LATER"
+		action { play "mouse_click"; close self; }
+	}
+}
+
+menuDef {
+	name "mw2coop_update_wait"
+	title "@MW2COOP_UPDATE_TITLE"
+	question "@MW2COOP_UPDATE_WAIT_Q"
+	itemDef {
+		name "yes"
+		text "@MW2COOP_UPDATE_HIDE"
+		action { play "mouse_click"; close self; }
+	}
+	itemDef {
+		name "no"
+		text "@MW2COOP_UPDATE_HIDE"
+		action { play "mouse_click"; close self; }
+	}
+}
+
+menuDef {
+	name "mw2coop_update_done"
+	title "@MW2COOP_UPDATE_TITLE"
+	question "@MW2COOP_UPDATE_DONE_Q"
+	itemDef {
+		name "yes"
+		text "@MW2COOP_UPDATE_RESTART"
+		action { play "mouse_click"; close self; exec "mw2coop_update_restart"; }
+	}
+	itemDef {
+		name "no"
+		text "@MW2COOP_UPDATE_QUIT"
+		action { play "mouse_click"; close self; exec "quit"; }
+	}
+}
+
+menuDef {
+	name "mw2coop_update_note"
+	title "@MW2COOP_UPDATE_TITLE"
+	question "@MW2COOP_UPDATE_NOTE_Q"
+	itemDef {
+		name "yes"
+		text "@MW2COOP_UPDATE_CLOSE"
+		action { play "mouse_click"; close self; }
+	}
+	itemDef {
+		name "no"
+		text "@MW2COOP_UPDATE_CLOSE"
+		action { play "mouse_click"; close self; }
+	}
+}
+
 // Split screen lobby: each player's difficulty (the console game has one popup for each: popmenu_specialops_splitscreen_difficulty_p1 / _p2; its levels are the game's own 0-3)
 menuDef {
 	name "mw2coop_skill_p1"

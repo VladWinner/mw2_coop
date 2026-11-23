@@ -250,10 +250,16 @@ static int tag_level_time(const char *tag) // <map>_<level time>_<net|split>
 		p--;
 	return *p == '_' ? atoi(p + 1) : -1;
 }
+static volatile LONG resync_gen; // netwatch_level_gen() when the load was decided
 static DWORD WINAPI resync_restart(LPVOID unused)
 {
 	(void)unused;
 	Sleep(1500); // the players read the notice first ("both PCs load the common checkpoint"), and the client has set its mw2coop_retry before the map restart reaches it
+	if (netwatch_level_gen() != (unsigned)resync_gen) { // a restart or a load came meanwhile (a failed mission): it brought both games to one start, and a second one at once
+		// crashed the host (2026-11-21)
+		log_printf("saves: the level was restarted or loaded while the checkpoint load waited: the load is left out");
+		return 0;
+	}
 	game_cbuf_addtext("set mw2coop_retry load\nfast_restart\n");
 	return 0;
 }
@@ -286,6 +292,7 @@ int saves_resync(int diverged_at, char *why, int why_size)
 	snprintf(text, sizeof(text), "mw2coop_resync %s", own_tag);
 	send_thrice(text);
 	log_printf("saves: the games differ from level time %d on: both PCs load checkpoint %s (taken at %d, load %d of it for this)", diverged_at, own_tag, t, resync_count);
+	InterlockedExchange(&resync_gen, (LONG)netwatch_level_gen());
 	CloseHandle(CreateThread(NULL, 0, resync_restart, NULL, 0, NULL));
 	return 1;
 }
@@ -297,8 +304,15 @@ int saves_resync(int diverged_at, char *why, int why_size)
 static void (*fast_restart_orig)(void);
 static void fast_restart_cmd(void)
 {
+	netwatch_level_switch();
 	char v[16];
 	if (!game_dvar_raw("mw2coop_retry", v, sizeof(v)) || strcmp(v, "load") != 0) {
+		// A network host's plain map restart: the client is told so before the restart reaches it. A client whose mw2coop_retry was set to "load" by a
+		// resync (mw2coop_resync, saves_resync) would load its checkpoint on this restart while this PC restarts the level (Second Sun, network tour
+		// 2026-11-23: a divergence reported at a section change, the host's own restart 20 ms later overtook the resync's load; the client loaded, the
+		// host restarted, and 10 s later the host dropped the client with COOP_CLIENTDROP). The client follows a "restart" from the host (host_decision).
+		if (*(base + XR(RVA_COOP_FLAG)) && !native_split_active() && game_peek(RVA_PARTY_IS_HOST, 1))
+			send_thrice("mw2coop_retry restart");
 		fast_restart_orig();
 		return;
 	}
@@ -331,7 +345,7 @@ static void fast_restart_cmd(void)
 		if (!partner_tag[0])
 			log_printf("saves: the client's checkpoint is not known (no packet): loading this PC's %s", own_tag[0] ? own_tag : "none");
 	} else if (network && host_decision_at && GetTickCount() - host_decision_at < 20000 && strcmp(host_decision, "restart") == 0) {
-		log_printf("saves: the host restarts the level (the checkpoints differ: this PC's %s)", own_tag);
+		log_printf("saves: the host restarts the level (a plain restart, or the checkpoints differ: this PC's %s)", own_tag);
 		host_decision_at = 0;
 		game_cbuf_addtext("set mw2coop_retry \"\"\n");
 		fast_restart_orig();
@@ -341,6 +355,14 @@ static void fast_restart_cmd(void)
 	int same_map = slot && *(int *)(slot + 4) == *(int *)(base + XR(RVA_MAP_CHECKSUM)) && slot[0x3e0];
 	log_printf("saves: fast_restart after a failed mission: %s", same_map ? "the last checkpoint is loaded" : "no checkpoint of this map in memory, the level restarts");
 	game_cbuf_addtext("set mw2coop_retry \"\"\n");
+	if (!same_map) {
+		// A plain map restart, not loadgame_continue_missionfailed: without this map's commit in memory that one looks for the map's save ON DISK (0x22c6c0:
+		// 0x1adc50 opens players\save\<name>.svg and checks its header, 0x22c340 restarts the map loading it). That is the player's own single-player save of
+		// the map, or an old one, of another session or build: the host on Roadkill (roadkill.svg of 2026-11-13) on 2026-11-21 and the client on S.S.D.D.
+		// (trainer.svg of 2026-11-17) on 2026-11-23 crashed in that load's entity spawn (rva 0x220d8c, the field name lookup 0x220d70 under 0x19a820).
+		fast_restart_orig();
+		return;
+	}
 #ifndef _WIN64
 	if (GetEnvironmentVariableA("MW2COOP_HASHDIFF", NULL, 0))
 		hash_ranges_diff();
@@ -476,6 +498,7 @@ static uintptr_t commit_write_hook(void *slot)
 static void (*map_orig)(void);
 static void map_cmd(void)
 {
+	netwatch_level_switch();
 	char v[8] = "", key[48] = "";
 	if (game_dvar_raw("mw2coop_snapload", v, sizeof(v)) && strcmp(v, "1") == 0 && game_dvar_raw("mw2coop_snapkey", key, sizeof(key)) && key[0]) {
 		char tag[64] = "", want[80];
@@ -528,6 +551,13 @@ static void LOAD_CC g_load_hook(void *f)
 	if (kept[0] && (native_split_active() || *(base + XR(RVA_COOP_FLAG)))) { // the scripts' dvars for this DLL as they were at the checkpoint (keep_dvars)
 		game_cbuf_addtext(kept);
 		log_printf("saves: the mod's dvars of the checkpoint set again after the load");
+	}
+	// QA (dvar mw2coop_qa_loaddelay <ms>, set on the host only, e.g. by qa_pair.sh's MW2COOP_QA_LATE): the host holds its first frame after a checkpoint load,
+	// so the client finishes its load first (netwatch.c wait_for_frame; the Favela drop of 2026-11-23)
+	char qd[16];
+	if (game_dvar_raw("mw2coop_qa_loaddelay", qd, sizeof(qd)) && atoi(qd) > 0 && game_peek(RVA_PARTY_IS_HOST, 1)) {
+		log_printf("saves: QA: the host waits %d ms after the load", atoi(qd));
+		Sleep((DWORD)atoi(qd));
 	}
 }
 

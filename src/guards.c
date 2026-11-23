@@ -306,6 +306,27 @@ static void unlink64_guarded(void *node)
 }
 #endif
 #ifndef _WIN64
+// 32-bit: the view of a player who rides a vehicle (VA 0x4cbb00, cdecl (local client, cgame struct, ...); the 64-bit build's 0x27f9e0, sway_view_hook above). Its state is a table by
+// the cgame struct's local client number (+4) at VA 0x1b99808 with room for client 0 only, and the vehicles' client blocks follow it (VA 0x1b99848). Context 1's number is 1: player 2's
+// view state went into vehicle slot 0's block, whose definition index became a float, and the next vehicle update faulted (Cliffhanger's snowmobiles the moment the split began,
+// official 32-bit and iw4x-sp, 2026-11-21: write caught with !watchw at rva 0xcc174). It runs as client 0; each context keeps its own entry 0 (native.c, RANGE_RIDE).
+static void (*ride_view32_original)(int, uint8_t *, void *, void *);
+static void ride_view32_hook(int lc, uint8_t *cg, void *a, void *b)
+{
+	const int cn = *(const int *)(cg + 4);
+	if (cn != 0) {
+		static LONG logged;
+		if (InterlockedIncrement(&logged) <= 3)
+			log_printf("guards: the rider view of client %d runs as client 0 (the state table has one entry)", cn);
+		*(int *)(cg + 4) = 0;
+		ride_view32_original(lc, cg, a, b);
+		*(int *)(cg + 4) = cn;
+		return;
+	}
+	ride_view32_original(lc, cg, a, b);
+}
+#endif
+#ifndef _WIN64
 // The official 32-bit game (rva 0xfb410): `const char *lookup(int index)` reads the first word of the entry that a table of pointers (absolute address in the instruction at +7) holds for the
 // index. The level load's client setup (rva 0x1c5ba7: the index is a word of the client state at +0xacbc, the result goes into a format call) called it for an entry that does not exist
 // yet / any more, and the read of the entry faulted at 0xfb41b (null): two of four 32-bit runs of the mission-hop bot scenario (Trainer, Roadkill, Cliffhanger) crashed there or at
@@ -460,6 +481,10 @@ void guards_install(void)
 		log_printf("guards: the view sway's weapon definition lookup %s", hook_call(sway, (void *)sway_wdef_hook, (void **)&sway_wdef_original) ? "is guarded" : "is NOT guarded (no hook page)");
 #endif
 #ifndef _WIN64
+	{
+		static const uint8_t rv[6] = {0x55, 0x8b, 0xec, 0x83, 0xe4, 0xc0}; // push ebp; mov ebp,esp; and esp,-0x40
+		log_printf("guards: the rider view of the second client %s", hook_function((uint8_t *)GetModuleHandleA(NULL) + XR(0xcbb00), rv, sizeof(rv), (void *)ride_view32_hook, (void **)&ride_view32_original) ? "is guarded" : "is NOT guarded (bytes differ)");
+	}
 	if (!game_is_iw4x()) {
 		static const uint8_t lookup_head[11] = {0x8b, 0x44, 0x24, 0x04, 0x8b, 0x0c, 0x85}; // mov eax,[esp+4]; mov ecx,[eax*4 + table] (the 4 bytes of the table address follow)
 		uint8_t *b32 = (uint8_t *)GetModuleHandleA(NULL);

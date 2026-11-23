@@ -23,6 +23,7 @@
 #include "enhopts.h"
 #include "netwatch.h"
 #include "firewall.h"
+#include "update.h"
 #include "devices.h"
 #include "console.h"
 #include "localize.h"
@@ -280,6 +281,7 @@ static void install_all(void)
 	addr_scratch_check("after steamnet_install");
 	firewall_install();
 	addr_scratch_check("after firewall_install");
+	update_install(); // (asks GitHub for a newer release: [update] check)
 	shot_install();
 	addr_scratch_check("after shot_install");
 	fov_install();

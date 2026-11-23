@@ -119,6 +119,10 @@ main()
 	// QA of a Special Ops op in the split screen (Big Brother's gunner)
 	if ( GetDvar( "mw2coop_qa" ) == "bbcheck" && !is_campaign_coop() )
 		thread maps\_mw2coop_qa::bbcheck();
+	// a Special Ops op in the native split screen: the watch of sync_weapons for player 2's empty hands (his client keeps its own weapon choice where the server's weapon
+	// switch does not reach it: the 32-bit build; the 64-bit DLL delivers it, src/native.c p2_sw_flush). Vlad 2026-11-21, so_ac130_co_hunted.
+	if ( getdvarint( "mw2coop_native_split" ) && !is_campaign_coop() && is_specialop() )
+		thread specops_p2_hands();
 
 	if ( !is_campaign_coop() )
 		return;
@@ -369,6 +373,7 @@ regroup_after_start()
 	thread restore_weapons();
 	thread restore_flags();
 	linked_for = 0;
+	edge_said = false;
 	for ( waited = 0; waited < 120; waited += 0.25 )
 	{
 		// player 2 seated by the level itself (a vehicle, a scene) stays where it put him; a link of the level's first frames only is waited
@@ -385,13 +390,19 @@ regroup_after_start()
 		linked_for = 0;
 		if ( level.player2 teleport_to_partner( level.player ) )
 		{
-			state( "regrouped at start point " + level.start_point );
+			state( "regrouped at start point " + level.start_point + ": player 2 from " + vec_text( level.player2.mw2coop_moved_from ) + " to " + vec_text( level.player2.origin ) + ", "
+				+ level.player2.mw2coop_moved_how + " (player 1 at " + vec_text( level.player.origin ) + ")" );
 			break;
+		}
+		if ( !edge_said && isdefined( level.player2.mw2coop_moved_how ) && level.player2.mw2coop_moved_how == "edge" )
+		{
+			edge_said = true;
+			state( "regroup: no free spot beside player 1 at an edge (player 1 at " + vec_text( level.player.origin ) + "): player 2 waits at " + vec_text( level.player2.origin ) );
 		}
 		wait 0.25;
 	}
 	if ( waited >= 120 )
-		state( "no safe spot next to player 1 within 120 s" );
+		state( "no safe spot next to player 1 within 120 s (player 2 at " + vec_text( level.player2.origin ) + ", player 1 at " + vec_text( level.player.origin ) + ")" );
 	// a level placing the two players itself waits for this (maps\_mw2coop_trainer)
 	flag_set( "mw2coop_regrouped" );
 }
@@ -520,6 +531,7 @@ teleport_to_partner( partner )
 	chest = partner.origin + ( 0, 0, 48 );
 	best = undefined;
 	best_open = -1;
+	drop = false;
 	foreach ( offset in offsets )
 	{
 		spot = partner.origin + offset;
@@ -528,6 +540,8 @@ teleport_to_partner( partner )
 			continue;
 		// ... and floor under the spot, at about the partner's height
 		ground = PlayerPhysicsTrace( spot + ( 0, 0, 48 ), spot - ( 0, 0, 96 ) );
+		if ( ground[ 2 ] < partner.origin[ 2 ] - 40 )
+			drop = true;	// open air beside him: an edge
 		if ( abs( ground[ 2 ] - partner.origin[ 2 ] ) > 40 )
 			continue;
 		// ... where he fits: a step is free at his feet (Wolverines! start burgertown put him in
@@ -549,15 +563,25 @@ teleport_to_partner( partner )
 			best_open = open;
 		}
 	}
+	self.mw2coop_moved_from = self.origin;
 	if ( isdefined( best ) )
 	{
 		self SetOrigin( best );
 		self SetPlayerAngles( yaw );
+		self.mw2coop_moved_how = "beside him";
 		return true;
 	}
-	// nowhere free: share the spot he stands on, the players push apart
+	// nowhere free: share the spot he stands on, the players push apart. Not at an edge: the push threw one of them over it (Cliffhanger's cave
+	// ledge, entered from Team Player's end: player 2 fell to his death at every start and the mission restarted, owner and network tour 2026-11-21).
+	// The caller tries again later, when the partner stands somewhere wider.
+	if ( drop )
+	{
+		self.mw2coop_moved_how = "edge";
+		return false;
+	}
 	self SetOrigin( partner.origin );
 	self SetPlayerAngles( yaw );
+	self.mw2coop_moved_how = "on his spot";
 	return true;
 }
 
@@ -697,6 +721,37 @@ teleport_to_partner_when_safe( partner, timeout )
 is_downed( player )
 {
 	return player ent_flag_exist( "coop_downed" ) && player ent_flag( "coop_downed" );
+}
+
+// Special Ops in the native split screen: player 2 holds nothing while he has a weapon of his own (not flying, not in the AC-130 or the helicopter's gun, not linked, not
+// downed): the DLL presses his weapon key (mw2coop_p2_weapnext), then a switch to his first weapon follows, as sync_weapons does in the campaign.
+specops_p2_hands()
+{
+	level endon( "special_op_terminated" );
+	empty = 0;
+	for ( ;; )
+	{
+		wait 0.25;
+		p = level.player2;
+		if ( !isdefined( p ) )
+			continue;
+		weapons = p GetWeaponsListPrimaries();
+		in_air = ( isdefined( level.ac130player ) && level.ac130player == p ) || ( isdefined( level.chopperplayer ) && level.chopperplayer == p );
+		if ( p GetCurrentWeapon() == "none" && weapons.size > 0 && !in_air && !p IsLinked() && !is_downed( p ) && !isdefined( p.is_flying_missile )
+			&& !( isdefined( p.is_controlling_UAV ) && p.is_controlling_UAV ) )
+		{
+			empty++;
+			if ( empty == 2 || empty % 12 == 0 )	// (a moment's empty hands are a switch in progress)
+			{
+				SetDvar( "mw2coop_p2_weapnext", GetTime() );
+				state( "Spec Ops: player 2's hands are empty: weapon key pressed for him" );
+			}
+			else if ( empty % 12 == 6 )
+				p SwitchToWeapon( weapons[ 0 ] );
+		}
+		else
+			empty = 0;
+	}
 }
 
 give_weapon( player, weapon )
@@ -2256,4 +2311,12 @@ players_blend_movespeedscale( scale, time )
 {
 	foreach ( player in level.players )
 		player blend_movespeedscale( scale, time );
+}
+
+// A position as whole units, for the log ("x y z").
+vec_text( v )
+{
+	if ( !isdefined( v ) )
+		return "?";
+	return int( v[ 0 ] ) + " " + int( v[ 1 ] ) + " " + int( v[ 2 ] );
 }

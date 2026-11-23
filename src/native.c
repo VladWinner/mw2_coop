@@ -3552,6 +3552,7 @@ static void vis_swap(void)
 	}
 }
 static int vis_swapped; // vis_swap has given player 2's draw his own marks: add_entity_hook's older per-entity swap (swapbits) must not undo them at +0xec
+static int ent_bits_swapped; // add_entity_hook's per-entity swap (swapbits, the 32-bit builds) is in force for the entity being added: the renderer needs the bits back (m11mask)
 static void cg_draw_vis(unsigned local_client, int a, int b)
 {
 #ifdef _WIN64
@@ -4043,12 +4044,48 @@ static int p2cmds_on(void)
 	return native_active && ctx_on && ctx1_ready && p2cmd_filter_ok && CFG_ONCE("p2cmds32", 0);
 #endif
 }
+static void sv_queue(uint8_t *cl, const char *text);
+// Player 2's weapon switches: a script's SwitchToWeapon and every loadout's switch are the server command "sw <weapon index>" (G_SelectWeaponIndex, 64-bit rva 0x1a1f50), and
+// his client follows only that: without it his usercmd keeps the weapon his context last chose, and the server goes back to it. The level's start hands out the loadouts before
+// context 1 takes commands, so that "sw" was dropped and player 2 stood with the weapon context 0 had when context 1 was copied from it (Vlad 2026-11-21, so_ac130_co_hunted:
+// player 1 in the AC-130 has no weapons, player 2 on the ground had empty hands until he switched himself). The last one dropped is sent once context 1 takes commands.
+static char p2_sw_pending[32];
+static DWORD p2_sw_pending_at;
+static void p2_sw_flush(void)
+{
+	if (!p2_sw_pending[0] || !p2cmds_on())
+		return;
+	char sw[32];
+	lstrcpynA(sw, p2_sw_pending, sizeof(sw));
+	p2_sw_pending[0] = 0;
+	if (GetTickCount() - p2_sw_pending_at > 60000)
+		return; // (an earlier session's)
+	sv_queue(base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE, sw);
+	log_printf("native: p2cmds: player 2's weapon switch from before his context took commands sent now (%s)", sw);
+}
 static void sv_add_command(uint8_t *cl, const char *text)
 {
 	int idx = (int)((cl - (base + RVA_SV_CLIENTS)) / SV_CLIENT_STRIDE);
 	int in_use = *(base + RVA_COOP_BYTE) ? *(int *)(base + RVA_COOP_SLOTS + idx * SLOT_STRIDE) == 2 : idx < *(int *)(base + RVA_LOCAL_PLAYERS);
-	if (!in_use || (idx == 1 && !*(base + RVA_COOP_BYTE) && !p2cmds_on()))
+	if (!in_use)
 		return;
+	if (idx == 1 && !*(base + RVA_COOP_BYTE)) {
+		if (!p2cmds_on()) {
+			if (!strncmp(text, "sw ", 3) && strlen(text) < sizeof(p2_sw_pending)) {
+				lstrcpynA(p2_sw_pending, text, sizeof(p2_sw_pending));
+				p2_sw_pending_at = GetTickCount();
+			}
+			return;
+		}
+		if (!strncmp(text, "sw ", 3))
+			p2_sw_pending[0] = 0; // (a newer switch)
+		else
+			p2_sw_flush();
+	}
+	sv_queue(cl, text);
+}
+static void sv_queue(uint8_t *cl, const char *text)
+{
 	void (*com_error)(int, const char *, ...) = (void (*)(int, const char *, ...))(base + RVA_COM_ERROR);
 	int *p = (int *)cl;
 	int seq = p[2];
@@ -4131,6 +4168,11 @@ static const range_t ranges[] = {
                                      // with one pair the context made second in a frame always got msec 0, and CL_MouseMove (0xcfcf0) does nothing at 0: player 2 on the keyboard
                                      // and mouse could not turn his view at all (Vlad, Big Brother "reverse": the minigun's camera did not turn; QA cmdlog1: frame_msec 0, no mouse
                                      // read in context 1). Each context keeps its own. [native] msecsplit=0 off
+    {0x400518, 0x2a8},               // the lasers to draw this frame (count 0x400518, entity numbers 0x400520 (0x60 x 2 bytes), "on" bytes 0x4005e0, entity flags 0x400640): every
+                                     // entity, event and weapon fire pass appends to it (0xa57f0), the screen update's client time call empties it (0xa5850 from 0xbc1a0, player 1's
+                                     // only) and the cgame draw draws it (0xa5920): player 2's draw drew player 1's entries and then his own, each laser twice in his half (QA laserdup
+                                     // 2026-11-21: 4 lasers drawn for player 1, 8 for player 2; Spec Ops engine audit row E). Each context keeps its own, player 2's emptied before his
+                                     // step (cg_step_hook). [native] lasersplit=0 off
 };
 #define RANGE_FX 9
 #define RANGE_VIEW 10
@@ -4140,6 +4182,9 @@ static const range_t ranges[] = {
 #define RANGE_SHAKE 14
 #define RANGE_RIDE 15
 #define RANGE_MSEC 16
+#define RANGE_LASER 17
+#define RANGE_LASER_N 1
+#define RVA_LASER_COUNT 0x400518
 #define SUNSPLIT_DEFAULT 1
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
@@ -4164,12 +4209,25 @@ static const range_t ranges[] = {
     {0x341230, 0x1c},                // the screen blur of local client 0 (VA 0x741230 + local client * 0x1c; clear_blur is VA 0x4a5690): see the 64-bit range ([native] blursplit=0 off)
     {0x4889a0, 8},                   // the time the usercmds were last made and frame_msec (CL_CreateNewCommands VA 0x579bb0; CL_MouseMove VA 0x578fe0 does nothing at msec 0): see the
                                      // 64-bit range ([native] msecsplit=0 off)
+    {0x1799808, 0x38},               // the view of a player who rides a vehicle (VA 0x4cbb00, the 64-bit 0x27f9e0): its state by local client at VA 0x1b99808 (stride 0x38) has room for
+                                     // client 0 only, and right after it are the vehicles' client blocks (VA 0x1b99848, 64 x 0x80). Context 1 (local client number 1) wrote its state
+                                     // into vehicle slot 0's block: its definition index became a float and the next vehicle update faulted (Cliffhanger's snowmobiles, 32-bit and
+                                     // iw4x-sp, the moment the split began; found with !watchw, 2026-11-21). guards.c runs client 1 as client 0; each context keeps its own state
+                                     // here, as in 64 bits ([native] ridesplit=0 off)
+    {0x3517b8, 0x180},               // the lasers to draw this frame (see the 64-bit range; the append VA 0x48ed80, the draw VA 0x4ba470), in four parts here: the cgame's dvar pointers lie
+    {0x351938, 0x60},                // between them. Entity flags VA 0x7517b8 (0x60 x 4 bytes), "on" bytes VA 0x751938, the count VA 0x7519c4, entity numbers VA 0x7519d8 (0x60 x 2 bytes)
+    {0x3519c4, 4},                   // ([native] lasersplit=0 off)
+    {0x3519d8, 0xc0},
 };
 #define RANGE_FX 10
 #define RANGE_VIEW 11
 #define RANGE_SUN 12
 #define RANGE_BLUR 13
 #define RANGE_MSEC 14
+#define RANGE_RIDE 15
+#define RANGE_LASER 16
+#define RANGE_LASER_N 4
+#define RVA_LASER_COUNT 0x3519c4
 #define SUNSPLIT_DEFAULT 1 // (with the wait for the frame in flight, see sunwait in ctx_swap_mask)
 #endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
@@ -4241,6 +4299,18 @@ static void xr_parse(void)
 	}
 }
 #endif
+// The laser list goes with the contexts ([native] lasersplit=0 off) when every part of it was found in this build.
+static int laser_split_on(void)
+{
+	static int on = -1;
+	if (on < 0) {
+		on = cfg("lasersplit", 1);
+		for (int i = RANGE_LASER; on && i < RANGE_LASER + RANGE_LASER_N; i++)
+			if (!addr_resolved(ranges[i].rva))
+				on = 0;
+	}
+	return on;
+}
 static void ctx_ensure(void)
 {
 	if (ctx_store[0][0])
@@ -4626,6 +4696,8 @@ static void ctx_swap_mask(int to, unsigned mask)
 			continue;
 #endif
 		if (i == RANGE_MSEC && (!CFG_ONCE("msecsplit", 1) || !addr_resolved(ranges[i].rva)))
+			continue;
+		if (i >= RANGE_LASER && i < RANGE_LASER + RANGE_LASER_N && !laser_split_on())
 			continue;
 		uint8_t *live = base + RANGE_RVA(i);
 #if defined(_WIN64) && defined(RANGE_FX)
@@ -5522,7 +5594,8 @@ static void server_cmds_hook(uintptr_t lc, int *msg)
 static int p2cmd_allowed(const char *c)
 {
 	static const char *const ok[] = {"visionset_naked", "visionset_night", "visionset_missilecam", "visionset_thermal", "visionset_pain", "scr_blur", "clear_blur", "scr_fade",
-					 "watersheeting", "ls", "ls_stop", "offhand", "ret_lock_on", "showViewModel", "hideViewModel", "hud_drawHUD"};
+					 "watersheeting", "ls", "ls_stop", "offhand", "ret_lock_on", "showViewModel", "hideViewModel", "hud_drawHUD",
+					 "sw"}; // sw: the server switched his weapon (SwitchToWeapon, a loadout, a weapon picked up)
 	for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
 		if (!strcmp(c, ok[i]))
 			return 1;
@@ -5568,6 +5641,7 @@ static void (*cg_exec_original)(int, int);
 static void cg_exec_hook(int lc, int latest)
 {
 	if (ctx_current == 1 && p2cmds_on()) {
+		p2_sw_flush(); // (a weapon switch from before this context took commands: to the server's queue, run in a later frame)
 		int *done = (int *)(base + XR(P2C_CGS_DONE));
 		const int newest = *(int *)(base + XR(P2C_CLC_NEWEST)), ack = *(int *)(base + XR(P2C_CLC_ACK));
 		if (*done < ack || *done > newest)
@@ -8674,7 +8748,9 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 	// 0x10 << local client) by that view. vis_swap gives the cgame, which draws him as local client 0, his bits in local client 0's place: right for the cgame's own tests,
 	// wrong for the renderer's, so a model the script hid from player 2 alone was drawn in his half and one hidden from player 1 alone was not (Vlad, Spec Ops snowmobile
 	// races 2026-11-17: player 2 saw his own rider body from inside; entity type 13, gone with skiptypes=8192). The two bits go back for the renderer ([native] m11mask=0 off).
-	if (ctx_current == 1 && mode == 11 && vis_swapped && CFG_ONCE("m11mask", 1)) {
+	// (the 32-bit builds have no vis_swap: there add_entity_hook swaps each entity's bits, ent_bits_swapped; the rider body of a Cliffhanger snowmobile, hidden from its rider,
+	// stood in front of player 2's own camera, 2026-11-21)
+	if (ctx_current == 1 && mode == 11 && (vis_swapped || ent_bits_swapped) && CFG_ONCE("m11mask", 1)) {
 		const unsigned b0 = d & 0x10u, b1 = d & 0x20u;
 		d = (d & ~0x30u) | (b0 << 1) | (b1 >> 1);
 	}
@@ -8914,6 +8990,7 @@ static void add_entity_hook(int n)
 		if (swapbits && !vis_swapped) { // (not when vis_swap already swapped them for the whole draw: a second swap gave +0xec back player 1's marks)
 			unsigned b0 = saved & 0x10, b1 = saved & 0x20;
 			*flags = (saved & ~0x30u) | (b0 ? 0x20 : 0) | (b1 ? 0x10 : 0);
+			ent_bits_swapped = 1;
 		}
 		{
 			float sv[LAG_SAVED];
@@ -8942,6 +9019,7 @@ static void add_entity_hook(int n)
 			}
 		}
 		*flags = saved;
+		ent_bits_swapped = 0;
 		return;
 	}
 	{
@@ -9469,6 +9547,29 @@ static void vol_off_hook(int prio, int fade)
 {
 	if (mix_pass(MIX_VOL, prio, 0, fade))
 		vol_off_original(prio, fade);
+}
+// The vehicles' client state (rva 0x280fb0, called by the vehicle draw 0x280860 at 0x2808c1; 32 bits: VA 0x662730 from VA 0x42771a, cdecl): one block per vehicle for
+// the whole game (rva 0x1b762f0, 64 x 0x80; VA 0x1b99848): the time since its last update, its velocity, the tread scroll and the engine sound's state machine (0x27efb0:
+// the idle, engine and rev aliases started and stopped through 0x27ec00). Both views draw every vehicle, so both ran the update in every frame: the second one with the
+// time since the first (0, or less than 0 when player 2's client time was behind), and the engine sounds started a second time (QA 2026-11-21, Cliffhanger's
+// snowmobiles, sndcount=2: snowmobile_1_idle 642 / 642 starts a second in contexts 0 / 1; Spec Ops engine audit row I). Context 1 skips it: the state is the world's,
+// player 1's view keeps it and player 2's draw reads it. [native] vehupd1=0 off.
+static void (*veh_update_original)(int, void *);
+static void veh_update_hook(int lc, void *cent)
+{
+	if (ctx_current == 1 && native_active && CFG_ONCE("vehupd1", 1))
+		return;
+	veh_update_original(lc, cent);
+}
+static void veh_update_install(void)
+{
+#ifdef _WIN64
+	uint8_t *at = base + XR(0x2808c1), *fn = base + XR(0x280fb0);
+#else
+	uint8_t *at = base + XR(0x2771a), *fn = base + XR(0x262730);
+#endif
+	const int ok = at[0] == 0xe8 && at + 5 + *(const int32_t *)(at + 1) == fn && jhook_call(at, (void *)veh_update_hook, (void **)&veh_update_original);
+	log_printf("native: the vehicles' client state and engine sounds %s", ok ? "are updated once a frame (context 0)" : "(the call at the vehicle draw) are not as expected: both views update them");
 }
 #ifdef _WIN64
 // The entities' looping sounds in 64 bits (the 32-bit loopsnd1 below; owner 2026-11-17: on the 64-bit split screen a sound "like an ADSL connection" in Second Sun, not on
@@ -10025,6 +10126,7 @@ static void loop_expire_install32(void)
 static void sound_once_install32(void)
 {
 	loop_expire_install32();
+	veh_update_install();
 	if (!cfg("evsnd1", 1) && !cfg("sndcount", 0))
 		return;
 	snd_count32 = cfg("sndcount", 0) != 0;
@@ -10257,6 +10359,7 @@ static void contexts_install(void)
 		}
 		mix_install64();
 		ent_loops_install64();
+		veh_update_install();
 		snd_frame_install64();
 		if (!jhook_function(base + XR(0x9c960), add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
@@ -10484,6 +10587,8 @@ static void cg_step_hook(unsigned lc)
 				log_printf("native: p2time: player 2's cl.serverTime %d -> %d", *t, (int)cg_time_arg);
 			*t = (int)cg_time_arg;
 		}
+		if (laser_split_on()) // (his own laser list, which nothing else empties: 0xa5850 runs for player 1 only)
+			*(int *)(base + XR(RVA_LASER_COUNT)) = 0;
 		cg_step_original(0);
 		if (CFG_ONCE("animleaf", 0)) // QA: the partner body's tree after player 2's step
 			animleaf_log("s1", 0, NULL), animleaf_log("s1", CFG_ONCE("animleafent", 1), NULL);
@@ -10730,6 +10835,10 @@ static int split_addresses_ok(void)
 				log_printf("native: the range of frame_msec (reference rva 0x%x) was not found in this build: player 2's mouse does not turn the view in split screen (a pad does)", ranges[i].rva);
 				continue;
 			}
+			if (i >= RANGE_LASER && i < RANGE_LASER + RANGE_LASER_N) { // (ctx_swap_mask leaves it out: one list, the lasers drawn twice in player 2's half)
+				log_printf("native: a part of the laser list (reference rva 0x%x) was not found in this build: player 2's half draws each laser twice", ranges[i].rva);
+				continue;
+			}
 			if (bad++ < 6)
 				log_printf("native: the split screen needs the range at reference rva 0x%x, which was not found in this build", ranges[i].rva);
 		}
@@ -10784,6 +10893,14 @@ static int activate(int players)
 	session_reset();
 	ctx_on = 1;
 	InterlockedExchange(&coopdvar_on, cfg("coopdvar", 1));
+	if (coopdvar_on && !getenv("MW2COOP_SPLITZONES")) { // at once: the thread looks only four times a second without a session (audit 2026-11-18, native 8), and the level's zones were loaded before its first
+			   // write (they read coop 0: no Spec Ops zone, no player bodies in the split screen; zones.c also counts the session itself now)
+		AcquireSRWLockExclusive(&coopdvar_lock);
+		uint8_t *dvar = *(uint8_t **)(base + RVA_COOP_DVAR);
+		if (dvar)
+			*(int *)(dvar + 0x10) = 1;
+		ReleaseSRWLockExclusive(&coopdvar_lock);
+	}
 	native_active = 1;
 #ifdef _WIN64
 	fov_scale_install(); // (the dvars exist once the cgame is up: the session starts in a level)

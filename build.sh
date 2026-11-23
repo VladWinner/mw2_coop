@@ -7,8 +7,12 @@ set -e
 cd "$(dirname "$0")"
 LLVM_MINGW=${LLVM_MINGW:-../tools/llvm-mingw/llvm-mingw-20261006-ucrt-x86_64}
 CC="$LLVM_MINGW/bin/x86_64-w64-mingw32-clang"
+# the version the updater compares (src/update.c): tools/make_release.sh passes the release tag (v1.5.3, nightly-<date>-<commit>); any other build is "dev"
+MW2COOP_VERSION=${MW2COOP_VERSION:-dev}
+case "$MW2COOP_VERSION" in *[!A-Za-z0-9._-]*) echo "bad MW2COOP_VERSION $MW2COOP_VERSION"; exit 1 ;; esac
+VER_DEF="-DMW2COOP_VERSION=\"$MW2COOP_VERSION\""
 SRC="src/main.c src/saves.c src/d3dcap.c src/modtex.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/control.c src/discord.c src/crash.c src/scripts.c src/localize.c src/memdump.c src/menus.c src/mirror.c src/transplant.c src/access.c src/settings.c src/inimerge.c src/inisync.c src/voicefix.c src/upnp.c src/steamnet.c src/firewall.c src/zones.c src/missions.c src/menutable.c src/logo.c src/ctexts.c src/addr.c src/net.c src/netguard.c src/fonts.c src/devices.c src/console.c src/native.c src/guards.c src/climbads.c src/window.c
-	src/party.c src/progress.c src/netwatch.c src/nick.c src/scrdebug.c src/scrdebug_stack.c src/shot.c src/fov.c src/padicon.c src/padopts.c src/gfxopts.c src/enhopts.c src/upscale.c src/fsr3.c src/padglyphs.c src/rawinput.c src/pads.c src/weaponfov.c src/inputlog.c src/loadprof.c src/rumble.c src/dx/state11.c src/dx/stateprobe.c src/dx/sm3.c src/dx/mirror11.c src/dx/d3dcallers.c src/dx/natgfx.c src/dx/natcheck.c src/dx/natdraw11.c src/dx/nat11.c src/dx/natdrawfn.c src/dx/natdrawfn2.c src/dx/natres.c src/dx/natres2.c src/dx/natres3.c src/dx/natstart.c src/dx/natframe.c src/dx/natframe2.c src/dx/natbring.c src/dx/natboot.c src/winmm_stubs.S src/winmm.def"
+	src/party.c src/progress.c src/netwatch.c src/nick.c src/scrdebug.c src/scrdebug_stack.c src/shot.c src/fov.c src/padicon.c src/padopts.c src/gfxopts.c src/enhopts.c src/upscale.c src/fsr3.c src/padglyphs.c src/rawinput.c src/pads.c src/weaponfov.c src/inputlog.c src/loadprof.c src/rumble.c src/update.c src/updcore.c src/dx/state11.c src/dx/stateprobe.c src/dx/sm3.c src/dx/mirror11.c src/dx/d3dcallers.c src/dx/natgfx.c src/dx/natcheck.c src/dx/natdraw11.c src/dx/nat11.c src/dx/natdrawfn.c src/dx/natdrawfn2.c src/dx/natres.c src/dx/natres2.c src/dx/natres3.c src/dx/natstart.c src/dx/natframe.c src/dx/natframe2.c src/dx/natbring.c src/dx/natboot.c src/winmm_stubs.S src/winmm.def"
 if [ "$1" = x86 ]; then
 	STRIP=; { [ "$2" = release ] || [ "$3" = release ]; } && STRIP=-s   # release: stripped, no local paths in the DLL
 	# the 32-bit build of the game (see docs/32bit-plan.md): only the first slice is ported so far
@@ -17,7 +21,7 @@ if [ "$1" = x86 ]; then
 	OUT=build/x86; DEF=
 	if [ "$2" = iw4x ]; then echo "(no separate iw4x build any more: the 32-bit DLL supports the iw4x-sp client)"; fi
 	mkdir -p $OUT
-	"$CC32" -O2 $STRIP -Wall -Wextra $DEF -shared -static -static-libgcc -Isrc/x86 -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -o $OUT/winmm.dll 		src/x86/main32.c src/x86/stubs32.c src/saves.c src/guards.c src/climbads.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/scripts.c src/zones.c src/missions.c src/menutable.c src/logo.c src/ctexts.c src/addr.c 		src/control.c src/discord.c src/party.c src/settings.c src/inimerge.c src/inisync.c src/voicefix.c src/upnp.c src/crash.c src/fov.c src/mirror.c src/localize.c src/progress.c src/fonts.c src/devices.c src/console.c src/native.c src/addr159.c src/menus.c src/padicon.c src/padopts.c src/gfxopts.c src/enhopts.c src/upscale.c src/fsr3.c src/padglyphs.c src/rawinput.c src/pads.c src/weaponfov.c src/inputlog.c src/loadprof.c src/rumble.c src/dx/state11.c src/dx/stateprobe.c src/dx/sm3.c src/dx/mirror11.c src/dx/d3dcallers.c src/dx/natgfx.c src/dx/natcheck.c src/access.c src/net.c src/netguard.c src/netwatch.c src/nick.c src/steamnet.c src/firewall.c src/memdump.c src/transplant.c src/window.c src/shot.c src/d3dcap.c src/modtex.c src/x86/scrdebug32.c src/x86/iw4xtext.c src/scrdebug_stack.c src/x86/winmm_stubs.S src/x86/winmm.def -lbcrypt -lws2_32 -liphlpapi -lgdi32 -lshell32
+	"$CC32" -O2 $STRIP -Wall -Wextra $DEF $VER_DEF -shared -static -static-libgcc -Isrc/x86 -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -o $OUT/winmm.dll 		src/x86/main32.c src/x86/stubs32.c src/saves.c src/guards.c src/climbads.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/scripts.c src/zones.c src/missions.c src/menutable.c src/logo.c src/ctexts.c src/addr.c 		src/control.c src/discord.c src/party.c src/settings.c src/inimerge.c src/inisync.c src/voicefix.c src/upnp.c src/crash.c src/fov.c src/mirror.c src/localize.c src/progress.c src/fonts.c src/devices.c src/console.c src/native.c src/addr159.c src/menus.c src/padicon.c src/padopts.c src/gfxopts.c src/enhopts.c src/upscale.c src/fsr3.c src/padglyphs.c src/rawinput.c src/pads.c src/weaponfov.c src/inputlog.c src/loadprof.c src/rumble.c src/update.c src/updcore.c src/dx/state11.c src/dx/stateprobe.c src/dx/sm3.c src/dx/mirror11.c src/dx/d3dcallers.c src/dx/natgfx.c src/dx/natcheck.c src/access.c src/net.c src/netguard.c src/netwatch.c src/nick.c src/steamnet.c src/firewall.c src/memdump.c src/transplant.c src/window.c src/shot.c src/d3dcap.c src/modtex.c src/x86/scrdebug32.c src/x86/iw4xtext.c src/scrdebug_stack.c src/x86/winmm_stubs.S src/x86/winmm.def -lbcrypt -lws2_32 -liphlpapi -lgdi32 -lshell32 -lwinhttp
 	echo "built $OUT/winmm.dll"
 	exit 0
 fi
@@ -34,9 +38,9 @@ done
 "$LLVM_MINGW/bin/llvm-nm" --defined-only -g $B12/*.o | awk 'NF == 3 && $3 !~ /^\./ { print $3 " b12_" $3 }' | sort -u > $B12/map.txt
 for o in $B12/*.o; do "$LLVM_MINGW/bin/llvm-objcopy" --redefine-syms=$B12/map.txt $o; done
 if [ "$1" = release ]; then
-	"$CC" -O2 -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -s -o build/winmm.dll $SRC $B12/*.o -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid
+	"$CC" -O2 -Wall -Wextra $VER_DEF -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -s -o build/winmm.dll $SRC $B12/*.o -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid -lwinhttp -lbcrypt
 else
-	"$CC" -O2 -g -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -o build/winmm.dll $SRC $B12/*.o -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid \
+	"$CC" -O2 -g -Wall -Wextra $VER_DEF -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -o build/winmm.dll $SRC $B12/*.o -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid -lwinhttp -lbcrypt \
 		-Wl,--pdb=build/winmm.pdb
 fi
 echo "built build/winmm.dll${1:+ ($1)}"

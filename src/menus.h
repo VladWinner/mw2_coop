@@ -28,3 +28,6 @@ void menus_log_instances(const char *name, const char *mat);
 void menus_log_names(void);
 // devices.c: a player of the split screen lobby pressed a button or gave his device back (the lobby texts follow)
 void menus_split_changed(void);
+// update.c (main thread): a yes/no popup of menus.menu ("question" with the rows yes and no) made once the UI has its menus; show or hide one of a menu's rows
+void menus_yes_no_popup(const char *name);
+void menus_show_row(uint8_t *menu, const char *row, int visible);

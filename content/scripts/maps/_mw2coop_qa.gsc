@@ -113,6 +113,19 @@
 //   glyphs   - (trainer, native split screen, [native] p1pad=<n>) each player gets a hint naming a
 //              key ("[{+gostand}]"): player 2 on a pad sees the button's picture, player 1 the key;
 //              the composed picture is saved as "glyphs" (src/padglyphs.c)
+//   slidesync - (favela_escape, start "solorun_chopper") player 1 steps onto the rooftop slide while player 2 is still at the start: player 2
+//              is brought next to him (maps\_mw2coop_favelaescape::slide_sync), frame "slide"
+//   groundpick - (native split screen, player 2 on a pad: MW2COOP_PAD=0; any level where player 2 holds a weapon) player 2 picks a weapon off the
+//              ground (Vlad 2026-11-21: "a weapon he picks up shows only after switching once or twice"): one of his weapons is taken from him and laid
+//              in front of him, his pad holds X (Use) on it; it must be in his hands without a switch of his own (frames gp-before, gp-after)
+//   deadpick - (native split screen, player 2 on a pad: MW2COOP_PAD=0; invasion) a weapon lying in the level (one player 2 lacks): player 2 is put beside
+//              it, looks at it and holds X; it must be his weapon in hands (frames dp-before, dp-after); player 1 takes it if player 2 could not (the item,
+//              or player 2's input?)
+//   edgeyaw  - (cliffhanger, default start) player 1 turns to eight directions on the cave ledge; each time player 2 is brought to him
+//              (maps\_mw2coop::teleport_to_partner): beside him, "on his spot" or held back at the edge; then whether player 2 fell
+//   laserdup - (any level with allies, native split screen) the four allies nearest player 1 get their laser forced on for 20 s, frames
+//              "laser-a/b"; run it with the console line "!watchx a5920 @400518" (64-bit: the laser draw and the laser list's count, by
+//              client context): each context should draw only its own lasers (the engine audit's row E)
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -586,6 +599,21 @@ main()
 			break;
 		case "chopperjump":
 			chopperjump();
+			break;
+		case "slidesync":
+			slidesync();
+			break;
+		case "laserdup":
+			laserdup();
+			break;
+		case "edgeyaw":
+			edgeyaw();
+			break;
+		case "groundpick":
+			groundpick();
+			break;
+		case "deadpick":
+			deadpick();
 			break;
 		case "scenewatch":
 			scenewatch();
@@ -2434,11 +2462,15 @@ link_probe()
 		now = 0;
 		if ( level.player IsLinked() )
 			now = 1;
+		if ( i == 0 && isdefined( level.player2 ) )
+			text += " (player 2 at frame 0 @" + int( level.player2.origin[ 0 ] ) + "," + int( level.player2.origin[ 1 ] ) + "," + int( level.player2.origin[ 2 ] ) + ")";
 		if ( now != last )
 			text += " frame " + i + ": " + now + " @" + int( level.player.origin[ 0 ] ) + "," + int( level.player.origin[ 1 ] );
 		last = now;
 		wait 0.05;
 	}
+	if ( isdefined( level.player2 ) )
+		text += "; player 2 now @" + int( level.player2.origin[ 0 ] ) + "," + int( level.player2.origin[ 1 ] ) + "," + int( level.player2.origin[ 2 ] ) + " linked " + level.player2 IsLinked();
 	maps\_mw2coop::state( "link probe:" + text );
 }
 
@@ -2836,6 +2868,287 @@ qa_side_camera( target )
 	cam Delete();
 }
 
+// Escape from Favela (start point "solorun_chopper"): the rooftop slide carries a player to the ledge, so a partner far behind is brought to the first one when he steps onto
+// it (maps\_mw2coop_favelaescape::slide_sync: 2 s after the flag, when the other one is more than 500 units away). Player 1 is put on the slide's trigger, player 2 stays.
+groundpick()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait_intro();
+	wait 4;
+	p = level.player2;
+	// a level that starts in a vehicle (Wolverines!: the Humvee, weapons disabled until the players get out): wait till player 2 stands on his feet
+	for ( t = 0; t < 70 && ( p IsLinked() || level.player IsLinked() ); t += 0.5 )
+		wait 0.5;
+	check( !p IsLinked(), "player 2 is on his feet (" + t + " s)" );
+	wait 4;
+	level.mw2coop_no_follow = true;
+	// the weapon in his hands is taken and laid on the ground: his hands are empty or hold his other weapon, as in Vlad's report
+	other = p GetCurrentWeapon();
+	report( "groundpick: player 2 holds " + other + "; " + weapons_text( p ) );
+	p TakeWeapon( other );
+	if ( p GetCurrentWeapon() == "none" )
+		report( "groundpick: player 2's hands are empty" );
+	wait 1;
+	fwd = AnglesToForward( ( 0, p GetPlayerAngles()[ 1 ], 0 ) );
+	spot = PlayerPhysicsTrace( p.origin + fwd * 45 + ( 0, 0, 30 ), p.origin + fwd * 45 - ( 0, 0, 100 ) );
+	item = Spawn( "weapon_" + other, spot + ( 0, 0, 4 ) );
+	wait 0.5;
+	p SetPlayerAngles( VectorToAngles( item.origin - p GetEye() ) );
+	wait 0.5;
+	qa_shot( "gp-before" );
+	presses = 0;
+	for ( presses = 0; presses < 4 && !p HasWeapon( other ); presses++ )
+	{
+		if ( isdefined( item ) )
+			p SetPlayerAngles( VectorToAngles( item.origin - p GetEye() ) );
+		wait 0.2;
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 16384 0 0 0" );	// X held: Use
+		wait 1.2;
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+		wait 0.6;
+	}
+	check( p HasWeapon( other ), "player 2 picked the " + other + " up with Use (" + presses + " presses; " + weapons_text( p ) + ")" );
+	wait 1.5;
+	check( p GetCurrentWeapon() == other, "the picked weapon is player 2's weapon in hands (" + p GetCurrentWeapon() + ")" );
+	if ( !p HasWeapon( other ) && isdefined( item ) )
+	{
+		// control (2026-11-23: player 2 never took it on 64 and 32 bits, and no "hold to pick up" hint showed in his half): player 1, on the keyboard, takes
+		// the same item from the other side. If he cannot either, the item made by Spawn() is the trouble, not player 2's input
+		level.player TakeWeapon( other );
+		wait 0.5;
+		spot1 = PlayerPhysicsTrace( item.origin + fwd * 40 + ( 0, 0, 30 ), item.origin + fwd * 40 - ( 0, 0, 100 ) );
+		level.player SetOrigin( spot1 );
+		level.player SetPlayerAngles( VectorToAngles( item.origin - level.player GetEye() ) );
+		wait 0.8;
+		qa_shot( "gp-p1-before" );
+		for ( i = 0; i < 3 && !level.player HasWeapon( other ); i++ )
+		{
+			press( level.player, "activate", 1200 );
+			wait 1.6;
+		}
+		took = "could not take";
+		if ( level.player HasWeapon( other ) )
+			took = "took";
+		report( "groundpick: control: player 1 " + took + " the " + other + " (" + weapons_text( level.player ) + ")" );
+		qa_shot( "gp-p1-after" );
+	}
+	p SetPlayerAngles( ( 0, p GetPlayerAngles()[ 1 ], 0 ) );
+	wait 0.5;
+	qa_shot( "gp-after" );
+	wait 3;
+	qa_shot( "gp-after2" );
+	report( "done" );
+}
+
+deadpick()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait_intro();
+	wait 4;
+	p = level.player2;
+	for ( t = 0; t < 70 && ( p IsLinked() || level.player IsLinked() ); t += 0.5 )
+		wait 0.5;
+	check( !p IsLinked(), "player 2 is on his feet (" + t + " s)" );
+	wait 4;
+	level.mw2coop_no_follow = true;
+	// a weapon lying in the level that player 2 does not have (an ally killed by Kill() drops nothing: he goes ragdoll at once, animscripts
+	// DropWeaponWrapper "too late"; 2026-11-23 Invasion has a scar_h_reflex lying near the start)
+	names = strtok( "scar_h_reflex m4_grunt m4m203_reflex scar_h scar_h_acog famas_reflex tavor_reflex ak47 ak47_reflex m240 rpd ump45 mp5 aug_reflex fn2000_reflex beretta usp", " " );
+	item = undefined;
+	w = undefined;
+	foreach ( name in names )
+	{
+		if ( p HasWeapon( name ) )
+			continue;
+		found = GetEntArray( "weapon_" + name, "classname" );
+		foreach ( it in found )
+			if ( !isdefined( item ) || Distance( it.origin, p.origin ) < Distance( item.origin, p.origin ) )
+			{
+				item = it;
+				w = name;
+			}
+	}
+	check( isdefined( item ), "a weapon lies in the level that player 2 does not have" );
+	if ( !isdefined( item ) )
+	{
+		report( "done" );
+		return;
+	}
+	report( "deadpick: player 2 holds " + p GetCurrentWeapon() + "; " + weapons_text( p ) + "; the weapon on the ground: " + w + " at " + vec_int( item.origin ) + ", " + int( Distance( item.origin, p.origin ) ) + " away" );
+	wait 1;	// (it lands)
+	// player 2 beside it, 40 units away on the floor, facing it
+	fwd = AnglesToForward( ( 0, p GetPlayerAngles()[ 1 ], 0 ) );
+	spot2 = PlayerPhysicsTrace( item.origin - fwd * 40 + ( 0, 0, 30 ), item.origin - fwd * 40 - ( 0, 0, 100 ) );
+	p SetOrigin( spot2 );
+	p SetPlayerAngles( VectorToAngles( item.origin - p GetEye() ) );
+	wait 0.5;
+	qa_shot( "dp-before" );
+	presses = 0;
+	for ( presses = 0; presses < 4 && !p HasWeapon( w ); presses++ )
+	{
+		if ( isdefined( item ) )
+			p SetPlayerAngles( VectorToAngles( item.origin - p GetEye() ) );
+		wait 0.2;
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 16384 0 0 0" );	// X held: Use
+		wait 1.2;
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+		wait 0.6;
+	}
+	check( p HasWeapon( w ), "player 2 picked the dropped " + w + " up with Use (" + presses + " presses; " + weapons_text( p ) + ")" );
+	wait 1.5;
+	check( p GetCurrentWeapon() == w, "the picked weapon is player 2's weapon in hands (" + p GetCurrentWeapon() + ")" );
+	if ( !p HasWeapon( w ) && isdefined( item ) )
+	{
+		spot1 = PlayerPhysicsTrace( item.origin + fwd * 40 + ( 0, 0, 30 ), item.origin + fwd * 40 - ( 0, 0, 100 ) );
+		level.player SetOrigin( spot1 );
+		level.player SetPlayerAngles( VectorToAngles( item.origin - level.player GetEye() ) );
+		wait 0.8;
+		qa_shot( "dp-p1-before" );
+		for ( i = 0; i < 3 && !level.player HasWeapon( w ); i++ )
+		{
+			press( level.player, "activate", 1200 );
+			wait 1.6;
+		}
+		took = "could not take";
+		if ( level.player HasWeapon( w ) )
+			took = "took";
+		report( "deadpick: control: player 1 " + took + " the " + w + " (" + weapons_text( level.player ) + ")" );
+	}
+	p SetPlayerAngles( ( 0, p GetPlayerAngles()[ 1 ], 0 ) );
+	wait 0.5;
+	qa_shot( "dp-after" );
+	wait 3;
+	qa_shot( "dp-after2" );
+	report( "done" );
+}
+
+edgeyaw()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 6;
+	home = level.player2.origin;
+	report( "player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( home ) );
+	fell = 0;
+	for ( yaw = 0; yaw < 360; yaw += 45 )
+	{
+		level.player SetPlayerAngles( ( 0, yaw, 0 ) );
+		wait 0.2;
+		level.player2.mw2coop_moved_how = "-";
+		moved = level.player2 maps\_mw2coop::teleport_to_partner( level.player );
+		at = level.player2.origin;
+		wait 1.5;
+		dz = level.player.origin[ 2 ] - level.player2.origin[ 2 ];
+		report( "yaw " + yaw + ": moved " + moved + " (" + level.player2.mw2coop_moved_how + ") to " + vec_int( at ) + ", 1.5 s later " + vec_int( level.player2.origin ) + ", " + int( dz ) + " below player 1" );
+		if ( dz > 100 )
+		{
+			fell++;
+			level.player2 SetOrigin( home );
+			level.player2 SetVelocity( ( 0, 0, 0 ) );
+			wait 0.5;
+		}
+	}
+	check( fell == 0, "player 2 never fell off the ledge (" + fell + " of 8)" );
+	// what the old fallback did when nothing beside him was free: player 2 on player 1's spot (the two push apart)
+	level.player SetPlayerAngles( ( 0, 90, 0 ) );
+	level.player2 SetOrigin( level.player.origin );
+	wait 2;
+	dz = level.player.origin[ 2 ] - level.player2.origin[ 2 ];
+	report( "the old fallback (player 2 on player 1's spot, yaw 90): 2 s later player 2 at " + vec_int( level.player2.origin ) + ", " + int( dz ) + " below player 1, player 1 at " + vec_int( level.player.origin ) );
+	report( "done" );
+}
+
+laserdup()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 8;
+	allies = get_array_of_closest( level.player.origin, GetAIArray( "allies" ) );
+	lit = [];
+	foreach ( ai in allies )
+	{
+		if ( lit.size >= 4 )
+			break;
+		ai LaserForceOn();
+		lit[ lit.size ] = ai;
+	}
+	check( lit.size > 0, "allies with the laser forced on (" + lit.size + ")" );
+	if ( lit.size )
+	{
+		// both players face the first lit ally from a few steps away, so both halves show the beams
+		target = lit[ 0 ].origin;
+		foreach ( i, p in level.players )
+		{
+			ang = VectorToAngles( target + ( 0, 0, 50 ) - p GetEye() );
+			p SetPlayerAngles( ( ang[ 0 ], ang[ 1 ], 0 ) );
+		}
+	}
+	SetDvar( "mw2coop_qa_laser_on", "1" );
+	report( "lasers on at " + GetTime() + " ms" );
+	wait 4;
+	qa_shot( "laser-a" );
+	wait 12;
+	qa_shot( "laser-b" );
+	wait 4;
+	foreach ( ai in lit )
+		if ( isalive( ai ) )
+			ai LaserForceOff();
+	report( "lasers off at " + GetTime() + " ms" );
+	report( "done" );
+}
+
+slidesync()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait 8;
+	trigs = [];	// (GetEntArray takes no script_flag key: the flag triggers by their class, then their flag)
+	foreach ( cls in strtok( "trigger_multiple_flag_set trigger_multiple_flag_set_touching trigger_multiple", " " ) )
+	{
+		ents = GetEntArray( cls, "classname" );
+		if ( !isdefined( ents ) )
+			continue;
+		foreach ( e in ents )
+			if ( isdefined( e.script_flag ) && e.script_flag == "trig_solorun_player_on_slide" )
+				trigs[ trigs.size ] = e;
+	}
+	check( trigs.size > 0, "the slide's trigger exists (" + trigs.size + ")" );
+	if ( !trigs.size )
+		return;
+	trig = trigs[ 0 ];
+	report( "slide trigger at " + vec_int( trig.origin ) + ", ladder " + isdefined( level.chopperladder ) + ", player 1 at " + vec_int( level.player.origin ) + ", player 2 at " + vec_int( level.player2.origin ) + ", " + int( Distance( level.player.origin, level.player2.origin ) ) + " apart" );
+	// player 2 well behind the slide (it carries a player toward the ladder): the side of the trigger away from the ladder, 700 units, on whatever is below
+	if ( isdefined( level.chopperladder ) )
+	{
+		away = VectorNormalize( ( trig.origin[ 0 ] - level.chopperladder.origin[ 0 ], trig.origin[ 1 ] - level.chopperladder.origin[ 1 ], 0 ) );
+		back = trig.origin + away * 700;
+		level.player2 SetOrigin( PlayerPhysicsTrace( back + ( 0, 0, 600 ), back - ( 0, 0, 800 ) ) );
+		report( "ladder at " + vec_int( level.chopperladder.origin ) + ", player 2 put behind the slide at " + vec_int( level.player2.origin ) );
+		wait 1;
+	}
+	spot = PlayerPhysicsTrace( trig.origin + ( 0, 0, 40 ), trig.origin - ( 0, 0, 400 ) );
+	level.player SetOrigin( spot );
+	t = 0;
+	while ( !flag( "trig_solorun_player_on_slide" ) && t < 5 )
+	{
+		wait 0.1;
+		t += 0.1;
+	}
+	check( flag( "trig_solorun_player_on_slide" ), "player 1 on the slide sets its flag (" + t + " s)" );
+	report( "player 1 on the slide at " + vec_int( level.player.origin ) + ", player 2 " + int( Distance( level.player.origin, level.player2.origin ) ) + " away" );
+	qa_shot( "slide-a" );
+	t = 0;
+	while ( Distance( level.player.origin, level.player2.origin ) > 300 && t < 9 )
+	{
+		wait 0.25;
+		t += 0.25;
+	}
+	d = Distance( level.player.origin, level.player2.origin );
+	check( d <= 300, "player 2 was brought to player 1 (" + int( d ) + " apart after " + t + " s)" );
+	qa_shot( "slide-b" );
+	wait 3;
+	qa_shot( "slide-c" );
+	report( "after 3 s: player 1 at " + vec_int( level.player.origin ) + " alive " + isalive( level.player ) + ", player 2 at " + vec_int( level.player2.origin ) + " alive " + isalive( level.player2 ) );
+	report( "done" );
+}
+
 // Escape from Favela (start point "solorun_chopper": the level's code calls that part "chopperjump", but a start
 // named so does not exist and the level then starts at its beginning, where no chopper comes: 2026-11-17): player 2 leaps for the chopper's rope ladder (real keys:
 // forward, then jump, facing the ladder); player 1 catches the rope too; both are on it when the
@@ -3133,7 +3446,15 @@ snowview()
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
 	if ( level.start_point == "icepick" )
 	{
-		// player 2 rides, player 1 walks up and looks at his snowmobile
+		// player 2 rides, player 1 walks up and looks at his snowmobile; with the dvar mw2coop_qa_snowrider 1 the other way round (player 2 looks at
+		// player 1's rider: the 32-bit split screen check of 2026-11-23, a rider seen from the other player's half)
+		rider = level.player2;
+		viewer = level.player;
+		if ( GetDvar( "mw2coop_qa_snowrider" ) == "1" )
+		{
+			rider = level.player;
+			viewer = level.player2;
+		}
 		t = 0;
 		while ( !flag( "player_snowmobile_available" ) && t < 90 )
 		{
@@ -3141,14 +3462,14 @@ snowview()
 			t += 0.5;
 		}
 		wait 1;
-		level.player2 player_mount_vehicle( level.player_snowmobile );
+		rider player_mount_vehicle( level.player_snowmobile );
 		wait 5;
-		v = level.player2.vehicle;
+		v = rider.vehicle;
 		sp = GetEnt( "playermobile_spawner", "targetname" );
 		if ( isdefined( sp ) )
 			report( "spawner " + sp.classname + " vehicletype " + sp.vehicletype );
 		report( "vehicle type " + v.vehicletype + ", riders " + isdefined( v.riders ) + ", seats " + v maps\_mw2coop::seats_text() );
-		report( "player 2 rides model " + v.model + ", first person " + isdefined( v.firstPerson ) + ", copy " + isdefined( v.mw2coop_copy ) );
+		report( player_name( rider ) + " rides model " + v.model + ", first person " + isdefined( v.firstPerson ) + ", copy " + isdefined( v.mw2coop_copy ) );
 		// four fixed views around the snowmobile, 130 units away, standing on the snow
 		report( "rider body " + isdefined( v.mw2coop_rider ) );
 		if ( isdefined( v.mw2coop_rider ) )
@@ -3176,8 +3497,8 @@ snowview()
 					dir = AnglesToForward( ( 0, v.angles[ 1 ] - 90 + n * 90, 0 ) );
 					spot = center + dir * 110;
 					spot = PlayerPhysicsTrace( spot + ( 0, 0, 60 ), spot - ( 0, 0, 300 ) );
-					level.player SetOrigin( spot );
-					level.player SetPlayerAngles( VectorToAngles( center - level.player GetEye() ) );
+					viewer SetOrigin( spot );
+					viewer SetPlayerAngles( VectorToAngles( center - viewer GetEye() ) );
 					wait 0.8;
 					qa_shot( "rider-pose" + variant + "-" + n );
 				}

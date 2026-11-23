@@ -232,6 +232,72 @@ static const ModString strings[] = {
 	// Второй игрок не сможет войти. / Разрешить доступ?
 	{"MW2COOP_FIREWALL_TEXT", "\xc2\xf2\xee\xf0\xee\xe9 \xe8\xe3\xf0\xee\xea \xed\xe5 \xf1\xec\xee\xe6\xe5\xf2 \xe2\xee\xe9\xf2\xe8.\n\xd0\xe0\xe7\xf0\xe5\xf8\xe8\xf2\xfc \xe4\xee\xf1\xf2\xf3\xef?",
 	 "The other player cannot get in.\nAllow access?"},
+	// Обновление мода
+	{"MW2COOP_UPDATE_TITLE", "\xce\xe1\xed\xee\xe2\xeb\xe5\xed\xe8\xe5 \xec\xee\xe4\xe0",
+	 "Mod update"},
+	// Вышла версия %s мода Modern Warfare 2 Enhanced / (у вас %s). Скачать и установить её сейчас? / У обоих игроков должна быть одна версия.
+	{"MW2COOP_UPDATE_FMT", "\xc2\xfb\xf8\xeb\xe0 \xe2\xe5\xf0\xf1\xe8\xff %s \xec\xee\xe4\xe0 Modern Warfare 2 Enhanced\n(\xf3 \xe2\xe0\xf1 %s). \xd1\xea\xe0\xf7\xe0\xf2\xfc \xe8 \xf3\xf1\xf2\xe0\xed\xee\xe2\xe8\xf2\xfc \xe5\xb8 \xf1\xe5\xe9\xf7\xe0\xf1?\n\xd3 \xee\xe1\xee\xe8\xf5 \xe8\xe3\xf0\xee\xea\xee\xe2 \xe4\xee\xeb\xe6\xed\xe0 \xe1\xfb\xf2\xfc \xee\xe4\xed\xe0 \xe2\xe5\xf0\xf1\xe8\xff.",
+	 "Modern Warfare 2 Enhanced %s is out (you have %s).\nDownload and install it now?\nBoth players need the same version."},
+	// Обновить
+	{"MW2COOP_UPDATE_YES", "\xce\xe1\xed\xee\xe2\xe8\xf2\xfc",
+	 "Update"},
+	// Позже
+	{"MW2COOP_UPDATE_LATER", "\xcf\xee\xe7\xe6\xe5",
+	 "Later"},
+	// Скрыть
+	{"MW2COOP_UPDATE_HIDE", "\xd1\xea\xf0\xfb\xf2\xfc",
+	 "Hide"},
+	// Загрузка %s: %d%%
+	{"MW2COOP_UPDATE_DL_FMT", "\xc7\xe0\xe3\xf0\xf3\xe7\xea\xe0 %s: %d%%",
+	 "Downloading %s: %d%%"},
+	// Установка файлов...
+	{"MW2COOP_UPDATE_INSTALLING", "\xd3\xf1\xf2\xe0\xed\xee\xe2\xea\xe0 \xf4\xe0\xe9\xeb\xee\xe2...",
+	 "Installing the files..."},
+	// Версия %s установлена. / Игра запустится заново, чтобы работать с ней.
+	{"MW2COOP_UPDATE_DONE_FMT", "\xc2\xe5\xf0\xf1\xe8\xff %s \xf3\xf1\xf2\xe0\xed\xee\xe2\xeb\xe5\xed\xe0.\n\xc8\xe3\xf0\xe0 \xe7\xe0\xef\xf3\xf1\xf2\xe8\xf2\xf1\xff \xe7\xe0\xed\xee\xe2\xee, \xf7\xf2\xee\xe1\xfb \xf0\xe0\xe1\xee\xf2\xe0\xf2\xfc \xf1 \xed\xe5\xe9.",
+	 "Version %s is installed.\nThe game starts again to use it."},
+	// Перезапустить
+	{"MW2COOP_UPDATE_RESTART", "\xcf\xe5\xf0\xe5\xe7\xe0\xef\xf3\xf1\xf2\xe8\xf2\xfc",
+	 "Restart"},
+	// Выйти из игры
+	{"MW2COOP_UPDATE_QUIT", "\xc2\xfb\xe9\xf2\xe8 \xe8\xe7 \xe8\xe3\xf0\xfb",
+	 "Quit the game"},
+	// Закрыть
+	{"MW2COOP_UPDATE_CLOSE", "\xc7\xe0\xea\xf0\xfb\xf2\xfc",
+	 "Close"},
+	// У вас последняя версия мода (%s).
+	{"MW2COOP_UPDATE_NEWEST_FMT", "\xd3 \xe2\xe0\xf1 \xef\xee\xf1\xeb\xe5\xe4\xed\xff\xff \xe2\xe5\xf0\xf1\xe8\xff \xec\xee\xe4\xe0 (%s).",
+	 "You have the newest version of the mod (%s)."},
+	// Это сборка для разработки: / обновления для неё не предлагаются.
+	{"MW2COOP_UPDATE_DEV", "\xdd\xf2\xee \xf1\xe1\xee\xf0\xea\xe0 \xe4\xeb\xff \xf0\xe0\xe7\xf0\xe0\xe1\xee\xf2\xea\xe8:\n\xee\xe1\xed\xee\xe2\xeb\xe5\xed\xe8\xff \xe4\xeb\xff \xed\xe5\xb8 \xed\xe5 \xef\xf0\xe5\xe4\xeb\xe0\xe3\xe0\xfe\xf2\xf1\xff.",
+	 "This is a development build:\nno updates are offered for it."},
+	// Не удалось узнать, есть ли обновление / (нет связи с GitHub).
+	{"MW2COOP_UPDATE_NOCHECK", "\xcd\xe5 \xf3\xe4\xe0\xeb\xee\xf1\xfc \xf3\xe7\xed\xe0\xf2\xfc, \xe5\xf1\xf2\xfc \xeb\xe8 \xee\xe1\xed\xee\xe2\xeb\xe5\xed\xe8\xe5\n(\xed\xe5\xf2 \xf1\xe2\xff\xe7\xe8 \xf1 GitHub).",
+	 "Could not find out whether there is an update\n(no connection to GitHub)."},
+	// Обновление не установлено: / %s. / Мод остался прежним, подробности в mw2coop.log.
+	{"MW2COOP_UPDATE_FAIL_FMT", "\xce\xe1\xed\xee\xe2\xeb\xe5\xed\xe8\xe5 \xed\xe5 \xf3\xf1\xf2\xe0\xed\xee\xe2\xeb\xe5\xed\xee:\n%s.\n\xcc\xee\xe4 \xee\xf1\xf2\xe0\xeb\xf1\xff \xef\xf0\xe5\xe6\xed\xe8\xec, \xef\xee\xe4\xf0\xee\xe1\xed\xee\xf1\xf2\xe8 \xe2 mw2coop.log.",
+	 "The update was not installed:\n%s.\nThe mod is as it was; mw2coop.log has the details."},
+	// Нет связи с GitHub
+	{"MW2COOP_UPDATE_E_NET", "\xcd\xe5\xf2 \xf1\xe2\xff\xe7\xe8 \xf1 GitHub",
+	 "No connection to GitHub"},
+	// Загруженный файл не совпал с контрольной суммой
+	{"MW2COOP_UPDATE_E_HASH", "\xc7\xe0\xe3\xf0\xf3\xe6\xe5\xed\xed\xfb\xe9 \xf4\xe0\xe9\xeb \xed\xe5 \xf1\xee\xe2\xef\xe0\xeb \xf1 \xea\xee\xed\xf2\xf0\xee\xeb\xfc\xed\xee\xe9 \xf1\xf3\xec\xec\xee\xe9",
+	 "The download does not match its checksum"},
+	// Архив повреждён
+	{"MW2COOP_UPDATE_E_ARCHIVE", "\xc0\xf0\xf5\xe8\xe2 \xef\xee\xe2\xf0\xe5\xe6\xe4\xb8\xed",
+	 "The archive is damaged"},
+	// Файлы в папке игры не удалось заменить
+	{"MW2COOP_UPDATE_E_WRITE", "\xd4\xe0\xe9\xeb\xfb \xe2 \xef\xe0\xef\xea\xe5 \xe8\xe3\xf0\xfb \xed\xe5 \xf3\xe4\xe0\xeb\xee\xf1\xfc \xe7\xe0\xec\xe5\xed\xe8\xf2\xfc",
+	 "The files in the game folder could not be replaced"},
+	// В выпуске нет архива для этой версии игры
+	{"MW2COOP_UPDATE_E_ASSET", "\xc2 \xe2\xfb\xef\xf3\xf1\xea\xe5 \xed\xe5\xf2 \xe0\xf0\xf5\xe8\xe2\xe0 \xe4\xeb\xff \xfd\xf2\xee\xe9 \xe2\xe5\xf0\xf1\xe8\xe8 \xe8\xe3\xf0\xfb",
+	 "The release has no archive for this game build"},
+	// Проверять обновления
+	{"MW2COOP_ENH_UPDATE", "\xcf\xf0\xee\xe2\xe5\xf0\xff\xf2\xfc \xee\xe1\xed\xee\xe2\xeb\xe5\xed\xe8\xff",
+	 "Check for updates"},
+	// Мод
+	{"MW2COOP_ENH_G_MOD", "\xcc\xee\xe4",
+	 "Mod"},
 	// Другой напарник
 	{"MW2COOP_PARTNER_TITLE", "\xc4\xf0\xf3\xe3\xee\xe9 \xed\xe0\xef\xe0\xf0\xed\xe8\xea",
 	 "Different partner"},
@@ -304,7 +370,7 @@ typedef struct {
 	const char *name;
 	const char *first; // the string shown until a switch, NULL for text
 	volatile LONG shown; // index into strings[], -1 for text, -2 until <first> is looked up
-	char text[128];
+	char text[256]; // (the updater's questions are three lines)
 	LocalizeEntry entry;
 } Alias;
 
@@ -330,6 +396,10 @@ static Alias aliases[] = {
 	{"MW2COOP_SAVE_3", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_SAVE_4", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_LOBBY_2", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_UPDATE_Q", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_UPDATE_WAIT_Q", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_UPDATE_DONE_Q", NULL, -1, "", {NULL, NULL}},
+	{"MW2COOP_UPDATE_NOTE_Q", NULL, -1, "", {NULL, NULL}},
 	{"MW2COOP_LOBBY_3", NULL, -1, "", {NULL, NULL}},
 };
 #define ALIAS_COUNT (int)(sizeof(aliases) / sizeof(aliases[0]))
@@ -347,6 +417,11 @@ static FixedString fixed[] = {
 	// The stock text names Price, who has not been introduced yet at this point of the story
 	// (issue #6): "Доберитесь с капитаном Мактавишем и отрядом до зоны посадки."
 	{"FAVELA_ESCAPE_OBJ_FOLLOW_SOAP", "\xc4\xee\xe1\xe5\xf0\xe8\xf2\xe5\xf1\xfc \xf1 \xea\xe0\xef\xe8\xf2\xe0\xed\xee\xec \xcc\xe0\xea\xf2\xe0\xe2\xe8\xf8\xe5\xec \xe8 \xee\xf2\xf0\xff\xe4\xee\xec \xe4\xee \xe7\xee\xed\xfb \xef\xee\xf1\xe0\xe4\xea\xe8.", {NULL, NULL}},
+	// The title of the role popup of Overwatch (so_character_select_coop, specOpsTable.csv column 12): the stock text calls the AC-130 an attack helicopter, and the rows are the players (the one who takes the gunner's seat):
+	// "Выбрать боевой вертолет AC130" (owner, 2026-11-21: illiterate).
+	{"SPECIAL_OPS_SO_SELECT_AC130_GUNNER", "\xc2\xfb\xe1\xf0\xe0\xf2\xfc \xf1\xf2\xf0\xe5\xeb\xea\xe0 AC-130", {NULL, NULL}},
+	// The same popup in Big Brother: the stock "Выбрать боевой вертолет" (the rows are the players, not helicopters).
+	{"SPECIAL_OPS_SO_SELECT_CHOPPER_GUNNER", "\xc2\xfb\xe1\xf0\xe0\xf2\xfc \xf1\xf2\xf0\xe5\xeb\xea\xe0 \xe2\xe5\xf0\xf2\xee\xeb\xb8\xf2\xe0", {NULL, NULL}},
 };
 #define FIXED_COUNT (int)(sizeof(fixed) / sizeof(fixed[0]))
 
@@ -606,6 +681,26 @@ static void *find_header(int type, const char *name)
 		}
 	}
 	if (type == ASSET_TYPE_LOCALIZE_ENTRY && name) {
+		// QA: MW2COOP_LOCWATCH=<text>: the names of the game's strings asked for whose text holds <text> (a menu that builds the name, e.g. from a table), once each
+		static int watch = -1;
+		static char watch_text[64], watched[16][64];
+		if (watch < 0)
+			watch = GetEnvironmentVariableA("MW2COOP_LOCWATCH", watch_text, sizeof(watch_text)) > 0;
+		if (watch) {
+			LocalizeEntry *e = original(type, name);
+			if (e && e->value && strstr(e->value, watch_text)) {
+				int seen = 0, free_slot = -1;
+				for (int k = 0; k < 16 && !seen; k++) {
+					seen = !strcmp(watched[k], name);
+					if (!watched[k][0] && free_slot < 0)
+						free_slot = k;
+				}
+				if (!seen && free_slot >= 0) {
+					lstrcpynA(watched[free_slot], name, sizeof(watched[free_slot]));
+					log_printf("localize: watch: %s = %s", name, e->value);
+				}
+			}
+		}
 		for (int i = 0; i < FIXED_COUNT; i++) {
 			if (strcmp(name, fixed[i].name) != 0 || !game_is_russian())
 				continue;

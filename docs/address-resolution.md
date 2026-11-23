@@ -188,6 +188,13 @@ One 64-bit address left the code (`0x5c5bf`, the call of the scene's last pass t
   then stay off: the call reaches the harmless block of `ret`), the loops' expiry (its hook compares its bytes and refuses: the loops restart in every split screen frame as
   before the fix) and the QA seek log. That exe itself runs from its own table (`addr159.c`), where all 10 are mapped.
 
+## Seventh round (2026-11-23): the partner's frame wait
+
+One new address on each build: the engine's co-op packet dispatcher of its waiting loops (64: 0x2308a0, 32: 0xacca0; iw4x-sp 1.0.159: 0x22e60 in `addr159.c`),
+which `netwatch.c` calls while the partner waits for the host's frame after a load. Both files made again: x64 499 addresses, x86 443; on the reference builds
+499 of 499 and 443 of 443; the iw4x-sp exe through the signatures 396 of 443. `tools/check_raw_addresses.py`: no raw offsets. The wait is left out when the
+dispatcher is not found (`addr_resolved`).
+
 ## What is not done
 
 * No 64-bit build whose addresses moved exists here to run it on. The path is run on the reference
