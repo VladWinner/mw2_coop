@@ -21,6 +21,9 @@
 #include "settings.h"
 #include "menus.h"
 #include "progress.h"
+#include "rejoin.h"
+#include "report.h"
+#include "voice.h"
 #include "saves.h"
 #include "steamnet.h"
 
@@ -316,6 +319,28 @@ static int send_to(SOCKET s, const char *buf, int len, int flags, const struct s
 	return real_sendto(s, buf, len, flags, to, tolen);
 }
 
+static void hold_push(const struct sockaddr *from, int fromlen, const char *data, int len);
+
+// rejoin.c: the engine's coopDis, either way ("\xff\xff\xff\xff" "R" <2 bytes> "coopDis\0" <reason> "\0"); the reason is a word (COOP_CLIENTDROP, ..._END_GAME) or,
+// from a client that timed out, the error's text in the game's language
+static void note_coopdis(int sent, const char *buf, int len)
+{
+	static const char word[] = "coopDis"; // (compared with its 0)
+	if (len < 16 || *(const unsigned int *)buf != 0xffffffffu)
+		return;
+	for (int i = 4; i < 12 && i + (int)sizeof(word) < len; i++)
+		if (memcmp(buf + i, word, sizeof(word)) == 0) {
+			char reason[48];
+			int k = len - i - (int)sizeof(word);
+			if (k > (int)sizeof(reason) - 1)
+				k = (int)sizeof(reason) - 1;
+			memcpy(reason, buf + i + sizeof(word), k);
+			reason[k] = 0;
+			rejoin_on_coopdis(sent, reason);
+			return;
+		}
+}
+
 static void remember_peer(SOCKET s, const struct sockaddr *sa)
 {
 	if (!sa || sa->sa_family != AF_INET)
@@ -363,6 +388,19 @@ int net_send_mod(const char *text)
 	int ok = sent_n == n;
 	LeaveCriticalSection(&peer_lock);
 	return ok;
+}
+
+// a packet of the mod's that is not text (its "\xff\xff\xff\xff" included) or longer than net_send_mod takes: the partner's voice (voice.c), the pieces of his log
+// for a bug report (report.c); up to 1400 bytes
+int net_send_mod_bin(const void *data, int len)
+{
+	if (len <= 4 || len > 1400 || !real_sendto)
+		return 0;
+	EnterCriticalSection(&peer_lock);
+	SOCKET use = game_socket != INVALID_SOCKET ? game_socket : peer_socket;
+	int sent_n = use != INVALID_SOCKET && peer_socket != INVALID_SOCKET ? send_to(use, (const char *)data, len, 0, (const struct sockaddr *)&peer, sizeof(peer)) : -2;
+	LeaveCriticalSection(&peer_lock);
+	return sent_n == len;
 }
 
 // Every IPv4 network the PC is on (LAN, Wi-Fi, Radmin VPN, Hamachi...) gets the packet at its
@@ -423,6 +461,9 @@ static int is_session_packet(const char *buf, int len)
 	    (len >= (int)sizeof(nick_prefix) - 1 && memcmp(buf, nick_prefix, sizeof(nick_prefix) - 1) == 0) ||
 	    (len >= (int)sizeof(resync_prefix) - 1 && memcmp(buf, resync_prefix, sizeof(resync_prefix) - 1) == 0))
 		return 1;
+	static const char report[] = "\xff\xff\xff\xffmw2coop_report_"; // report.c: the partner's log asked for and sent
+	if (len >= (int)sizeof(report) - 1 && memcmp(buf, report, sizeof(report) - 1) == 0)
+		return 1;
 	static const char start[] = "\xff\xff\xff\xffmw2coop_start";
 	static const char ready[] = "\xff\xff\xff\xffmw2coop_ready";
 	static const char brief[] = "\xff\xff\xff\xffmw2coop_briefdone";
@@ -466,6 +507,21 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 	}
 	if (netwatch_send_paused() && to && to->sa_family == AF_INET && from_partner(to))
 		return len; // QA (mw2coop_netpause): as if sent
+	note_coopdis(1, buf, len);
+	// rejoin.c: the partner's game says goodbye to its host after a break ("R" <sequence, 2 bytes> "coopDis" ..., resent every 300 ms until the host answers
+	// "RA <sequence>"). A host whose game crashed never answers: the goodbye went on about 2.5 minutes, and no join of the partner's got through meanwhile (QA
+	// 2026-11-23: the host's game killed and started again, the partner back only at his 21st attempt). Once the break is known here, the mod answers it in
+	// the host's place; a host that is still there answers too, and the second answer is one the game has no use for.
+	if (len > 8 && to && to->sa_family == AF_INET && *(const unsigned int *)buf == 0xffffffffu && buf[4] == 'R' && !memcmp(buf + 7, "coopDis", 8) &&
+	    rejoin_state() == REJOIN_CLIENT_JOIN && from_partner(to)) {
+		char ack[24];
+		const unsigned seq = (unsigned)(uint8_t)buf[5] << 8 | (uint8_t)buf[6];
+		const int n = snprintf(ack, sizeof(ack), "\xff\xff\xff\xffRA %u", seq) + 1; // (with its 0, as the game sends it)
+		hold_push(to, tolen < (int)sizeof(struct sockaddr_storage) ? tolen : (int)sizeof(struct sockaddr_storage), ack, n);
+		static volatile LONG told;
+		if (!InterlockedExchange(&told, 1))
+			log_printf("net: the partner's goodbye to the host after the break is answered in the host's place (RA %u)", seq);
+	}
 	log_packet("send", to, buf, len);
 	return send_to(s, buf, len, flags, to, tolen);
 }
@@ -485,6 +541,25 @@ static int hold_head, hold_count;
 static CRITICAL_SECTION hold_lock;
 
 static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
+
+// a packet the game reads next as if it had come from <from> (my_sendto's answer in the host's place)
+static void hold_push(const struct sockaddr *from, int fromlen, const char *data, int len)
+{
+	if (len <= 0 || len > 1500 || fromlen <= 0)
+		return;
+	EnterCriticalSection(&hold_lock);
+	if (hold_count == HOLD_Q) {
+		hold_head = (hold_head + 1) % HOLD_Q;
+		hold_count--;
+	}
+	held_packet_t *h = &hold_q[(hold_head + hold_count) % HOLD_Q];
+	h->len = len;
+	h->fromlen = fromlen;
+	memcpy(&h->from, from, fromlen);
+	memcpy(h->data, data, len);
+	hold_count++;
+	LeaveCriticalSection(&hold_lock);
+}
 
 static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
 {
@@ -557,6 +632,14 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 			return SOCKET_ERROR;
 		}
 	}
+	{ // rejoin.c: after a break the host that waits and the partner who looks for it send each other this, so that their routers let the other's packets in; the partner joins once he hears it
+		static const char hello[] = "\xff\xff\xff\xffmw2coop_rejoin_hello";
+		if (r >= (int)sizeof(hello) - 1 && memcmp(buf, hello, sizeof(hello) - 1) == 0) {
+			rejoin_note_hello(); // (the partner joins only once he hears the host: a join that waits in the game's queue for a host that is gone spoils the next ones on the 32-bit game)
+			WSASetLastError(WSAEWOULDBLOCK);
+			return SOCKET_ERROR;
+		}
+	}
 	if (r > 0 && settings_netguard()) {
 		// packets no co-op session sends and the game would act on (netguard.c): the game never sees them
 		EnterCriticalSection(&peer_lock);
@@ -575,8 +658,16 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 	}
 	if (r > 0) {
 		log_packet("recv", from, buf, r);
-		if (from_partner(from))
+		if (from_partner(from)) {
+			static const char voice[] = "\xff\xff\xff\xffmw2coop_v";
+			if (r > (int)sizeof(voice) - 1 && memcmp(buf, voice, sizeof(voice) - 1) == 0) { // (voice.c: his voice comes from a thread of its own, so it is not a sign of his game's life)
+				voice_on_packet(buf, r);
+				WSASetLastError(WSAEWOULDBLOCK);
+				return SOCKET_ERROR;
+			}
 			netwatch_partner_packet(); // any packet of his: the lockstep frames, his usercmds, the mod's own
+			note_coopdis(0, buf, r);
+		}
 		// The partner is learnt from his connect only once access.c has let it through (night audit 2026-11-17, NET-1: any packet with the text "coopConnect" anywhere, a
 		// refused connect included, made its sender the partner, and the real partner's start / ready packets were then ignored as a stranger's).
 		const int connect = game_peek(RVA_PARTY_IS_HOST, 1) && is_coop_connect(buf, r);
@@ -620,7 +711,7 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 					const int k = r - (int)(sizeof(nick_prefix) - 1);
 					memcpy(t, buf + sizeof(nick_prefix) - 1, k < 63 ? k : 63);
 					nick_on_packet(t);
-				} else if (!progress_on_packet(buf, r) && !saves_on_packet(buf, r))
+				} else if (!report_on_packet(buf, r) && !progress_on_packet(buf, r) && !saves_on_packet(buf, r))
 					menus_on_packet(buf, r);
 			} else if (InterlockedIncrement(&ignored_packets) <= 5)
 				log_printf("net: a start or ready packet from an address that is not the partner's was ignored");
@@ -651,6 +742,18 @@ int net_partner_known(void)
 {
 	EnterCriticalSection(&peer_lock);
 	const int known = peer_socket != INVALID_SOCKET;
+	LeaveCriticalSection(&peer_lock);
+	return known;
+}
+
+int net_partner_address(uint8_t ip[4], uint16_t *port)
+{
+	EnterCriticalSection(&peer_lock);
+	const int known = peer_socket != INVALID_SOCKET;
+	if (known) {
+		memcpy(ip, &peer.sin_addr, 4);
+		*port = ntohs(peer.sin_port);
+	}
 	LeaveCriticalSection(&peer_lock);
 	return known;
 }

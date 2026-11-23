@@ -232,6 +232,24 @@ menuDef {
 	}
 }
 
+// A network session that broke off while it ran (src/rejoin.c): at the next start of the game, the main menu asks to go on with it (the host opens its lobby again,
+// the partner joins the host again; both go on from the last checkpoint).
+menuDef {
+	name "mw2coop_rejoin"
+	title "@MW2COOP_REJOIN_TITLE"
+	question "@MW2COOP_REJOIN_Q"
+	itemDef {
+		name "yes"
+		text "@MENU_YES"
+		action { play "mouse_click"; close self; exec "mw2coop_rejoin_yes"; }
+	}
+	itemDef {
+		name "no"
+		text "@MENU_NO"
+		action { play "mouse_click"; close self; exec "mw2coop_rejoin_no"; }
+	}
+}
+
 // The mod's updates (src/update.c), at the main menu: a newer release was found (Update / Later); the download's progress (one row: Hide); installed (Restart / Quit:
 // the game must start again to use it); a note (one row: Close) for "the newest version is installed" and "the update could not be installed". The questions are
 // made by the mod (versions, progress). The one-row popups' second row (no) is hidden by the mod.

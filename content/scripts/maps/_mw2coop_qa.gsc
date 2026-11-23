@@ -94,6 +94,13 @@
 //              tables (looks at them, presses Use) and walks up to the frag box (Forward)
 //   bay      - (trainer; a range start: "", timed_ads, bullet_penetration, frag) both players
 //              stand inside the sandbag bay and can move
+//   invertq  - (trainer, start "") the hip fire part: both get the range's rifle, player 1 faces the targets and each target
+//              that pops up is hit for him; the level goes on to the sights training without single player's question
+//              whether to invert the look (it froze player 1 alone)
+//   partnerline - (any map; MW2COOP_GOD=0) the partner's distance by the game's edge marker and "Down: N m" while he is down:
+//              frames with player 2 out of player 1's view, in it, down in it and down out of it
+//   wheelnew - (any map; Invasion for the voices) the wheel's "on me" brings player 2 beside player 1, and after player 2's
+//              "need ammo" player 1's Use (real input) gives him a magazine from his own reserve
 //   introfreeze - (a map's default start with an intro title) under the title neither player
 //              moves on a real Forward press; afterwards both walk
 //   tour     - (any map, default start) every playable section of the level (its start points), one
@@ -585,6 +592,15 @@ main()
 			break;
 		case "bay":
 			bay();
+			break;
+		case "invertq":
+			invertq();
+			break;
+		case "partnerline":
+			partnerline();
+			break;
+		case "wheelnew":
+			wheelnew();
 			break;
 		case "introfreeze":
 			introfreeze();
@@ -3354,7 +3370,7 @@ pingtest()
 	wait 2.5;	// (the 5 presses in 3 s guard)
 	p1 maps\_mw2coop_ping::event( "open", -1 );
 	wait 0.3;
-	check( isdefined( p1.mw2coop_wheel ) && p1.mw2coop_wheel.boxes.size == 8 && !isdefined( p2.mw2coop_wheel ), "the wheel opened for player 1 only (eight items)" );
+	check( isdefined( p1.mw2coop_wheel ) && p1.mw2coop_wheel.boxes.size == 10 && !isdefined( p2.mw2coop_wheel ), "the wheel opened for player 1 only (ten items)" );
 	p1 maps\_mw2coop_ping::event( "sel", 6 );
 	wait 0.4;
 	qa_shot( "ping-wheel" );
@@ -7085,6 +7101,192 @@ bay()
 	{
 		check( qa_in_bay( player, start ), player_name( player ) + " is inside the sandbags (" + bay_text( player, start ) + ")" );
 		check( !qa_stuck( player ), player_name( player ) + " is not stuck in anything solid" );
+	}
+	report( "done" );
+}
+
+// S.S.D.D.: after the two targets from the hip, single player asks player 1 whether to invert the look (a popup, his controls frozen, the screen
+// blurred, until he answers); co-op leaves the question out (trainer.gsc.patch 9). Both get the range's rifle, player 1 faces the targets, and each
+// target that pops up is hit as player 1's shot would hit it; the level must go on to the sights training (flag hip_fire_done) with nobody frozen.
+invertq()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	foreach ( player in level.players )
+		if ( !player HasWeapon( level.gunPrimary ) )
+		{
+			player GiveWeapon( level.gunPrimary );
+			player SwitchToWeapon( level.gunPrimary );
+		}
+	t0 = GetTime();
+	while ( !flag( "player_facing_targets_for_hip_fire" ) && GetTime() - t0 < 90000 )
+	{
+		if ( isdefined( level.firing_range_area ) )
+			level.player SetPlayerAngles( VectorToAngles( level.firing_range_area.origin - level.player GetEye() ) );
+		wait 0.5;
+	}
+	check( flag( "player_facing_targets_for_hip_fire" ), "the hip fire part began (player 1 faces the targets, " + ( GetTime() - t0 ) + " ms)" );
+	hits = 0;
+	t1 = GetTime();
+	while ( !flag( "hip_fire_done" ) && GetTime() - t1 < 40000 )
+	{
+		foreach ( target in level.hip_targets )
+			target notify( "damage", 100, level.player, ( 0, 0, 1 ), target.origin, "MOD_RIFLE_BULLET" ); // (a target that is down does not listen)
+		hits++;
+		wait 1;
+	}
+	SetDvar( "mw2coop_qa_shot", level.script + "-invertq" );
+	// (the question waits for player 1's answer with his controls frozen: while it is up the level does not get there)
+	check( flag( "hip_fire_done" ), "the level went on to the sights training after the two targets, no question whether to invert the look (" + ( GetTime() - t1 ) + " ms, " + hits + " rounds of hits)" );
+	wait 2;
+	SetDvar( "mw2coop_qa_shot", level.script + "-invertq-after" );
+	report( "done" );
+}
+
+// The partner's distance by the game's edge marker of him, and "Down: N m" while he is down (maps\_mw2coop_partner): player 2 stands 500 units in front of
+// player 1, who looks away (frames: the distance at the edge on player 1's screen), at him (no distance: he is on the screen), then player 2 is downed (the
+// red line over him) and player 1 looks away again (the red line at the edge). Run with MW2COOP_GOD=0 (a down needs damage).
+partnerline()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 2;
+	foreach ( player in level.players )
+		player EnableInvulnerability();
+	yaw = level.player GetPlayerAngles()[ 1 ];
+	fwd = AnglesToForward( ( 0, yaw, 0 ) );
+	level.player2 SetOrigin( level.player.origin + fwd * 500 );
+	level.player2 SetPlayerAngles( ( 0, yaw + 180, 0 ) );
+	level.player SetPlayerAngles( ( 0, yaw, 0 ) );
+	wait 1;
+	check( isdefined( level.player.mw2coop_partner_side ) && level.player.mw2coop_partner_side == "seen" && !isdefined( level.player.mw2coop_partner_line ),
+		"player 1 looks at player 2: no line (" + level.player.mw2coop_partner_side + ")" );
+	SetDvar( "mw2coop_qa_shot", level.script + "-pl-seen" );
+	wait 1.5;
+	level.player SetPlayerAngles( ( 0, yaw + 100, 0 ) );	// (turned left: the partner is on his right)
+	wait 1;
+	check( isdefined( level.player.mw2coop_partner_line ) && level.player.mw2coop_partner_side == "right", "player 1 turned left: the line at the right edge (" + level.player.mw2coop_partner_side + ")" );
+	SetDvar( "mw2coop_qa_shot", level.script + "-pl-away" );
+	wait 1.5;
+	level.player SetPlayerAngles( ( 0, yaw + 180, 0 ) );
+	wait 1;
+	check( isdefined( level.player.mw2coop_partner_line ) && level.player.mw2coop_partner_side == "behind", "player 1 turned round: the line says behind (" + level.player.mw2coop_partner_side + ")" );
+	SetDvar( "mw2coop_qa_shot", level.script + "-pl-behind" );
+	wait 1.5;
+	level.player SetPlayerAngles( ( 0, yaw, 0 ) );
+	wait 0.5;
+	level.player2 DisableInvulnerability();
+	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	wait 1.5;
+	check( level.player2 ent_flag_exist( "coop_downed" ) && level.player2 ent_flag( "coop_downed" ), "player 2 is down" );
+	check( isdefined( level.player.mw2coop_partner_line ) && level.player.mw2coop_partner_line_down, "player 1's line says player 2 is down" );
+	SetDvar( "mw2coop_qa_shot", level.script + "-pl-down" );
+	wait 1.5;
+	level.player SetPlayerAngles( ( 0, yaw + 120, 0 ) );
+	wait 1;
+	SetDvar( "mw2coop_qa_shot", level.script + "-pl-downaway" );
+	wait 1.5;
+	report( "done" );
+}
+
+// The wheel's "on me" and "need ammo" (maps\_mw2coop_ping, maps\_mw2coop_partner): player 2 is put some way off, player 1 picks "on me" on the wheel (sector 9)
+// and player 2 must be brought beside him; then player 2 picks "need ammo" (sector 8), player 1 looks at him and presses Use (real input, press()): player 2's
+// weapon gets a magazine from player 1's reserve. The voices are checked where the level loads its side's lines (Invasion: Rangers).
+wheelnew()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 2;
+	p1 = level.player;
+	p2 = level.player2;
+	foreach ( player in level.players )
+		player EnableInvulnerability();
+	// both armed (S.S.D.D. hands out the range's rifle at the table only: no weapon, no ammo to give)
+	foreach ( player in level.players )
+		if ( isdefined( level.gunPrimary ) && !player HasWeapon( level.gunPrimary ) )
+		{
+			player GiveWeapon( level.gunPrimary );
+			player GiveMaxAmmo( level.gunPrimary );
+			player SwitchToWeapon( level.gunPrimary );
+		}
+	if ( isdefined( level.gunPrimary ) )
+		p2 SetWeaponAmmoStock( level.gunPrimary, 0 ); // (room for the magazine he is given)
+	wait 1.5;
+	// player 2 500 units in front of player 1 (as partnerline: the start's tent has no room for a trace to find)
+	yaw = p1 GetPlayerAngles()[ 1 ];
+	p2 SetOrigin( p1.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 500 );
+	moved = true;
+	wait 0.5;
+	far = Distance( p1.origin, p2.origin );
+	check( moved && far > 320, "player 2 is put some way off (" + int( far ) + " units)" );
+	// "on me"
+	p1 maps\_mw2coop_ping::event( "open", -1 );
+	wait 0.3;
+	check( isdefined( p1.mw2coop_wheel ) && p1.mw2coop_wheel.boxes.size == 10, "the wheel has ten items" );
+	p1 maps\_mw2coop_ping::event( "sel", 9 );
+	wait 0.4;
+	qa_shot( "wheel-come" );
+	p1 maps\_mw2coop_ping::event( "close", 9 );
+	wait 0.6;
+	last = ping_last( p1 );
+	check( isdefined( last ) && last.kind == "come", "'on me' made its marker (" + ping_kinds( p1 ) + ")" );
+	c = maps\_mw2coop_ping::voice_country();
+	if ( c != "" )
+		check( isdefined( last ) && IsSubStr( ping_voice( last ), "_1_order_move" ), "'on me' in player 1's voice (" + ping_voice( last ) + ")" );
+	wait 5;
+	near = Distance( p1.origin, p2.origin );
+	check( near < 160, "player 2 was brought beside player 1 (" + int( far ) + " -> " + int( near ) + " units)" );
+	qa_shot( "wheel-came" );
+	// "need ammo" from player 2, player 1 gives
+	wait 2.5;	// (the presses' guard)
+	w2 = p2 GetCurrentWeapon();
+	w1 = p1 GetCurrentWeapon();
+	before2 = p2 GetWeaponAmmoStock( w2 );
+	before1 = p1 GetWeaponAmmoStock( w1 );
+	p2 maps\_mw2coop_ping::event( "open", -1 );
+	wait 0.3;
+	p2 maps\_mw2coop_ping::event( "sel", 8 );
+	wait 0.3;
+	p2 maps\_mw2coop_ping::event( "close", 8 );
+	wait 0.8;
+	last = ping_last( p2 );
+	check( isdefined( last ) && last.kind == "needammo" && isdefined( p2.mw2coop_ammo_asked ), "'need ammo' made its marker on player 2 (" + ping_kinds( p2 ) + ")" );
+	if ( c != "" )
+		report( "wheelnew: 'need ammo' voice: " + ping_voice( last ) );
+	// player 1 stands 50 units in front of player 2, faces his chest and presses Use (the game's +activate, then +usereload, the revive's key)
+	yaw2 = p2 GetPlayerAngles()[ 1 ];
+	p1 SetOrigin( p2.origin + AnglesToForward( ( 0, yaw2, 0 ) ) * 50 );
+	wait 0.3;
+	p1 SetPlayerAngles( VectorToAngles( ( p2.origin + ( 0, 0, 40 ) ) - p1 GetEye() ) );
+	wait 1;
+	qa_shot( "wheel-ammohint" );
+	held = 0;
+	foreach ( button in StrTok( "activate usereload", " " ) )
+	{
+		press( p1, button, 750 );
+		for ( t = 0; t < 10; t++ )
+		{
+			if ( p1 UseButtonPressed() )
+				held++;
+			wait 0.1;
+		}
+		wait 0.8;
+		if ( p2 GetWeaponAmmoStock( w2 ) > before2 )
+			break;
+	}
+	after2 = p2 GetWeaponAmmoStock( w2 );
+	after1 = p1 GetWeaponAmmoStock( w1 );
+	report( "wheelnew: player 1's Use seen held by the server in " + held + " of 20 looks, " + int( Distance( p1.origin, p2.origin ) ) + " units from player 2" );
+	check( after2 > before2 && after1 < before1, "player 1's Use gave player 2 ammo (player 2 " + w2 + " " + before2 + " -> " + after2 + ", player 1 " + w1 + " " + before1 + " -> " + after1 + ")" );
+	qa_shot( "wheel-ammogiven" );
+	if ( after2 <= before2 && isdefined( p2.mw2coop_ammo_use ) )
+	{ // (the give itself, without the use detection: the use entity's trigger as the engine sends it)
+		p2.mw2coop_ammo_use notify( "trigger", p1 );
+		wait 0.5;
+		check( p2 GetWeaponAmmoStock( w2 ) > before2, "the give itself works when the use entity is triggered (player 2 " + before2 + " -> " + p2 GetWeaponAmmoStock( w2 ) + ")" );
 	}
 	report( "done" );
 }

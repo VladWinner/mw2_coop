@@ -29,6 +29,10 @@
 #include "net.h"
 #include "party.h"
 #include "progress.h"
+#include "rejoin.h"
+#include "report.h"
+#include "weaponfov.h"
+#include "voice.h"
 #include "saves.h"
 #include "scrdebug.h"
 #include "settings.h"
@@ -94,6 +98,10 @@ static DWORD WINAPI watcher(LPVOID unused)
 		addr_scratch_check("after party_install");
 		progress_install();
 		addr_scratch_check("after progress_install");
+		rejoin_install();
+		report_install();
+		weaponfov_install();
+		voice_install();
 		saves_install();
 		addr_scratch_check("after saves_install");
 		menus_install();

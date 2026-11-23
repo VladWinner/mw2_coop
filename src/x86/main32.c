@@ -30,6 +30,10 @@
 #include "menus.h"
 #include "net.h"
 #include "progress.h"
+#include "rejoin.h"
+#include "report.h"
+#include "weaponfov.h"
+#include "voice.h"
 #include "saves.h"
 #include "scrdebug.h"
 #include "steamnet.h"
@@ -268,6 +272,10 @@ static void install_all(void)
 	addr_scratch_check("after party_install");
 	progress_install();
 	addr_scratch_check("after progress_install");
+	rejoin_install();
+	report_install();
+	weaponfov_install();
+	voice_install();
 	saves_install();
 	addr_scratch_check("after saves_install");
 	menus_install();

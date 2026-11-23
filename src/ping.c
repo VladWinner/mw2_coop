@@ -43,7 +43,7 @@ typedef struct {
 	DWORD at;     // when it went down
 	DWORD tick;   // the last frame that saw it held
 	float cx, cy; // the mouse's way since the wheel opened (counts; y down)
-	int sector;   // -1: none (the middle), 0..7 clockwise from the top
+	int sector;   // -1: none (the middle), 0..WHEEL_SECTORS-1 clockwise from the top
 } wheel_t;
 static wheel_t wheel[2];
 static LONG seq;
@@ -139,12 +139,14 @@ static void tick(int player)
 	}
 }
 
-// 0..7 clockwise from the top for a direction (x right, y up)
+// 0..WHEEL_SECTORS-1 clockwise from the top for a direction (x right, y up); maps\_mw2coop_ping.gsc draws the same number (wheel_count)
+#define WHEEL_SECTORS 10 // (8 until 2026-11-23: "come to me" and "need ammo" were added)
 static int sector_of(float x, float y)
 {
+	const float step = 360.0f / WHEEL_SECTORS;
 	float a = atan2f(x, y) * 57.29578f; // 0 up, 90 right
-	int s = (int)floorf((a + 22.5f) / 45.0f);
-	return (s % 8 + 8) % 8;
+	int s = (int)floorf((a + step / 2) / step);
+	return (s % WHEEL_SECTORS + WHEEL_SECTORS) % WHEEL_SECTORS;
 }
 
 static void pick(int player, int s)

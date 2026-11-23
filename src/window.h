@@ -4,3 +4,5 @@
 // Re-applied when the window or its style changes (vid_restart, alt+enter). [display] darktitle=0 in settings.ini switches it off.
 // Also the ultrawide safe area (safeArea_horizontal lowered on a screen wider than 16:9; [display] safearea_auto=0 switches it off).
 void window_install(void);
+// d3dcap.c's Direct3DCreate9 (the main thread, before the game makes its window): [display] window_fit's hook on the window's size (64-bit; once)
+void window_fit_early(void);

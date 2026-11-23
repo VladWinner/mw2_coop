@@ -37,6 +37,10 @@ int progress_chosen_info(char *map, int map_size, char *names, int names_size);
 // The host picks save i for the lobby (-1: the newest).
 void progress_choose(int i);
 
+// rejoin.c: the file name of the save this session writes to ("save_<n>.txt"), 0 before a session; and the host picks a save again by that name (1 if it is there).
+int progress_current_save(char *name, int size);
+int progress_choose_file(const char *name);
+
 // The picked save (else the newest): where its checkpoint was reached; 0 if not known.
 int progress_chosen_spot(char *spot, int size);
 

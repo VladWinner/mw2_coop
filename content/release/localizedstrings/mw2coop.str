@@ -664,6 +664,110 @@ REFERENCE           MW2COOP_NET_INSYNC
 LANG_ENGLISH        "^2The two games match again"
 LANG_RUSSIAN        "^2Игры снова совпадают"
 
+REFERENCE           MW2COOP_REJOIN_TITLE
+LANG_ENGLISH        "The co-op game broke off"
+LANG_RUSSIAN        "Совместная игра прервалась"
+
+REFERENCE           MW2COOP_REJOIN_HOST_FMT
+LANG_ENGLISH        "Partner: %s.\nOpen the lobby again and go on\nfrom the last checkpoint?"
+LANG_RUSSIAN        "Напарник: %s.\nОткрыть лобби снова и продолжить\nс последней контрольной точки?"
+
+REFERENCE           MW2COOP_REJOIN_CLIENT_FMT
+LANG_ENGLISH        "Host: %s.\nJoin the host again and go on\nfrom the last checkpoint?"
+LANG_RUSSIAN        "Хост: %s.\nВойти к хосту снова и продолжить\nс последней контрольной точки?"
+
+REFERENCE           MW2COOP_REJOIN_WAIT_FMT
+LANG_ENGLISH        "The connection to %s broke off.\nThe lobby waits for your partner: you go on from the last checkpoint"
+LANG_RUSSIAN        "Связь с игроком %s прервалась.\nЛобби ждёт напарника: продолжите с последней контрольной точки"
+
+REFERENCE           MW2COOP_REJOIN_GO_FMT
+LANG_ENGLISH        "%s is back:\ngoing on from the last checkpoint in %d s"
+LANG_RUSSIAN        "Игрок %s снова в лобби:\nпродолжение с последней контрольной точки через %d с"
+
+REFERENCE           MW2COOP_REJOIN_NOSNAP_FMT
+LANG_ENGLISH        "%s is back but holds another checkpoint:\npress Start to choose"
+LANG_RUSSIAN        "Игрок %s снова в лобби, но у него другая контрольная точка:\nнажмите «Старт», чтобы выбрать"
+
+REFERENCE           MW2COOP_REJOIN_OTHER
+LANG_ENGLISH        "Another player is in the lobby:\nthe partner of the game that broke off is not back yet"
+LANG_RUSSIAN        "В лобби другой игрок:\nнапарник прерванной игры ещё не вернулся"
+
+REFERENCE           MW2COOP_REJOIN_JOIN_FMT
+LANG_ENGLISH        "The connection to %s's game broke off:\njoining it again (attempt %d)"
+LANG_RUSSIAN        "Связь с игрой игрока %s прервалась:\nвходим снова (попытка %d)"
+
+REFERENCE           MW2COOP_REJOIN_BACK_FMT
+LANG_ENGLISH        "Back in %s's lobby:\nthe game goes on from the last checkpoint"
+LANG_RUSSIAN        "Снова в лобби игрока %s:\nигра продолжится с последней контрольной точки"
+
+REFERENCE           MW2COOP_REJOIN_WAITHOST_FMT
+LANG_ENGLISH        "The connection to %s's game broke off:\nwaiting for the host's lobby to open again"
+LANG_RUSSIAN        "Связь с игрой игрока %s прервалась:\nждём, когда лобби хоста снова откроется"
+
+REFERENCE           MW2COOP_PARTNER_DOWN
+LANG_ENGLISH        "Down: &&1 m"
+LANG_RUSSIAN        "Ранен: &&1 м"
+
+REFERENCE           MW2COOP_PARTNER_LEFT
+LANG_ENGLISH        "< &&1 m"
+LANG_RUSSIAN        "< &&1 м"
+
+REFERENCE           MW2COOP_PARTNER_RIGHT
+LANG_ENGLISH        "&&1 m >"
+LANG_RUSSIAN        "&&1 м >"
+
+REFERENCE           MW2COOP_PARTNER_BEHIND
+LANG_ENGLISH        "&&1 m behind"
+LANG_RUSSIAN        "&&1 м сзади"
+
+REFERENCE           MW2COOP_PING_W_NEEDAMMO
+LANG_ENGLISH        "Need ammo"
+LANG_RUSSIAN        "Нужны патроны"
+
+REFERENCE           MW2COOP_PING_W_COME
+LANG_ENGLISH        "On me"
+LANG_RUSSIAN        "Ко мне"
+
+REFERENCE           MW2COOP_PING_NEEDAMMO
+LANG_ENGLISH        "&&1: need ammo!"
+LANG_RUSSIAN        "&&1: нужны патроны!"
+
+REFERENCE           MW2COOP_PING_COME
+LANG_ENGLISH        "&&1: on me!"
+LANG_RUSSIAN        "&&1: ко мне!"
+
+REFERENCE           MW2COOP_COME_NOT_NOW
+LANG_ENGLISH        "You cannot call your partner over now"
+LANG_RUSSIAN        "Сейчас позвать напарника нельзя"
+
+REFERENCE           MW2COOP_AMMO_GIVE_HINT
+LANG_ENGLISH        "Press [{+activate}] to give ammo"
+LANG_RUSSIAN        "Нажмите [{+activate}], чтобы дать патроны"
+
+REFERENCE           MW2COOP_AMMO_GIVEN
+LANG_ENGLISH        "&&1 shared ammo with &&2"
+LANG_RUSSIAN        "&&1 поделился патронами с &&2"
+
+REFERENCE           MW2COOP_AMMO_NONE
+LANG_ENGLISH        "Nothing to share: less than a magazine in reserve"
+LANG_RUSSIAN        "Нечем поделиться: в запасе меньше магазина"
+
+REFERENCE           MW2COOP_REPORT_BUG
+LANG_ENGLISH        "REPORT A BUG"
+LANG_RUSSIAN        "СООБЩИТЬ ОБ ОШИБКЕ"
+
+REFERENCE           MW2COOP_REPORT_DONE_FMT
+LANG_ENGLISH        "^2Bug report saved: %s"
+LANG_RUSSIAN        "^2Отчёт об ошибке сохранён: %s"
+
+REFERENCE           MW2COOP_VOICE_TALKS_FMT
+LANG_ENGLISH        "^5%s is talking"
+LANG_RUSSIAN        "^5%s говорит"
+
+REFERENCE           MW2COOP_VOICE_PARTNER
+LANG_ENGLISH        "Partner"
+LANG_RUSSIAN        "Напарник"
+
 REFERENCE           MW2COOP_SAVE_NO_PARTNER
 LANG_ENGLISH        "no partner"
 LANG_RUSSIAN        "без напарника"

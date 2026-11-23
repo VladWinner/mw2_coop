@@ -22,6 +22,8 @@ void menus_log_items(const char *menu_name);
 void menus_find_text(const char *needle);
 // progress.c: the host's start packet came: the loading screen is the campaign's (specialops 0 until the level is over)
 void menus_campaign_loading_begin(void);
+// progress.c: the host's start packet came (the client): the network session is noted for going on after a break (rejoin.c)
+void menus_rejoin_client_begins(void);
 // net.c: this PC waits in a campaign briefing (the game does not read its socket meanwhile)
 int menus_briefing_holds(void);
 void menus_log_instances(const char *name, const char *mat);

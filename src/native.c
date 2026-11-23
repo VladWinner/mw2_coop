@@ -1759,17 +1759,11 @@ static void trace_present(void)
 
 
 // [native] weaponfov on the native renderers (src/dx/natgfx.c ng_weapon_viewport): tan(view fov / 2) / tan(weapon fov / 2), 0 when the weapon keeps the game's field of view
-static float weaponfov_base_tan(void);
 float native_weapon_k(void);
 float native_weapon_k(void)
 {
-	static float wt = -1;
-	if (wt < 0) {
-		const int fov = cfg("weaponfov", 0);
-		wt = fov > 0 ? tanf((float)fov * 3.14159265f / 360.0f) : 0;
-	}
-	const float vt = wt > 0 ? weaponfov_base_tan() : 0;
-	return vt > 0 && wt > 0 ? vt / wt : 0;
+	return 0; // (off: cg_weaponFov, src/weaponfov.c, scales the weapon's own projection, which the native renderers take from the game too; the old depth range test
+		  // of ng_weapon_viewport took the world's range for the weapon's)
 }
 
 #ifdef _WIN64
@@ -1831,25 +1825,6 @@ int native_nat_film_size(unsigned *w, unsigned *h)
 
 
 static DWORD comp_not_before; // GetTickCount: the device hooks are not (re)installed before it (after a vid_restart the Steam overlay hooks the new device first)
-// tan(fov / 2) of the field of view the game draws the world with when nothing zooms: cg_fov times cg_fovScale (the first-person weapon's own field of view is set against it)
-static float weaponfov_base_tan(void)
-{
-	static dvar_t *fov, *scale;
-	if (!fov)
-		fov = game_find_dvar("cg_fov");
-	if (!scale)
-		scale = game_find_dvar("cg_fovScale");
-	if (!fov || fov->type != DVAR_TYPE_FLOAT)
-		return 0;
-	float s = scale && scale->type == DVAR_TYPE_FLOAT && scale->current.value > 0 ? scale->current.value : 1.0f;
-	return tanf(fov->current.value * s * 3.14159265f / 360.0f);
-}
-static void weaponfov_patch_slot(void **slot, void *hook, void **orig)
-{
-	/* weaponfov.c keeps a void-returning patch callback; adapt the checked native
-	   patcher without weakening its result handling for the other hook sites. */
-	(void)patch_slot(slot, hook, orig);
-}
 
 static int comp_hook(IDirect3DDevice9 *hint)
 {
@@ -1893,8 +1868,7 @@ static int comp_hook(IDirect3DDevice9 *hint)
 		return 0;
 	}
 	the_device = dev;
-	if (cfg("weaponfov", 0) > 0 || cfg("weaponfovlog", 0))
-		weaponfov_hook(dev, weaponfov_patch_slot, weaponfov_base_tan, (float)cfg("weaponfov", 0), cfg("weaponfovlog", 0));
+	// (the weapon's own field of view is cg_weaponFov now, src/weaponfov.c: a hook on the game's weapon projection, not on the device)
 	if (cfg("resethook", 1))
 		patch_slot(&vt[16], (void *)reset_hook, (void **)&reset_orig);
 	IDirect3DDevice9Ex *ex = NULL;
@@ -6672,6 +6646,11 @@ static uint8_t *hud_menu(const char *name, int *count)
 		}
 	}
 	return NULL;
+}
+uint8_t *native_cg_find_menu(const char *name)
+{
+	int count;
+	return hud_menu(name, &count);
 }
 static int near_f(float a, float b)
 {

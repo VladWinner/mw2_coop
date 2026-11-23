@@ -37,6 +37,8 @@ ping_precache()
 	PrecacheString( &"MW2COOP_PING_W_FALLBACK" );
 	PrecacheString( &"MW2COOP_PING_W_WATCH" );
 	PrecacheString( &"MW2COOP_PING_W_COVER" );
+	PrecacheString( &"MW2COOP_PING_W_NEEDAMMO" );
+	PrecacheString( &"MW2COOP_PING_W_COME" );
 	PrecacheString( &"MW2COOP_PING_W_HINT" );
 }
 
@@ -489,7 +491,7 @@ group_of( kind, ent )
 		return "place";
 	if ( kind == "enemy" || kind == "enemy_vehicle" || kind == "enemy_turret" || kind == "attack" )
 		return "enemy";
-	if ( kind == "weapon" || kind == "ammo" || kind == "vehicle" || kind == "turret" )
+	if ( kind == "weapon" || kind == "ammo" || kind == "vehicle" || kind == "turret" || kind == "needammo" )
 		return "item";
 	return "danger";
 }
@@ -516,7 +518,7 @@ shader_of( kind )
 		return "hud_burningbarrelicon";
 	if ( kind == "explosive_car" )
 		return "hud_burningcaricon";
-	if ( kind == "weapon" || kind == "ammo" )
+	if ( kind == "weapon" || kind == "ammo" || kind == "needammo" )
 		return "waypoint_ammo";
 	if ( is_red( kind ) || kind == "attack" || kind == "explosive" )
 		return "coop_player_location_fire";
@@ -529,7 +531,7 @@ color_of( kind, player )
 		return ( 1, 0.25, 0.2 );
 	if ( kind == "attack" )
 		return ( 1, 0.55, 0.1 );
-	if ( kind == "weapon" || kind == "ammo" )
+	if ( kind == "weapon" || kind == "ammo" || kind == "needammo" )
 		return ( 1, 1, 0.3 );
 	if ( isdefined( level.player2 ) && player == level.player2 )
 		return ( 0.635, 0.929, 0.604 );	// Bravo's (the game's co-op partner green)
@@ -540,7 +542,7 @@ color_of( kind, player )
 // SetTargetEnt puts the icon at the origin of its entity, a man's feet)
 lift_of( kind, ent )
 {
-	if ( IsAI( ent ) )
+	if ( IsAI( ent ) || IsPlayer( ent ) )
 		return 78;
 	if ( is_vehicle( ent ) )
 		return 72;
@@ -606,6 +608,8 @@ make( kind, ent, pos, title )
 	color = color_of( kind, self );
 	foreach ( viewer in level.players )
 	{
+		if ( kind == "needammo" && viewer == self )
+			continue;	// (a marker over his own head is for the partner only)
 		h = NewClientHudElem( viewer );
 		h SetShader( shader, 1, 1 );
 		h.color = color;
@@ -726,6 +730,12 @@ remove()
 
 // ---- the wheel
 
+// the wheel's sectors, clockwise from the top (src/ping.c WHEEL_SECTORS picks one of as many); "need ammo" and "on me" were added on 2026-11-23 (the night list)
+wheel_count()
+{
+	return 10;
+}
+
 wheel_kind( i )
 {
 	switch ( i )
@@ -737,7 +747,9 @@ wheel_kind( i )
 		case 4: return "danger";
 		case 5: return "fallback";
 		case 6: return "watch";
-		default: return "cover";
+		case 7: return "cover";
+		case 8: return "needammo";
+		default: return "come";
 	}
 }
 
@@ -752,7 +764,9 @@ wheel_text( i )
 		case 4: return &"MW2COOP_PING_W_DANGER";
 		case 5: return &"MW2COOP_PING_W_FALLBACK";
 		case 6: return &"MW2COOP_PING_W_WATCH";
-		default: return &"MW2COOP_PING_W_COVER";
+		case 7: return &"MW2COOP_PING_W_COVER";
+		case 8: return &"MW2COOP_PING_W_NEEDAMMO";
+		default: return &"MW2COOP_PING_W_COME";
 	}
 }
 
@@ -780,10 +794,11 @@ wheel_open()
 	w.sel = -1;
 	w.boxes = [];
 	w.labels = [];
-	for ( i = 0; i < 8; i++ )
+	step = 360 / wheel_count();
+	for ( i = 0; i < wheel_count(); i++ )
 	{
-		x = sin( i * 45 ) * 124;
-		y = 0 - cos( i * 45 ) * 88;
+		x = sin( i * step ) * 200;	// (ten boxes of 116 x 24 round this ellipse do not touch; eight sat on 124 x 88)
+		y = 0 - cos( i * step ) * 120;
 		box = self wheel_elem( x, y, 900 );
 		box SetShader( "white", 116, 24 );
 		box.color = ( 0, 0, 0 );
@@ -821,13 +836,13 @@ wheel_sel( n )
 	w = self.mw2coop_wheel;
 	if ( !isdefined( w ) )
 		return;
-	if ( w.sel >= 0 && w.sel < 8 )
+	if ( w.sel >= 0 && w.sel < wheel_count() )
 	{
 		w.boxes[ w.sel ].color = ( 0, 0, 0 );
 		w.boxes[ w.sel ].alpha = 0.55;
 	}
 	w.sel = n;
-	if ( n >= 0 && n < 8 )
+	if ( n >= 0 && n < wheel_count() )
 	{
 		c = color_of( wheel_kind( n ), self );
 		w.boxes[ n ].color = ( c[ 0 ] * 0.7, c[ 1 ] * 0.7, c[ 2 ] * 0.7 );
@@ -848,7 +863,7 @@ wheel_close( n )
 	w.hint Destroy();
 	log_line( "ping wheel: player " + player_n( self ) + " closed on " + n + ", level time " + GetTime() );
 	w notify( "closed" );	// (after the HUD is gone: wheel_watch() calls this and ends on the notify)
-	if ( n < 0 || n > 7 || !self spam_ok() )
+	if ( n < 0 || n >= wheel_count() || !self spam_ok() )
 		return;
 	self wheel_ping( wheel_kind( n ) );
 }
@@ -857,6 +872,20 @@ wheel_close( n )
 // something that explodes), else the spot
 wheel_ping( kind )
 {
+	// "need ammo": a marker over himself that follows him (the partner then sees "press Use to give ammo" on him: maps\_mw2coop_partner::ammo_offer)
+	if ( kind == "needammo" )
+	{
+		self.mw2coop_ammo_asked = GetTime();
+		self make( "needammo", self, self.origin, undefined );
+		return;
+	}
+	// "on me": a marker where he stands, and the partner is brought beside him where the game lets (maps\_mw2coop_partner::come_to)
+	if ( kind == "come" )
+	{
+		self make( "come", undefined, self.origin + ( 0, 0, 8 ), undefined );
+		self thread maps\_mw2coop_partner::come_to();
+		return;
+	}
 	eye = self GetEye();
 	dir = AnglesToForward( self GetPlayerAngles() );
 	trace = BulletTrace( eye, eye + dir * 15000, true, self );
@@ -950,6 +979,8 @@ say( kind, title, pos )
 		case "fallback": iPrintLn( &"MW2COOP_PING_FALLBACK", name ); break;
 		case "watch": iPrintLn( &"MW2COOP_PING_WATCH", name ); break;
 		case "cover": iPrintLn( &"MW2COOP_PING_COVER", name ); break;
+		case "needammo": iPrintLn( &"MW2COOP_PING_NEEDAMMO", name ); break;
+		case "come": iPrintLn( &"MW2COOP_PING_COME", name ); break;
 		case "cancel": iPrintLn( &"MW2COOP_PING_CANCEL", name ); break;
 		default: iPrintLn( &"MW2COOP_PING_PLACE", name ); break;
 	}
@@ -1014,6 +1045,13 @@ voice_line( kind, pos )
 			break;
 		case "go":
 			lines[ lines.size ] = v + "order_move_combat";
+			break;
+		case "come":	// "on me" (the squad's "follow me")
+			lines[ lines.size ] = v + "order_move_follow";
+			lines[ lines.size ] = v + "order_move_noncombat";
+			break;
+		case "needammo":	// (the game's soldiers have no "need ammo": "reloading!")
+			lines[ lines.size ] = v + "inform_reloading_generic";
 			break;
 	}
 	foreach ( alias in lines )

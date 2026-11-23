@@ -10,3 +10,6 @@ int steam_friend(uint64_t steam_id);
 int steamnet_send(const char *buf, int len, const struct sockaddr *to);
 // net.c: a packet from Steam (its length, <from> = the peer's virtual address), or 0.
 int steamnet_receive(char *buf, int len, struct sockaddr *from, int *fromlen);
+// rejoin.c: the Steam ID behind a peer's virtual address (0 when <ip> is none, or the relay is off), and the virtual address of a Steam ID (0 when the relay is off).
+uint64_t steamnet_peer_id(const uint8_t ip[4]);
+int steamnet_address_of(uint64_t id, uint8_t ip[4]);

@@ -12,6 +12,8 @@ char access_lobby_flag(void);
 void access_join(const uint8_t ip[4], uint16_t port, int locked);
 // Start in the host's lobby: 0 (and the password popup opens) in password mode without one.
 int access_can_start(void);
+// rejoin.c: the partner of a network session that broke off (his Steam ID / XUID) is let in whatever the access mode; 0 forgets him.
+void access_rejoin_partner(uint64_t xuid);
 // net.c: 1 if the packet is ours or a refused coopConnect (the game must not see it); a reply to
 // send back to the sender is put into reply.
 int access_on_packet(const char *buf, int len, const uint8_t ip[4], uint16_t port, char *reply, int reply_size,

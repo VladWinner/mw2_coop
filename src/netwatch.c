@@ -471,6 +471,14 @@ void netwatch_poll(void)
 		game_cbuf_addtext("mw2coop_netnotice\n");
 }
 
+// report.c: a line in the game's message window while a level runs (main thread); the log has it either way
+void netwatch_say(const char *text)
+{
+	log_printf("netwatch: say: %s", text);
+	if (base && level_runs())
+		((void (*)(int, const char *, int))(base + NW_GAME_MESSAGE))(0, text, 0);
+}
+
 // --- the notice (console command, main thread) ---
 static void notice_f(void)
 {

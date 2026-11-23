@@ -25,6 +25,7 @@
 #include "log.h"
 #include "settings.h"
 #include "upscale.h"
+#include "window.h"
 #include "dx/stateprobe.h"
 #include "dx/mirror11.h"
 #include "dx/d3dcallers.h"
@@ -295,8 +296,168 @@ static HRESULT STDMETHODCALLTYPE create_ps_dump(IDirect3DDevice9 *dev, const DWO
 	return create_ps_orig(dev, code, out);
 }
 
+// ---- The shader cache (owner 2026-11-23, the night list: faster level loads). The game makes one Direct3D 9 shader for every copy of it in a zone, the same
+// bytecode again and again (the zones' own count: trainer 6197 creates of which about half are copies; the next level in the same process makes most of the
+// previous one's again; research 2026-11-23, local notes), and each create costs the driver a compile. Here a create of bytecode this device has made before
+// gives the same object back (one more reference) instead of a new one. The cache keeps one reference of its own; an entry nobody else has used for two level
+// loads is let go (d3dcap_shader_cache_level). A new device empties it (before the device is made: the cache's references kept the old one alive).
+// [native] shadercache=0 turns it off.
+typedef struct {
+	uint64_t h1;
+	uint32_t h2, size;
+	IUnknown *obj;
+	unsigned epoch;
+	int ps;
+} shc_entry_t;
+static shc_entry_t *shc;
+static int shc_n, shc_cap, shc_on = -1;
+static unsigned shc_epoch;
+static SRWLOCK shc_lock = SRWLOCK_INIT;
+static create_shader_t shc_vs_orig, shc_ps_orig;
+static unsigned shc_hits, shc_made;
+static LONGLONG shc_made_ticks;
+
+static int shc_enabled(void)
+{
+	if (shc_on < 0) {
+		char ini[MAX_PATH];
+		DWORD n = GetModuleFileNameA(NULL, ini, MAX_PATH);
+		while (n > 0 && ini[n - 1] != '\\')
+			n--;
+		ini[n] = 0;
+		lstrcatA(ini, "mw2coop\\settings.ini");
+		shc_on = GetPrivateProfileIntA("native", "shadercache", 1, ini) != 0 && !getenv("MW2COOP_NOSHADERCACHE");
+		log_printf("d3dcap: shader cache %s", shc_on ? "on (the same bytecode gives the same shader object back)" : "off ([native] shadercache=0)");
+	}
+	return shc_on;
+}
+
+static void shc_hash(const DWORD *code, size_t size, uint64_t *h1, uint32_t *h2)
+{
+	uint64_t a = 1469598103934665603ull; // FNV-1a 64
+	uint32_t b = 0;			      // and a second, different sum (a rotating one), for an exact enough match without a copy of the bytecode
+	const uint8_t *p = (const uint8_t *)code;
+	for (size_t i = 0; i < size; i++) {
+		a = (a ^ p[i]) * 1099511628211ull;
+		b = ((b << 5) | (b >> 27)) + p[i] + (uint32_t)i;
+	}
+	*h1 = a, *h2 = b;
+}
+
+static HRESULT shc_create(IDirect3DDevice9 *dev, const DWORD *code, void **out, int ps)
+{
+	create_shader_t orig = ps ? shc_ps_orig : shc_vs_orig;
+	const size_t size = code ? shader_size(code) : 0;
+	if (!size || !out)
+		return orig(dev, code, out);
+	uint64_t h1;
+	uint32_t h2;
+	shc_hash(code, size, &h1, &h2);
+	AcquireSRWLockExclusive(&shc_lock);
+	for (int i = 0; i < shc_n; i++)
+		if (shc[i].h1 == h1 && shc[i].h2 == h2 && shc[i].size == (uint32_t)size && shc[i].ps == ps) {
+			IUnknown *o = shc[i].obj;
+			o->lpVtbl->AddRef(o);
+			shc[i].epoch = shc_epoch;
+			shc_hits++;
+			ReleaseSRWLockExclusive(&shc_lock);
+			*out = o;
+			return D3D_OK;
+		}
+	ReleaseSRWLockExclusive(&shc_lock);
+	LARGE_INTEGER t0, t1;
+	QueryPerformanceCounter(&t0);
+	HRESULT hr = orig(dev, code, out);
+	QueryPerformanceCounter(&t1);
+	if (FAILED(hr) || !*out)
+		return hr;
+	AcquireSRWLockExclusive(&shc_lock);
+	shc_made++;
+	shc_made_ticks += t1.QuadPart - t0.QuadPart;
+	if (shc_n == shc_cap) {
+		const int cap = shc_cap ? shc_cap * 2 : 4096;
+		shc_entry_t *m = shc ? HeapReAlloc(GetProcessHeap(), 0, shc, cap * sizeof(*m)) : HeapAlloc(GetProcessHeap(), 0, cap * sizeof(*m));
+		if (m)
+			shc = m, shc_cap = cap;
+	}
+	if (shc_n < shc_cap) {
+		IUnknown *o = *out;
+		o->lpVtbl->AddRef(o); // (the cache's own reference)
+		shc[shc_n++] = (shc_entry_t){h1, h2, (uint32_t)size, o, shc_epoch, ps};
+	}
+	ReleaseSRWLockExclusive(&shc_lock);
+	return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE shc_create_vs(IDirect3DDevice9 *dev, const DWORD *code, void **out)
+{
+	return shc_create(dev, code, out, 0);
+}
+
+static HRESULT STDMETHODCALLTYPE shc_create_ps(IDirect3DDevice9 *dev, const DWORD *code, void **out)
+{
+	return shc_create(dev, code, out, 1);
+}
+
+// all of it goes (a new device): the cache's references let go
+static void shc_flush(const char *why)
+{
+	AcquireSRWLockExclusive(&shc_lock);
+	const int n = shc_n;
+	for (int i = 0; i < shc_n; i++)
+		shc[i].obj->lpVtbl->Release(shc[i].obj);
+	shc_n = 0;
+	ReleaseSRWLockExclusive(&shc_lock);
+	if (n)
+		log_printf("d3dcap: shader cache emptied (%d shader(s), %s)", n, why);
+}
+
+// zones.c: a level's zones begin to load: the stats of the last one, and the entries no one used in the last two loads go (only the cache holds them)
+void d3dcap_shader_cache_level(const char *map)
+{
+	if (shc_on <= 0)
+		return;
+	AcquireSRWLockExclusive(&shc_lock);
+	LARGE_INTEGER f;
+	QueryPerformanceFrequency(&f);
+	const int before = shc_n;
+	int kept = 0;
+	for (int i = 0; i < shc_n; i++) {
+		IUnknown *o = shc[i].obj;
+		int drop = 0;
+		if (shc_epoch - shc[i].epoch >= 2) {
+			o->lpVtbl->AddRef(o);
+			drop = o->lpVtbl->Release(o) == 1; // (the cache's reference is the only one)
+		}
+		if (drop)
+			o->lpVtbl->Release(o);
+		else
+			shc[kept++] = shc[i];
+	}
+	shc_n = kept;
+	log_printf("d3dcap: shader cache before '%s': %u made (%.0f ms in the driver), %u given back from the cache since the last level; %d kept, %d let go", map ? map : "",
+		   shc_made, (double)shc_made_ticks * 1000.0 / (double)f.QuadPart, shc_hits, kept, before - kept);
+	shc_made = shc_hits = 0;
+	shc_made_ticks = 0;
+	shc_epoch++;
+	ReleaseSRWLockExclusive(&shc_lock);
+}
+
+static void shader_cache_hook(IDirect3DDevice9 *dev)
+{
+	if (getenv("MW2COOP_DUMPSHADERS") || !shc_enabled())
+		return;
+	void **vt = *(void ***)dev;
+	if (vt[VT_CREATE_VERTEX_SHADER] == (void *)shc_create_vs)
+		return;
+	patch_vtable(vt, VT_CREATE_VERTEX_SHADER, (void *)shc_create_vs, (void **)&shc_vs_orig);
+	patch_vtable(vt, VT_CREATE_PIXEL_SHADER, (void *)shc_create_ps, (void **)&shc_ps_orig);
+	log_printf("d3dcap: the device's shader creation goes through the shader cache");
+}
+
 static void hook_shader_dump(IDirect3DDevice9 *dev)
 {
+	shader_cache_hook(dev);
 	d3dcallers_hook_device(dev); // QA, MW2COOP_D3DCALLERS=1
 	stateprobe_hook_device(dev); // QA, MW2COOP_STATEPROBE=1
 	mirror11_hook_device(dev);   // QA, MW2COOP_D3D11MIRROR=1
@@ -513,6 +674,7 @@ static HRESULT STDMETHODCALLTYPE create_device_hook(IDirect3D9 *d3d, UINT adapte
 		return inner ? inner(d3d, adapter, type, window, flags, pp, out) : D3DERR_NOTAVAILABLE;
 	}
 	in_create_device = 1;
+	shc_flush("a new device"); // (the shaders of the old device: their references kept it alive)
 	HRESULT hr = create_device_hook_outer(d3d, adapter, type, window, flags, pp, out);
 	in_create_device = 0;
 	return hr;
@@ -639,6 +801,7 @@ static IUnknown *make_d3d12_device_for_display(void)
 static IDirect3D9 *WINAPI create9_hook(UINT version)
 {
 	IDirect3D9 *d3d = NULL;
+	window_fit_early(); // (the game's main thread before it makes its window: the window's size hook goes on here, window.c)
 	if (!use_ex && settings_d3d9on12()) { // experimental, the plain interface: the game's Direct3D 9 on top of Direct3D 12
 		HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
 		create9on12_t make = d3d9 ? (create9on12_t)(void *)GetProcAddress(d3d9, "Direct3DCreate9On12") : NULL;

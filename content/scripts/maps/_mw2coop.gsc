@@ -131,7 +131,9 @@ main()
 	if ( GetDvar( "coop" ) == "1" )
 	{
 		maps\_mw2coop_ping::ping_precache();	// (the wheel's texts: before any wait)
+		maps\_mw2coop_partner::partner_precache();
 		thread maps\_mw2coop_ping::init();
+		thread maps\_mw2coop_partner::init(); // the partner's distance by the game's edge marker of him, and "down" while he is
 	}
 	if ( GetDvar( "mw2coop_qa" ) == "hintkeys" )
 		maps\_mw2coop_qa::hintkeys_precache();	// (QA: its texts, before any wait)

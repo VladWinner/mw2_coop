@@ -93,6 +93,27 @@ static int is_virtual(const uint8_t *ip)
 	return ip[0] == VIRTUAL_A && ip[1] == VIRTUAL_B && ip[2] == 0 && ip[3] >= 1 && ip[3] <= MAX_PEERS;
 }
 
+uint64_t steamnet_peer_id(const uint8_t ip[4])
+{
+	if (!enabled || !is_virtual(ip))
+		return 0;
+	EnterCriticalSection(&peers_lock);
+	const uint64_t id = peers[ip[3] - 1];
+	LeaveCriticalSection(&peers_lock);
+	return id;
+}
+
+int steamnet_address_of(uint64_t id, uint8_t ip[4])
+{
+	if (!enabled || !id)
+		return 0;
+	const int n = peer_index(id, 1);
+	if (n < 0)
+		return 0;
+	ip[0] = VIRTUAL_A, ip[1] = VIRTUAL_B, ip[2] = 0, ip[3] = (uint8_t)(n + 1);
+	return 1;
+}
+
 int steamnet_send(const char *buf, int len, const struct sockaddr *to)
 {
 	if (!enabled || !to || to->sa_family != AF_INET)

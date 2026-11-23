@@ -5,8 +5,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include "addr.h"
 #include "game.h"
+#include "hook.h"
 #include "log.h"
 #include "native.h"
 #include "settings.h"
@@ -193,8 +196,121 @@ static DWORD WINAPI safearea_thread(LPVOID unused)
 	}
 }
 
+// ---- a window that fits on the screen (Vlad: "windowed mode always takes the monitor's native resolution"; owner's night list 2026-11-23)
+// The game's window size (rva 0x10a90, called before the window is made, on every vid_restart too): windowed mode (r_displayMode 2) takes r_customMode
+// when it is "WxH" and not bigger than the monitor, else r_mode, whose list is the monitor's modes and whose default is the screen's own size: a window as
+// big as the screen, whose title bar and frame then go past the screen and under the taskbar. The window's parameters after the call: +0x0c the mode,
+// +0x10 / +0x14 the window's place (vid_xpos, vid_ypos), +0x18 / +0x1c and +0x20 / +0x24 the size (the device's back buffer and the window's client
+// area). When the window with its frame does not fit in the monitor's work area, the largest r_mode that does is taken, the same shape first, and the
+// window is moved into the work area. [display] window_fit=0: the game's size.
+#ifdef _WIN64
+#define REF_WND_PARMS 0x10a90
+#define WND_MODE 0x0c
+#define WND_X 0x10
+#define WND_Y 0x14
+#define WND_BACK_W 0x18
+#define WND_BACK_H 0x1c
+#define WND_W 0x20
+#define WND_H 0x24
+static void (*wnd_parms_original)(uint8_t *p);
+
+static void wnd_parms_hook(uint8_t *p)
+{
+	wnd_parms_original(p);
+	if (*(int *)(p + WND_MODE) != 2)
+		return;
+	const int w = *(int *)(p + WND_W), h = *(int *)(p + WND_H);
+	RECT fr = {0, 0, 100, 100}; // the frame of the game's windowed style (WS_CAPTION | WS_SYSMENU, WS_EX_WINDOWEDGE as the game makes it)
+	AdjustWindowRectEx(&fr, WS_CAPTION | WS_SYSMENU, FALSE, WS_EX_WINDOWEDGE);
+	const int fw = fr.right - fr.left - 100, fh = fr.bottom - fr.top - 100;
+	POINT at = {*(int *)(p + WND_X), *(int *)(p + WND_Y)};
+	MONITORINFOEXA mi;
+	memset(&mi, 0, sizeof(mi));
+	mi.cbSize = sizeof(mi);
+	if (!GetMonitorInfoA(MonitorFromPoint(at, MONITOR_DEFAULTTOPRIMARY), (MONITORINFO *)&mi))
+		return;
+	const int ww = mi.rcWork.right - mi.rcWork.left, wh = mi.rcWork.bottom - mi.rcWork.top;
+	int nw = w, nh = h;
+	if (w + fw > ww || h + fh > wh) {
+		// the monitor's display modes (32 bits, 640x480 and up): the list r_mode is made of (the game's dvars are not up yet for the first window)
+		int best_w = 0, best_h = 0, best_same = 0, n = 0;
+		DEVMODEA dm;
+		memset(&dm, 0, sizeof(dm));
+		dm.dmSize = sizeof(dm);
+		for (DWORD i = 0; EnumDisplaySettingsExA(mi.szDevice, i, &dm, 0) && i < 4096; i++) {
+			const int mw = (int)dm.dmPelsWidth, mh = (int)dm.dmPelsHeight;
+			if (dm.dmBitsPerPel != 32 || mw < 640 || mh < 480)
+				continue;
+			n++;
+			if (mw + fw > ww || mh + fh > wh)
+				continue;
+			const int same = abs(mw * h - mh * w) * 100 < w * mh; // (the same shape within 1%)
+			if (same > best_same || (same == best_same && mw * mh > best_w * best_h))
+				best_w = mw, best_h = mh, best_same = same;
+		}
+		if (!best_w) {
+			static int told;
+			if (!told++)
+				log_printf("window: the %dx%d window does not fit in the work area %dx%d and none of the monitor's %d modes does: left as it is", w, h, ww, wh, n);
+			return;
+		}
+		nw = best_w, nh = best_h;
+	}
+	// the place: the whole window inside the work area
+	int x = at.x, y = at.y;
+	if (x + nw + fw > mi.rcWork.right)
+		x = mi.rcWork.right - nw - fw;
+	if (y + nh + fh > mi.rcWork.bottom)
+		y = mi.rcWork.bottom - nh - fh;
+	if (x < mi.rcWork.left)
+		x = mi.rcWork.left;
+	if (y < mi.rcWork.top)
+		y = mi.rcWork.top;
+	if (nw == w && nh == h && x == at.x && y == at.y)
+		return;
+	*(int *)(p + WND_W) = *(int *)(p + WND_BACK_W) = nw;
+	*(int *)(p + WND_H) = *(int *)(p + WND_BACK_H) = nh;
+	*(int *)(p + WND_X) = x;
+	*(int *)(p + WND_Y) = y;
+	log_printf("window: windowed %dx%d at %d,%d does not fit in the work area %dx%d (frame %dx%d): %dx%d at %d,%d", w, h, (int)at.x, (int)at.y, ww, wh, fw, fh, nw, nh, x, y);
+}
+
+// Installed from d3dcap.c's Direct3DCreate9 on the game's main thread, before the window is made (window_install, after the window, is too late for the
+// first window: it only covers a build whose Direct3DCreate9 did not come through d3dcap). Before game_init the address is the reference build's (XR
+// is not set up yet): on another build the head bytes do not match and nothing is hooked.
+static volatile LONG fit_tried;
+static void window_fit_install(void)
+{
+	if (InterlockedExchange(&fit_tried, 1))
+		return;
+	if (!settings_window_fit()) {
+		log_printf("window: window_fit off ([display] window_fit=0)");
+		return;
+	}
+	if (!addr_resolved(REF_WND_PARMS)) {
+		log_printf("window: the window's size code was not found in this build: no window_fit");
+		return;
+	}
+	static const uint8_t head[15] = {0x48, 0x89, 0x5c, 0x24, 0x18, 0x55, 0x56, 0x57, 0x48, 0x83, 0xec, 0x70, 0x48, 0x8b, 0xd9}; // mov [rsp+18],rbx; push rbp/rsi/rdi; sub rsp,70; mov rbx,rcx
+	if (!hook_function((uint8_t *)GetModuleHandleA(NULL) + XR(REF_WND_PARMS), head, sizeof(head), (void *)wnd_parms_hook, (void **)&wnd_parms_original))
+		log_printf("window: the window's size code (0x10a90) is not the expected code: no window_fit");
+	else
+		log_printf("window: a window that does not fit on the screen gets a game resolution that does (window_fit)");
+}
+#else
+static void window_fit_install(void)
+{
+}
+#endif
+
+void window_fit_early(void)
+{
+	window_fit_install();
+}
+
 void window_install(void)
 {
+	window_fit_install();
 	if (settings_safearea())
 		CreateThread(NULL, 0, safearea_thread, NULL, 0, NULL);
 	if (!settings_darktitle())

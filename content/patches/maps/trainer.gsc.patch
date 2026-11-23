@@ -232,3 +232,26 @@ level.gate_cqb_exit = make_door_from_prefab( "gate_cqb_exit" );
 level.gate_cqb_exit = make_door_from_prefab( "gate_cqb_exit" );
 	level.mw2coop_door_close = ::door_close;
 @@@ end
+
+9. Co-op: after the two targets from the hip, single player asks whether to invert the look (the popup invert_axis_pc / invert_axis,
+   with the controls frozen, the screen blurred, and "try a few more" if asked to). It was put to player 1 alone, froze him while
+   player 2 played on, and read each PC's own mouse setting (ui_mousepitch, the profile): the whole question is left out in co-op
+   (owner, 2026-11-23: "in co-op this has to be off"). The look stays as each player set it in the options.
+@@@ replace
+	playerIsInverted = undefined;
+@@@ with
+	if ( !maps\_mw2coop::is_campaign_coop() )
+	{
+	playerIsInverted = undefined;
+@@@ end
+
+@@@ replace
+	}
+	
+	setObjectiveState( "obj_rifle", "done" );
+@@@ with
+	}
+	}
+	
+	setObjectiveState( "obj_rifle", "done" );
+@@@ end

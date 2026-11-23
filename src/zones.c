@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "hook.h"
+#include "d3dcap.h"
 #include "log.h"
 #include "missions.h"
 #include "zones.h"
@@ -125,6 +126,7 @@ static void load_level_zones(const char *map, int flag)
 	char qa[4] = "";
 	const int split = native_split_active() && !(GetEnvironmentVariableA("MW2COOP_SPLITZONES", qa, sizeof(qa)) && qa[0] == '0'); // (QA: =0 the old way)
 	log_printf("zones: loading level zones for '%s' (coop '%s'%s, flag %d)", map ? map : "", coop, split ? ", split screen session" : "", flag);
+	d3dcap_shader_cache_level(map);
 	if ((coop[0] == '1' || split) && map) {
 		// once, before the first co-op level's zones: the database thread is idle here
 		if (!pools_extended++)

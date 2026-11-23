@@ -58,6 +58,11 @@
 #include "progress.h"
 #include "saves.h"
 #include "ping.h"
+#include "rejoin.h"
+#include "report.h"
+#include "weaponfov.h"
+#include "voice.h"
+#include "steamnet.h"
 
 // itemDef_t::textRect follows windowDef_t. The cached width/height must be invalidated
 // when a cloned button is moved, otherwise its label keeps the source item's old layout.
@@ -422,7 +427,7 @@ void menus_log_items(const char *menu_name)
 #endif
 #ifdef _WIN64
 		{ // QA: the expressions of the item (the tokens: operand kind/value or operator code), to find what shows or hides it
-			int fcount = *(int *)(it + ITEM_FLOAT_EXPS - 8);
+			int fcount = *(int *)(it + ITEM_FLOAT_EXPS - 4); // (floatExpressionCount, right before the pointer: rva 0x254981 compares +0x194)
 			log_statement("visible", *(uint8_t **)(it + ITEM_FLOAT_EXPS + 8));
 			for (int k = 0; fexp && k < fcount && k < 12; k++)
 				log_statement("float", *(uint8_t **)((uint8_t *)fexp + 16 * k + 8));
@@ -991,8 +996,9 @@ static int menu_script_has_target(MenuEventHandlerSet *set, int depth, const cha
 			const char *script = (const char *)h->data;
 			if (script && game_string_readable(script, 8) && strstr(script, needle))
 				return 1;
-#ifdef _WIN64
-		} else if (h->type == 1 && h->data && game_mem_readable(h->data, 16)) {
+		}
+#ifdef _WIN64 // (the brace above was inside this block: the 32-bit build did not compile, nightly of b54776a)
+		else if (h->type == 1 && h->data && game_mem_readable(h->data, 16)) {
 			if (menu_script_has_target(*(MenuEventHandlerSet **)h->data, depth + 1, needle) ||
 			    menu_script_has_target(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1, needle))
 				return 1;
@@ -2993,8 +2999,9 @@ static void send_ready(void)
 		char tag[64];
 		snprintf(snap, sizeof(snap), " snaptag=%s:%s", partner_snapkey, progress_snapshot_tag(partner_snapkey, tag, sizeof(tag)) ? tag : "-");
 	}
-	snprintf(text, sizeof(text), READY_TAG "%ld %s %016llx saves=%d%s", my_ready, settings_player_id(),
-		 (unsigned long long)*(uint64_t *)(base + RVA_XUID_TABLE), saves_supported(), snap);
+	// (the host: "full=1" while its party holds both players: a partner who joins it again after a break knows he is in, rejoin.c)
+	snprintf(text, sizeof(text), READY_TAG "%ld %s %016llx saves=%d%s%s", my_ready, settings_player_id(),
+		 (unsigned long long)*(uint64_t *)(base + RVA_XUID_TABLE), saves_supported(), snap, base[RVA_PARTY_IS_HOST] && party_full() ? " full=1" : "");
 	net_send_mod(text);
 	ready_sent = GetTickCount();
 }
@@ -3082,6 +3089,7 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 
 static volatile LONG brief_partner_done; // the partner's briefing film is over or skipped (the packet mw2coop_briefdone)
 static volatile DWORD brief_notify_until; // the partner is told "my briefing is over" at every poll until then (a skip on this PC, any way it happens; UDP may lose one)
+static volatile LONG host_full;		  // (client) the host's last ready packet said its party holds both players
 int menus_on_packet(const char *buf, int len)
 {
 	static const char brief[] = "\xff\xff\xff\xffmw2coop_briefdone";
@@ -3122,6 +3130,7 @@ int menus_on_packet(const char *buf, int len)
 	LONG saves = strstr(rest, "saves=1") != NULL;
 	if (InterlockedExchange(&partner_saves, saves) != saves)
 		log_printf("menus: the partner's build %s the game's checkpoints", saves ? "loads" : "does not load");
+	InterlockedExchange(&host_full, strstr(rest, " full=1") != NULL);
 	if (InterlockedExchange(&partner_ready, ready) != ready || !partner_present())
 		log_printf("menus: partner %s", ready ? "ready" : "not ready");
 	partner_heard = GetTickCount();
@@ -3434,6 +3443,7 @@ static void start_launch(void)
 	}
 	progress_begin(continuing, partner_id, partner_xuid, (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38, // slot 1
 		       add_member);
+	rejoin_session_begin(1, (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38, partner_xuid, partner_id); // (if it breaks off, both go on from its last checkpoint)
 	game_cbuf_addtext(load ? "set mw2coop_snapload 1\n" : "set mw2coop_snapload 0\n"); // (a session dvar: the start packet takes it to the client)
 	log_printf("menus: Start: coopLaunch");
 	campaign_loading_begin();
@@ -3578,12 +3588,15 @@ static void add_partner_popups(void)
 	yes_no_popup("mw2coop_partner");
 	yes_no_popup("mw2coop_member");
 	yes_no_popup("mw2coop_newgame");
+	yes_no_popup("mw2coop_rejoin");
 }
 
 // mw2coop_online: run by the campaign menu's co-op button before "listen" opens the lobby
 static void online_f(void)
 {
 	lobby_music_patch(1); // second chance before listen activates coop_lobby
+	if (rejoin_state() == REJOIN_CLIENT_JOIN)
+		rejoin_end("the player hosts a lobby of his own");
 	char map[64] = "trainer", start[64] = "";
 	const char *chosen = game_cmd_argv(1);
 	continuing = 0;
@@ -3686,6 +3699,8 @@ static void devmap_f(void)
 }
 
 static void tick_f(void);
+static void rejoin_yes_f(void);
+static void rejoin_no_f(void);
 
 // ---- the native split screen lobby: both players' cards, player 1's pad in the menus
 // The lobby's player cards come from the menu expression coopPlayerInfo(n, field) (rva 0x2442b0: local client, its arguments (count at [0x28], n as int / float / string at
@@ -3866,6 +3881,8 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_logo_tick", NULL, NULL, logo_tick_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_find", NULL, NULL, find_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_join_found", NULL, NULL, join_found_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_rejoin_yes", NULL, NULL, rejoin_yes_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_rejoin_no", NULL, NULL, rejoin_no_f CMD_NODE_FLAG},
 };
 
 // The menu work runs on the game's main thread, between frames: the control thread only queues
@@ -4213,6 +4230,7 @@ void menus_poll(void)
 	char v[8] = "", coop[8] = "";
 	game_dvar_raw("sv_running", v, sizeof(v));
 	game_dvar_raw("coop", coop, sizeof(coop));
+	rejoin_poll(*(volatile int *)(base + RVA_UI_STATE), *(volatile int *)(base + RVA_CLIENT_STATE), v[0] == '1'); // (a network session's break: rejoin.c)
 	// menus_poll runs on the control thread during a level; tick_f deliberately does not.
 	// Record the local mission here so tick_f can detect its end as soon as the menus return.
 	if (v[0] == '1' && InterlockedCompareExchange(&native_started, 0, 0) &&
@@ -4394,6 +4412,7 @@ void menus_poll(void)
 		if (!sticky)
 			campaign_loading_end();
 	}
+	report_poll(v[0] == '1'); // (the pause menu's "Report a bug": the menu tick below does not run while a level does)
 	if (v[0] == '1') {
 		// Prepatch both known pause menus on the game's main thread during active gameplay.
 		// A UI zone may register only one; when paused, only the currently visible menu's route
@@ -4458,6 +4477,259 @@ static void pause_routes_tick_f(void)
 	}
 }
 
+// ---- going on with a network session that broke off (rejoin.c has the record and finds the break; owner 2026-11-23) ----
+
+// the lobby's hint line (bottom right, where the game says "double-click a friend's name for voice chat"); a split screen lobby keeps it for its devices
+static int rejoin_hint_on;
+static void rejoin_hint(const char *text)
+{
+	if (split_mode)
+		return;
+	if (text) {
+		localize_override("MENU_SP_STEAM_CHAT_HINT", text);
+		rejoin_hint_on = 1;
+	} else if (rejoin_hint_on) {
+		localize_override("MENU_SP_STEAM_CHAT_HINT", NULL);
+		rejoin_hint_on = 0;
+	}
+}
+
+static void rejoin_hint_fmt(const char *name, const char *want, const char *a, int n)
+{
+	const char *fmt = localize_text(name);
+	char text[256];
+	if (!fmt || !ctexts_fmt_ok(fmt, want))
+		return;
+	if (!strcmp(want, "s"))
+		snprintf(text, sizeof(text), fmt, a);
+	else if (!strcmp(want, "sd"))
+		snprintf(text, sizeof(text), fmt, a, n);
+	else
+		lstrcpynA(text, fmt, sizeof(text));
+	rejoin_hint(text);
+}
+
+// the partner of the session that broke off: by his player id (the mod's, the same after a restart; QA 2026-11-23: the iw4x-sp host's XUID was another after its
+// restart, and its partner never took the lobby for his), else by his XUID
+static int rejoin_same_partner(const rejoin_info_t *r)
+{
+	if (r->pid[0] && partner_id[0])
+		return strcmp(partner_id, r->pid) == 0;
+	return !r->xuid || partner_xuid == r->xuid;
+}
+
+// the partner's address to join or to send to: a Steam relay peer's virtual address is made again from his Steam ID (it is numbered per run of the game)
+static int rejoin_address(const rejoin_info_t *r, uint8_t ip[4], uint16_t *port)
+{
+	memcpy(ip, r->ip, 4);
+	*port = r->port;
+	if (ip[0] == 240 && ip[1] == 10 && !steamnet_address_of(r->xuid, ip))
+		return 0;
+	return ip[0] != 0 && *port != 0;
+}
+
+// The host: its lobby continues the playthrough of the session that broke off (its save, its mission and checkpoint, as Continue does), lets the partner in
+// whatever the access, and is ready; the partner's game joins again by itself.
+static void rejoin_arrange_host(const rejoin_info_t *r)
+{
+	char map[64], start[64], spot[64] = "", cmd[320];
+	if (r->save[0] && progress_choose_file(r->save))
+		save_picked = 1; // (the lobby stays on this save when the partner is known, not on his newest)
+	if (progress_chosen(map, sizeof(map), start, sizeof(start))) {
+		continuing = 1;
+		add_member = 0;
+		progress_chosen_spot(spot, sizeof(spot));
+		snprintf(cmd, sizeof(cmd), "set coop_mapName %s\nset start \"%s\"\nset mw2coop_cp_start \"%s\"\nset mw2coop_cp_pos \"%s\"\nset mw2coop_snapload 0\n", map, start,
+			 spot[0] ? start : "", spot);
+		game_cbuf_addtext(cmd);
+		log_printf("menus: rejoin: the lobby continues %s ('%s' start '%s')", r->save, map, start);
+	} else
+		log_printf("menus: rejoin: no save of the playthrough to continue: the lobby keeps its mission");
+	access_rejoin_partner(r->xuid);
+	InterlockedExchange(&my_ready, 1);
+	send_ready();
+	update_texts();
+}
+
+static void rejoin_lobby_tick(int campaign, int ui)
+{
+	static int arranged, counting, joined, attempts, reopens;
+	static DWORD count_from, hello_next, next_try, join_since, wait_since, reopen_at;
+	rejoin_info_t r;
+	// a session of an earlier run of the game that broke off: asked once, at the main menu
+	if (ui == 1 && rejoin_offer_take(&r)) {
+		const char *fmt = localize_text(r.host ? "MW2COOP_REJOIN_HOST_FMT" : "MW2COOP_REJOIN_CLIENT_FMT");
+		char text[256];
+		if (fmt && ctexts_fmt_ok(fmt, "s")) {
+			snprintf(text, sizeof(text), fmt, r.name[0] ? r.name : "?");
+			localize_set_text("MW2COOP_REJOIN_Q", text);
+			game_cbuf_addtext("openmenu mw2coop_rejoin\n");
+			log_printf("menus: rejoin: asking whether to go on with the %s session that broke off (partner '%s')", r.host ? "hosted" : "joined", r.name);
+		}
+	}
+	const int st = rejoin_state();
+	if (st != REJOIN_HOST_WAIT)
+		arranged = 0, counting = 0, reopens = 0, wait_since = 0;
+	if (st != REJOIN_CLIENT_JOIN)
+		joined = 0, attempts = 0, next_try = 0, join_since = 0;
+	if (st != REJOIN_HOST_WAIT && st != REJOIN_CLIENT_JOIN) {
+		rejoin_hint(NULL);
+		return;
+	}
+	rejoin_info(&r);
+	const DWORD now = GetTickCount();
+	const char *name = r.name[0] ? r.name : "?";
+	if (st == REJOIN_HOST_WAIT) {
+		const int in_lobby = campaign && ui == 0x0b && base[RVA_PARTY_ACTIVE] && base[RVA_PARTY_IS_HOST];
+		if (!wait_since)
+			wait_since = now;
+		if (!in_lobby) {
+			if (arranged && ui != 0x0b && ui != 0) { // the host left the lobby (Back): no more waiting
+				rejoin_end("the host left the lobby");
+				rejoin_hint(NULL);
+			} else if (!arranged && (ui == 1 || ui == 14) && now - wait_since > 2000 && (int)(now - reopen_at) >= 0 && reopens < 3) {
+				// the level ended outside the host's lobby: the iw4x-sp client's host stops with an engine error ("Packet is ... bytes, unable to add ... more")
+				// when the partner goes silent and lands in Special Ops' menu (QA 2026-11-23): the lobby is opened again on the playthrough
+				reopens++;
+				reopen_at = now + 6000;
+				if (r.save[0] && progress_choose_file(r.save))
+					save_picked = 1;
+				log_printf("menus: rejoin: the host is out of its lobby (ui state %d): the lobby is opened again (%d)", ui, reopens);
+				host_lobby(NULL);
+			}
+			return;
+		}
+		if (!arranged) {
+			arranged = 1;
+			rejoin_arrange_host(&r);
+		}
+		const int back = party_full() && partner_present();
+		const int same = back && rejoin_same_partner(&r); // (by the player id: the iw4x-sp client's XUID is not the same after a restart)
+		char key[48], tag[64], want[120] = "";
+		const int snap = continuing && progress_chosen_snapshot(key, sizeof(key), tag, sizeof(tag));
+		if (snap)
+			snprintf(want, sizeof(want), "%s:%s", key, tag);
+		const int match = !snap || strcmp(partner_snaptag, want) == 0;
+		if (same && match && my_ready && partner_ready) {
+			if (!counting) {
+				counting = 1;
+				count_from = now;
+				log_printf("menus: rejoin: the partner is back and ready (checkpoint %s): the lobby starts in 5 s", snap ? want : "none, start point");
+			}
+			const int left = 5 - (int)((now - count_from) / 1000);
+			if (left <= 0) {
+				counting = 0;
+				InterlockedExchange(&partner_confirmed, 1); // (the playthrough's own partner: no questions about members)
+				rejoin_hint(NULL);
+				log_printf("menus: rejoin: going on");
+				start_launch();
+				return;
+			}
+			rejoin_hint_fmt("MW2COOP_REJOIN_GO_FMT", "sd", name, left);
+			return;
+		}
+		if (counting)
+			log_printf("menus: rejoin: the count stopped (partner %s, ready %ld / %ld)", back ? "here" : "gone", my_ready, partner_ready);
+		counting = 0;
+		if (back && !same)
+			rejoin_hint_fmt("MW2COOP_REJOIN_OTHER", "", NULL, 0);
+		else if (same && !match)
+			rejoin_hint_fmt("MW2COOP_REJOIN_NOSNAP_FMT", "s", name, 0);
+		else
+			rejoin_hint_fmt("MW2COOP_REJOIN_WAIT_FMT", "s", name, 0);
+		// a router in front of the host lets the partner's join in once the host has sent to him: a packet every 2 s while he is away
+		uint8_t ip[4];
+		uint16_t port;
+		if (!back && (int)(now - hello_next) >= 0 && rejoin_address(&r, ip, &port)) {
+			hello_next = now + 2000;
+			net_send_mod_to(ip, port, "mw2coop_rejoin_hello");
+		}
+		return;
+	}
+	// the partner: joins the host's address again until the host's party holds him (its ready packets say "full"), then is ready
+	const int in = base[RVA_PARTY_ACTIVE] && !base[RVA_PARTY_IS_HOST] && partner_present() && host_full && rejoin_same_partner(&r);
+	if (in) {
+		if (!joined) {
+			joined = 1;
+			log_printf("menus: rejoin: back in the host's lobby after %d attempt(s): ready", attempts);
+			InterlockedExchange(&my_ready, 1);
+			send_ready();
+			update_texts();
+		}
+		rejoin_hint_fmt("MW2COOP_REJOIN_BACK_FMT", "s", name, 0);
+		return;
+	}
+	if (joined && !base[RVA_PARTY_ACTIVE]) { // he was back and left the lobby himself
+		rejoin_end("the partner left the host's lobby");
+		rejoin_hint(NULL);
+		return;
+	}
+	if (ui != 0x0b && ui != 1 && ui != 14)
+		return; // (a popup of the game's, a load: later)
+	if (!join_since)
+		join_since = now;
+	if (now - join_since > 10 * 60 * 1000) {
+		rejoin_end("the host's game did not take the partner back in 10 minutes");
+		rejoin_hint(NULL);
+		return;
+	}
+	uint8_t ip[4];
+	uint16_t port;
+	if (!rejoin_address(&r, ip, &port)) {
+		rejoin_end("the host's address is not known");
+		return;
+	}
+	// the partner's own small packet to the host every 2 s: its router keeps the way open for the host's, and the host's game sees it is looked for
+	static DWORD chello_next;
+	if ((int)(now - chello_next) >= 0) {
+		chello_next = now + 2000;
+		net_send_mod_to(ip, port, "mw2coop_rejoin_hello");
+	}
+	// A join is tried only when the host is heard (its waiting lobby's packets, or its lobby's ready packets): a join sent to a host that is gone waits in the
+	// game's queue of reliable packets, and on the 32-bit game (iw4x-sp) a join queued so kept every later one from getting through after the host had started
+	// again (QA 2026-11-23: the partner never got back; one join sent while the host was down was enough).
+	const int host_heard = rejoin_hello_age() < 4000 || partner_present();
+	if ((attempts && (int)(now - next_try) < 0) || !host_heard) {
+		if (attempts)
+			rejoin_hint_fmt("MW2COOP_REJOIN_JOIN_FMT", "sd", name, attempts);
+		else
+			rejoin_hint_fmt("MW2COOP_REJOIN_WAITHOST_FMT", "s", name, 0);
+		return;
+	}
+	next_try = now + 8000; // (a join takes a few seconds to show in the host's packets: the next one only after that)
+	attempts++;
+	char cmd[64];
+	snprintf(cmd, sizeof(cmd), "mw2coop_join %u.%u.%u.%u %u\n", ip[0], ip[1], ip[2], ip[3], (unsigned)port);
+	game_cbuf_addtext(cmd);
+	log_printf("menus: rejoin: joining the host at %u.%u.%u.%u:%u again (attempt %d, the host is heard)", ip[0], ip[1], ip[2], ip[3], (unsigned)port, attempts);
+	rejoin_hint_fmt("MW2COOP_REJOIN_JOIN_FMT", "sd", name, attempts);
+}
+
+// the main menu's question after a restart: Yes (the host opens its lobby on the playthrough again; the partner joins the host again), No
+static void rejoin_yes_f(void)
+{
+	rejoin_info_t r;
+	rejoin_info(&r);
+	if (r.host) {
+		rejoin_set_state(REJOIN_HOST_WAIT, "the host opens the lobby again");
+		if (r.save[0] && progress_choose_file(r.save))
+			save_picked = 1;
+		host_lobby(NULL); // (mw2coop_online: the lobby continues the picked save)
+	} else
+		rejoin_set_state(REJOIN_CLIENT_JOIN, "the partner joins the host again");
+}
+
+static void rejoin_no_f(void)
+{
+	rejoin_end("the player said no");
+}
+
+// the client: a network session launches (the host's start packet, progress.c)
+void menus_rejoin_client_begins(void)
+{
+	rejoin_session_begin(0, (const char *)base + RVA_PARTY_MEMBER_NAMES, partner_xuid, partner_id); // (slot 0: the host)
+}
+
 static void tick_f(void)
 {
 	InterlockedExchange(&tick_queued, 0);
@@ -4492,6 +4764,10 @@ static void tick_f(void)
 	int spec_split = spec_split_lobby();
 	int split_lobby = campaign || spec_split; // the lobby of a split screen game of ours: the return to it is looked after for a Special Ops op too
 	int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
+	rejoin_lobby_tick(campaign, lobby_ui); // a network session that broke off: the host waits, the partner joins again
+	report_menu_tick();		       // the pause menu's "Report a bug" (report.c)
+	weaponfov_tick();		       // cg_weaponFov once the game's dvars are there (weaponfov.c)
+	voice_menu_tick();		       // the push-to-talk key bound once (voice.c)
 	patch_lobby(campaign, spec_split);
 	patch_role_popup(InterlockedCompareExchange(&split_mode, 0, 0) != 0); // (the game's role popup starts our session in a split screen lobby)
 	leave_warning_patch(campaign);

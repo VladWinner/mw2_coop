@@ -34,6 +34,7 @@
 #include "net.h"
 #include "party.h"
 #include "progress.h"
+#include "rejoin.h"
 #include "saves.h"
 #include "scrdebug.h"
 #include "settings.h"
@@ -119,6 +120,7 @@ static void script_request(const char *cmd)
 			// the last mission is over (after the credits, maps\_mw2coop::mission_complete): no next one to launch, both PCs leave the session for
 			// the main menu, as single player does there; each PC does it itself, so neither sees the other drop (audit 2026-11-18, GSC F3)
 			log_printf("control: the last mission is over: back to the main menu");
+			rejoin_end("the last mission is over"); // (a planned end: nothing to go on with)
 			game_cbuf_addtext("disconnect\n");
 		}
 		return;

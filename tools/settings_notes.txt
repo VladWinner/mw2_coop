@@ -34,4 +34,8 @@ native.shocksect 1 (default): the shell shock's saved screen copies only the rec
 native.qa_mouse1dx QA: a steady mouse movement fed to player 2 in split screen, in counts per frame (no real cursor is moved): checks that his view turns. 0 (default): off.
 native.cmdlog1 QA: logs player 2's usercmd angles, the key catchers, frame_msec and his mouse reads, 4 times a second (64-bit; Big Brother's gunner). 0 (default): off.
 native.padfreeze While a player's controls are frozen (a script's FreezeControls, a linked scene) his pad's stick moves nothing, as the keyboard's keys move nothing then (default 1): the Spec Ops snowmobile races hold the pad player until GO. 0: the pad's move goes through (a vehicle then drives off while frozen).
+native.shadercache The same Direct3D 9 shader bytecode gives the same shader object back instead of a new one (default 1): the game makes one shader for every copy of it in a zone, and the next level makes most of the last one's again, each a compile in the driver; the log has the numbers before every level (d3dcap: shader cache before ...). 0: the game's own way.
+voice.mic A part of the microphone's name as Windows lists it (default empty: Windows' default recording device).
+voice.talk_key The key that, held, talks to the partner in network co-op (default CAPSLOCK); the mod binds it to +mw2coop_talk once, when the player's config binds that key to nothing else. Empty: no key is bound.
+voice.volume_pct The partner's voice, 0 to 200 (default 100).
 native.pingmouse The markers' wheel holds the view while it is open: the mouse read of CL_MouseMove is hooked from the start, in network co-op too (default 1). 0: not hooked; the wheel then turns with the view and picks nothing by the mouse.

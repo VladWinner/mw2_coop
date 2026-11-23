@@ -4,6 +4,8 @@
 // so d3d9.dll's Direct3DCreate9 is hooked before the game window exists and CreateDevice of the object it returns hands over the device.
 void d3dcap_install(void); // from DllMain, before the game creates its device
 void *d3dcap_device(void); // the newest device the game created, or NULL
+// zones.c: a level's zones begin to load: the shader cache logs the last level's numbers and lets go of what no level used twice in a row
+void d3dcap_shader_cache_level(const char *map);
 // Direct3D 9 on Direct3D 12 (settings.ini [display] d3d9on12): logs once the back buffer and the depth buffer as Direct3D 12 resources; call at a Present.
 void d3dcap_on12_probe(void *dev9);
 // Direct3D 9 on Direct3D 12 (d3d9on12): the Direct3D 12 device Direct3D 9 runs on and the direct command queue made for it (NULL otherwise).

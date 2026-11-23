@@ -47,6 +47,13 @@ static char password[33];
 static volatile LONG hosting; // this PC holds a campaign lobby (set by the menu tick)
 static volatile LONG friendly_fire = 1;
 
+static volatile uint64_t rejoin_partner_xuid; // rejoin.c: the partner of a session that broke off, let in whatever the access (0: none)
+
+void access_rejoin_partner(uint64_t xuid)
+{
+	rejoin_partner_xuid = xuid;
+}
+
 static int edit_mode;
 static uint8_t edit_ip[4];
 static uint16_t edit_port;
@@ -507,6 +514,15 @@ int access_on_packet(const char *buf, int len, const uint8_t ip[4], uint16_t por
 	memcpy(&xuid, at + 1, 8);
 	if (steam_friend(xuid) || (access_mode == ACCESS_PASSWORD && authorized(ip, port)))
 		return 0;
+	if (rejoin_partner_xuid && xuid == rejoin_partner_xuid) { // the partner of the session that broke off comes back (rejoin.c): he got in once already
+		static DWORD logged;
+		if (GetTickCount() - logged > 5000) {
+			logged = GetTickCount();
+			log_printf("access: %u.%u.%u.%u:%u is the partner of the broken session (xuid %016llx): let in", ip[0], ip[1], ip[2], ip[3], port,
+				   (unsigned long long)xuid);
+		}
+		return 0;
+	}
 	*reply_len = snprintf(reply, reply_size, "\xff\xff\xff\xff" "coopReject %s",
 			      access_mode == ACCESS_STEAM ? "MW2COOP_FRIENDS_ONLY" : "MW2COOP_BAD_PASSWORD");
 	static DWORD last_log;

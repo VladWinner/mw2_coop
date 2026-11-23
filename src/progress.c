@@ -315,6 +315,34 @@ void progress_choose(int i)
 		log_printf("progress: the host picked the save %s (map '%s')", chosen_file + strlen(dir), v.map);
 }
 
+int progress_current_save(char *name, int size)
+{
+	AcquireSRWLockShared(&save_lock);
+	const char *slash = strrchr(target_file, '\\');
+	const int have = target_file[0] && slash && !is_legacy(target_file);
+	if (have)
+		lstrcpynA(name, slash + 1, size);
+	ReleaseSRWLockShared(&save_lock);
+	if (!have)
+		name[0] = 0;
+	return have;
+}
+
+int progress_choose_file(const char *name)
+{
+	int k = name && strncmp(name, "save_", 5) == 0 ? atoi(name + 5) : 0;
+	if (k <= 0)
+		return 0;
+	char file[MAX_PATH];
+	snprintf(file, sizeof(file), "%sprogress\\save_%d.txt", dir, k); // (the name made again from its number: nothing of the record's text goes into a path)
+	save_t v;
+	if (!read_save(file, &v))
+		return 0;
+	lstrcpynA(chosen_file, file, MAX_PATH);
+	log_printf("progress: the save %s is picked again (map '%s')", file + strlen(dir), v.map);
+	return 1;
+}
+
 int progress_chosen_spot(char *spot, int size)
 {
 	save_t v;
@@ -712,6 +740,7 @@ int progress_on_packet(const char *buf, int len)
 	if (len < tl || memcmp(buf, tag, tl) != 0)
 		return 0;
 	menus_campaign_loading_begin();
+	menus_rejoin_client_begins(); // (if the session breaks off, both go on from its last checkpoint: rejoin.c)
 	forget_checkpoint_data();
 	char text[512];
 	int n = len - tl < (int)sizeof(text) - 1 ? len - tl : (int)sizeof(text) - 1;

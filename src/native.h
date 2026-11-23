@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 
 // Native split screen (src/native.c): one game process, two local players, the picture cut top and bottom. 64-bit build only.
 //   settings.ini [native] players=2 ...                 QA: the session starts with the game
@@ -13,6 +14,8 @@ void native_install(void);
 #define NATIVE_PAD_LLEFT 0x100000u
 #define NATIVE_PAD_LRIGHT 0x200000u
 unsigned native_pad_button_of(const char *cmd, int tactical);
+// a menu of the cgame's UI context of local client 0 (the HUD's menus, loaded with a level) by name; NULL when it has none
+uint8_t *native_cg_find_menu(const char *name);
 // a new level's zones are loading: client 1's last server command of the previous level is cleared
 void native_level_load(void);
 // menus_poll: notes player 2's client while a level runs (for native_level_load)
