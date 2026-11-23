@@ -124,6 +124,13 @@ main()
 	if ( getdvarint( "mw2coop_native_split" ) && !is_campaign_coop() && is_specialop() )
 		thread specops_p2_hands();
 
+	// the co-op markers (maps\_mw2coop_ping.gsc; the key: src/ping.c), in any co-op session: the campaign and Special Ops, network or split screen
+	if ( GetDvar( "coop" ) == "1" )
+	{
+		maps\_mw2coop_ping::ping_precache();	// (the wheel's texts: before any wait)
+		thread maps\_mw2coop_ping::init();
+	}
+
 	if ( !is_campaign_coop() )
 		return;
 

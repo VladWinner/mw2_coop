@@ -11,6 +11,7 @@ export MW2COOP_NOUPNP=${MW2COOP_NOUPNP-1}
 #   MW2COOP_QA_WATCH   extra dvars or memory (@rva:size, *rva+off:size) to log on change
 #   MW2COOP_QA_CMDS    extra commands.txt lines for both copies, separated by ";" (e.g. "!trace 342c88")
 #   MW2COOP_QA_LATE    extra host lines run right after coopLaunch, ";"-separated (start with a !sleep)
+#   MW2COOP_QA_LATE_CLIENT  the same for the client, run right after its join (64-bit and 32-bit pairs; start with a !sleep)
 #   MW2COOP_GOD        host's mw2coop_god (default: unset = 1, god mode on; "restart" forces 0).
 #                      Set on the host only: the client gets it from the host's launch packet.
 #   MW2COOP_HOST_CMDS  extra host lines run in the lobby right before coopLaunch, ";"-separated
@@ -48,6 +49,8 @@ set mw2coop_qa_phase \"\"
 $(printf '%s' "${MW2COOP_QA_CMDS:-}" | tr ';' '
 ')"
 LONG=$(( (LEVEL_S + 30) * 1000 ))
+CLATE="$(printf '%s' "${MW2COOP_QA_LATE_CLIENT:-}" | tr ';' '
+')"
 LATE="$(printf '%s' "${MW2COOP_QA_LATE:-}" | tr ';' '
 ')"
 HOSTCMDS="$(printf '%s' "${MW2COOP_HOST_CMDS:-}" | tr ';' '
@@ -95,10 +98,10 @@ elif [ "$BITS" = 32 ]; then
 set solo_play 0'
 	OWN_IP=$(powershell.exe -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { \$_.IPAddress -notlike '169.*' -and \$_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1).IPAddress" | tr -d '\r')
 	printf '# host\n%s\n%s\nset start "%s"\nset mw2coop_god "%s"\n!sleep 8000\n%s\nlisten\n!sleep 2000\n%s\ncoopLaunch\n%s\n!sleep %d\n' "$COMMON" "$PRE" "$HOST_START" "$GOD" "$LAUNCH" "$HOSTCMDS" "$LATE" $LONG > $A/mw2coop/commands.txt
-	printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\n%s\nset start "%s"\n!sleep 14000\n!xuid_add 1\n!sleep 6000\nmw2coop_join %s\n!sleep %d\n' "$COMMON" "$PRE" "$START" "$OWN_IP" $LONG > $B/mw2coop/commands.txt
+	printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\n%s\nset start "%s"\n!sleep 14000\n!xuid_add 1\n!sleep 6000\nmw2coop_join %s\n%s\n!sleep %d\n' "$COMMON" "$PRE" "$START" "$OWN_IP" "$CLATE" $LONG > $B/mw2coop/commands.txt
 else
 printf '# host\n%s\nset start "%s"\nset mw2coop_god "%s"\n!sleep 35000\n%s\nlisten\n!sleep 2000\n%s\ncoopLaunch\n%s\n!sleep %d\n' "$COMMON" "$HOST_START" "$GOD" "$LAUNCH" "$HOSTCMDS" "$LATE" $LONG > $A/mw2coop/commands.txt
-printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\nset start "%s"\n!sleep 20000\n!xuid_add 1\n!sleep 19000\nmw2coop_join %s\n!sleep %d\n' "$COMMON" "$START" "${MW2COOP_JOIN_IP:-127.0.0.1}" $LONG > $B/mw2coop/commands.txt
+printf '# client (QA: shifted XUID, join by address without a Steam lobby)\n%s\nset start "%s"\n!sleep 20000\n!xuid_add 1\n!sleep 19000\nmw2coop_join %s\n%s\n!sleep %d\n' "$COMMON" "$START" "${MW2COOP_JOIN_IP:-127.0.0.1}" "$CLATE" $LONG > $B/mw2coop/commands.txt
 fi
 rm -f $A/mw2coop/mw2coop.log $B/mw2coop/mw2coop.log
 # A hang watchdog: when both logs stand still for 25 s (the games run in lockstep, so a hung copy stops the other too), ask

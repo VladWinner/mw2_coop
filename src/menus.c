@@ -52,6 +52,7 @@
 #include "net.h"
 #include "progress.h"
 #include "saves.h"
+#include "ping.h"
 
 #ifdef _WIN64
 #define RVA_UI_CONTEXT XR(0x1a3ab00) // uiContext_t (Menus_OpenByName's first argument, "openmenu" @0x24ca10)
@@ -3813,6 +3814,7 @@ static void tick_f(void)
 	fonts_retry_tick(); // (the fonts' late retry: here, at the top of the main thread, not inside an asset lookup)
 	gfxopts_tick();
 	enhopts_tick();
+	ping_menu_tick(); // (binds [input] ping_key to the co-op markers once)
 	picking_tick();
 	unlock_missions_tick();
 	find_tick();

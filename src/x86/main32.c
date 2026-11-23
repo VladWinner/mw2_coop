@@ -43,6 +43,7 @@
 #include "party.h"
 #include "settings.h"
 #include "upnp.h"
+#include "ping.h"
 
 int proxy_init(void);
 int proxy_host_is_game(void);
@@ -282,6 +283,7 @@ static void install_all(void)
 	firewall_install();
 	addr_scratch_check("after firewall_install");
 	update_install(); // (asks GitHub for a newer release: [update] check)
+	ping_install();   // (the co-op markers' key: [input] ping_key)
 	shot_install();
 	addr_scratch_check("after shot_install");
 	fov_install();

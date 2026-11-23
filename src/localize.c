@@ -331,6 +331,91 @@ static const ModString strings[] = {
 	// ^2Напарник снова на связи (пауза %d с)
 	{"MW2COOP_NET_BACK_FMT", "^2\xcd\xe0\xef\xe0\xf0\xed\xe8\xea \xf1\xed\xee\xe2\xe0 \xed\xe0 \xf1\xe2\xff\xe7\xe8 (\xef\xe0\xf3\xe7\xe0 %d \xf1)",
 	 "^2Your partner is back (a %d s gap)"},
+	// the co-op markers (maps\_mw2coop_ping.gsc, src/ping.c): &&1 the player's name (Alpha / Bravo), &&2 a weapon's; the wheel's items (W_)
+	// &&1: сюда
+	{"MW2COOP_PING_PLACE", "&&1: \xf1\xfe\xe4\xe0",
+	 "&&1: here"},
+	// &&1: враг!
+	{"MW2COOP_PING_ENEMY", "&&1: \xe2\xf0\xe0\xe3!",
+	 "&&1: enemy!"},
+	// &&1: вражеская техника!
+	{"MW2COOP_PING_ENEMY_VEHICLE", "&&1: \xe2\xf0\xe0\xe6\xe5\xf1\xea\xe0\xff \xf2\xe5\xf5\xed\xe8\xea\xe0!",
+	 "&&1: enemy vehicle!"},
+	// &&1: техника
+	{"MW2COOP_PING_VEHICLE", "&&1: \xf2\xe5\xf5\xed\xe8\xea\xe0",
+	 "&&1: vehicle"},
+	// &&1: пулемётчик!
+	{"MW2COOP_PING_ENEMY_TURRET", "&&1: \xef\xf3\xeb\xe5\xec\xb8\xf2\xf7\xe8\xea!",
+	 "&&1: enemy gunner!"},
+	// &&1: здесь пулемёт
+	{"MW2COOP_PING_TURRET", "&&1: \xe7\xe4\xe5\xf1\xfc \xef\xf3\xeb\xe5\xec\xb8\xf2",
+	 "&&1: turret here"},
+	// &&1: граната!
+	{"MW2COOP_PING_GRENADE", "&&1: \xe3\xf0\xe0\xed\xe0\xf2\xe0!",
+	 "&&1: grenade!"},
+	// &&1: мина!
+	{"MW2COOP_PING_MINE", "&&1: \xec\xe8\xed\xe0!",
+	 "&&1: mine!"},
+	// &&1: взрывоопасно!
+	{"MW2COOP_PING_EXPLOSIVE", "&&1: \xe2\xe7\xf0\xfb\xe2\xee\xee\xef\xe0\xf1\xed\xee!",
+	 "&&1: explosive!"},
+	// &&1: здесь &&2
+	{"MW2COOP_PING_WEAPON", "&&1: \xe7\xe4\xe5\xf1\xfc &&2",
+	 "&&1: &&2 here"},
+	// &&1: здесь патроны
+	{"MW2COOP_PING_AMMO", "&&1: \xe7\xe4\xe5\xf1\xfc \xef\xe0\xf2\xf0\xee\xed\xfb",
+	 "&&1: ammo here"},
+	// &&1: опасность!
+	{"MW2COOP_PING_DANGER", "&&1: \xee\xef\xe0\xf1\xed\xee\xf1\xf2\xfc!",
+	 "&&1: danger!"},
+	// &&1: атакую!
+	{"MW2COOP_PING_ATTACK", "&&1: \xe0\xf2\xe0\xea\xf3\xfe!",
+	 "&&1: attacking!"},
+	// &&1: иду сюда
+	{"MW2COOP_PING_GO", "&&1: \xe8\xe4\xf3 \xf1\xfe\xe4\xe0",
+	 "&&1: going here"},
+	// &&1: жди здесь
+	{"MW2COOP_PING_WAIT", "&&1: \xe6\xe4\xe8 \xe7\xe4\xe5\xf1\xfc",
+	 "&&1: wait here"},
+	// &&1: отступаем!
+	{"MW2COOP_PING_FALLBACK", "&&1: \xee\xf2\xf1\xf2\xf3\xef\xe0\xe5\xec!",
+	 "&&1: fall back!"},
+	// &&1: смотрю сюда
+	{"MW2COOP_PING_WATCH", "&&1: \xf1\xec\xee\xf2\xf0\xfe \xf1\xfe\xe4\xe0",
+	 "&&1: watching here"},
+	// &&1: прикрываю
+	{"MW2COOP_PING_COVER", "&&1: \xef\xf0\xe8\xea\xf0\xfb\xe2\xe0\xfe",
+	 "&&1: covering"},
+	// &&1: отбой
+	{"MW2COOP_PING_CANCEL", "&&1: \xee\xf2\xe1\xee\xe9",
+	 "&&1: never mind"},
+	// Враг
+	{"MW2COOP_PING_W_ENEMY", "\xc2\xf0\xe0\xe3",
+	 "Enemy"},
+	// Атакую
+	{"MW2COOP_PING_W_ATTACK", "\xc0\xf2\xe0\xea\xf3\xfe",
+	 "Attacking"},
+	// Иду сюда
+	{"MW2COOP_PING_W_GO", "\xc8\xe4\xf3 \xf1\xfe\xe4\xe0",
+	 "Going here"},
+	// Жди здесь
+	{"MW2COOP_PING_W_WAIT", "\xc6\xe4\xe8 \xe7\xe4\xe5\xf1\xfc",
+	 "Wait here"},
+	// Опасность
+	{"MW2COOP_PING_W_DANGER", "\xce\xef\xe0\xf1\xed\xee\xf1\xf2\xfc",
+	 "Danger"},
+	// Отступаем
+	{"MW2COOP_PING_W_FALLBACK", "\xce\xf2\xf1\xf2\xf3\xef\xe0\xe5\xec",
+	 "Fall back"},
+	// Смотрю сюда
+	{"MW2COOP_PING_W_WATCH", "\xd1\xec\xee\xf2\xf0\xfe \xf1\xfe\xe4\xe0",
+	 "Watching"},
+	// Прикрываю
+	{"MW2COOP_PING_W_COVER", "\xcf\xf0\xe8\xea\xf0\xfb\xe2\xe0\xfe",
+	 "Covering"},
+	// Отпустите, чтобы поставить метку; в центре: отмена
+	{"MW2COOP_PING_W_HINT", "\xce\xf2\xef\xf3\xf1\xf2\xe8\xf2\xe5, \xf7\xf2\xee\xe1\xfb \xef\xee\xf1\xf2\xe0\xe2\xe8\xf2\xfc \xec\xe5\xf2\xea\xf3; \xe2 \xf6\xe5\xed\xf2\xf0\xe5: \xee\xf2\xec\xe5\xed\xe0",
+	 "Let go to mark; in the middle: cancel"},
 	// ^1Рассинхронизация с %d с
 	{"MW2COOP_NET_DESYNC_FMT", "^1\xd0\xe0\xf1\xf1\xe8\xed\xf5\xf0\xee\xed\xe8\xe7\xe0\xf6\xe8\xff \xf1 %d \xf1",
 	 "^1Out of sync since %d s"},

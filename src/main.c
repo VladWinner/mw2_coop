@@ -39,6 +39,7 @@
 #include "upnp.h"
 #include "zones.h"
 #include "scripts.h"
+#include "ping.h"
 
 int proxy_init(void);
 int proxy_host_is_game(void);
@@ -108,6 +109,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		firewall_install();
 		addr_scratch_check("after firewall_install");
 		update_install(); // (asks GitHub for a newer release: [update] check)
+		ping_install();   // (the co-op markers' key: [input] ping_key)
 		shot_install();
 		addr_scratch_check("after shot_install");
 		fov_install();

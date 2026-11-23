@@ -21,6 +21,7 @@
 #include "menus_ui.h"
 #include "scrdebug_stack.h"
 #include "native.h"
+#include "ping.h"
 #include "console.h"
 #include "control.h"
 #include "padopts.h"
@@ -5862,6 +5863,10 @@ static int kb_player(void)
 {
 	return pad_dev[0] >= 0 && pad_dev[1] < 0 ? 1 : 0;
 }
+int native_kb_player(void)
+{
+	return kb_player();
+}
 
 // an action of the table at rva 0x3be770 by its name ("+attack" / "-attack", "weapnext"), for local client 0 of the live context
 #ifndef _WIN64
@@ -6488,8 +6493,12 @@ static void pad_frame_player(int pl, int play)
 		p->rc_yaw = (int)floorf(rx_rc * 127.0f + 0.5f);
 		yaw = pitch = 0;
 	}
+	// the markers' wheel (src/ping.c): Back held opens it and the look stick picks a kind of marker; the view stays where it was meanwhile (owner, 2026-11-23)
+	const int wheel = ping_pad(pl, (st.pad.buttons & 0x0020) != 0, rx, ry);
+	if (wheel)
+		yaw = pitch = 0, p->rc_pitch = p->rc_yaw = 0;
 	const float yaw_in = yaw, pitch_in = pitch;
-	if (o.assist && !qa_noassist[pl] && !remote) // (the aim assist turns the view, which a remote-controlled missile does not follow)
+	if (o.assist && !qa_noassist[pl] && !remote && !wheel) // (the aim assist turns the view, which a remote-controlled missile does not follow)
 		aim_assist(pl, dt, &yaw, &pitch, sqrtf(lx * lx + ly * ly), sqrtf(rx * rx + ry * ry), lt);
 	else
 		aa_state[pl].lock_ent = aa_state[pl].snap_ent = -1, aa_state[pl].ads_was = lt;
@@ -6526,6 +6535,8 @@ static void pad_frame_player(int pl, int play)
 	for (size_t i = 0; i < PAD_MAP_N; i++) {
 		int was = (p->held & map[i].mask) != 0, is = (buttons & map[i].mask) != 0;
 		if (was == is)
+			continue;
+		if (map[i].mask == 0x0020) // Back: the markers (ping_pad above: a short press marks, held it opens the wheel; the objectives are in the pause menu)
 			continue;
 		if (map[i].hold)
 			pad_binding(map[i].hold, is);
@@ -7225,6 +7236,7 @@ static void *mouse_read_target, *mouse_read2_target;
 static void mouse_read_original(intptr_t state, float *x, float *y);
 static void mouse_read2_original(intptr_t state, float *x, float *y);
 #endif
+static int mouse_early; // the mouse read below is hooked from the start (mouse_early_install: the markers' wheel in network co-op), not by the split screen's context hooks
 static unsigned mouse1_reads; // QA (cmdlog1): player 2's mouse reads and their sum since the last log line
 static float mouse1_sum[2];
 static void mouse_read_hook(intptr_t state, float *x, float *y)
@@ -7242,6 +7254,7 @@ static void mouse_read_hook(intptr_t state, float *x, float *y)
 		mouse1_sum[0] += *x;
 		mouse1_sum[1] += *y;
 	}
+	ping_mouse(native_active ? kb_player() : 0, x, y); // an open markers' wheel takes the movement (src/ping.c): the view stays
 	if (inputlog_on() && (*x != 0 || *y != 0))
 		inputlog("MOUSE,%d,%d,%d,%.3f,%.3f", ctx_current, 1, native_active ? kb_player() : 0, *x, *y);
 }
@@ -7959,14 +7972,22 @@ static void hudelem_hook(int lc, void *e)
 {
 #ifdef _WIN64
 	if (mode == 11 && split_on && CFG_ONCE("hudelemlog", 0) && GetTickCount() - split_tick > 15000) { // QA: the HUD elements each context draws: shader name (configstring of the index at +0x4c), colour, sort, position
-		static unsigned hn;
-		if (hn < 150 && e && !IsBadReadPtr(e, 0xb0)) {
+		static unsigned hn, marks, marks_logged;
+		if ((hn < 150 || marks_logged < 60) && e && !IsBadReadPtr(e, 0xb0)) {
 			char nm[64] = "?";
 			const int idx = *(const int *)((const uint8_t *)e + 0x4c);
 			((int (*)(int, int, char *, int))(base + XR(0xb0610)))(lc, idx, nm, sizeof(nm));
 			const uint32_t *d = (const uint32_t *)e;
 			hn++;
-			if (!strcmp(nm, "black") || hn < 12) {
+			// (the co-op markers' icons, src/ping.c: one line in 40 draws of them)
+			const int mark = strstr(nm, "coop_player") || strstr(nm, "waypoint") || !strncmp(nm, "hud_", 4);
+			int show = 0;
+			if (mark) {
+				if (marks++ % 40 == 0 && marks_logged < 60)
+					marks_logged++, show = 1;
+			} else if (hn < 150 && (!strcmp(nm, "black") || hn < 12))
+				show = 1;
+			if (show) {
 				uint8_t rgba[8] = {0};
 				const int tnow = *(const int *)(base + XR(0x51dca8));
 				((void (*)(void *, int, void *))(base + XR(0x73eb0)))(e, tnow, rgba); // the colour at the client's time, as the draw reads it
@@ -10208,7 +10229,9 @@ static int hooks_apply32_contexts(void)
 		{0x1799e8, n32_mouse2_stub, &mouse_read2_target},
 	};
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
-		if (!jhook_call(base + XR(sites[i].site), sites[i].hook, sites[i].original)) {
+		if (mouse_early && sites[i].hook == (void *)n32_mouse_stub)
+			continue; // hooked at the start already (a second hook of the call would call itself)
+		else if (!jhook_call(base + XR(sites[i].site), sites[i].hook, sites[i].original)) {
 			log_printf("native: no call at rva 0x%x, context hook %zu off", XR(sites[i].site), i);
 			return 0;
 		}
@@ -10312,7 +10335,9 @@ static void contexts_install(void)
 	};
 	int enabled = cfg("sites", 0x7fffffff);
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
-		if ((enabled & (1 << i)) && !jhook_call(base + XR(sites[i].site), sites[i].hook, sites[i].original))
+		if (mouse_early && sites[i].hook == (void *)mouse_read_hook)
+			continue; // hooked at the start already (a second hook of the call would call itself)
+		else if ((enabled & (1 << i)) && !jhook_call(base + XR(sites[i].site), sites[i].hook, sites[i].original))
 			log_printf("native: no call at rva 0x%x, context hook %zu off", XR(sites[i].site), i);
 	swap_entities = cfg("swapent", 0); // the old workaround for context 1's "mine" (superseded by ownfix, local_slot_hook)
 	skip_entity = cfg("skipent", 1); // context 1's own entity (player 2) is never drawn by the first pass either
@@ -11213,6 +11238,22 @@ void native_poll_players(void)
 }
 
 
+// The markers' wheel (src/ping.c) holds the view of a player who has it open and gives his mouse's movement to it, in network co-op too, where no split screen
+// session hooks anything: the mouse read of CL_MouseMove (64-bit call at rva 0xcfd23; 32-bit 0x179000) is hooked from the start. The hook passes the movement on as
+// the game has it (context 0's, no session) unless the wheel is open. The split screen's context hooks leave that call to this one. [native] pingmouse=0 off.
+static void mouse_early_install(void)
+{
+	if (mouse_early || !cfg("pingmouse", 1))
+		return;
+#ifdef _WIN64
+	mouse_early = jhook_call(base + XR(0xcfd23), mouse_read_hook, (void **)&mouse_read_original);
+#else
+	mouse_early = jhook_call(base + XR(0x179000), n32_mouse_stub, &mouse_read_target);
+#endif
+	log_printf("native: the mouse read %s", mouse_early ? "is hooked (the markers' wheel holds the view)" : "is not as expected: the markers' wheel cannot hold the view");
+}
+
+
 void native_install(void)
 {
 	char path[MAX_PATH];
@@ -11257,6 +11298,7 @@ void native_install(void)
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + XR(0x2bb0), dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");
 #endif
+	mouse_early_install();
 	// the QA runs: settings.ini [native] players=2 starts the session at once (the menu's button does it later, native_split_start)
 	int players = cfg("players", 0);
 	if (players >= 2)

@@ -532,6 +532,118 @@ REFERENCE           MW2COOP_NET_BACK_FMT
 LANG_ENGLISH        "^2Your partner is back (a %d s gap)"
 LANG_RUSSIAN        "^2Напарник снова на связи (пауза %d с)"
 
+REFERENCE           MW2COOP_PING_PLACE
+LANG_ENGLISH        "&&1: here"
+LANG_RUSSIAN        "&&1: сюда"
+
+REFERENCE           MW2COOP_PING_ENEMY
+LANG_ENGLISH        "&&1: enemy!"
+LANG_RUSSIAN        "&&1: враг!"
+
+REFERENCE           MW2COOP_PING_ENEMY_VEHICLE
+LANG_ENGLISH        "&&1: enemy vehicle!"
+LANG_RUSSIAN        "&&1: вражеская техника!"
+
+REFERENCE           MW2COOP_PING_VEHICLE
+LANG_ENGLISH        "&&1: vehicle"
+LANG_RUSSIAN        "&&1: техника"
+
+REFERENCE           MW2COOP_PING_ENEMY_TURRET
+LANG_ENGLISH        "&&1: enemy gunner!"
+LANG_RUSSIAN        "&&1: пулемётчик!"
+
+REFERENCE           MW2COOP_PING_TURRET
+LANG_ENGLISH        "&&1: turret here"
+LANG_RUSSIAN        "&&1: здесь пулемёт"
+
+REFERENCE           MW2COOP_PING_GRENADE
+LANG_ENGLISH        "&&1: grenade!"
+LANG_RUSSIAN        "&&1: граната!"
+
+REFERENCE           MW2COOP_PING_MINE
+LANG_ENGLISH        "&&1: mine!"
+LANG_RUSSIAN        "&&1: мина!"
+
+REFERENCE           MW2COOP_PING_EXPLOSIVE
+LANG_ENGLISH        "&&1: explosive!"
+LANG_RUSSIAN        "&&1: взрывоопасно!"
+
+REFERENCE           MW2COOP_PING_WEAPON
+LANG_ENGLISH        "&&1: &&2 here"
+LANG_RUSSIAN        "&&1: здесь &&2"
+
+REFERENCE           MW2COOP_PING_AMMO
+LANG_ENGLISH        "&&1: ammo here"
+LANG_RUSSIAN        "&&1: здесь патроны"
+
+REFERENCE           MW2COOP_PING_DANGER
+LANG_ENGLISH        "&&1: danger!"
+LANG_RUSSIAN        "&&1: опасность!"
+
+REFERENCE           MW2COOP_PING_ATTACK
+LANG_ENGLISH        "&&1: attacking!"
+LANG_RUSSIAN        "&&1: атакую!"
+
+REFERENCE           MW2COOP_PING_GO
+LANG_ENGLISH        "&&1: going here"
+LANG_RUSSIAN        "&&1: иду сюда"
+
+REFERENCE           MW2COOP_PING_WAIT
+LANG_ENGLISH        "&&1: wait here"
+LANG_RUSSIAN        "&&1: жди здесь"
+
+REFERENCE           MW2COOP_PING_FALLBACK
+LANG_ENGLISH        "&&1: fall back!"
+LANG_RUSSIAN        "&&1: отступаем!"
+
+REFERENCE           MW2COOP_PING_WATCH
+LANG_ENGLISH        "&&1: watching here"
+LANG_RUSSIAN        "&&1: смотрю сюда"
+
+REFERENCE           MW2COOP_PING_COVER
+LANG_ENGLISH        "&&1: covering"
+LANG_RUSSIAN        "&&1: прикрываю"
+
+REFERENCE           MW2COOP_PING_CANCEL
+LANG_ENGLISH        "&&1: never mind"
+LANG_RUSSIAN        "&&1: отбой"
+
+REFERENCE           MW2COOP_PING_W_ENEMY
+LANG_ENGLISH        "Enemy"
+LANG_RUSSIAN        "Враг"
+
+REFERENCE           MW2COOP_PING_W_ATTACK
+LANG_ENGLISH        "Attacking"
+LANG_RUSSIAN        "Атакую"
+
+REFERENCE           MW2COOP_PING_W_GO
+LANG_ENGLISH        "Going here"
+LANG_RUSSIAN        "Иду сюда"
+
+REFERENCE           MW2COOP_PING_W_WAIT
+LANG_ENGLISH        "Wait here"
+LANG_RUSSIAN        "Жди здесь"
+
+REFERENCE           MW2COOP_PING_W_DANGER
+LANG_ENGLISH        "Danger"
+LANG_RUSSIAN        "Опасность"
+
+REFERENCE           MW2COOP_PING_W_FALLBACK
+LANG_ENGLISH        "Fall back"
+LANG_RUSSIAN        "Отступаем"
+
+REFERENCE           MW2COOP_PING_W_WATCH
+LANG_ENGLISH        "Watching"
+LANG_RUSSIAN        "Смотрю сюда"
+
+REFERENCE           MW2COOP_PING_W_COVER
+LANG_ENGLISH        "Covering"
+LANG_RUSSIAN        "Прикрываю"
+
+REFERENCE           MW2COOP_PING_W_HINT
+LANG_ENGLISH        "Let go to mark; in the middle: cancel"
+LANG_RUSSIAN        "Отпустите, чтобы поставить метку; в центре: отмена"
+
 REFERENCE           MW2COOP_NET_DESYNC_FMT
 LANG_ENGLISH        "^1Out of sync since %d s"
 LANG_RUSSIAN        "^1Рассинхронизация с %d с"

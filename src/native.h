@@ -10,6 +10,8 @@ void native_level_load(void);
 void native_poll_players(void);
 // 1 while a session runs
 int native_split_active(void);
+// 0 or 1: the player whose context gets the keyboard and the mouse in the split screen (player 2 only when player 1 plays on a pad and player 2 on none)
+int native_kb_player(void);
 // Where context ctx (0 player 1, 1 player 2) keeps the bytes the game has at a reference rva of the client statics that a split screen keeps per context; NULL outside a session
 void *native_ctx_addr(int ctx, unsigned rva);
 // One key press (down and up) through the engine's key event, for the split screen lobby's pad

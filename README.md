@@ -29,6 +29,7 @@
 - 🤝 **The real campaign, for two.** Both PCs run the same level in lockstep, so the world, the enemies and every scripted scene are shared, not faked.
 - 🎬 **Every set piece reworked for two players**: vehicles, turrets, climbs, swims, cutscenes and the final knife fight. Nobody is left behind or thrown out of a scene.
 - 🎯 **Enemies fight both of you**, and scenes that protect the player protect both.
+- 📍 **Markers for the partner (new)**: tap Z (a pad's Back) to mark what you look at for both of you: an enemy (a red marker over him that follows him), an enemy vehicle or gunner, a grenade or a mine, a barrel or car that explodes, a weapon on the ground (by name) or ammunition, or a place; twice quickly marks danger, pressed again on your own marker it goes away. Hold Z for the wheel: enemy, attacking, going here, wait here, danger, fall back, watching, covering; move the mouse (a pad's right stick) to one and let go, the view stays still meanwhile. A line on the screen says who marked what. The key is set in `settings.ini` (`[input] ping_key`) or with `bind <key> +mw2coop_ping` in the console.
 - 🩹 **Downs and revives** with the game's own revive system; both down means a restart together.
 - 🎚 **Difficulty**: online, the one the host picks in the lobby, for both; in split screen each player picks his own (the rows Alpha and Bravo, like the console game's two difficulty buttons).
 - 🔫 **Friendly fire switch**: the host turns damage between the players on or off in the lobby (on by default).

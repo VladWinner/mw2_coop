@@ -121,6 +121,12 @@
 //   deadpick - (native split screen, player 2 on a pad: MW2COOP_PAD=0; invasion) a weapon lying in the level (one player 2 lacks): player 2 is put beside
 //              it, looks at it and holds X; it must be his weapon in hands (frames dp-before, dp-after); player 1 takes it if player 2 could not (the item,
 //              or player 2's input?)
+//   pingtest - (native split screen; invasion: enemies, cars, Humvees) the co-op markers (maps\_mw2coop_ping.gsc), the script's events given straight: player 1
+//              marks the ground in front (place), again on it (gone), twice quickly (danger), opens the wheel (frame ping-wheel), picks "watching" and lets go
+//              (a watch marker); then, as targets come in sight (90 s at most): player 2 marks an enemy (enemy, an anchor above him), the weapon he drops when
+//              killed (weapon, its name), a car that explodes (explosive) and a vehicle; frames ping-*. With the console lines of the DLL's wheel (MW2COOP_MID:
+//              mw2coop_ping_qa 0 move <dx> 0 alone, then +mw2coop_ping, a move, -mw2coop_ping) it logs player 1's view yaw: the lone move turns it, the move
+//              in the open wheel must not ("pingtest: yaw ...")
 //   edgeyaw  - (cliffhanger, default start) player 1 turns to eight directions on the cave ledge; each time player 2 is brought to him
 //              (maps\_mw2coop::teleport_to_partner): beside him, "on his spot" or held back at the edge; then whether player 2 fell
 //   laserdup - (any level with allies, native split screen) the four allies nearest player 1 get their laser forced on for 20 s, frames
@@ -608,6 +614,9 @@ main()
 			break;
 		case "edgeyaw":
 			edgeyaw();
+			break;
+		case "pingtest":
+			pingtest();
 			break;
 		case "groundpick":
 			groundpick();
@@ -3020,6 +3029,329 @@ deadpick()
 	wait 3;
 	qa_shot( "dp-after2" );
 	report( "done" );
+}
+
+ping_kinds( player )
+{
+	text = "";
+	if ( !isdefined( player.mw2coop_pings ) )
+		return "none";
+	foreach ( ping in player.mw2coop_pings )
+	{
+		huds = 0;
+		if ( isdefined( ping.huds ) )
+			huds = ping.huds.size;
+		text = text + ping.kind + "/" + huds + " ";
+	}
+	if ( text == "" )
+		return "none";
+	return text;
+}
+
+ping_last( player )
+{
+	if ( !isdefined( player.mw2coop_pings ) || !player.mw2coop_pings.size )
+		return undefined;
+	return player.mw2coop_pings[ player.mw2coop_pings.size - 1 ];
+}
+
+// turns the player to a point and taps (the script's event, as the DLL's would come)
+ping_at( player, point )
+{
+	level.mw2coop_qa_ping_aim = GetTime();
+	player SetPlayerAngles( VectorToAngles( point - player GetEye() ) );
+	wait 0.25;
+	player maps\_mw2coop_ping::event( "tap", -1 );
+	wait 0.5;
+}
+
+// the nearest entity of the list that the player sees (its point: origin + lift), within reach
+ping_seen( player, ents, lift, reach )
+{
+	best = undefined;
+	eye = player GetEye();
+	foreach ( e in ents )
+	{
+		if ( !isdefined( e ) || Distance( e.origin, eye ) > reach )
+			continue;
+		at = e.origin + ( 0, 0, lift );
+		tr = BulletTrace( eye, at, false, player );
+		if ( tr[ "fraction" ] < 0.97 && !( isdefined( tr[ "entity" ] ) && tr[ "entity" ] == e ) )
+			continue;
+		if ( !isdefined( best ) || Distance( e.origin, eye ) < Distance( best.origin, eye ) )
+			best = e;
+	}
+	return best;
+}
+
+pingtest()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait_intro();
+	wait 4;
+	for ( t = 0; t < 20 && !isdefined( level.player.mw2coop_pings ); t++ )
+		wait 0.5;
+	check( isdefined( level.player.mw2coop_pings ), "the markers are set up (maps\\_mw2coop_ping::init)" );
+	p1 = level.player;
+	p2 = level.player2;
+	level.mw2coop_no_follow = true;
+	p1 EnableInvulnerability();
+	p2 EnableInvulnerability();
+	level thread ping_yaw_watch( p1 );
+	// player 1: a place 30 degrees down in front of him
+	p1 SetPlayerAngles( ( 30, p1 GetPlayerAngles()[ 1 ], 0 ) );
+	wait 0.3;
+	p1 maps\_mw2coop_ping::event( "tap", -1 );
+	wait 0.6;
+	check( p1.mw2coop_pings.size == 1 && p1.mw2coop_pings[ 0 ].kind == "place" && p1.mw2coop_pings[ 0 ].huds.size == 2, "player 1 marked a place, seen by both (" + ping_kinds( p1 ) + ")" );
+	qa_shot( "ping-place" );
+	// on it again a second later: it goes away (he is turned to its spot again: the start of Invasion turns him with the Humvee, and the press of the first run
+	// 2026-11-23 landed 600 units away)
+	wait 1;
+	level.mw2coop_qa_ping_aim = GetTime();
+	if ( p1.mw2coop_pings.size && isdefined( p1.mw2coop_pings[ 0 ].spot ) )
+		p1 SetPlayerAngles( VectorToAngles( p1.mw2coop_pings[ 0 ].spot - p1 GetEye() ) );
+	p1 maps\_mw2coop_ping::event( "tap", -1 );	// (same frame: the Humvee of Invasion's start turns him between frames)
+	wait 0.6;
+	check( p1.mw2coop_pings.size == 0, "player 1's press on his own marker took it away (" + ping_kinds( p1 ) + ")" );
+	// twice quickly: danger
+	p1 maps\_mw2coop_ping::event( "tap", -1 );
+	wait 0.15;
+	p1 maps\_mw2coop_ping::event( "tap", -1 );
+	wait 0.6;
+	check( p1.mw2coop_pings.size == 1 && p1.mw2coop_pings[ 0 ].kind == "danger", "two quick presses: danger (" + ping_kinds( p1 ) + ")" );
+	qa_shot( "ping-danger" );
+	// the wheel: open, "watching" (6, left), let go
+	p1 SetPlayerAngles( ( 15, p1 GetPlayerAngles()[ 1 ] + 40, 0 ) );
+	wait 2.5;	// (the 5 presses in 3 s guard)
+	p1 maps\_mw2coop_ping::event( "open", -1 );
+	wait 0.3;
+	check( isdefined( p1.mw2coop_wheel ) && p1.mw2coop_wheel.boxes.size == 8 && !isdefined( p2.mw2coop_wheel ), "the wheel opened for player 1 only (eight items)" );
+	p1 maps\_mw2coop_ping::event( "sel", 6 );
+	wait 0.4;
+	qa_shot( "ping-wheel" );
+	p1 maps\_mw2coop_ping::event( "close", 6 );
+	wait 0.6;
+	last = ping_last( p1 );
+	check( !isdefined( p1.mw2coop_wheel ) && isdefined( last ) && last.kind == "watch", "let go on 'watching': the wheel is gone and a watch marker made (" + ping_kinds( p1 ) + ")" );
+	qa_shot( "ping-watch" );
+	// the wheel let go in the middle: nothing
+	n = p1.mw2coop_pings.size;
+	p1 maps\_mw2coop_ping::event( "open", -1 );
+	wait 0.2;
+	p1 maps\_mw2coop_ping::event( "close", -1 );
+	wait 0.4;
+	check( !isdefined( p1.mw2coop_wheel ) && p1.mw2coop_pings.size == n, "let go in the middle: no marker (" + ping_kinds( p1 ) + ")" );
+
+	// targets as they come in sight (Invasion: the enemies come up the street a while after the start)
+	enemy_done = false;
+	weapon_done = false;
+	car_done = false;
+	vehicle_done = false;
+	put_tried = false;
+	for ( t = 0; t < 180 && !( enemy_done && weapon_done && car_done && vehicle_done ); t++ )
+	{
+		wait 0.5;
+		if ( !car_done )
+		{
+			cars = array_combine( GetEntArray( "destructible_vehicle", "targetname" ), GetEntArray( "explodable_barrel", "targetname" ) );
+			car = ping_seen( p1, cars, 30, 1500 );
+			if ( isdefined( car ) && !isdefined( car.exploded ) )
+			{
+				wait 3.1;
+				ping_at( p1, car.origin + ( 0, 0, 30 ) );
+				last = ping_last( p1 );
+				check( isdefined( last ) && IsSubStr( last.kind, "explosive" ) && isdefined( last.ent ) && last.ent == car, "player 1 marked a car or barrel that explodes (" + ping_kinds( p1 ) + ", " + car.targetname + ", " + int( Distance( car.origin, p1.origin ) ) + " units)" );
+				qa_shot( "ping-explosive" );
+				car_done = true;
+				continue;
+			}
+		}
+		if ( !vehicle_done )
+		{
+			vehicles = [];
+			foreach ( v in Vehicle_GetArray() )
+				if ( isdefined( v ) && isdefined( v.code_classname ) && v.code_classname == "script_vehicle" && v.classname != "script_vehicle_corpse" )
+					vehicles[ vehicles.size ] = v;
+			v = ping_seen( p1, vehicles, 40, 3000 );
+			if ( isdefined( v ) && Distance( v.origin, p1.origin ) > 250 )
+			{
+				wait 3.1;
+				if ( !isdefined( v ) || v.classname == "script_vehicle_corpse" )
+				{
+					report( "pingtest: the vehicle was destroyed before the press; another is looked for" );
+					continue;	// (Invasion's Humvees blow up: the first run's pick was a wreck by the time of the press)
+				}
+				ping_at( p1, v.origin + ( 0, 0, 40 ) );
+				last = ping_last( p1 );
+				check( isdefined( last ) && ( last.kind == "vehicle" || last.kind == "enemy_vehicle" ) && isdefined( last.anchor ), "player 1 marked a vehicle (" + ping_kinds( p1 ) + ", " + v.classname + ")" );
+				qa_shot( "ping-vehicle" );
+				vehicle_done = true;
+				continue;
+			}
+		}
+		if ( !enemy_done )
+		{
+			enemy = undefined;
+			eye = p2 GetEye();
+			foreach ( ai in GetAIArray( "axis" ) )
+				if ( IsAlive( ai ) && SightTracePassed( eye, ai GetEye(), false, p2 ) && ( !isdefined( enemy ) || Distance( ai.origin, p2.origin ) < Distance( enemy.origin, p2.origin ) ) )
+					enemy = ai;
+			if ( !isdefined( enemy ) && t >= 40 && !put_tried )
+			{
+				put_tried = true;
+				enemy = ping_put_by_enemy( p2 );
+				wait 0.5;
+				if ( isdefined( enemy ) && !( IsAlive( enemy ) && SightTracePassed( p2 GetEye(), enemy GetEye(), false, p2 ) ) )
+					enemy = undefined;
+			}
+			if ( isdefined( enemy ) )
+			{
+				ping_at( p2, enemy GetTagOrigin( "j_spine4" ) );
+				last = ping_last( p2 );
+				check( isdefined( last ) && last.kind == "enemy" && isdefined( last.ent ) && last.ent == enemy && isdefined( last.anchor ), "player 2 marked the enemy he looks at, the marker above him (" + ping_kinds( p2 ) + ", " + int( Distance( enemy.origin, p2.origin ) ) + " units away)" );
+				qa_shot( "ping-enemy" );
+				enemy_done = true;
+				// killed, he drops his weapon: player 2 marks it
+				spot = enemy.origin;
+				enemy Kill();
+				wait 2;
+				state = "entity gone";
+				if ( isdefined( enemy ) )
+					state = "IsAlive " + IsAlive( enemy ) + ", IsAI " + IsAI( enemy ) + ", class " + enemy.classname;
+				check( !isdefined( last.huds ), "the enemy's marker went with him (" + state + ")" );
+				weapons = [];
+				foreach ( e in GetEntArray() )
+					if ( isdefined( e.classname ) && e.classname.size > 7 && GetSubStr( e.classname, 0, 7 ) == "weapon_" && Distance( e.origin, spot ) < 200 )
+						weapons[ weapons.size ] = e;
+				w = ping_seen( p2, weapons, 4, 3000 );
+				if ( isdefined( w ) )
+				{
+					wait 3.1;
+					ping_at( p2, w.origin + ( 0, 0, 2 ) );
+					last = ping_last( p2 );
+					check( isdefined( last ) && last.kind == "weapon", "player 2 marked the weapon the enemy dropped (" + ping_kinds( p2 ) + ", " + w.classname + ")" );
+					qa_shot( "ping-weapon" );
+					weapon_done = true;
+				}
+				else
+					report( "pingtest: the killed enemy's weapon (" + weapons.size + " near him) is not in player 2's sight: not checked" );
+				weapon_done = true;
+			}
+		}
+	}
+	if ( !enemy_done )
+		report( "pingtest: no enemy came in player 2's sight in 90 s: the enemy marker is not checked" );
+	if ( !car_done )
+		report( "pingtest: no car or barrel that explodes in player 1's sight: not checked" );
+	if ( !vehicle_done )
+		report( "pingtest: no vehicle in player 1's sight: not checked" );
+	wait 3;
+	qa_shot( "ping-later" );
+	// every marker goes when its time is up (12 s at most for a place, 15 s for an item): none older than 16 s
+	old = 0;
+	foreach ( pl in level.players )
+		foreach ( ping in pl.mw2coop_pings )
+			if ( GetTime() - ping.made > 16000 )
+				old++;
+	check( old == 0, "no marker outlives its time (" + old + " older than 16 s; player 1: " + ping_kinds( p1 ) + ", player 2: " + ping_kinds( p2 ) + ")" );
+	report( "done" );
+}
+
+// player 2 is put on the ground 260 units from the nearest living enemy, where he sees him (8 directions tried); the enemy, or undefined
+ping_put_by_enemy( p2 )
+{
+	ais = GetAIArray( "axis" );
+	report( "pingtest: no enemy in player 2's sight after 20 s; " + ais.size + " enemies in the level: player 2 is put beside the nearest he can see from there" );
+	if ( !ais.size )
+		return ping_spawn_enemy( p2 );
+	sorted = get_array_of_closest( p2.origin, ais );
+	foreach ( ai in sorted )
+	{
+		if ( !IsAlive( ai ) )
+			continue;
+		for ( a = 0; a < 360; a += 45 )
+		{
+			spot = ai.origin + ( cos( a ) * 260, sin( a ) * 260, 0 );
+			down = BulletTrace( spot + ( 0, 0, 72 ), spot - ( 0, 0, 160 ), false, ai );
+			if ( down[ "fraction" ] >= 1 )
+				continue;
+			ground = down[ "position" ];
+			if ( !SightTracePassed( ground + ( 0, 0, 60 ), ai GetEye(), false, ai ) )
+				continue;
+			if ( BulletTrace( ground + ( 0, 0, 4 ), ground + ( 0, 0, 72 ), false, ai )[ "fraction" ] < 1 )
+				continue;	// (no room to stand)
+			p2 SetOrigin( ground );
+			report( "pingtest: player 2 put " + int( Distance( ground, ai.origin ) ) + " units from an enemy (" + ai.classname + ")" );
+			return ai;
+		}
+	}
+	return undefined;
+}
+
+// an enemy from the level's own spawners, put on the ground 300 units from player 2 where he sees him (8 directions tried); he fights nobody (ignoreall)
+ping_spawn_enemy( p2 )
+{
+	spawners = GetSpawnerTeamArray( "axis" );
+	eye = p2 GetEye();
+	foreach ( s in spawners )
+	{
+		guy = s spawn_ai( true );
+		if ( !isdefined( guy ) || !IsAlive( guy ) )
+			continue;
+		guy.ignoreall = true;
+		guy.ignoreme = true;
+		for ( a = 0; a < 360; a += 45 )
+		{
+			spot = p2.origin + ( cos( a ) * 300, sin( a ) * 300, 0 );
+			down = BulletTrace( spot + ( 0, 0, 72 ), spot - ( 0, 0, 160 ), false, guy );
+			if ( down[ "fraction" ] >= 1 )
+				continue;
+			ground = down[ "position" ];
+			if ( !SightTracePassed( eye, ground + ( 0, 0, 60 ), false, p2 ) )
+				continue;
+			guy ForceTeleport( ground, VectorToAngles( p2.origin - ground ) );
+			report( "pingtest: an enemy spawned (" + guy.classname + ") and put 300 units from player 2" );
+			return guy;
+		}
+		guy Delete();
+		report( "pingtest: no open ground 300 units round player 2 for the spawned enemy" );
+		return undefined;
+	}
+	report( "pingtest: the level has no enemy spawner that spawns" );
+	return undefined;
+}
+
+// player 1's view yaw as his wheel opens and closes, and a turn of more than 2.5 degrees in one frame while it is closed (the DLL's wheel: a mouse move turns the view
+// when the wheel is closed, and must not while it is open); the script's own turns (ping_at) are left out
+ping_yaw_watch( p )
+{
+	was = false;
+	yaw = p GetPlayerAngles()[ 1 ];
+	for ( ;; )
+	{
+		open = isdefined( p.mw2coop_wheel );
+		now = p GetPlayerAngles()[ 1 ];
+		if ( open != was )
+		{
+			if ( open )
+				report( "pingtest: yaw " + now + " as the wheel opens" );
+			else
+				report( "pingtest: yaw " + now + " as the wheel closes" );
+			yaw = now;
+		}
+		else if ( open && abs( now - yaw ) > 0.5 )
+		{
+			report( "pingtest: yaw " + now + " while the wheel is open" );
+			yaw = now;
+		}
+		else if ( !open && abs( now - yaw ) > 2.5 && ( !isdefined( level.mw2coop_qa_ping_aim ) || GetTime() - level.mw2coop_qa_ping_aim > 1000 ) )
+			report( "pingtest: yaw " + now + " turned " + ( now - yaw ) + " in a frame (wheel closed)" );
+		if ( !open )
+			yaw = now;
+		was = open;
+		wait 0.05;
+	}
 }
 
 edgeyaw()
