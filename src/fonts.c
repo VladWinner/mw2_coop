@@ -57,7 +57,7 @@
 #define DEF_IMAGE 8
 #define GLYPH_SIZE 24
 #define FONT_RENDER_SCALE 4
-#define TEXT_FACE_Y_ADJUST 2
+#define FONT_FACE_Y_ADJUST 2
 #define SYSTEM_FALLBACK_WIDTH_PERCENT 86
 #define ATLAS_MIN_WIDTH 1024
 #define ATLAS_MAX_SIZE 4096
@@ -1037,7 +1037,8 @@ int fonts_units_per_pixel(const void *font)
 
 static int job_baseline(const FontJob *j, int m)
 {
-	double adjust = j->face == FACE_TEXT ? TEXT_FACE_Y_ADJUST : 0;
+	double adjust = 0;
+    adjust = FONT_FACE_Y_ADJUST;
 	return (int)((j->pixel_height * 0.13 + adjust) * m + 0.5); // m = 1: the whole-pixel baseline of the original tables
 }
 
