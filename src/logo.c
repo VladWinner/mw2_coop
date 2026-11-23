@@ -1,6 +1,6 @@
-// The main menu's logo with the mod's name in it. The game's logo (material logo_cod2, a 1024 x 256 picture the engine has decoded into a Direct3D texture)
-// is read back from the graphics card, the word ENHANCED is laid over it (mw2coop\logo-enhanced.tga: the mod's own picture of the word, 1024 x 256, straight alpha,
-// made by tools/make_logo_word.py) and the result is written back into the same texture. Nothing of the game is written to disk.
+// The main menu's logo can use either the untouched game's artwork or an Enhanced composite. Both
+// are kept in mod-owned managed textures and material copies; the original game's material/texture
+// is never rewritten. mw2coop\logo-enhanced.tga is the transparent 1024 x 256 overlay.
 #define COBJMACROS
 #include <windows.h>
 #include <d3d9.h>
@@ -65,8 +65,13 @@ static uint32_t *read_texture(IDirect3DTexture9 *tex, int *w, int *h)
 	uint32_t *px = calloc((size_t)d.Width * d.Height, 4);
 	const uint8_t *src = lr.pBits;
 	if (px && (d.Format == D3DFMT_A8R8G8B8 || d.Format == D3DFMT_X8R8G8B8)) {
-		for (UINT y = 0; y < d.Height; y++)
-			memcpy(px + (size_t)y * d.Width, src + (size_t)y * lr.Pitch, d.Width * 4);
+		for (UINT y = 0; y < d.Height; y++) {
+			uint32_t *row = px + (size_t)y * d.Width;
+			memcpy(row, src + (size_t)y * lr.Pitch, d.Width * 4);
+			if (d.Format == D3DFMT_X8R8G8B8)
+				for (UINT x = 0; x < d.Width; x++)
+					row[x] |= 0xff000000u;
+		}
 	} else if (px && (d.Format == D3DFMT_DXT1 || d.Format == D3DFMT_DXT3 || d.Format == D3DFMT_DXT5)) {
 		int block = d.Format == D3DFMT_DXT1 ? 8 : 16;
 		for (UINT by = 0; by < d.Height / 4; by++)
@@ -240,47 +245,148 @@ static int write_texture(IDirect3DTexture9 *tex, const uint32_t *px, int w, int 
 	return ok;
 }
 
-void logo_install(void *material, int dump_only)
+// Keep the original and Enhanced pictures in two mod-owned managed textures, then make two
+// shallow copies of the game's Material/table/image that point at those textures. The original
+// logo texture may live in D3DPOOL_DEFAULT and cannot reliably be locked for repeated writes;
+// swapping the menu item's material is safe for both D3D9 and the native renderer.
+static void *logo_source_material;
+static uint8_t *logo_source_table;
+static uint8_t *logo_source_image;
+static IDirect3DTexture9 *logo_source_texture;
+static IDirect3DTexture9 *logo_variant_textures[2];
+static uint8_t logo_material_copies[2][0x100];
+static uint8_t logo_table_copies[2][0x40];
+static uint8_t logo_image_copies[2][0x80];
+static void *logo_material_variants[2];
+
+static int logo_is_variant(void *material)
 {
-	static void *done;
-	if (!material || material == done)
-		return;
-	done = material;
-	uint8_t *image = material_image(material);
-	if (!image || !(natboot_active() || d3dcap_device())) {
-		log_printf("logo: no image (%p) or device", (void *)image);
-		return;
+	return material && (material == logo_material_variants[0] || material == logo_material_variants[1]);
+}
+
+static int make_logo_variant(int index, void *material, uint8_t *table, uint8_t *image, IDirect3DTexture9 *texture)
+{
+	static const char *const names[2] = {"mw2coop_logo_original", "mw2coop_logo_enhanced"};
+	memcpy(logo_material_copies[index], material, sizeof(logo_material_copies[index]));
+	memcpy(logo_table_copies[index], table, sizeof(logo_table_copies[index]));
+	memcpy(logo_image_copies[index], image, sizeof(logo_image_copies[index]));
+	*(IDirect3DTexture9 **)logo_image_copies[index] = texture;
+	for (int i = 0; i < 4; i++) {
+		uint8_t **slot = (uint8_t **)(logo_table_copies[index] + i * 16 + DEF_IMAGE);
+		if (*slot == image)
+			*slot = logo_image_copies[index];
 	}
-	IDirect3DTexture9 *tex = *(IDirect3DTexture9 **)image;
-	if (!tex || !readable(tex, sizeof(void *))) {
-		log_printf("logo: the image has no texture");
-		return;
-	}
+	*(uint8_t **)(logo_material_copies[index] + MATERIAL_TABLE) = logo_table_copies[index];
+	*(const char **)logo_material_copies[index] = names[index];
+	logo_material_variants[index] = logo_material_copies[index];
+	return 1;
+}
+
+static int prepare_logo_variants(void *material)
+{
+	if (!(natboot_active() || d3dcap_device()))
+		return 0;
+	if (logo_is_variant(material))
+		material = logo_source_material;
+	if (!material || !readable(material, MATERIAL_TABLE + sizeof(void *)))
+		return 0;
+	uint8_t *table = *(uint8_t **)((uint8_t *)material + MATERIAL_TABLE);
+	if (!table || !readable(table, 0x40))
+		return 0;
+	uint8_t *image = *(uint8_t **)(table + DEF_IMAGE);
+	if (!image || !readable(image, 0x80))
+		return 0;
+	IDirect3DTexture9 *source = *(IDirect3DTexture9 **)image;
+	if (!source || !readable(source, sizeof(void *)))
+		return 0;
+	if (material == logo_source_material && table == logo_source_table && image == logo_source_image &&
+	    source == logo_source_texture && logo_variant_textures[0] && logo_variant_textures[1])
+		return 1;
+
 	int w = 0, h = 0;
-	uint32_t *px = read_texture(tex, &w, &h);
-	if (!px)
-		return;
-	char path[MAX_PATH];
-	if (dump_only) {
-		game_dir_file("mw2coop\\logo-dump.tga", path, sizeof(path));
-		write_tga(path, px, w, h);
-		log_printf("logo: the game's logo (%dx%d) written to %s", w, h, path);
-		free(px);
-		return;
+	uint32_t *original = read_texture(source, &w, &h);
+	if (!original)
+		return 0;
+	uint32_t *enhanced = malloc((size_t)w * h * sizeof(*enhanced));
+	if (!enhanced) {
+		free(original);
+		return 0;
 	}
-	D3DSURFACE_DESC d;
-	modtex_get_level_desc(tex, 0, &d);
+	memcpy(enhanced, original, (size_t)w * h * sizeof(*enhanced));
 	int ow = 0, oh = 0;
+	char path[MAX_PATH];
 	game_dir_file("mw2coop\\logo-enhanced.tga", path, sizeof(path));
 	uint32_t *over = read_tga(path, &ow, &oh);
-	if (!over || ow != w || oh != h || d.Pool == D3DPOOL_DEFAULT || (d.Format != D3DFMT_A8R8G8B8)) {
-		log_printf("logo: left as it is (word picture %s, %dx%d against %dx%d, pool %u, format %u)", over ? "read" : "missing", ow, oh, w, h, (unsigned)d.Pool, (unsigned)d.Format);
-	} else {
-		composite(px, over, w * h);
-		log_printf("logo: ENHANCED added to the game's logo (%s)", write_texture(tex, px, w, h) ? "all levels written" : "write failed");
-	}
+	int have_overlay = over && ow == w && oh == h;
+	if (have_overlay)
+		composite(enhanced, over, w * h);
+	else
+		log_printf("logo: Enhanced overlay unavailable (picture %s, %dx%d against %dx%d); keeping an original fallback",
+			   over ? "read" : "missing", ow, oh, w, h);
 	free(over);
-	free(px);
+
+	// These are new managed textures, not writes into the game's original (possibly DEFAULT-pool) image.
+	IDirect3DTexture9 *original_tex = modtex_create(source, (UINT)w, (UINT)h, 1, D3DFMT_A8R8G8B8);
+	IDirect3DTexture9 *enhanced_tex = modtex_create(source, (UINT)w, (UINT)h, 1, D3DFMT_A8R8G8B8);
+	if (!original_tex || !enhanced_tex || !write_texture(original_tex, original, w, h) ||
+	    !write_texture(enhanced_tex, enhanced, w, h)) {
+		modtex_release(original_tex);
+		modtex_release(enhanced_tex);
+		free(original);
+		free(enhanced);
+		log_printf("logo: could not create the two managed logo textures; keeping the game's material");
+		return 0;
+	}
+	free(original);
+	free(enhanced);
+
+	IDirect3DTexture9 *old_original = logo_variant_textures[0];
+	IDirect3DTexture9 *old_enhanced = logo_variant_textures[1];
+	make_logo_variant(0, material, table, image, original_tex);
+	make_logo_variant(1, material, table, image, enhanced_tex);
+	logo_source_material = material;
+	logo_source_table = table;
+	logo_source_image = image;
+	logo_source_texture = source;
+	logo_variant_textures[0] = original_tex;
+	logo_variant_textures[1] = enhanced_tex;
+	modtex_release(old_original);
+	modtex_release(old_enhanced);
+	log_printf("logo: original and Enhanced material variants ready (%dx%d; overlay %s)", w, h,
+		   have_overlay ? "applied" : "not available");
+	return 1;
+}
+
+void *logo_material_variant(void *material, int enhanced)
+{
+	if (logo_is_variant(material))
+		material = logo_source_material;
+	if (!prepare_logo_variants(material))
+		return material;
+	return logo_material_variants[!!enhanced];
+}
+
+void logo_install(void *material, int dump_only)
+{
+	if (!material || !(natboot_active() || d3dcap_device()))
+		return;
+	if (logo_is_variant(material))
+		material = logo_source_material;
+	if (dump_only) {
+		uint8_t *image = material_image((const uint8_t *)material);
+		IDirect3DTexture9 *tex = image ? *(IDirect3DTexture9 **)image : NULL;
+		int w = 0, h = 0;
+		uint32_t *px = tex ? read_texture(tex, &w, &h) : NULL;
+		if (px) {
+			char path[MAX_PATH];
+			game_dir_file("mw2coop\\logo-dump.tga", path, sizeof(path));
+			write_tga(path, px, w, h);
+			log_printf("logo: the game's original logo (%dx%d) written to %s", w, h, path);
+			free(px);
+		}
+		return;
+	}
+	(void)prepare_logo_variants(material);
 }
 
 // A copy of <template_material> (a Material *, here the logo's) with the About page's four icons (mw2coop\about-icons.tga, 512 x 128, straight alpha) as its picture. The game's own

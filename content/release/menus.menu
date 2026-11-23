@@ -2,35 +2,14 @@
 // The mod does not load .menu files into the game; it reads this file to build what it adds to the game's own menus.
 // Edit a text or an action and restart the game; an item you delete keeps the mod's built-in values (the built-in copy of this file is compiled in).
 //
-//   menuDef name "main_text"   the game's main menu: its itemDefs are the buttons added at the top, in this order
+//   menuDef name "mw2coop_campaign"   the Campaign subpage cloned from the game's native main_text menu
 //   menuDef name "<other>"     a popup the mod adds; title "..." is its heading, and it has exactly four itemDefs (its rows), in this order;
 //                              with question "..." it is a yes/no popup: two itemDefs, Yes and No (their names yes and no are fixed)
 //   itemDef name               the button's or row's name; the code finds some of them by name, so do not rename them (mw2coop_host_4 is shown or hidden by the code)
 //   itemDef text               what is written on it; "@NAME" is a text of the game or of mw2coop\localizedstrings\mw2coop.str (shown in the game's language)
 //   itemDef action { ... }     what a click does: the menu script of the game. Some commands: play "mouse_click"; close self; open <menu>; exec "<console command>";
 
-// The top level of the main menu: three entries in the place of the game's Resume / New game / Mission select / Main menu buttons, above Settings (the game's Options), Credits and Quit.
-// The campaign page (menuDef "mw2coop_campaign": the game's own Resume, New game and Mission select, made by the mod) and are opened from here; Multiplayer runs the game's own Multiplayer action (the action here is only the fallback).
-menuDef {
-	name "main_text"
-	itemDef {
-		name "mw2coop_campaign_btn"
-		text "@MW2COOP_CAMPAIGN"
-		action { play "mouse_click"; setGameMode "sp"; setdvar "specialops" 0; open "mw2coop_campaign"; }
-	}
-	itemDef {
-		name "mw2coop_specops_btn"
-		text "@MENU_SP_SPECIAL_OPS_CAPS"
-		action { play "mouse_click"; open "main_specops"; }
-	}
-	itemDef {
-		name "mw2coop_multiplayer_btn"
-		text "@MW2COOP_MULTIPLAYER"
-		action { play "mouse_click"; open "popmenu_recommendation_mp"; }
-	}
-}
-
-// The campaign page (made by the mod from the game's main menu: Continue, New game, Mission select, Statistics, Back): these buttons are added under Mission Select, in this order.
+// The Campaign page (cloned from the game's native main_text menu); these buttons are added under Mission Select, in this order.
 // Join a game (mw2coop_find) looks for the co-op games on every network this PC is on; the list's last row joins by address (menuDef "mw2coop_lobbies").
 menuDef {
 	name "mw2coop_campaign"
@@ -51,7 +30,7 @@ menuDef {
 	}
 }
 
-// The main menu's About button, under Credits.
+// The About page is opened from the custom About button in main_selection.
 menuDef {
 	name "main_text_about"
 	itemDef {

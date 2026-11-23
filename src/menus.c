@@ -1,10 +1,15 @@
 // Co-op in the game's own menus (no .bat files). This build has no menu text parser, so the
 // zone's menus (ASSET_TYPE_MENU 26, as the UI has loaded them) are changed in memory:
 //
-// - Campaign main menu (main_text): a "TWO PLAYERS ONLINE" button under Mission Select, cloned
-//   from Mission Select. It opens the game's own Spec Ops co-op lobby (coop_lobby: Steam friend
-//   invites, ready state, Start) with a campaign mission: where the players stopped last
-//   (mw2coop\progress.txt), else The Pit (trainer).
+// - The game's original main_selection remains the front door: its Campaign / Spec Ops /
+//   Multiplayer picture cards, background, selection previews and logo rectangle are kept.
+//   Settings, Game Credits, About and the native Quit button form one centered bottom row, all
+//   using the original Quit button's styling. Each loaded main_selection instance is patched.
+// - Campaign opens a clone of the game's native main_text page (Resume, New game, Mission Select,
+//   a new divider, co-op / split-screen entries, the original divider, Statistics, Settings and Back).
+//   It opens the game's own Spec Ops co-op lobby (coop_lobby: Steam friend invites, ready state,
+//   Start) with a campaign mission: where the players stopped last (mw2coop\progress.txt), else
+//   The Pit (trainer).
 // - In that lobby "Change Op" opens the campaign mission list (levels) instead of the Spec Ops
 //   list. The mission buttons end in the difficulty popup's "devmap <map>"; in the campaign lobby
 //   the devmap command is caught and sets the lobby's mission instead.
@@ -53,6 +58,26 @@
 #include "progress.h"
 #include "saves.h"
 #include "ping.h"
+
+// itemDef_t::textRect follows windowDef_t. The cached width/height must be invalidated
+// when a cloned button is moved, otherwise its label keeps the source item's old layout.
+#ifdef _WIN64
+#define ITEM_TEXT_RECT 0xb0
+#else
+#define ITEM_TEXT_RECT 0xa4
+#endif
+
+#ifdef _WIN64
+#define ITEM_STATIC_FLAGS 0x4c
+#else
+#define ITEM_STATIC_FLAGS 0x44
+#endif
+
+#define WINDOW_FLAG_DECORATION 0x00100000u
+// rectClient has its own alignment bytes after its four floats. The UI's layout pass
+// consults both sets; changing only rect.horzAlign is overwritten when the menu opens.
+#define ITEM_RECT_CLIENT_ALIGN_H (ITEM_RECT_CLIENT_Y + 0x0c)
+#define ITEM_RECT_CLIENT_ALIGN_V (ITEM_RECT_CLIENT_Y + 0x0d)
 
 #ifdef _WIN64
 #define RVA_UI_CONTEXT XR(0x1a3ab00) // uiContext_t (Menus_OpenByName's first argument, "openmenu" @0x24ca10)
@@ -360,8 +385,14 @@ void menus_log_items(const char *menu_name)
 		uint8_t *it = items[i];
 		const char *name = *(const char **)it, *text = *(const char **)(it + ITEM_TEXT);
 		float *r = (float *)(it + ITEM_RECT);
-		log_printf("menus: %s[%d] %s '%s' x %g y %g w %g h %g align %d/%d", menu_name, i, name ? name : "-",
-			   text ? text : "", r[0], r[1], r[2], r[3], it[ITEM_RECT_ALIGN_H], it[ITEM_RECT_ALIGN_V]);
+		float *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4);
+		float *text_rect = (float *)(it + ITEM_TEXT_RECT);
+		log_printf("menus: %s[%d] %s '%s' rect %g %g %g %g client %g %g %g %g textRect %g %g %g %g align %d/%d clientAlign %d/%d",
+			   menu_name, i, name ? name : "-", text ? text : "",
+			   r[0], r[1], r[2], r[3], client[0], client[1], client[2], client[3],
+			   text_rect[0], text_rect[1], text_rect[2], text_rect[3],
+			   it[ITEM_RECT_ALIGN_H], it[ITEM_RECT_ALIGN_V],
+			   it[ITEM_RECT_CLIENT_ALIGN_H], it[ITEM_RECT_CLIENT_ALIGN_V]);
 		// what can lock or hide it, and what it runs (the campaign's mission buttons)
 		MenuEventHandlerSet *act = *(MenuEventHandlerSet **)(it + ITEM_ACTION);
 		const char *script = act && act->count > 0 && act->handlers[0] && act->handlers[0]->type == 0
@@ -492,22 +523,7 @@ int ui_register_menu(uint8_t *menu)
 
 // ---------------------------------------------------------------- campaign main menu button
 
-static uint8_t **main_items; // our items array for main_text, NULL until patched
-
-// Buttons added under Mission Select, in the order of the itemDefs of menuDef "main_text" in menus.menu (src/menutable.c)
-static int main_button_count(void)
-{
-	int n = 0;
-	while (menutable_item("main_text", n))
-		n++;
-	return n;
-}
-
-// The look of the main menu: the game's logo, with the mod's name in it (logo.c), sits at the top of the left panel
-// with its right edge on the right edge of the list; the dark panel behind the list and the line in it end in a hard edge on the right, so they are drawn mirrored (a negative
-// width draws the picture mirrored over the same place) with the fade-in material of the line, which fades out there. The other pages are the game's own.
-// The title line ("For the record") is emptied: the name is in the logo.
-static void *fade_material;  // the Material * of "gradient_fadein"
+static const char split_specops_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_split_specops\" ; ";
 
 static const char *item_material_name(const uint8_t *it)
 {
@@ -515,38 +531,10 @@ static const char *item_material_name(const uint8_t *it)
 	return mat && !IsBadReadPtr(mat, sizeof(*mat)) && *mat && !IsBadStringPtrA(*mat, 16) ? *mat : "";
 }
 
-static const char split_specops_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_split_specops\" ; ";
-
-static void place_logo(uint8_t *it)
+static int is_selection_logo(const char *name)
 {
-	float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4); // rect and rectClient: x, y, width, height
-	rect[0] = client[0] = -44, rect[1] = client[1] = 4, rect[2] = client[2] = 216, rect[3] = client[3] = 54; // its right edge on the right edge of the buttons' text
-	it[ITEM_RECT_ALIGN_H] = 1, it[ITEM_RECT_ALIGN_V] = 1;
-}
-
-static void style_items(uint8_t **items, int count)
-{
-	for (int i = 0; i < count; i++) // the fade material first: the line of the main menu has it
-		if (!fade_material && !strcmp(item_material_name(items[i]), "gradient_fadein"))
-			fade_material = *(void **)(items[i] + ITEM_BACKGROUND_PTR);
-	for (int i = 0; i < count; i++) {
-		uint8_t *it = items[i];
-		const char *text = *(const char **)(it + ITEM_TEXT), *mat_name = item_material_name(it);
-		float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4);
-		if (!strcmp(mat_name, "logo_cod2")) {
-			logo_install(*(void **)(it + ITEM_BACKGROUND_PTR), getenv("MW2COOP_LOGODUMP") != NULL);
-			place_logo(it);
-		} else if (!strcmp(mat_name, "gradient_fadein_fadebottom") || !strcmp(mat_name, "gradient_fadein")) {
-			if (fade_material && strcmp(mat_name, "gradient_fadein"))
-				*(void **)(it + ITEM_BACKGROUND_PTR) = fade_material;
-			if (rect[2] > 0)
-				rect[2] = client[2] = -rect[2];
-		} else if (text && !strcmp(text, "@MENU_SP_FOR_THE_RECORD")) {
-			*(const char **)(it + ITEM_TEXT) = ""; // the mod's name is in the logo
-			*(void **)(it + ITEM_TEXT_EXP) = NULL;
-			rect[1] = client[1] = -6;
-		}
-	}
+	return name && (!strcmp(name, "logo_cod2") || !strcmp(name, "mw2coop_logo_original") ||
+		!strcmp(name, "mw2coop_logo_enhanced"));
 }
 
 // The About page (menus.menu, menuDef "mw2coop_about"): a page of its own, made from a copy of the game's main menu. From the top: the logo centered in the header, the credits
@@ -578,6 +566,55 @@ static void set_rect(uint8_t *it, float x, float y, float w, float h, int align_
 	it[ITEM_RECT_ALIGN_H] = (uint8_t)align_h, it[ITEM_RECT_ALIGN_V] = (uint8_t)align_v;
 }
 
+// Find the thin horizontal divider already used by the native main_text menu. The copy is
+// placed between Mission Select and the mod's co-op entries, while the original divider remains
+// after Split Screen and before Settings.
+static uint8_t *find_campaign_divider(uint8_t **items, int count, float after_y, float before_y)
+{
+	uint8_t *best = NULL;
+	float best_y = -100000.0f;
+	for (int i = 0; i < count; i++) {
+		uint8_t *it = items[i];
+		const char *mat = item_material_name(it);
+		const char *text = *(const char **)(it + ITEM_TEXT);
+		float *r = (float *)(it + ITEM_RECT);
+		float w = r[2] < 0.0f ? -r[2] : r[2];
+		float h = r[3] < 0.0f ? -r[3] : r[3];
+		int horizontal_line = (mat && (strstr(mat, "line") || strstr(mat, "gradient_fadein"))) ||
+			(w >= 100.0f && h > 0.0f && w >= h * 8.0f);
+		if (!horizontal_line || w < 100.0f || h <= 0.0f || h > 32.0f ||
+		    r[1] < after_y - 0.5f || r[1] > before_y + 0.5f ||
+		    *(MenuEventHandlerSet **)(it + ITEM_ACTION) || (text && text[0]))
+			continue;
+		// The divider nearest Settings is the one that currently separates the co-op group
+		// from the lower native menu entries.
+		if (r[1] > best_y) {
+			best = it;
+			best_y = r[1];
+		}
+	}
+	return best;
+}
+
+static uint8_t *clone_campaign_divider(uint8_t *source, uint8_t *parent, float y)
+{
+	if (!source)
+		return NULL;
+	uint8_t *it = ui_clone_item(source, parent);
+	float *r = (float *)(source + ITEM_RECT);
+	float x = r[0], w = r[2], h = r[3] < 0.0f ? -r[3] : r[3];
+	int align_h = source[ITEM_RECT_ALIGN_H], align_v = source[ITEM_RECT_ALIGN_V];
+	*(MenuEventHandlerSet **)(it + ITEM_ACTION) = NULL;
+	*(void **)(it + ITEM_ON_FOCUS) = NULL;
+	*(void **)(it + ITEM_LEAVE_FOCUS) = NULL;
+	*(const char **)(it + ITEM_TEXT) = "";
+	*(void **)(it + ITEM_TEXT_EXP) = NULL;
+	*(int *)(it + ITEM_FLOAT_EXPS - sizeof(void *)) = 0;
+	*(void **)(it + ITEM_FLOAT_EXPS) = NULL;
+	set_rect(it, x, y, w, h, align_h, align_v);
+	return it;
+}
+
 static int name_in(const char *name, const char *const *list);
 static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 {
@@ -605,8 +642,11 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 			continue;
 		if (!strcmp(mat, "gradient_fadein_fadebottom")) // the dark panel over the whole page
 			set_rect(pi[i], -427, -240, 854, 480, 2, 2);
-		if (!strcmp(mat, "logo_cod2")) {
+		if (is_selection_logo(mat)) {
 			logo_item = pi[i];
+			void *variant = logo_material_variant(*(void **)(pi[i] + ITEM_BACKGROUND_PTR), 1);
+			if (variant)
+				*(void **)(pi[i] + ITEM_BACKGROUND_PTR) = variant;
 			set_rect(pi[i], -144, 6, 288, 72, 2, 1);
 		}
 		if (text && !strcmp(text, "@MENU_SP_FOR_THE_RECORD")) {
@@ -763,172 +803,90 @@ static int name_in(const char *name, const char *const *list)
 	return 0;
 }
 
-// The main menu as six entries: CAMPAIGN, SPEC OPS, MULTIPLAYER (menus.menu, menuDef "main_text"), then Settings, Credits and Quit. The game's Resume, New game and Mission select
-// move to a page of their own, "mw2coop_campaign" (a copy of the main menu with Stats but without Options, Credits, the Main menu button and Quit, with a Back button);
-// the game's Main menu button (the Campaign / Spec Ops chooser) goes, as SPEC OPS opens the Spec Ops menu itself.
+// Build the mod's Campaign page by cloning the game's native main_text menu. The native menu
+// remains untouched and is never used as the mod's front door; main_selection is the only main menu.
 static void patch_main_menu(void)
 {
 	uint8_t *menu = ui_find_menu("main_text");
-	if (!menu)
+	if (!menu || ui_find_menu("mw2coop_campaign"))
 		return;
-	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
-	if (items == main_items)
-		return;
-	fade_material = NULL; // (main_text is new: its zone's fade-in material is found again, not the one of the zone before)
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	int at = ui_item_index(menu, "levelselect");
-	const int nbuttons = main_button_count();
-	if (at < 0 || !nbuttons || ui_item_index(menu, menutable_item("main_text", 0)->name) >= 0) {
-		log_printf("menus: main_text has no levelselect button, no co-op buttons added");
-		main_items = items;
+	int extra = 0;
+	while (menutable_item("mw2coop_campaign", extra))
+		extra++;
+	if (!items || count <= 0 || count > 512 || at < 0 || !extra) {
+		log_printf("menus: native main_text has no Mission Select template; Campaign page not added");
 		return;
 	}
-	static const char *const top_gone[] = {"resume", "newgame", "newgame_warning", "levelselect", "game_selection", NULL};
-	static const char *const campaign_gone[] = {"options", "credits", "game_selection", "button_quit", NULL};
-	static const char *const top_gone_more[] = {"stats", NULL}; // Stats moves to the campaign page
-	uint8_t *src = items[at]; // Mission Select: the template of the new buttons
-
-	// the campaign page
-	if (!ui_find_menu("mw2coop_campaign")) {
-		uint8_t *camp = ui_clone_menu(menu, "mw2coop_campaign");
-		uint8_t **ci = *(uint8_t ***)(camp + MENU_ITEMS);
-		uint8_t **cl = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(*cl));
-		int n = 0;
-		uint8_t *level = NULL;
-		int extra = 0; // the mod's buttons of the page (menus.menu, menuDef "mw2coop_campaign"): Co-op and Split screen, under Mission Select
-		while (menutable_item("mw2coop_campaign", extra))
-			extra++;
-		cl = HeapAlloc(GetProcessHeap(), 0, (count + extra + 1) * sizeof(*cl));
-		float level_y = 0;
-		for (int i = 0; i < count; i++) {
-			const char *name = *(const char **)ci[i];
-			if (name_in(name, campaign_gone) || !strcmp(item_material_name(ci[i]), "logo_cod2")) // (the logo is the main menu's only)
-				continue;
-			if (level && *(float *)(ci[i] + ITEM_RECT_Y) >= level_y + BUTTON_HEIGHT - 0.5f && *(float *)(ci[i] + ITEM_RECT_Y) < 1000) { // below Mission Select: moves down
-				*(float *)(ci[i] + ITEM_RECT_Y) += extra * BUTTON_HEIGHT;
-				*(float *)(ci[i] + ITEM_RECT_CLIENT_Y) += extra * BUTTON_HEIGHT;
-			}
-			cl[n++] = ci[i];
-			if (name && !strcmp(name, "levelselect")) {
-				level = ci[i];
-				level_y = *(float *)(level + ITEM_RECT_Y);
-				for (int b = 0; b < extra; b++) {
-					const MenuItem *def = menutable_item("mw2coop_campaign", b);
-					uint8_t *item = ui_clone_item(level, camp);
-					float y = level_y + (b + 1) * BUTTON_HEIGHT;
-					*(const char **)item = def->name;
-					*(const char **)(item + ITEM_TEXT) = def->text;
-					*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(def->action);
-					*(float *)(item + ITEM_RECT_Y) = y;
-					*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
-					cl[n++] = item;
-				}
-			}
-		}
-		if (level) {
-			uint8_t *back = ui_clone_item(level, camp);
-			float y = *(float *)(level + ITEM_RECT_Y) + BUTTON_HEIGHT;
-			for (int k = 0; k < n; k++) { // Back goes under the last button (Stats)
-				const char *kn = *(const char **)cl[k];
-				if (kn && !strcmp(kn, "stats"))
-					y = *(float *)(cl[k] + ITEM_RECT_Y) + BUTTON_HEIGHT;
-			}
-			*(const char **)back = "mw2coop_campaign_back";
-			*(const char **)(back + ITEM_TEXT) = "@PLATFORM_BACK_CAPS";
-			*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set(UI_S_CLICK_CLOSE);
-			*(float *)(back + ITEM_RECT_Y) = y;
-			*(float *)(back + ITEM_RECT_CLIENT_Y) = y;
-			cl[n++] = back;
-		}
-		*(uint8_t ***)(camp + MENU_ITEMS) = cl;
-		*(int *)(camp + MENU_ITEM_COUNT) = n;
-		set_page_esc(camp);
-		if (ui_register_menu(camp))
-			log_printf("menus: campaign page added (%d items)", n);
-	}
-
-	add_about_page(menu, count, src);
-
-	// the look (style_items): the logo at the top of the left panel, the panel and its line fading out to the right; the buttons go down to make room
-	const float header_dy = 10.0f;
-	style_items(items, count);
-	// the top level: the game's four buttons are replaced by the table's
-	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + nbuttons + 1) * sizeof(*list));
-	int n = 0, inserted = 0;
-	const MenuItem *about = menutable_item("main_text_about", 0); // the About button goes under the last Credits item
-	int last_credits = -1;
+	uint8_t *level = items[at];
+	float level_y = *(float *)(level + ITEM_RECT_Y), options_y = 100000.0f;
 	for (int i = 0; i < count; i++)
-		if (!strcmp(*(const char **)items[i] ? *(const char **)items[i] : "", "credits"))
-			last_credits = i;
+		if (!strcmp(*(const char **)items[i] ? *(const char **)items[i] : "", "options"))
+			options_y = *(float *)(items[i] + ITEM_RECT_Y);
+	uint8_t *camp = ui_clone_menu(menu, "mw2coop_campaign");
+	if (!camp)
+		return;
+	uint8_t **ci = *(uint8_t ***)(camp + MENU_ITEMS);
+	static const char *const campaign_gone[] = {"credits", "game_selection", "button_quit", NULL};
+	const float campaign_group_gap = 8.0f;
+	uint8_t *divider_source = find_campaign_divider(ci, count, level_y + BUTTON_HEIGHT, options_y);
+	uint8_t *divider = divider_source ? clone_campaign_divider(divider_source, camp, level_y + BUTTON_HEIGHT + 3.0f) : NULL;
+	uint8_t **cl = HeapAlloc(GetProcessHeap(), 0, (count + extra + 2) * sizeof(*cl));
+	if (!cl)
+		return;
+	int n = 0;
 	for (int i = 0; i < count; i++) {
-		const char *name = *(const char **)items[i];
-		if (name_in(name, top_gone_more))
+		const char *name = *(const char **)ci[i];
+		if (name_in(name, campaign_gone) || is_selection_logo(item_material_name(ci[i])))
 			continue;
-		if (name_in(name, top_gone)) {
-			if (inserted)
-				continue;
-			inserted = 1;
-			float y0 = *(float *)(items[i] + ITEM_RECT_Y);
-			for (int b = 0; b < nbuttons; b++) {
-				uint8_t *item = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
-				memcpy(item, src, ITEM_SIZE);
-				float y = y0 + header_dy + b * BUTTON_HEIGHT;
-				const MenuItem *def = menutable_item("main_text", b);
+		if (name && !strcmp(name, "options"))
+			*(const char **)(ci[i] + ITEM_TEXT) = "@MW2COOP_SETTINGS";
+		if (*(float *)(ci[i] + ITEM_RECT_Y) >= level_y + BUTTON_HEIGHT - 0.5f && *(float *)(ci[i] + ITEM_RECT_Y) < 1000) {
+			*(float *)(ci[i] + ITEM_RECT_Y) += extra * BUTTON_HEIGHT + campaign_group_gap;
+			*(float *)(ci[i] + ITEM_RECT_CLIENT_Y) += extra * BUTTON_HEIGHT + campaign_group_gap;
+		}
+		cl[n++] = ci[i];
+		if (name && !strcmp(name, "levelselect")) {
+			if (divider)
+				cl[n++] = divider;
+			for (int b = 0; b < extra; b++) {
+				const MenuItem *def = menutable_item("mw2coop_campaign", b);
+				uint8_t *item = ui_clone_item(level, camp);
+				float y = level_y + (b + 1) * BUTTON_HEIGHT + campaign_group_gap;
 				*(const char **)item = def->name;
 				*(const char **)(item + ITEM_TEXT) = def->text;
 				*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(def->action);
-				if (!strcmp(def->name, "mw2coop_multiplayer_btn")) {
-					char mp[MAX_PATH];
-					void *original = original_multiplayer_action();
-					if (game_is_iw4x() && iw4x_mp_path(mp, sizeof(mp))) {
-						*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_iw4x_mp\" ; ");
-						log_printf("menus: the Multiplayer button starts IW4x (%s)", mp);
-					} else {
-						if (original)
-							*(void **)(item + ITEM_ACTION) = original;
-						log_printf("menus: the Multiplayer button runs %s", original ? "the game's own action" : "the fallback of menus.menu");
-					}
-				}
-				*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
 				*(float *)(item + ITEM_RECT_Y) = y;
 				*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
-				list[n++] = item;
+				cl[n++] = item;
 			}
-			continue;
-		}
-		if (name && !strcmp(name, "options")) // Options is called Settings
-			*(const char **)(items[i] + ITEM_TEXT) = "@MW2COOP_SETTINGS";
-		// Stats and the Main menu button are gone: Credits moves up one row, Quit two
-		if (name && (!strcmp(name, "credits") || !strcmp(name, "button_quit"))) {
-			float up = BUTTON_HEIGHT * (!strcmp(name, "credits") ? 1 : about ? 1 : 2);
-			*(float *)(items[i] + ITEM_RECT_Y) -= up;
-			*(float *)(items[i] + ITEM_RECT_CLIENT_Y) -= up;
-		}
-		if (inserted) { // the rows below the three entries (the line, Settings, Credits, Quit) move down with them
-			*(float *)(items[i] + ITEM_RECT_Y) += header_dy;
-			*(float *)(items[i] + ITEM_RECT_CLIENT_Y) += header_dy;
-		}
-		list[n++] = items[i];
-		if (about && i == last_credits) {
-			uint8_t *item = HeapAlloc(GetProcessHeap(), 0, ITEM_SIZE);
-			memcpy(item, src, ITEM_SIZE);
-			float y = *(float *)(items[i] + ITEM_RECT_Y) + BUTTON_HEIGHT;
-			*(const char **)item = about->name;
-			*(const char **)(item + ITEM_TEXT) = about->text;
-			*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(about->action);
-			*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
-			*(float *)(item + ITEM_RECT_Y) = y;
-			*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
-			list[n++] = item;
 		}
 	}
-	// the old items stay valid, so the UI may read the new array before the new count
-	main_items = list;
-	*(uint8_t ***)(menu + MENU_ITEMS) = list;
-	*(int *)(menu + MENU_ITEM_COUNT) = n;
-	// the game's onOpen ends with "focusfirst", which no longer finds the Resume button it was written for: the first entry gets the focus by name (a key or a pad starts there)
-	append_on_open(menu, "\"setfocus\" \"mw2coop_campaign_btn\" ; ");
-	log_printf("menus: main_text: Campaign, Spec Ops and Multiplayer entries (%d items)", n);
+	uint8_t *back = ui_clone_item(level, camp);
+	float back_y = level_y + BUTTON_HEIGHT;
+	for (int k = 0; k < n; k++) {
+		const char *name = *(const char **)cl[k];
+		if (name && (!strcmp(name, "stats") || !strcmp(name, "options"))) {
+			float next_y = *(float *)(cl[k] + ITEM_RECT_Y) + BUTTON_HEIGHT;
+			if (next_y > back_y)
+				back_y = next_y;
+		}
+	}
+	*(const char **)back = "mw2coop_campaign_back";
+	*(const char **)(back + ITEM_TEXT) = "@PLATFORM_BACK_CAPS";
+	*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set(UI_S_CLICK_CLOSE);
+	*(float *)(back + ITEM_RECT_Y) = back_y;
+	*(float *)(back + ITEM_RECT_CLIENT_Y) = back_y;
+	cl[n++] = back;
+	*(uint8_t ***)(camp + MENU_ITEMS) = cl;
+	*(int *)(camp + MENU_ITEM_COUNT) = n;
+	set_page_esc(camp);
+	if (ui_register_menu(camp)) {
+		add_about_page(menu, count, level);
+		log_printf("menus: Campaign page cloned from native main_text (%d items, divider %s); native main_text left untouched", n, divider ? "added" : "not found");
+	}
 }
 
 // Esc on a page of the mod closes it (the pages are copies of the main menu, whose Esc would ask whether to quit). onESC follows onClose in the menu (onOpen, onCloseRequest, onClose, onESC).
@@ -937,30 +895,51 @@ static void set_page_esc(uint8_t *page)
 	*(void **)(page + MENU_ON_CLOSE + sizeof(void *)) = ui_script_set(UI_S_CLICK_CLOSE);
 }
 
-// One more handler (a menu script) at the end of a menu's onOpen.
-static void append_on_open(uint8_t *menu, const char *script)
+// Append one menu script to an event handler set while preserving handlers already supplied by the game.
+static void append_menu_event(uint8_t *menu, size_t event_offset, const char *script)
 {
-	const MenuEventHandlerSet *old = *(MenuEventHandlerSet **)(menu + MENU_ON_OPEN);
-	int n = old && old->count > 0 && old->count < 64 ? old->count : 0;
+	const MenuEventHandlerSet *old = *(MenuEventHandlerSet **)(menu + event_offset);
+	int n = old && game_mem_readable(old, sizeof(*old)) && old->count > 0 && old->count < 64 &&
+		old->handlers && game_mem_readable(old->handlers, (size_t)old->count * sizeof(void *)) ? old->count : 0;
 	MenuEventHandlerSet *set = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*set));
 	MenuEventHandler **list = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n + 1) * sizeof(*list));
+	if (!set || !list) {
+		if (set)
+			HeapFree(GetProcessHeap(), 0, set);
+		if (list)
+			HeapFree(GetProcessHeap(), 0, list);
+		return;
+	}
 	for (int i = 0; i < n; i++)
 		list[i] = old->handlers[i];
 	MenuEventHandler *h = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*h));
+	if (!h) {
+		HeapFree(GetProcessHeap(), 0, list);
+		HeapFree(GetProcessHeap(), 0, set);
+		return;
+	}
 	h->data = (void *)script;
 	h->type = 0;
 	list[n] = h;
 	set->count = n + 1;
 	set->handlers = list;
-	*(MenuEventHandlerSet **)(menu + MENU_ON_OPEN) = set;
+	*(MenuEventHandlerSet **)(menu + event_offset) = set;
 }
 
-// The game starts on "main_selection", its picture cards Campaign / Spec Ops / Multiplayer. The mod's main menu is the list in main_text (patch_main_menu), so the
-// selection menu opens it when it opens itself: one more handler at the end of its onOpen.
-static uint8_t *selection_patched; // the menu object whose onOpen was extended
-// The Spec Ops page's way back: its Main menu button opens the game's own Campaign / Spec Ops picture chooser ("main_selection"); the mod's main menu is main_text, so
-// the scripts of the page's items open that instead. The scripts are replaced once per menu object (a zone reload makes a new one).
-static int specops_replace_set(MenuEventHandlerSet *set, int depth, const char *from, const char *to)
+// One more handler at the end of a menu's onOpen / onESC event.
+static void append_on_open(uint8_t *menu, const char *script)
+{
+	append_menu_event(menu, MENU_ON_OPEN, script);
+}
+
+static void append_on_esc(uint8_t *menu, const char *script)
+{
+	append_menu_event(menu, MENU_ON_CLOSE + sizeof(void *), script);
+}
+
+// Replace a quoted menu name in a menu's script handlers. Used both for the Spec Ops Escape
+// route and for the single-player pause menus whose stock scripts still target main_text.
+static int menu_script_replace_target(MenuEventHandlerSet *set, int depth, const char *from, const char *to)
 {
 	const size_t from_len = strlen(from), to_len = strlen(to);
 	if (!set || !game_mem_readable(set, sizeof(*set)) || depth > 4 || set->count < 1 || set->count > 24 || !game_mem_readable(set->handlers, set->count * sizeof(void *)))
@@ -989,52 +968,606 @@ static int specops_replace_set(MenuEventHandlerSet *set, int depth, const char *
 			done++;
 #ifdef _WIN64
 		} else if (h->type == 1 && h->data && game_mem_readable(h->data, 16)) { // if (expression, set): a readable set at either place is followed
-			done += specops_replace_set(*(MenuEventHandlerSet **)h->data, depth + 1, from, to);
-			done += specops_replace_set(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1, from, to);
+			done += menu_script_replace_target(*(MenuEventHandlerSet **)h->data, depth + 1, from, to);
+			done += menu_script_replace_target(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1, from, to);
 		} else if (h->type == 2 && h->data) {
-			done += specops_replace_set((MenuEventHandlerSet *)h->data, depth + 1, from, to);
+			done += menu_script_replace_target((MenuEventHandlerSet *)h->data, depth + 1, from, to);
 #endif
 		}
 	}
 	return done;
 }
 
-static uint8_t *specops_seen;
+static int menu_script_has_target(MenuEventHandlerSet *set, int depth, const char *needle)
+{
+	if (!set || !game_mem_readable(set, sizeof(*set)) || depth > 4 || set->count < 1 || set->count > 24 ||
+	    !game_mem_readable(set->handlers, set->count * sizeof(void *)))
+		return 0;
+	for (int i = 0; i < set->count; i++) {
+		MenuEventHandler *h = set->handlers[i];
+		if (!h || !game_mem_readable(h, sizeof(*h)))
+			continue;
+		if (h->type == 0) {
+			const char *script = (const char *)h->data;
+			if (script && game_string_readable(script, 8) && strstr(script, needle))
+				return 1;
+#ifdef _WIN64
+		} else if (h->type == 1 && h->data && game_mem_readable(h->data, 16)) {
+			if (menu_script_has_target(*(MenuEventHandlerSet **)h->data, depth + 1, needle) ||
+			    menu_script_has_target(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1, needle))
+				return 1;
+		} else if (h->type == 2 && h->data && menu_script_has_target((MenuEventHandlerSet *)h->data, depth + 1, needle))
+			return 1;
+#endif
+	}
+	return 0;
+}
+
+static int menu_event_has_script(uint8_t *menu, size_t event_offset, const char *needle)
+{
+	const MenuEventHandlerSet *set = *(MenuEventHandlerSet **)(menu + event_offset);
+	if (!set || !game_mem_readable(set, sizeof(*set)) || set->count < 1 || set->count > 64 ||
+	    !set->handlers || !game_mem_readable(set->handlers, (size_t)set->count * sizeof(void *)))
+		return 0;
+	for (int i = 0; i < set->count; i++) {
+		MenuEventHandler *h = set->handlers[i];
+		if (!h || !game_mem_readable(h, sizeof(*h)) || h->type != 0 || !h->data)
+			continue;
+		const char *script = (const char *)h->data;
+		if (!IsBadStringPtrA(script, 128) && strstr(script, needle))
+			return 1;
+	}
+	return 0;
+}
+
 static void patch_specops_return(void)
 {
-	uint8_t *menu = ui_find_menu("main_specops");
-	if (!menu || menu == specops_seen)
-		return;
-	specops_seen = menu;
+	static const char *const esc_script =
+		"\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"open\" \"main_selection\" ; ";
+	uint8_t *menus[64];
+	int count = ui_menu_instances("main_specops", menus, 64);
+	for (int i = 0; i < count; i++) {
+		uint8_t *menu = menus[i];
+		if (!menu || menu_event_has_script(menu, MENU_ON_CLOSE + sizeof(void *), "\"open\" \"main_selection\""))
+			continue;
+		// Some game builds open main_specops as a full-screen menu rather than a closeable overlay.
+		// Append a direct Escape route so both cases land on the original card screen.
+		append_on_esc(menu, esc_script);
+		log_printf("menus: main_specops: appended Esc return to main_selection (instance %d/%d)", i + 1, count);
+	}
+}
+
+// Retarget the two pause/quit warning menus to the original main_selection card screen. They are
+// proactively patched on the game thread during the active level, then retried while paused if a
+// particular UI zone loads either menu lazily.
+static int pause_menu_main_selection_retarget(uint8_t *menu, int *has_route)
+{
+	static const size_t menu_events[] = {
+		MENU_ON_OPEN,
+		MENU_ON_OPEN + sizeof(void *), // onCloseRequest
+		MENU_ON_CLOSE,
+		MENU_ON_CLOSE + sizeof(void *) // onEsc
+	};
+	static const size_t item_events[] = {ITEM_ACTION, ITEM_ACCEPT, ITEM_ON_FOCUS, ITEM_LEAVE_FOCUS};
+	int replaced = 0, route = 0;
+	for (size_t i = 0; i < sizeof(menu_events) / sizeof(menu_events[0]); i++) {
+		MenuEventHandlerSet *set = *(MenuEventHandlerSet **)(menu + menu_events[i]);
+		replaced += menu_script_replace_target(set, 0, "\"main_text\"", "\"main_selection\"");
+		replaced += menu_script_replace_target(set, 0, "openmenu main_text", "openmenu main_selection");
+		if (i >= 2 && menu_script_has_target(set, 0, "main_selection"))
+			route = 1; // only close / Esc handlers count as the menu's direct return route
+	}
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
-	int count = *(int *)(menu + MENU_ITEM_COUNT), done = 0;
-	for (int i = 0; i < count; i++)
-		done += specops_replace_set(*(MenuEventHandlerSet **)(items[i] + ITEM_ACTION), 0, "\"main_selection\"", "\"main_text\"");
-	set_page_esc(menu); // Esc closes the page, which was opened over the main menu (the game's own Esc sent it to the chooser)
-	log_printf("menus: main_specops: %d script(s) now open main_text (the Main menu button); Esc closes the page", done);
+	if (count < 0 || count > 512 || !items || !game_mem_readable(items, (size_t)count * sizeof(*items))) {
+		if (has_route)
+			*has_route = route;
+		return replaced;
+	}
+	for (int i = 0; i < count; i++) {
+		uint8_t *item = items[i];
+		if (!item || !game_mem_readable(item, ITEM_SIZE))
+			continue;
+		for (size_t e = 0; e < sizeof(item_events) / sizeof(item_events[0]); e++) {
+			MenuEventHandlerSet *set = *(MenuEventHandlerSet **)(item + item_events[e]);
+			replaced += menu_script_replace_target(set, 0, "\"main_text\"", "\"main_selection\"");
+			replaced += menu_script_replace_target(set, 0, "openmenu main_text", "openmenu main_selection");
+			if (e < 2 && menu_script_has_target(set, 0, "main_selection"))
+				route = 1; // ACTION / ACCEPT only; focus and leave-focus are not exit routes
+		}
+	}
+	if (has_route)
+		*has_route = route;
+	return replaced;
+}
+
+static int patch_pause_menu_main_selection_return(int *visible_route_mask)
+{
+	// Pause menus belong to the level UI zone, while main_selection belongs to the front-end
+	// zone and is not necessarily registered yet. Script targets can still be redirected now;
+	// requiring main_selection to be loaded here forced every return through the delayed fallback.
+	static const char *const names[] = {"savegame_warning", "pausedmenu"};
+	uint8_t *menus[64];
+	int ready_mask = 0, visible_mask = 0;
+	for (size_t m = 0; m < sizeof(names) / sizeof(names[0]); m++) {
+		int count = ui_menu_instances(names[m], menus, 64);
+		for (int i = 0; i < count; i++) {
+			if (!menus[i])
+				continue;
+			int has_route = 0;
+			int changed = pause_menu_main_selection_retarget(menus[i], &has_route);
+			if (changed)
+				log_printf("menus: %s: %d script target(s) now open main_selection", names[m], changed);
+			if (has_route) {
+				ready_mask |= 1 << m;
+				if (*(uint32_t *)(menus[i] + ITEM_DYNAMIC_FLAGS) & WINDOW_VISIBLE)
+					visible_mask |= 1 << m;
+			}
+		}
+	}
+	if (visible_route_mask)
+		*visible_route_mask = visible_mask;
+	return ready_mask; // bit 0: savegame_warning; bit 1: pausedmenu
+}
+
+// The button background/hitbox uses a full-screen client anchor so it is not offset by the
+// engine's safe-area origin. Text is drawn by a separate decoration item using the normal
+// centered anchor: this keeps glyphs at their native aspect/scale instead of stretching them
+// along with the fullscreen client rectangle.
+static int selection_button_position(uint8_t *item, float screen_left, float width)
+{
+	const float draw_x = screen_left - 320.0f;
+	const float client_x = draw_x;
+	float *rect = (float *)(item + ITEM_RECT);
+	float *client = (float *)(item + ITEM_RECT_CLIENT_Y - 4);
+	float *text_rect = (float *)(item + ITEM_TEXT_RECT);
+	int changed = rect[0] != draw_x || client[0] != client_x || rect[2] != width || client[2] != width ||
+		item[ITEM_RECT_ALIGN_H] != 2 || item[ITEM_RECT_CLIENT_ALIGN_H] != 4 ||
+		item[ITEM_RECT_ALIGN_V] != 3 || item[ITEM_RECT_CLIENT_ALIGN_V] != 3;
+	if (!changed)
+		return 0;
+	rect[0] = draw_x;
+	client[0] = client_x;
+	rect[2] = client[2] = width;
+	item[ITEM_RECT_ALIGN_H] = 2; // normal centered layout for text; no fullscreen stretch
+	item[ITEM_RECT_CLIENT_ALIGN_H] = 2;
+	item[ITEM_RECT_ALIGN_V] = 3; // VERTICAL_ALIGN_BOTTOM, as the native Quit row
+	item[ITEM_RECT_CLIENT_ALIGN_V] = 3;
+	// The background button intentionally has no text. Keep the cache invalid in case a native
+	// menu reload left an old Quit label layout attached to this item.
+	text_rect[0] = text_rect[1] = text_rect[2] = text_rect[3] = 0.0f;
+	return 1;
+}
+
+static int selection_button_label_position(uint8_t *item, float screen_left, float width)
+{
+	const float draw_x = screen_left - 320.0f;
+	const float client_x = draw_x; // both rectangles use HORIZONTAL_ALIGN_CENTER, so both X values are center-relative
+	float *rect = (float *)(item + ITEM_RECT);
+	float *client = (float *)(item + ITEM_RECT_CLIENT_Y - 4);
+	float *text_rect = (float *)(item + ITEM_TEXT_RECT);
+	int changed = rect[0] != draw_x || client[0] != client_x || rect[1] != 0.0f || client[1] != 0.0f ||
+		rect[2] != width || client[2] != width || rect[3] != BUTTON_HEIGHT || client[3] != BUTTON_HEIGHT ||
+		item[ITEM_RECT_ALIGN_H] != 2 || item[ITEM_RECT_CLIENT_ALIGN_H] != 2 ||
+		item[ITEM_RECT_ALIGN_V] != 3 || item[ITEM_RECT_CLIENT_ALIGN_V] != 3;
+	if (!changed)
+		return 0;
+	rect[0] = draw_x;
+	client[0] = client_x;
+	rect[1] = client[1] = 0.0f;
+	rect[2] = client[2] = width;
+	rect[3] = client[3] = BUTTON_HEIGHT;
+	item[ITEM_RECT_ALIGN_H] = 2; // normal centered layout for text; no fullscreen stretch
+	item[ITEM_RECT_CLIENT_ALIGN_H] = 2;
+	item[ITEM_RECT_ALIGN_V] = 3;
+	item[ITEM_RECT_CLIENT_ALIGN_V] = 3;
+	text_rect[0] = text_rect[1] = text_rect[2] = text_rect[3] = 0.0f;
+	return 1;
+}
+
+static void selection_button_clear_text(uint8_t *item)
+{
+	*(const char **)(item + ITEM_TEXT) = "";
+	*(void **)(item + ITEM_TEXT_EXP) = NULL;
+	float *text_rect = (float *)(item + ITEM_TEXT_RECT);
+	text_rect[0] = text_rect[1] = text_rect[2] = text_rect[3] = 0.0f;
+}
+
+// Clone the native Quit item as a background-only clickable button. Its own text is moved to a
+// companion decoration item with regular centered alignment, so the fullscreen hitbox cannot
+// stretch the label. All native hover/focus colors and click styling remain on this item.
+static uint8_t *selection_menu_button(uint8_t *quit_style, uint8_t *action_source, uint8_t *parent,
+				      const char *name, const char *fallback_action,
+				      float screen_left, float width)
+{
+	uint8_t *item = ui_clone_item(quit_style, parent);
+	if (!item)
+		return NULL;
+	*(const char **)item = name;
+	selection_button_clear_text(item);
+	MenuEventHandlerSet *action = action_source ? *(MenuEventHandlerSet **)(action_source + ITEM_ACTION) : NULL;
+	MenuEventHandlerSet *accept = action_source ? *(MenuEventHandlerSet **)(action_source + ITEM_ACCEPT) : NULL;
+	if (!action)
+		action = ui_script_set(fallback_action);
+	if (!accept)
+		accept = ui_script_set(fallback_action);
+	*(MenuEventHandlerSet **)(item + ITEM_ACTION) = action;
+	*(MenuEventHandlerSet **)(item + ITEM_ACCEPT) = accept;
+	selection_button_position(item, screen_left, width);
+	return item;
+}
+
+// A text-only overlay cloned from Quit: preserve its font, text scale, horizontal text alignment,
+// foreground color and style, but no background or input handlers. Its two rectangles use the
+// regular centered anchor and therefore stay at the same X without inheriting the button hitbox's
+// fullscreen scaling.
+static uint8_t *selection_menu_button_label(uint8_t *quit_style, uint8_t *parent, const char *name,
+					    const char *text, float screen_left, float width)
+{
+	uint8_t *item = ui_clone_item(quit_style, parent);
+	if (!item)
+		return NULL;
+	*(const char **)item = name;
+	*(const char **)(item + ITEM_TEXT) = text;
+	*(void **)(item + ITEM_TEXT_EXP) = NULL;
+	*(void **)(item + ITEM_BACKGROUND_PTR) = NULL;
+	*(void **)(item + ITEM_MATERIAL_EXP_PTR) = NULL;
+	*(void **)(item + ITEM_FLOAT_EXPS) = NULL;
+	*(void **)(item + ITEM_DISABLED_EXP) = NULL;
+	*(void **)(item + ITEM_DVAR) = NULL;
+	*(void **)(item + ITEM_TYPE_DATA) = NULL;
+	*(MenuEventHandlerSet **)(item + ITEM_ACTION) = NULL;
+	*(MenuEventHandlerSet **)(item + ITEM_ACCEPT) = NULL;
+	*(MenuEventHandlerSet **)(item + ITEM_ON_FOCUS) = NULL;
+	*(MenuEventHandlerSet **)(item + ITEM_LEAVE_FOCUS) = NULL;
+	*(int *)(item + ITEM_TYPE) = 0; // ordinary text/decoration item, not a second interactive button
+	*(int *)(item + ITEM_DATA_TYPE) = 0;
+	*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) = WINDOW_VISIBLE;
+	*(uint32_t *)(item + ITEM_STATIC_FLAGS) |= WINDOW_FLAG_DECORATION;
+	selection_button_label_position(item, screen_left, width);
+	return item;
+}
+
+// main_selection uses menu-local ui_highlighted_game, not a global dvar. Mirror the card focus
+// into a mod-owned dvar and request the logo swap directly from the game's menu thread.
+static int patch_selection_focus_handlers(uint8_t *sel)
+{
+	static const char *const cards[3] = {"game_so", "game_sp", "game_mp"};
+	static const char *const scripts[3] = {
+		"\"setdvar\" \"mw2coop_highlighted_game\" 1 ; ",
+		"\"setdvar\" \"mw2coop_highlighted_game\" 2 ; ",
+		"\"setdvar\" \"mw2coop_highlighted_game\" 3 ; "
+	};
+	int added = 0;
+	for (int i = 0; i < 3; i++) {
+		int at = ui_item_index(sel, cards[i]);
+		if (at < 0)
+			continue;
+		uint8_t **items = *(uint8_t ***)(sel + MENU_ITEMS);
+		uint8_t *item = items ? items[at] : NULL;
+		if (item && !menu_event_has_script(item, ITEM_ON_FOCUS, "mw2coop_highlighted_game")) {
+			append_menu_event(item, ITEM_ON_FOCUS, scripts[i]);
+			added++;
+		}
+	}
+	return added;
+}
+
+static void patch_selection_instance(uint8_t *sel, uint8_t *main)
+{
+	if (!sel)
+		return;
+	int count = *(int *)(sel + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(sel + MENU_ITEMS);
+	if (count <= 0 || count > 512 || !items)
+		return;
+
+	int sp_at = ui_item_index(sel, "game_sp");
+	int quit_at = ui_item_index(sel, "quit");
+	if (quit_at < 0)
+		return;
+
+	// Four equal 144-unit slots with 8-unit gaps: [20,164], [172,316], [324,468], [476,620].
+	// The 600-unit group is centered in the 640-unit logical menu. The background hitboxes use
+	// HORIZONTAL_ALIGN_FULLSCREEN; their text overlays use HORIZONTAL_ALIGN_CENTER.
+	static const float button_width = 144.0f;
+	static const float button_left[4] = {20.0f, 172.0f, 324.0f, 476.0f};
+	static const char *const button_names[4] = {
+		"mw2coop_selection_settings", "mw2coop_selection_credits", "mw2coop_selection_about", "quit"
+	};
+	static const char *const label_names[4] = {
+		"mw2coop_selection_settings_label", "mw2coop_selection_credits_label",
+		"mw2coop_selection_about_label", "mw2coop_selection_quit_label"
+	};
+	static const char *const label_texts[4] = {
+		"@MENU_OPTIONS", "@MENU_CREDITS", "@EXE_SV_INFO_MOD", "@MENU_QUIT"
+	};
+	static const char *const fallback_actions[3] = {
+		"\"play\" \"mouse_click\" ; \"open\" \"options\" ; ",
+		"\"play\" \"mouse_click\" ; \"open\" \"credits\" ; ",
+		"\"play\" \"mouse_click\" ; \"open\" \"mw2coop_about\" ; "
+	};
+
+	int campaign_route = 0;
+	if (sp_at >= 0) {
+		MenuEventHandlerSet *action = *(MenuEventHandlerSet **)(items[sp_at] + ITEM_ACTION);
+		campaign_route = menu_script_replace_target(action, 0, "\"main_text\"", "\"mw2coop_campaign\"");
+	}
+
+	int found[3], missing = 0;
+	for (int i = 0; i < 3; i++) {
+		found[i] = ui_item_index(sel, button_names[i]);
+		if (found[i] < 0)
+			missing++;
+	}
+
+	// Use native Settings / Credits / About actions when the stock main_text page is loaded;
+	// retain safe script fallbacks when it is not.
+	uint8_t *sources[3] = {NULL, NULL, NULL};
+	if (main) {
+		int main_count = *(int *)(main + MENU_ITEM_COUNT);
+		uint8_t **main_items = *(uint8_t ***)(main + MENU_ITEMS);
+		if (main_count > 0 && main_count <= 512 && main_items) {
+			static const char *const source_names[3] = {"options", "credits", "mw2coop_about_btn"};
+			for (int i = 0; i < 3; i++) {
+				int at = ui_item_index(main, source_names[i]);
+				if (at >= 0)
+					sources[i] = main_items[at];
+			}
+		}
+	}
+
+	int added = 0;
+	if (missing) {
+		uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + missing) * sizeof(*list));
+		if (list) {
+			memcpy(list, items, count * sizeof(*list));
+			int n = count;
+			for (int i = 0; i < 3; i++) {
+				if (found[i] >= 0)
+					continue;
+				uint8_t *button = selection_menu_button(items[quit_at], sources[i], sel, button_names[i],
+									fallback_actions[i], button_left[i], button_width);
+				if (button) {
+					list[n++] = button;
+					added++;
+				}
+			}
+			if (added) {
+				*(uint8_t ***)(sel + MENU_ITEMS) = list;
+				*(int *)(sel + MENU_ITEM_COUNT) = n;
+				items = list;
+				count = n;
+			} else
+				HeapFree(GetProcessHeap(), 0, list);
+		}
+	}
+
+	// The native Quit and the three added buttons are background/hitbox-only items. Their labels
+	// are four independent text-only decorations, drawn after the backgrounds with normal scale.
+	int layout_changed = 0;
+	for (int i = 0; i < 4; i++) {
+		int at = ui_item_index(sel, button_names[i]);
+		if (at < 0)
+			continue;
+		items = *(uint8_t ***)(sel + MENU_ITEMS);
+		uint8_t *button = items[at];
+		const char *button_text = *(const char **)(button + ITEM_TEXT);
+		if (!button_text || button_text[0]) {
+			selection_button_clear_text(button);
+			layout_changed = 1;
+		}
+		layout_changed |= selection_button_position(button, button_left[i], button_width);
+	}
+
+	int label_found[4], labels_missing = 0;
+	for (int i = 0; i < 4; i++) {
+		label_found[i] = ui_item_index(sel, label_names[i]);
+		if (label_found[i] < 0)
+			labels_missing++;
+	}
+	if (labels_missing) {
+		items = *(uint8_t ***)(sel + MENU_ITEMS);
+		count = *(int *)(sel + MENU_ITEM_COUNT);
+		uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + labels_missing) * sizeof(*list));
+		if (list) {
+			memcpy(list, items, count * sizeof(*list));
+			int n = count;
+			uint8_t *quit_style = items[ui_item_index(sel, "quit")];
+			for (int i = 0; i < 4; i++) {
+				if (label_found[i] >= 0)
+					continue;
+				uint8_t *label = selection_menu_button_label(quit_style, sel, label_names[i], label_texts[i],
+										 button_left[i], button_width);
+				if (label) {
+					list[n++] = label;
+					label_found[i] = n - 1;
+					added++;
+				}
+			}
+			if (n > count) {
+				*(uint8_t ***)(sel + MENU_ITEMS) = list;
+				*(int *)(sel + MENU_ITEM_COUNT) = n;
+				items = list;
+				count = n;
+			} else
+				HeapFree(GetProcessHeap(), 0, list);
+		}
+	}
+
+	for (int i = 0; i < 4; i++) {
+		int at = ui_item_index(sel, label_names[i]);
+		if (at < 0)
+			continue;
+		items = *(uint8_t ***)(sel + MENU_ITEMS);
+		uint8_t *label = items[at];
+		*(const char **)(label + ITEM_TEXT) = label_texts[i];
+		// Reassert text-only properties in case the UI zone kept an older clone of this item.
+		*(void **)(label + ITEM_BACKGROUND_PTR) = NULL;
+		*(void **)(label + ITEM_MATERIAL_EXP_PTR) = NULL;
+		*(MenuEventHandlerSet **)(label + ITEM_ACTION) = NULL;
+		*(MenuEventHandlerSet **)(label + ITEM_ACCEPT) = NULL;
+		*(MenuEventHandlerSet **)(label + ITEM_ON_FOCUS) = NULL;
+		*(MenuEventHandlerSet **)(label + ITEM_LEAVE_FOCUS) = NULL;
+		*(void **)(label + ITEM_FLOAT_EXPS) = NULL;
+		*(void **)(label + ITEM_DISABLED_EXP) = NULL;
+		*(void **)(label + ITEM_DVAR) = NULL;
+		*(void **)(label + ITEM_TYPE_DATA) = NULL;
+		*(int *)(label + ITEM_TYPE) = 0;
+		*(int *)(label + ITEM_DATA_TYPE) = 0;
+		*(void **)(label + ITEM_TEXT_EXP) = NULL;
+		*(uint32_t *)(label + ITEM_DYNAMIC_FLAGS) = WINDOW_VISIBLE;
+		*(uint32_t *)(label + ITEM_STATIC_FLAGS) |= WINDOW_FLAG_DECORATION;
+		layout_changed |= selection_button_label_position(label, button_left[i], button_width);
+	}
+
+	int focus_hooks = patch_selection_focus_handlers(sel);
+
+	// Ensure both logo variants exist for this UI-zone texture. selection_logo_tick swaps the
+	// selected material on the main thread, without changing the game's original texture.
+	items = *(uint8_t ***)(sel + MENU_ITEMS);
+	count = *(int *)(sel + MENU_ITEM_COUNT);
+	for (int i = 0; i < count; i++) {
+		uint8_t *item = items[i];
+		if (is_selection_logo(item_material_name(item))) {
+			void *material = *(void **)(item + ITEM_BACKGROUND_PTR);
+			if (getenv("MW2COOP_LOGODUMP"))
+				logo_install(material, 1);
+			(void)logo_material_variant(material, 1);
+			break;
+		}
+	}
+
+	static uint8_t *logged_menus[64];
+	static int logged_count;
+	int first_visit = 1;
+	for (int i = 0; i < logged_count; i++)
+		if (logged_menus[i] == sel) {
+			first_visit = 0;
+			break;
+		}
+	if (first_visit && logged_count < 64)
+		logged_menus[logged_count++] = sel;
+	if (first_visit || layout_changed || added || focus_hooks || campaign_route) {
+		int q = ui_item_index(sel, "quit");
+		float q_draw = 0.0f, q_hit = 0.0f, q_width = 0.0f;
+		int q_draw_align = -1, q_hit_align = -1;
+		if (q >= 0) {
+			items = *(uint8_t ***)(sel + MENU_ITEMS);
+			float *r = (float *)(items[q] + ITEM_RECT);
+			float *c = (float *)(items[q] + ITEM_RECT_CLIENT_Y - 4);
+			q_draw = r[0]; q_hit = c[0]; q_width = r[2];
+			q_draw_align = items[q][ITEM_RECT_ALIGN_H];
+			q_hit_align = items[q][ITEM_RECT_CLIENT_ALIGN_H];
+		}
+		float draw_x[3] = {0.0f, 0.0f, 0.0f}, hit_x[3] = {0.0f, 0.0f, 0.0f};
+		float label_x[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+		int present[3] = {0, 0, 0}, draw_align[3] = {-1, -1, -1}, hit_align[3] = {-1, -1, -1};
+		for (int i = 0; i < 3; i++) {
+			int at = ui_item_index(sel, button_names[i]);
+			if (at >= 0) {
+				items = *(uint8_t ***)(sel + MENU_ITEMS);
+				uint8_t *item = items[at];
+				present[i] = 1;
+				draw_x[i] = *(float *)(item + ITEM_RECT);
+				hit_x[i] = *(float *)(item + ITEM_RECT_CLIENT_Y - 4);
+				draw_align[i] = item[ITEM_RECT_ALIGN_H];
+				hit_align[i] = item[ITEM_RECT_CLIENT_ALIGN_H];
+			}
+		}
+		for (int i = 0; i < 4; i++) {
+			int at = ui_item_index(sel, label_names[i]);
+			if (at >= 0) {
+				items = *(uint8_t ***)(sel + MENU_ITEMS);
+				label_x[i] = *(float *)(items[at] + ITEM_RECT);
+			}
+		}
+		int visible = (*(uint32_t *)(sel + 0x50) & WINDOW_VISIBLE) != 0;
+		log_printf("menus: main_selection row instance %p visible %d items %d; Quit draw %.1f hit %.1f w %.1f align %d/%d; buttons present %d/%d/%d drawX %.1f/%.1f/%.1f hitX %.1f/%.1f/%.1f align %d/%d/%d client %d/%d/%d; labels %.1f/%.1f/%.1f/%.1f textAlign 2/2; changed %d added %d focusHooks %d campaign %d",
+			   sel, visible, *(int *)(sel + MENU_ITEM_COUNT), q_draw, q_hit, q_width, q_draw_align, q_hit_align,
+			   present[0], present[1], present[2], draw_x[0], draw_x[1], draw_x[2], hit_x[0], hit_x[1], hit_x[2],
+			   draw_align[0], draw_align[1], draw_align[2], hit_align[0], hit_align[1], hit_align[2],
+			   label_x[0], label_x[1], label_x[2], label_x[3], layout_changed, added, focus_hooks, campaign_route);
+	}
 }
 
 static void patch_selection_menu(void)
 {
+	// Do not gate positioning on the generated Campaign/About pages: after a UI-zone transition
+	// those pages may not have been registered yet, while main_selection is already visible.
+	uint8_t *main = ui_find_menu("main_text");
+	uint8_t *menus[64];
+	int count = ui_menu_instances("main_selection", menus, 64);
+	for (int i = 0; i < count; i++)
+		patch_selection_instance(menus[i], main);
+}
 
-	uint8_t *sel = ui_find_menu("main_selection");
-	if (!sel || sel == selection_patched || !ui_find_menu("main_text"))
-		return;
-	selection_patched = sel;
-	const MenuEventHandlerSet *old = *(MenuEventHandlerSet **)(sel + MENU_ON_OPEN);
-	int n = old && old->count > 0 && old->count < 64 ? old->count : 0;
-	MenuEventHandlerSet *set = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*set));
-	MenuEventHandler **list = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n + 1) * sizeof(*list));
-	for (int i = 0; i < n; i++)
-		list[i] = old->handlers[i];
-	MenuEventHandler *h = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*h));
-	h->data = (void *)"\"open\" \"main_text\" ; ";
-	h->type = 0;
-	list[n] = h;
-	set->count = n + 1;
-	set->handlers = list;
-	*(MenuEventHandlerSet **)(sel + MENU_ON_OPEN) = set;
-	log_printf("menus: main_selection opens main_text (onOpen had %d handlers)", n);
+// The menu's ui_highlighted_game is a local variable, not a global dvar. Card onFocus handlers
+// mirror their selected index to mw2coop_highlighted_game; the focused item is also a direct fallback.
+static int selection_focused_card(uint8_t *menu)
+{
+	static const char *const names[3] = {"game_so", "game_sp", "game_mp"};
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	if (count <= 0 || count > 512 || !items)
+		return 0;
+	for (int i = 0; i < 3; i++) {
+		int at = ui_item_index(menu, names[i]);
+		if (at < 0)
+			continue;
+		uint32_t flags = *(uint32_t *)(items[at] + ITEM_DYNAMIC_FLAGS);
+		if ((flags & (WINDOW_VISIBLE | WINDOW_HASFOCUS)) == (WINDOW_VISIBLE | WINDOW_HASFOCUS))
+			return i + 1;
+	}
+	return 0;
+}
+
+static void selection_logo_tick(void)
+{
+	char highlighted[16] = "";
+	game_dvar_raw("mw2coop_highlighted_game", highlighted, sizeof(highlighted));
+	int selected = highlighted[0] >= '1' && highlighted[0] <= '3' && !highlighted[1] ? highlighted[0] - '0' : 0;
+	uint8_t *menus[64];
+	int count = ui_menu_instances("main_selection", menus, 64);
+	for (int i = 0; i < count; i++) {
+		uint8_t *menu = menus[i];
+		if (!menu || !(*(uint32_t *)(menu + 0x50) & WINDOW_VISIBLE))
+			continue;
+		int focused = selection_focused_card(menu);
+		if (focused)
+			selected = focused; // actual UI focus wins if a stale dvar survived a menu-zone change
+	}
+	static int last_selected = 2; // the default front-end focus is Campaign
+	if (selected >= 1 && selected <= 3)
+		last_selected = selected;
+	static int last_logged_selection;
+	if (last_selected != last_logged_selection) {
+		static const char *const labels[4] = {"none", "Spec Ops", "Campaign", "Multiplayer"};
+		log_printf("menus: main_selection focus is %s (local mirror dvar '%s')", labels[last_selected], highlighted);
+		last_logged_selection = last_selected;
+	}
+	int enhanced = last_selected != 3;
+	for (int i = 0; i < count; i++) {
+		uint8_t *menu = menus[i];
+		if (!menu || !(*(uint32_t *)(menu + 0x50) & WINDOW_VISIBLE))
+			continue;
+		int n = *(int *)(menu + MENU_ITEM_COUNT);
+		uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+		if (n <= 0 || n > 512 || !items)
+			continue;
+		for (int j = 0; j < n; j++) {
+			uint8_t *item = items[j];
+			if (!item || !is_selection_logo(item_material_name(item)))
+				continue;
+			void *current = *(void **)(item + ITEM_BACKGROUND_PTR);
+			void *variant = logo_material_variant(current, enhanced);
+			if (variant && variant != current) {
+				*(void **)(item + ITEM_BACKGROUND_PTR) = variant;
+				log_printf("menus: main_selection logo switched to %s variant (selected card %d, dvar '%s')",
+					enhanced ? "Enhanced" : "original", last_selected, highlighted);
+			}
+		}
+	}
 }
 
 // Special Ops' menu (main_specops): a split screen button under its "two players online" one (the button is found by its text, so a game build that words it otherwise gets none: the log
@@ -1442,7 +1975,7 @@ static void lobby_music_patch(int campaign)
 	}
 	const char *wanted = lobby_music_specops;
 	if (campaign) {
-		uint8_t *main = ui_find_menu("main_text");
+		uint8_t *main = ui_find_menu("main_selection");
 		wanted = main ? *(const char **)(main + MENU_SOUND_LOOP) : NULL;
 		if (!wanted)
 			wanted = "music_mainmenu";
@@ -1451,7 +1984,7 @@ static void lobby_music_patch(int campaign)
 	}
 	if (*loop != wanted) {
 		*loop = wanted;
-		log_printf("menus: coop_lobby music set to %s", campaign ? "the single-player menu theme" : "the native Special Ops theme");
+		log_printf("menus: coop_lobby music set to %s", campaign ? "the native main-selection theme" : "the native Special Ops theme");
 	}
 }
 
@@ -1805,9 +2338,10 @@ static int spec_split_lobby(void)
 	return so_name(v);
 }
 
-// Leaving the campaign lobby: coop_lobby is the Special Ops lobby, and its "leave" popup (leave_lobby_warning) sends the player on to main_specops. Where that is done by a menu script
-// ("open" "main_specops"), the script is changed here for as long as the lobby holds a campaign mission, so the player lands on main_text (the engine's other way out, by the UI
-// state, is caught in menus_poll). The native scripts are put back for a Spec Ops lobby. The first time the popup is seen its items are logged, to see what the game really runs.
+// Leaving the campaign lobby: coop_lobby is the Special Ops lobby, and its "leave" popup
+// (leave_lobby_warning) sends the player on to main_specops. While it holds a campaign mission,
+// those script targets are changed to main_selection. The native scripts are put back for a
+// Spec Ops lobby. The first time the popup is seen its items are logged, to see what the game runs.
 typedef struct {
 	MenuEventHandler *handler;
 	void *native;
@@ -1816,22 +2350,27 @@ static LeaveSwap leave_swaps[24];
 static int leave_swap_count, leave_swapped, leave_logged;
 static uint8_t *leave_menu_seen;
 
-// a copy of the script with every "main_specops" (quoted) replaced by "main_text"; NULL when it has none
+// A copy of the script with every "main_specops" (quoted) replaced by "main_selection".
+// The latter is longer, so size the allocation for every replacement before copying.
 static char *leave_script_copy(const char *src)
 {
-	static const char from[] = "\"main_specops\"", to[] = "\"main_text\"";
-	if (!strstr(src, from))
+	static const char from[] = "\"main_specops\"", to[] = "\"main_selection\"";
+	const size_t from_len = sizeof(from) - 1, to_len = sizeof(to) - 1;
+	size_t occurrences = 0;
+	for (const char *p = src; (p = strstr(p, from)); p += from_len)
+		occurrences++;
+	if (!occurrences)
 		return NULL;
-	size_t cap = strlen(src) + 1;
+	size_t cap = strlen(src) + occurrences * (to_len - from_len) + 1;
 	char *out = HeapAlloc(GetProcessHeap(), 0, cap);
 	if (!out)
 		return NULL;
 	size_t n = 0;
 	while (*src) {
-		if (!strncmp(src, from, sizeof(from) - 1)) {
-			memcpy(out + n, to, sizeof(to) - 1);
-			n += sizeof(to) - 1;
-			src += sizeof(from) - 1;
+		if (!strncmp(src, from, from_len)) {
+			memcpy(out + n, to, to_len);
+			n += to_len;
+			src += from_len;
 		} else
 			out[n++] = *src++;
 	}
@@ -1911,7 +2450,7 @@ static void leave_warning_patch(int campaign)
 			leave_walk(*(MenuEventHandlerSet **)(items[i] + ITEM_ACTION), 0);
 	}
 	leave_swapped = 1;
-	log_printf("menus: leave_lobby_warning: %d script(s) now open main_text instead of main_specops", leave_swap_count);
+	log_printf("menus: leave_lobby_warning: %d script(s) now open main_selection instead of main_specops", leave_swap_count);
 }
 
 // Items changed while the lobby holds a campaign mission; the native values are kept to switch
@@ -2176,11 +2715,6 @@ static void patch_lobby(int campaign, int spec_split)
 #define ASSET_TYPE_MATERIAL 5
 #define ITEM_BACKGROUND ITEM_BACKGROUND_PTR
 #define ITEM_MATERIAL_EXP ITEM_MATERIAL_EXP_PTR
-#ifdef _WIN64
-#define ITEM_STATIC_FLAGS 0x4c
-#else
-#define ITEM_STATIC_FLAGS 0x44
-#endif
 #define WINDOW_AUTOWRAPPED 0x00800000
 static uint8_t *pic_item, *name_item;
 static void *pic_native_material, *pic_native_exp, *name_native_exp;
@@ -3302,6 +3836,9 @@ static DWORD WINAPI lobby_pad_thread(LPVOID unused)
 	return 0;
 }
 
+static void pause_routes_tick_f(void);
+static void logo_tick_f(void);
+
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
@@ -3325,6 +3862,8 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_saves_menu", NULL, NULL, saves_menu_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_save_pick", NULL, NULL, save_pick_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_menus_tick", NULL, NULL, tick_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_pause_routes_tick", NULL, NULL, pause_routes_tick_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_logo_tick", NULL, NULL, logo_tick_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_find", NULL, NULL, find_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_join_found", NULL, NULL, join_found_f CMD_NODE_FLAG},
 };
@@ -3334,6 +3873,24 @@ static cmd_function_t commands[] = {
 // reloaded (back from a level), which brings fresh menus without our changes.
 static volatile LONG tick_queued;
 static volatile DWORD tick_queued_at;
+static volatile LONG pause_routes_tick_queued;
+static volatile DWORD pause_routes_tick_queued_at;
+static volatile DWORD pause_routes_last_queue_at;
+static volatile LONG pause_menu_route_mask; // bit 0: savegame_warning; bit 1: pausedmenu
+static volatile LONG pause_direct_route_ready; // set when the currently visible pause menu has a direct return
+static volatile LONG logo_tick_queued; // queue the main-thread logo material swap / menu layout refresh
+static volatile DWORD logo_tick_queued_at;
+
+static void queue_logo_tick(DWORD now)
+{
+	LONG queued = InterlockedCompareExchange(&logo_tick_queued, 0, 0);
+	if (queued && now - logo_tick_queued_at > 1500)
+		InterlockedExchange(&logo_tick_queued, 0); // recover if a map/UI transition cleared the queued command
+	if (InterlockedCompareExchange(&logo_tick_queued, 1, 0) == 0) {
+		logo_tick_queued_at = now;
+		game_cbuf_addtext("mw2coop_logo_tick\n");
+	}
+}
 
 // The loading screen. The Spec Ops lobby sets the dvar "specialops" to 1, and the loading screen follows it: with 1 it is Spec Ops' (another version of the mission's film with a
 // black panel and the studio logo, the bar under the level's text, "waiting for the other player"), with 0 the campaign's (the film over the whole picture, the bar at the bottom in the
@@ -3370,7 +3927,7 @@ static volatile LONG campaign_lobby_return_pending;
 static volatile LONG campaign_mission_seen;
 static volatile LONG campaign_lobby_seen;
 static volatile LONG campaign_main_return_pending;
-static volatile LONG campaign_main_route_tick; // when main_text was last asked for, 0 when not waiting for it
+static volatile LONG campaign_main_route_tick; // when main_selection was last asked for, 0 when not waiting for it
 static volatile LONG campaign_main_route_tries;
 static void campaign_loading_begin(void)
 {
@@ -3697,11 +4254,67 @@ void menus_poll(void)
 		}
 		if (brief_notify_until && GetTickCount() < brief_notify_until)
 			net_send_mod("mw2coop_briefdone");
-		if (ui != last_ui || cls != last_cls) {
+		int ui_changed = ui != last_ui;
+		if (ui_changed || cls != last_cls) {
 			log_printf("menus: ui state %d, client state %d", ui, cls);
-			if (ui == 6)
+			if (ui == 6) {
 				InterlockedExchange(&brief_partner_done, 0);
+				InterlockedExchange(&pause_menu_route_mask, 0);
+				InterlockedExchange(&pause_direct_route_ready, 0);
+			}
 			last_ui = ui, last_cls = cls;
+		}
+		DWORD now = GetTickCount();
+		// Card onFocus mirrors the menu-local selection into mw2coop_highlighted_game.
+		// Register the mod-owned dvar before the first hover handler can try to update it.
+		static int logo_dvar_initialized;
+		static char last_highlighted[16] = "";
+		char highlighted[16] = "";
+		if (!game_dvar_raw("mw2coop_highlighted_game", highlighted, sizeof(highlighted))) {
+			if (!logo_dvar_initialized) {
+				logo_dvar_initialized = 1;
+				game_cbuf_addtext("set mw2coop_highlighted_game 2\n");
+				strcpy(highlighted, "2");
+			}
+		} else {
+			logo_dvar_initialized = 1;
+		}
+		if (ui_changed || strcmp(last_highlighted, highlighted)) {
+			strncpy(last_highlighted, highlighted, sizeof(last_highlighted) - 1);
+			last_highlighted[sizeof(last_highlighted) - 1] = 0;
+			queue_logo_tick(now);
+		}
+		// The engine lays out native menu items again during open/hover transitions. Reassert
+		// the four-button row at a low rate while the front end is visible, after that layout pass.
+		static DWORD last_selection_refresh;
+		if (ui == 1 && now - last_selection_refresh >= 500) {
+			last_selection_refresh = now;
+			queue_logo_tick(now);
+		}
+		// Keep a fallback for builds whose pause menus expose no script to retarget. When the direct
+		// menu route was found, do not reopen the front-end after the UI has already transitioned.
+		static int pause_return_armed;
+		static DWORD pause_return_armed_at;
+		if (ui == 2) {
+			if (!pause_return_armed)
+				InterlockedExchange(&pause_direct_route_ready, 0); // wait for the currently visible pause menu's route
+			pause_return_armed = 1;
+			pause_return_armed_at = now;
+		} else if (pause_return_armed && ui == 1) {
+			pause_return_armed = 0;
+			if (InterlockedExchange(&pause_direct_route_ready, 0)) {
+				log_printf("menus: pause exit used the retargeted menu script; delayed fallback skipped");
+			} else {
+				game_cbuf_addtext("openmenu main_selection\nmw2coop_menus_tick\n");
+				log_printf("menus: pause exit fallback forced openmenu main_selection; menu refresh queued");
+			}
+		} else if (pause_return_armed && ui == 0 && v[0] == '1') {
+			// The player resumed the level instead of returning to the front-end.
+			pause_return_armed = 0;
+			InterlockedExchange(&pause_direct_route_ready, 0);
+		} else if (pause_return_armed && now - pause_return_armed_at > 15000) {
+			pause_return_armed = 0;
+			InterlockedExchange(&pause_direct_route_ready, 0);
 		}
 	}
 	{ // campaign co-op mission exit: the engine may choose main_specops because coop_lobby is shared with Special Ops
@@ -3729,7 +4342,7 @@ void menus_poll(void)
 		} else if (ui == 1) {
 			InterlockedExchange(&campaign_lobby_seen, 0);
 		}
-		// The engine can still be opening main_specops when main_text is asked for, and then main_specops ends up on top: while the UI state stays on it, ask once more.
+		// The engine can still be opening main_specops when main_selection is asked for; while the UI state stays on it, ask once more.
 		{
 			LONG asked = InterlockedCompareExchange(&campaign_main_route_tick, 0, 0);
 			if (asked && ui != 0x0e) {
@@ -3781,14 +4394,68 @@ void menus_poll(void)
 		if (!sticky)
 			campaign_loading_end();
 	}
-	if (v[0] == '1')
+	if (v[0] == '1') {
+		// Prepatch both known pause menus on the game's main thread during active gameplay.
+		// A UI zone may register only one; when paused, only the currently visible menu's route
+		// arms the direct return. Retry while paused if that menu was loaded lazily.
+		int ui = *(volatile int *)(base + RVA_UI_STATE);
+		DWORD now = GetTickCount();
+		LONG mask = InterlockedCompareExchange(&pause_menu_route_mask, 0, 0);
+		if (ui == 3 || ui == 6) {
+			InterlockedExchange(&pause_menu_route_mask, 0);
+			InterlockedExchange(&pause_direct_route_ready, 0);
+			mask = 0;
+		}
+		int due = (ui == 2) || (ui == 0 && mask != 3 && now - pause_routes_last_queue_at >= 750);
+		LONG queued = InterlockedCompareExchange(&pause_routes_tick_queued, 0, 0);
+		if (queued && now - pause_routes_tick_queued_at > 1500)
+			InterlockedExchange(&pause_routes_tick_queued, 0); // recover if a map transition cleared the queued command
+		if (due && InterlockedCompareExchange(&pause_routes_tick_queued, 1, 0) == 0) {
+			pause_routes_tick_queued_at = now;
+			pause_routes_last_queue_at = now;
+			game_cbuf_addtext("mw2coop_pause_routes_tick\n");
+		}
 		return;
+	}
+	InterlockedExchange(&pause_routes_tick_queued, 0);
 	// the queue is cleared by a map load; a tick queued before it never runs
 	if (tick_queued && GetTickCount() - tick_queued_at < 3000)
 		return;
 	tick_queued_at = GetTickCount();
 	InterlockedExchange(&tick_queued, 1);
 	game_cbuf_addtext("mw2coop_menus_tick\n");
+}
+
+// This narrow command is queued by menus_poll while a level runs. It executes on the game's main
+// thread (not the control thread) and only patches the two pause-menu return scripts.
+static void logo_tick_f(void)
+{
+	InterlockedExchange(&logo_tick_queued, 0);
+	if (base) {
+		patch_selection_menu(); // also refreshes a texture replaced by a vid_restart
+		selection_logo_tick();
+	}
+}
+
+static void pause_routes_tick_f(void)
+{
+	InterlockedExchange(&pause_routes_tick_queued, 0);
+	if (base) {
+		int visible = 0;
+		int found = patch_pause_menu_main_selection_return(&visible);
+		if (found) {
+			LONG old_mask, new_mask;
+			do {
+				old_mask = InterlockedCompareExchange(&pause_menu_route_mask, 0, 0);
+				new_mask = old_mask | found;
+			} while (InterlockedCompareExchange(&pause_menu_route_mask, new_mask, old_mask) != old_mask);
+			if (new_mask != old_mask)
+				log_printf("menus: pause return scripts prepatched (route mask 0x%x)", (unsigned)new_mask);
+			if (*(volatile int *)(base + RVA_UI_STATE) == 2 && (visible & new_mask) != 0 &&
+			    !InterlockedExchange(&pause_direct_route_ready, 1))
+				log_printf("menus: visible pause menu has a direct main_selection return; delayed fallback disabled (mask 0x%x)", (unsigned)(visible & new_mask));
+		}
+	}
 }
 
 static void tick_f(void)
@@ -3800,9 +4467,11 @@ static void tick_f(void)
 		update_texts();
 	addr_scratch_check("between two menu ticks"); // (a build whose addresses moved: the block for code that was not found must stay `ret`)
 	native_session_tick();
-	patch_main_menu();
+	patch_main_menu(); // clone the native Campaign page without modifying the native main_text menu
 	patch_selection_menu();
+	selection_logo_tick();
 	patch_specops_return();
+	patch_pause_menu_main_selection_return(NULL);
 	patch_act1_menu();
 	patch_specops_menu();
 	add_lobbies_menu();
@@ -3863,10 +4532,10 @@ static void tick_f(void)
 			party_gone_since = 0;
 	}
 	if (InterlockedExchange(&campaign_main_return_pending, 0)) {
-		game_cbuf_addtext("openmenu main_text\n");
+		game_cbuf_addtext("openmenu main_selection\n");
 		LONG tries = InterlockedIncrement(&campaign_main_route_tries);
 		InterlockedExchange(&campaign_main_route_tick, (LONG)GetTickCount() | 1);
-		log_printf("menus: campaign lobby exit routed to main_text (ui state %d, try %ld)", *(volatile int *)(base + RVA_UI_STATE), (long)tries);
+		log_printf("menus: campaign lobby exit routed to main_selection (ui state %d, try %ld)", *(volatile int *)(base + RVA_UI_STATE), (long)tries);
 	}
 	if (InterlockedExchange(&campaign_lobby_return_pending, 0)) {
 		if (campaign && *(volatile int *)(base + RVA_UI_STATE) == 0x0e) {
