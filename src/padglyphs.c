@@ -22,6 +22,7 @@
 #endif
 #include "log.h"
 #include "modtex.h"
+#include "native.h"
 #include "padglyphs.h"
 
 #ifdef _WIN64
@@ -44,35 +45,89 @@
 #define ICON 64
 #define ICON_SIZE 54 // the text draw's size byte: (54 - 16) / 32 of the font's height ~ 1.2
 
-enum { B_A, B_B, B_X, B_Y, B_LB, B_RB, B_LT, B_RT, B_LS, B_RS, B_BACK, B_START, B_UP, B_DOWN, B_LEFT, B_RIGHT, BUTTONS };
-static const char *const fallback[BUTTONS] = {"A", "B", "X", "Y", "LB", "RB", "LT", "RT", "LS", "RS", "Back", "Start", "Up", "Down", "Left", "Right"};
+// (B_LUP ... B_LRIGHT: the left stick pushed up, down, left, right: the pad's moves, a vehicle's throttle and reverse)
+enum { B_A, B_B, B_X, B_Y, B_LB, B_RB, B_LT, B_RT, B_LS, B_RS, B_BACK, B_START, B_UP, B_DOWN, B_LEFT, B_RIGHT, B_LUP, B_LDOWN, B_LLEFT, B_LRIGHT, BUTTONS };
+static const char *const fallback[BUTTONS] = {"A",     "B",    "X",     "Y",    "LB",   "RB",    "LT",    "RT",      "LS",      "RS",
+					      "Back",  "Start", "Up",   "Down", "Left", "Right", "LS up", "LS down", "LS left", "LS right"};
 
-// the game's commands and the pad buttons they are on (the layout of native.c's pad_frame_player; tactical: B and the right stick change places)
-static int button_of(const char *cmd, int tactical)
+// A hint names a game command ("[{+speed_throw}]"); the engine shows the key bound to it. The PC game's texts partly keep the console's commands (the console's
+// +speed for aiming, +stance for crouch and prone, +moveup for jumping: the training, the AC-130's zoom, the minigun's spin): the PC has no default key for them, and the
+// hint said "KEY_UNBOUND". The commands that do one action, the game's own alternatives (a hold and a toggle; the console's and the PC's names): a text whose command
+// the player has no key (or pad button) for shows the one of another command of its action. Only the texts: the scripts' own GetKeyBinding still gets the plain truth
+// (binding1), so their choice of the hint that fits the player's binds stays the game's (trainer.gsc registerActionBinding, estate_code.gsc's prone hints) and now
+// picks the console's texts for a pad player. "!" before a command: a pad's only (no key does that one's job): the Special Ops lobby's "not ready" listens to +stance
+// itself (_specialops.gsc NotifyOnCommand), and the keys' crouch does not send it, so a keyboard player's "[{+stance}]" stays the game's.
+static const char *const actions[][8] = {
+    {"+speed_throw", "+toggleads_throw", "+speed", "toggleads", "+toggleads", "+throw", NULL}, // aim (C4 is thrown with it: trainer.gsc's throw_C4 bindings)
+    {"+breath_sprint", "+sprint", "+holdbreath", "+breath_binoculars", NULL},                  // sprint, hold the breath
+    {"+melee", "+melee_breath", "+melee_sprint", NULL},
+    {"+reload", "+usereload", NULL},
+    {"+activate", "+usereload", NULL},
+    {"+gostand", "+moveup", "raisestance", NULL},                                              // jump, stand up
+    {"togglecrouch", "+movedown", "gocrouch", "lowerstance", "lowerstacnce", "!+stance", NULL}, // crouch ("lowerstacnce": the game's misspelling, TRAINER_HINT_PRONE_DOUBLE)
+    {"toggleprone", "+prone", "goprone", "!+stance", NULL},                                    // prone (the pad: B held)
+    {"weapnext", "weapprev", "weaponslot primaryb", NULL},
+    {"togglemenu", "pause", "+scores", NULL}, // the pause menu, with the objectives (the pad's Back is the markers)
+};
+#define ACTIONS (sizeof(actions) / sizeof(actions[0]))
+
+// the action cmd is one of (its first list), -1 none; *pad_only: cmd is in it as a pad's only
+static int action_of(const char *cmd, int *pad_only)
 {
-	static const struct {
-		const char *cmd;
-		int button;
-	} map[] = {
-	    {"gostand", B_A},      {"raisestance", B_A},   {"stance", B_B},       {"movedown", B_B},          {"togglecrouch", B_B},
-	    {"toggleprone", B_B},  {"prone", B_B},         {"lowerstance", B_B},  {"usereload", B_X},         {"activate", B_X},
-	    {"reload", B_X},       {"weapnext", B_Y},      {"weapprev", B_Y},     {"smoke", B_LB},            {"frag", B_RB},
-	    {"breath_sprint", B_LS}, {"sprint", B_LS},     {"holdbreath", B_LS},  {"melee", B_RS},            {"melee_breath", B_RS},
-	    {"scores", B_BACK},    {"togglemenu", B_START}, {"attack", B_RT},     {"speed_throw", B_LT},      {"toggleads_throw", B_LT},
-	    {"speed", B_LT},       {"actionslot 1", B_UP}, {"actionslot 2", B_DOWN}, {"actionslot 3", B_LEFT}, {"actionslot 4", B_RIGHT},
-	};
-	if (*cmd == '+' || *cmd == '-')
-		cmd++;
-	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
-		if (!_stricmp(cmd, map[i].cmd)) {
-			int b = map[i].button;
-			if (tactical && b == B_B)
-				return B_RS;
-			if (tactical && b == B_RS)
-				return B_B;
-			return b;
+	for (int a = 0; a < (int)ACTIONS; a++)
+		for (int i = 0; actions[a][i]; i++) {
+			const char *c = actions[a][i];
+			const int bang = *c == '!';
+			if (!_stricmp(cmd, c + bang)) {
+				*pad_only = bang;
+				return a;
+			}
 		}
 	return -1;
+}
+
+// the picture of a pad button of native.c's layout (an XInput mask or NATIVE_PAD_*), -1 none
+static int picture_of(unsigned b)
+{
+	static const struct {
+		unsigned mask;
+		int picture;
+	} t[] = {
+	    {0x1000, B_A},         {0x2000, B_B},         {0x4000, B_X},           {0x8000, B_Y},            {0x0100, B_LB},          {0x0200, B_RB},
+	    {0x0040, B_LS},        {0x0080, B_RS},        {0x0020, B_BACK},        {0x0010, B_START},        {0x0001, B_UP},          {0x0002, B_DOWN},
+	    {0x0004, B_LEFT},      {0x0008, B_RIGHT},     {NATIVE_PAD_LT, B_LT},   {NATIVE_PAD_RT, B_RT},    {NATIVE_PAD_LUP, B_LUP}, {NATIVE_PAD_LDOWN, B_LDOWN},
+	    {NATIVE_PAD_LLEFT, B_LLEFT}, {NATIVE_PAD_LRIGHT, B_LRIGHT},
+	};
+	for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++)
+		if (t[i].mask == b)
+			return t[i].picture;
+	return -1;
+}
+
+// the pad button a hint's command is on: the layout's own (native.c), else (texts only) one of another command of its action; -1 none
+static int pad_picture(const char *cmd, int tactical, int text)
+{
+	int b = picture_of(native_pad_button_of(cmd, tactical));
+	int pad_only;
+	const int a = text && b < 0 ? action_of(cmd, &pad_only) : -1;
+	for (int i = 0; a >= 0 && b < 0 && actions[a][i]; i++)
+		b = picture_of(native_pad_button_of(actions[a][i] + (actions[a][i][0] == '!'), tactical));
+	return b;
+}
+
+// once per command: a hint shows another command's key or button
+static void log_stand_in(const char *cmd, const char *by, int pad)
+{
+	static char seen[24][40];
+	for (int i = 0; i < 24; i++) {
+		if (!_stricmp(seen[i], cmd))
+			return;
+		if (!seen[i][0]) {
+			lstrcpynA(seen[i], cmd, sizeof(seen[i]));
+			log_printf("padglyphs: a hint's [{%s}] has no %s: it shows %s", cmd, pad ? "pad button" : "key", by);
+			return;
+		}
+	}
 }
 
 static uint8_t *base;
@@ -102,7 +157,7 @@ static float shape(int b, float x, float y, uint32_t *fill, int *lit)
 		return sd_rrect(x, y, 32, 32, 30, 15, 7);
 	if (b == B_LT || b == B_RT)
 		return sd_rrect(x, y, 32, 33, 21, 28, 11);
-	if (b == B_LS || b == B_RS)
+	if (b == B_LS || b == B_RS || b >= B_LUP)
 		return sqrtf((x - 32) * (x - 32) + (y - 32) * (y - 32)) - 28;
 	if (b == B_BACK || b == B_START)
 		return sd_rrect(x, y, 32, 32, 29, 17, 17);
@@ -152,8 +207,8 @@ static void label_mask(const wchar_t *text, int px, float mask[ICON * ICON])
 
 static void draw_icon(int b, uint8_t *bits, int pitch)
 {
-	static const wchar_t *const labels[BUTTONS] = {L"A", L"B", L"X", L"Y", L"LB", L"RB", L"LT", L"RT", L"LS", L"RS", L"\x25c0", L"\x25b6", L"", L"", L"", L""};
-	static const int sizes[BUTTONS] = {40, 40, 40, 40, 22, 22, 22, 22, 22, 22, 22, 22, 0, 0, 0, 0};
+	static const wchar_t *const labels[BUTTONS] = {L"A", L"B", L"X", L"Y", L"LB", L"RB", L"LT", L"RT", L"LS", L"RS", L"\x25c0", L"\x25b6", L"", L"", L"", L"", L"L\x25b2", L"L\x25bc", L"L\x25c4", L"L\x25ba"};
+	static const int sizes[BUTTONS] = {40, 40, 40, 40, 22, 22, 22, 22, 22, 22, 22, 22, 0, 0, 0, 0, 20, 20, 20, 20};
 	static float mask[ICON * ICON];
 	label_mask(labels[b], sizes[b] ? sizes[b] : 10, mask);
 	for (int py = 0; py < ICON; py++) {
@@ -243,18 +298,38 @@ static void make_materials(void)
 	log_printf("padglyphs: %d button pictures made%s", materials[0] ? BUTTONS : 0, again ? " again (\"white\" changed: a vid_restart)" : "");
 }
 
+// which 0: a text's key (the localizer), 1: a script's GetKeyBinding (the plain truth: a pad player's layout, a keyboard player's binds)
 static unsigned (*binding_original[2])(intptr_t, const char *, char *);
 static unsigned binding(int which, intptr_t lc, const char *cmd, char *out)
 {
 	int tactical = 0;
-	int pl = pad_player_of && cmd ? pad_player_of(&tactical) : -1;
-	int b = pl >= 0 ? button_of(cmd, tactical) : -1;
-	if (b < 0)
-		return binding_original[which](lc, cmd, out);
-	make_materials();
-	out[0] = 0x1b, out[1] = (char)('a' + b), out[2] = 0;
-	out[0x80] = 0;
-	return 1;
+	const int pl = pad_player_of && cmd ? pad_player_of(&tactical) : -1;
+	if (pl >= 0) {
+		const int b = pad_picture(cmd, tactical, which == 0);
+		if (b >= 0) {
+			if (which == 0 && native_pad_button_of(cmd, tactical) == 0)
+				log_stand_in(cmd, fallback[b], 1);
+			make_materials();
+			out[0] = 0x1b, out[1] = (char)('a' + b), out[2] = 0;
+			out[0x80] = 0;
+			return 1;
+		}
+	}
+	unsigned n = binding_original[which](lc, cmd, out);
+	int pad_only, a;
+	if (n || which != 0 || !cmd || (a = action_of(cmd, &pad_only)) < 0 || pad_only)
+		return n;
+	for (int i = 0; actions[a][i]; i++) { // no key for it: the key of another command of its action
+		const char *c = actions[a][i];
+		if (*c == '!' || !_stricmp(c, cmd))
+			continue;
+		n = binding_original[which](lc, c, out);
+		if (n) {
+			log_stand_in(cmd, c, 0);
+			return n;
+		}
+	}
+	return binding_original[which](lc, cmd, out); // (none: the game's "unbound" again)
 }
 static unsigned binding0(intptr_t lc, const char *cmd, char *out)
 {

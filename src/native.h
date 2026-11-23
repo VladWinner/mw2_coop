@@ -4,6 +4,15 @@
 //   settings.ini [native] players=2 ...                 QA: the session starts with the game
 //   native_split_start() / native_split_stop()          the menu's split screen lobby: the session starts with its Start and ends when the game is back in the menus
 void native_install(void);
+// The pad button a game command ("+attack", "weapnext") is on in the mod's pad layout: an XInput button mask, or one of these (the triggers, the left stick pushed);
+// 0 none. tactical: the tactical layout (B and the right stick click change places).
+#define NATIVE_PAD_LT 0x10000u
+#define NATIVE_PAD_RT 0x20000u
+#define NATIVE_PAD_LUP 0x40000u
+#define NATIVE_PAD_LDOWN 0x80000u
+#define NATIVE_PAD_LLEFT 0x100000u
+#define NATIVE_PAD_LRIGHT 0x200000u
+unsigned native_pad_button_of(const char *cmd, int tactical);
 // a new level's zones are loading: client 1's last server command of the previous level is cleared
 void native_level_load(void);
 // menus_poll: notes player 2's client while a level runs (for native_level_load)

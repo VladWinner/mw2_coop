@@ -119,6 +119,9 @@ main()
 	// QA of a Special Ops op in the split screen (Big Brother's gunner)
 	if ( GetDvar( "mw2coop_qa" ) == "bbcheck" && !is_campaign_coop() )
 		thread maps\_mw2coop_qa::bbcheck();
+	// QA of the Special Ops snowmobile races' start (both players held until "GO")
+	if ( GetDvar( "mw2coop_qa" ) == "racestart" && !is_campaign_coop() )
+		thread maps\_mw2coop_qa::racestart();
 	// a Special Ops op in the native split screen: the watch of sync_weapons for player 2's empty hands (his client keeps its own weapon choice where the server's weapon
 	// switch does not reach it: the 32-bit build; the 64-bit DLL delivers it, src/native.c p2_sw_flush). Vlad 2026-11-21, so_ac130_co_hunted.
 	if ( getdvarint( "mw2coop_native_split" ) && !is_campaign_coop() && is_specialop() )
@@ -130,6 +133,8 @@ main()
 		maps\_mw2coop_ping::ping_precache();	// (the wheel's texts: before any wait)
 		thread maps\_mw2coop_ping::init();
 	}
+	if ( GetDvar( "mw2coop_qa" ) == "hintkeys" )
+		maps\_mw2coop_qa::hintkeys_precache();	// (QA: its texts, before any wait)
 
 	if ( !is_campaign_coop() )
 		return;

@@ -6389,6 +6389,38 @@ static const pad_map_t pad_map[] = {
 };
 #define PAD_MAP_N (sizeof(pad_map) / sizeof(pad_map[0]))
 
+// For the hints' button pictures (padglyphs.c): the button a game command is on in this layout, read from the same tables the input goes through (pad_map,
+// pad_frame_player's triggers and left stick, Back's markers: ping_pad), the tactical layout's swap of B and the right stick click applied. An XInput button mask,
+// or NATIVE_PAD_LT / RT / LUP / LDOWN / LLEFT / LRIGHT (native.h); 0: the command is on no button of the pad (Back's "scores" is not: Back is the markers).
+unsigned native_pad_button_of(const char *cmd, int tactical)
+{
+	static const struct {
+		const char *cmd;
+		unsigned button;
+	} more[] = {
+	    {"attack", NATIVE_PAD_RT},     {"speed_throw", NATIVE_PAD_LT},     // the triggers (pad_frame_player: pad_binding "attack" / "speed_throw")
+	    {"forward", NATIVE_PAD_LUP},   {"back", NATIVE_PAD_LDOWN},         // the left stick (pad_frame_player: the usercmd's forward and right moves)
+	    {"moveleft", NATIVE_PAD_LLEFT}, {"moveright", NATIVE_PAD_LRIGHT},
+	    {"mw2coop_ping", 0x0020},                                          // Back: the markers
+	};
+	if (!cmd)
+		return 0;
+	if (*cmd == '+' || *cmd == '-')
+		cmd++;
+	unsigned b = 0;
+	for (size_t i = 0; i < PAD_MAP_N && !b; i++) {
+		const char *c = pad_map[i].hold ? pad_map[i].hold : pad_map[i].press;
+		if (pad_map[i].mask != 0x0020 && c && !_stricmp(cmd, c))
+			b = pad_map[i].mask;
+	}
+	for (size_t i = 0; i < sizeof(more) / sizeof(more[0]) && !b; i++)
+		if (!_stricmp(cmd, more[i].cmd))
+			b = more[i].button;
+	if (tactical && (b == 0x2000 || b == 0x0080)) // (pad_frame_player: "the tactical layout: B and the right stick click change places")
+		b ^= 0x2000 | 0x0080;
+	return b;
+}
+
 // one player's pad, his context live; play=0 reads it for the menus only (his context is not drawn: one picture)
 static void pad_frame_player(int pl, int play)
 {
@@ -7321,11 +7353,20 @@ static void *make_cmd_target;
 static uint8_t *make_cmd_original(uint8_t *out, int lc);
 #endif
 static volatile int qa_c0_fwd, qa_c0_fire; // QA (console mw2coop_qa_move <forward 0|1> <fire 0|1>): player 0's movement and trigger set straight in his usercmds
+// Frozen controls: the playerstate flag 0x800 (a script's FreezeControls, rva 0x1617d0 sets the client's flag 4, ClientThink makes it this flag; a linked scene) makes the
+// engine's key move (CL_KeyMove, 64-bit rva 0xcfa0e) give no move at all (unless cl_freemove is 2, a developer's fly mode). The pad's move written into the usercmd here
+// must stay out then too: a player on foot is held by the server's own freeze anyway, but a vehicle takes its throttle and steering straight from the usercmd. The Spec
+// Ops snowmobile races freeze both players for the countdown: the keyboard player waited and the pad player drove off before "GO" (owner 2026-11-23,
+// so_snowrace2_cliffhanger). [native] padfreeze=0 the old way.
+static int cmd_frozen(void)
+{
+	return (*(unsigned *)(base + RVA_PM_FLAGS) & 0x800) && CFG_ONCE("padfreeze", 1);
+}
 static uint8_t *make_cmd_hook(uint8_t *out, int a)
 {
 	uint8_t *cmd = make_cmd_original(out, a);
 	if (ctx_current == 0 && cmd && (qa_c0_fwd || qa_c0_fire)) {
-		if (qa_c0_fwd)
+		if (qa_c0_fwd && !cmd_frozen()) // (as the forward key: nothing while frozen)
 			cmd[0x1a] = 127;
 		if (qa_c0_fire)
 			*(int *)(cmd + 4) |= 1;
@@ -7343,7 +7384,14 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 	if ((ctx_current == 0 || ctx_current == 1) && cmd && native_active) {
 		int pl = ctx_current;
 		pad_player_t *p = &pads[pl];
-		if (pad_dev[pl] >= 0 && p->active && (p->forward || p->right || kb_player() != pl)) {
+		if (pad_dev[pl] >= 0 && p->active && cmd_frozen()) { // frozen: no move, as the keys give none (see cmd_frozen)
+			static DWORD frozen_logged[2];
+			if ((p->forward || p->right) && GetTickCount() - frozen_logged[pl] > 2000) {
+				frozen_logged[pl] = GetTickCount();
+				log_printf("native: padfreeze: player %d's pad move %d %d held back (controls frozen)", pl + 1, p->forward, p->right);
+			}
+			cmd[0x1a] = cmd[0x1b] = 0;
+		} else if (pad_dev[pl] >= 0 && p->active && (p->forward || p->right || kb_player() != pl)) {
 			cmd[0x1a] = (uint8_t)(int8_t)p->forward; // usercmd_s: forwardmove +0x1a, rightmove +0x1b, upmove +0x1c, downmove +0x1d
 			cmd[0x1b] = (uint8_t)(int8_t)p->right;
 		} else if (pl == 1 && kb_player() != 1 && !(pad_dev[1] >= 0 && p->active)) { // player 2 with no device: still

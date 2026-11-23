@@ -510,6 +510,48 @@ static FixedString fixed[] = {
 };
 #define FIXED_COUNT (int)(sizeof(fixed) / sizeof(fixed[0]))
 
+// The game's hints that name the command of a key for an action the PC does with another command: the console's control scheme left in the PC's text. The command
+// is replaced in the text (in every language: only the "[{...}]" part changes), so the key, or the pad's button, shown is the one that does it (padglyphs.c).
+// All the 167 texts of the Russian game that name a key were checked (2026-11-23, owner: fix why it happens, not one string). A text that names a command the
+// PC has no default key for is padglyphs.c's (it shows the key of another command of the same action); a script that picks its text by the player's binds
+// (trainer.gsc, estate_code.gsc) needs nothing. One text names a command the PC uses for something else:
+//   SCRIPT_PLATFORM_SNOWMOBILE_DRIVE "Hold [{+attack}] to drive" (Russian "Удерживайте [{+attack}] для управления"): the console drives the snowmobile with +attack
+//   and shoots with the vehicle's attack button (the Xbox 360 maps\_snowmobile_drive.gsc, is_shoot_button_pressed: level.console), the PC drives with the move keys
+//   and shoots with +attack (its own hint, SCRIPT_PLATFORM_SNOWMOBILE_ATTACK). Owner 2026-11-23, so_snowrace2_cliffhanger.
+static const struct {
+	const char *name, *from, *to;
+} command_fixes[] = {
+    {"SCRIPT_PLATFORM_SNOWMOBILE_DRIVE", "[{+attack}]", "[{+forward}]"},
+};
+#define COMMAND_FIXES (int)(sizeof(command_fixes) / sizeof(command_fixes[0]))
+static struct {
+	LocalizeEntry entry;
+	const char *made_from; // the stock text this one was made from (a level's load may bring another copy)
+	char text[512];
+} command_fixed[COMMAND_FIXES];
+
+static LocalizeEntry *command_fix(int i, LocalizeEntry *stock)
+{
+	if (!stock || !stock->value)
+		return stock;
+	if (command_fixed[i].made_from != stock->value) {
+		const char *at = strstr(stock->value, command_fixes[i].from);
+		const size_t len = strlen(stock->value), from = strlen(command_fixes[i].from), to = strlen(command_fixes[i].to);
+		if (!at || len - from + to >= sizeof(command_fixed[i].text))
+			return stock; // (another text than the one checked: left as it is)
+		char *out = command_fixed[i].text;
+		const size_t head = (size_t)(at - stock->value);
+		memcpy(out, stock->value, head);
+		memcpy(out + head, command_fixes[i].to, to);
+		memcpy(out + head + to, at + from, len - head - from + 1);
+		command_fixed[i].made_from = stock->value;
+		log_printf("localize: %s names %s in place of %s (the console's command in the PC's text)", command_fixes[i].name, command_fixes[i].to, command_fixes[i].from);
+	}
+	command_fixed[i].entry.name = stock->name;
+	command_fixed[i].entry.value = command_fixed[i].text;
+	return &command_fixed[i].entry;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Texts from files: every *.str in <game>\mw2coop\localizedstrings is read at start (the .str format the Call of Duty
 // engines and IW4M / iw4x mods use for localized strings: VERSION "1", then REFERENCE <NAME> with LANG_ENGLISH and
@@ -786,6 +828,9 @@ static void *find_header(int type, const char *name)
 				}
 			}
 		}
+		for (int i = 0; i < COMMAND_FIXES; i++)
+			if (!strcmp(name, command_fixes[i].name))
+				return command_fix(i, original(type, name));
 		for (int i = 0; i < FIXED_COUNT; i++) {
 			if (strcmp(name, fixed[i].name) != 0 || !game_is_russian())
 				continue;

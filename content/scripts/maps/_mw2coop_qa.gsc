@@ -126,7 +126,17 @@
 //              (a watch marker); then, as targets come in sight (90 s at most): player 2 marks an enemy (enemy, an anchor above him), the weapon he drops when
 //              killed (weapon, its name), a car that explodes (explosive) and a vehicle; frames ping-*. With the console lines of the DLL's wheel (MW2COOP_MID:
 //              mw2coop_ping_qa 0 move <dx> 0 alone, then +mw2coop_ping, a move, -mw2coop_ping) it logs player 1's view yaw: the lone move turns it, the move
-//              in the open wheel must not ("pingtest: yaw ...")
+//              in the open wheel must not ("pingtest: yaw ..."). The voices: "watching" has no line (the short sound), "going here" and "attacking" from the
+//              wheel are player 1's lines of the campaign's side, the enemy marker player 2's "contact at your <n> o'clock"
+//   racestart - (native split screen, so_snowrace1_cliffhanger / so_snowrace2_cliffhanger; started by maps\_mw2coop, not by this scenario list) both players
+//              hold the throttle from the level's start: player 1 his forward key (the console's "mw2coop_qa_move 1 0" in MW2COOP_PRE), player 2 his left stick up
+//              (the dvar mw2coop_qa_pad2, set here); neither snowmobile may move before the race's "GO" (the flag race_started: the race freezes both players'
+//              controls until then), both must move after it (frames race-*)
+//   hintkeys - (native split screen, player 1 on the keyboard, player 2 on a pad; any level) the game's hints that name a key the PC's text got wrong or has no
+//              default key for, printed big one after another on both halves (frames hint-<n>): player 1 must see a key (no "unbound"; the snowmobile's drive
+//              W), player 2 his pad's button (src/padglyphs.c, src/localize.c command_fixes); the log names each stand-in ("padglyphs: a hint's ...")
+//   pingvoice - (native split screen, any level) which side's voices the markers use there and which of their lines the level loads; player 1 picks "going here"
+//              and player 2 "enemy" on the wheel: each marker must carry the line the level has for it (or the short sound when it has none)
 //   edgeyaw  - (cliffhanger, default start) player 1 turns to eight directions on the cave ledge; each time player 2 is brought to him
 //              (maps\_mw2coop::teleport_to_partner): beside him, "on his spot" or held back at the edge; then whether player 2 fell
 //   laserdup - (any level with allies, native split screen) the four allies nearest player 1 get their laser forced on for 20 s, frames
@@ -617,6 +627,12 @@ main()
 			break;
 		case "pingtest":
 			pingtest();
+			break;
+		case "pingvoice":
+			pingvoice();
+			break;
+		case "hintkeys":
+			hintkeys();
 			break;
 		case "groundpick":
 			groundpick();
@@ -3048,6 +3064,218 @@ ping_kinds( player )
 	return text;
 }
 
+// the Special Ops snowmobile races: the start (see the scenario list)
+racestart()
+{
+	if ( !isdefined( level.mw2coop_qa_n ) )
+		level.mw2coop_qa_n = 0;	// (not started by main())
+	SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0" );
+	for ( t = 0; t < 300 && !( isdefined( level.player.snowmobile ) && isdefined( level.player2 ) && isdefined( level.player2.snowmobile ) ); t++ )
+		wait 0.1;
+	ok = isdefined( level.player.snowmobile ) && isdefined( level.player2 ) && isdefined( level.player2.snowmobile ) && flag_exist( "race_started" );
+	check( ok, "both players on their snowmobiles" );
+	if ( !ok )
+	{
+		SetDvar( "mw2coop_qa_pad2", "" );
+		return;
+	}
+	s1 = level.player.snowmobile;
+	s2 = level.player2.snowmobile;
+	o1 = s1.origin;
+	o2 = s2.origin;
+	max1 = 0;
+	max2 = 0;
+	shot = false;
+	for ( n = 0; !flag( "race_started" ); n++ )
+	{
+		d1 = Distance( s1.origin, o1 );
+		d2 = Distance( s2.origin, o2 );
+		if ( d1 > max1 )
+			max1 = d1;
+		if ( d2 > max2 )
+			max2 = d2;
+		if ( n % 5 == 0 )
+			report( "racestart: before GO, moved: player 1 " + int( d1 ) + ", player 2 " + int( d2 ) + " units" );
+		if ( !shot && n >= 25 )
+		{
+			SetDvar( "mw2coop_qa_shot", level.script + "-race-countdown" );	// (qa_shot names the start point, which a Special Ops level may not have)
+			shot = true;
+		}
+		wait 0.1;
+	}
+	check( max1 < 24, "player 1's snowmobile held until GO (it moved " + int( max1 ) + " units at most)" );
+	check( max2 < 24, "player 2's snowmobile held until GO (it moved " + int( max2 ) + " units at most)" );
+	g1 = s1.origin;
+	g2 = s2.origin;
+	wait 3;
+	SetDvar( "mw2coop_qa_shot", level.script + "-race-go" );
+	check( Distance( s1.origin, g1 ) > 100, "player 1 drives after GO (" + int( Distance( s1.origin, g1 ) ) + " units in 3 s)" );
+	check( Distance( s2.origin, g2 ) > 100, "player 2 drives after GO (" + int( Distance( s2.origin, g2 ) ) + " units in 3 s)" );
+	SetDvar( "mw2coop_qa_pad2", "" );
+	report( "racestart: done" );
+}
+
+// the hints' texts (maps\_mw2coop main, before any wait)
+hintkeys_precache()
+{
+	PrecacheString( &"SCRIPT_PLATFORM_AC130_HINT_ZOOM_AND_FIRE" );
+	PrecacheString( &"SCRIPT_PLATFORM_MINIGUN_SPIN_HINT" );
+	PrecacheString( &"SCRIPT_PLATFORM_SNOWMOBILE_DRIVE" );
+	PrecacheString( &"SCRIPT_PLATFORM_SNOWMOBILE_REVERSE" );
+	PrecacheString( &"SCRIPT_PLATFORM_SNOWMOBILE_ATTACK" );
+	PrecacheString( &"SCRIPT_PLATFORM_ZODIAC_STEADY" );
+	PrecacheString( &"SPECIAL_OPS_PRESS_TO_CANCEL" );
+	PrecacheString( &"SCRIPT_HINT_THROW_C4" );
+	PrecacheString( &"SCRIPT_PLATFORM_OILRIG_HINT_STEALTH_KILL" );
+}
+
+// the hints' keys (see the scenario list): a text element of each player's own, as the game's hints are (its key names are made in his half's context; iPrintLnBold
+// leaves "[{...}]" as it is)
+hintkeys()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait_intro();
+	wait 3;
+	level.player EnableInvulnerability();
+	level.player2 EnableInvulnerability();
+	names = StrTok( "AC130_ZOOM MINIGUN_SPIN SNOWMOBILE_DRIVE SNOWMOBILE_REVERSE SNOWMOBILE_ATTACK ZODIAC_STEADY SO_CANCEL THROW_C4 STEALTH_KILL", " " );
+	foreach ( i, n in names )
+	{
+		huds = [];
+		foreach ( player in level.players )
+		{
+			h = NewClientHudElem( player );
+			h.alignX = "center";
+			h.alignY = "middle";
+			h.horzAlign = "center";
+			h.vertAlign = "middle";
+			h.x = 0;
+			h.y = -50;
+			h.font = "default";
+			h.fontscale = 1.6;
+			h.foreground = true;
+			switch ( n )
+			{
+				case "AC130_ZOOM": h SetText( &"SCRIPT_PLATFORM_AC130_HINT_ZOOM_AND_FIRE" ); break;
+				case "MINIGUN_SPIN": h SetText( &"SCRIPT_PLATFORM_MINIGUN_SPIN_HINT" ); break;
+				case "SNOWMOBILE_DRIVE": h SetText( &"SCRIPT_PLATFORM_SNOWMOBILE_DRIVE" ); break;
+				case "SNOWMOBILE_REVERSE": h SetText( &"SCRIPT_PLATFORM_SNOWMOBILE_REVERSE" ); break;
+				case "SNOWMOBILE_ATTACK": h SetText( &"SCRIPT_PLATFORM_SNOWMOBILE_ATTACK" ); break;
+				case "ZODIAC_STEADY": h SetText( &"SCRIPT_PLATFORM_ZODIAC_STEADY" ); break;
+				case "SO_CANCEL": h SetText( &"SPECIAL_OPS_PRESS_TO_CANCEL" ); break;
+				case "THROW_C4": h SetText( &"SCRIPT_HINT_THROW_C4" ); break;
+				default: h SetText( &"SCRIPT_PLATFORM_OILRIG_HINT_STEALTH_KILL" ); break;
+			}
+			huds[ huds.size ] = h;
+		}
+		wait 0.6;
+		SetDvar( "mw2coop_qa_shot", level.script + "-hint-" + i + "-" + n );
+		report( "hintkeys: " + i + " " + n + " shown" );
+		wait 1.2;
+		foreach ( h in huds )
+			h Destroy();
+		wait 0.3;
+	}
+	report( "hintkeys: done" );
+}
+
+// a marker's voice line ("none" when it has none)
+ping_voice( ping )
+{
+	if ( !isdefined( ping ) || !isdefined( ping.voice ) )
+		return "none";
+	return ping.voice;
+}
+
+// a line without its clock number ("US_2_callout_yourclock_3" -> "US_2_callout_yourclock")
+ping_line_base( v )
+{
+	if ( !IsSubStr( v, "clock_" ) )
+		return v;
+	parts = StrTok( v, "_" );
+	text = parts[ 0 ];
+	for ( i = 1; i < parts.size - 1; i++ )
+		text = text + "_" + parts[ i ];
+	return text;
+}
+
+// which of the markers' lines the level loads, for voices 1 and 2 of side c
+ping_lines( c )
+{
+	if ( c == "" )
+		return "no side";
+	text = "";
+	foreach ( s in StrTok( "callout_yourclock_12 callout_contactclock_12 threat_mg_generic threat_infantry_exposed exposed_open threat_infantry_generic inform_incoming_grenade order_action_suppress order_move_combat", " " ) )
+	{
+		have = "";
+		if ( SoundExists( c + "_1_" + s ) )
+			have = have + "1";
+		if ( SoundExists( c + "_2_" + s ) )
+			have = have + "2";
+		if ( have == "" )
+			have = "-";
+		text = text + s + " " + have + "; ";
+	}
+	return text;
+}
+
+// any level: the markers' voices there (the side, its lines) and one marker of each player: player 1's "going here", player 2's "enemy" on a spot ahead of him
+pingvoice()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait_intro();
+	wait 4;
+	for ( t = 0; t < 20 && !isdefined( level.player.mw2coop_pings ); t++ )
+		wait 0.5;
+	check( isdefined( level.player.mw2coop_pings ), "the markers are set up (maps\\_mw2coop_ping::init)" );
+	p1 = level.player;
+	p2 = level.player2;
+	p1 EnableInvulnerability();
+	p2 EnableInvulnerability();
+	campaign = "none";
+	if ( isdefined( level.campaign ) )
+		campaign = level.campaign;
+	c = maps\_mw2coop_ping::voice_country();
+	report( "pingvoice: " + level.script + ", campaign " + campaign + ": voices '" + c + "' (" + ping_lines( c ) + ")" );
+	want = "SP_hit_alert";
+	if ( c != "" && SoundExists( c + "_1_order_move_combat" ) )
+		want = c + "_1_order_move_combat";
+	p1 SetPlayerAngles( ( 20, p1 GetPlayerAngles()[ 1 ], 0 ) );
+	wait 0.3;
+	p1 maps\_mw2coop_ping::event( "open", -1 );
+	wait 0.2;
+	p1 maps\_mw2coop_ping::event( "sel", 2 );
+	wait 0.2;
+	p1 maps\_mw2coop_ping::event( "close", 2 );
+	wait 0.6;
+	last = ping_last( p1 );
+	check( isdefined( last ) && last.kind == "go" && ping_voice( last ) == want, level.script + ": player 1's 'going here' says " + want + " (" + ping_voice( last ) + ")" );
+	p2 SetPlayerAngles( ( 20, p2 GetPlayerAngles()[ 1 ], 0 ) );
+	wait 0.3;
+	p2 maps\_mw2coop_ping::event( "open", -1 );
+	wait 0.2;
+	p2 maps\_mw2coop_ping::event( "sel", 0 );
+	wait 0.2;
+	p2 maps\_mw2coop_ping::event( "close", 0 );
+	wait 0.6;
+	last = ping_last( p2 );
+	want = "SP_hit_alert";
+	if ( c != "" && isdefined( last ) )
+	{
+		clock = animscripts\battlechatter::getDirectionFacingClock( p1 GetPlayerAngles(), p1.origin, last.pos );
+		foreach ( s in StrTok( "callout_yourclock_" + clock + " callout_contactclock_" + clock + " threat_infantry_exposed exposed_open threat_infantry_generic", " " ) )
+			if ( SoundExists( c + "_2_" + s ) )
+			{
+				want = c + "_2_" + s;
+				break;
+			}
+	}
+	check( isdefined( last ) && last.kind == "enemy" && ping_line_base( ping_voice( last ) ) == ping_line_base( want ), level.script + ": player 2's 'enemy' says " + want + " (" + ping_voice( last ) + ")" );
+	qa_shot( "pingvoice" );
+	wait 2;
+	report( "pingvoice: done" );
+}
+
 ping_last( player )
 {
 	if ( !isdefined( player.mw2coop_pings ) || !player.mw2coop_pings.size )
@@ -3142,6 +3370,29 @@ pingtest()
 	p1 maps\_mw2coop_ping::event( "close", -1 );
 	wait 0.4;
 	check( !isdefined( p1.mw2coop_wheel ) && p1.mw2coop_pings.size == n, "let go in the middle: no marker (" + ping_kinds( p1 ) + ")" );
+	// the voices: "watching" has no line; "going here" and "attacking" are player 1's (the campaign's side: Invasion's Rangers)
+	c = maps\_mw2coop_ping::voice_country();
+	report( "pingtest: the markers' voices: '" + c + "' (" + ping_lines( c ) + ")" );
+	check( c == "US", "Invasion's markers speak with the Rangers' voices ('" + c + "')" );
+	check( isdefined( last ) && ping_voice( last ) == "SP_hit_alert", "'watching' has no line: the short sound (" + ping_voice( last ) + ")" );
+	wait 2.5;
+	p1 maps\_mw2coop_ping::event( "open", -1 );
+	wait 0.2;
+	p1 maps\_mw2coop_ping::event( "sel", 2 );
+	wait 0.2;
+	p1 maps\_mw2coop_ping::event( "close", 2 );
+	wait 0.6;
+	last = ping_last( p1 );
+	check( isdefined( last ) && last.kind == "go" && ping_voice( last ) == c + "_1_order_move_combat", "'going here' in player 1's voice (" + ping_kinds( p1 ) + ": " + ping_voice( last ) + ")" );
+	wait 1.7;
+	p1 maps\_mw2coop_ping::event( "open", -1 );
+	wait 0.2;
+	p1 maps\_mw2coop_ping::event( "sel", 1 );
+	wait 0.2;
+	p1 maps\_mw2coop_ping::event( "close", 1 );
+	wait 0.6;
+	last = ping_last( p1 );
+	check( isdefined( last ) && last.kind == "attack" && ping_voice( last ) == c + "_1_order_action_suppress", "'attacking' in player 1's voice (" + ping_kinds( p1 ) + ": " + ping_voice( last ) + ")" );
 
 	// targets as they come in sight (Invasion: the enemies come up the street a while after the start)
 	enemy_done = false;
@@ -3210,6 +3461,11 @@ pingtest()
 				ping_at( p2, enemy GetTagOrigin( "j_spine4" ) );
 				last = ping_last( p2 );
 				check( isdefined( last ) && last.kind == "enemy" && isdefined( last.ent ) && last.ent == enemy && isdefined( last.anchor ), "player 2 marked the enemy he looks at, the marker above him (" + ping_kinds( p2 ) + ", " + int( Distance( enemy.origin, p2.origin ) ) + " units away)" );
+				if ( isdefined( last ) )
+				{
+					clock = animscripts\battlechatter::getDirectionFacingClock( p1 GetPlayerAngles(), p1.origin, last.pos );
+					check( ping_line_base( ping_voice( last ) ) == "US_2_callout_yourclock", "player 2's enemy marker: 'contact at your <n> o'clock' in his voice, from player 1's view (" + ping_voice( last ) + "; player 1's view now: " + clock + ")" );
+				}
 				qa_shot( "ping-enemy" );
 				enemy_done = true;
 				// killed, he drops his weapon: player 2 marks it

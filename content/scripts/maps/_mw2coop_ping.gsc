@@ -1,6 +1,7 @@
 // Co-op markers ("pings", owner 2026-11-23; the model: Apex Legends' ping and its wheel). The marker key ([input] ping_key, Z by default; a pad's Back, src/ping.c):
 //
-// A short press marks what the player looks at, for both players, with a line on the screen and a short sound. What is under the cross hair decides:
+// A short press marks what the player looks at, for both players, with a line on the screen and the squad's own voice where the game has a line for it (else a
+// short sound; see voice_line). What is under the cross hair decides:
 //   a live grenade or a claymore near the cross hair (8 degrees)        -> "grenade!" / "mine!", red, the grenade icon, follows it until it is gone
 //   an enemy under the cross hair, or within 4 degrees of it and in sight -> "enemy!", red, follows him, 7 s or until he dies
 //   a vehicle: an enemy one (its team axis or team3) / any other          -> "enemy vehicle!" red / "vehicle" in the player's colour, follows it
@@ -631,8 +632,9 @@ make( kind, ent, pos, title )
 	ping thread life();
 	if ( ping.ai )
 		ping thread death_watch( ent );
-	self say( kind, title );
-	// the log (the mod's state line): who, what, where, when; the QA reads it on both PCs
+	voice = self say( kind, title, pos );
+	ping.voice = voice;
+	// the log (the mod's state line): who, what, where, when, the voice line; the QA reads it on both PCs
 	n = 1;
 	if ( isdefined( level.player2 ) && self == level.player2 )
 		n = 2;
@@ -644,7 +646,7 @@ make( kind, ent, pos, title )
 		what = kind + " (entity " + ent GetEntityNumber() + ")";
 	if ( isdefined( title ) )
 		what = what + " " + title;
-	log_line( "ping " + level.mw2coop_ping_made + ": player " + n + " " + what + " at " + int( pos[ 0 ] ) + " " + int( pos[ 1 ] ) + " " + int( pos[ 2 ] ) + ", level time " + GetTime() );
+	log_line( "ping " + level.mw2coop_ping_made + ": player " + n + " " + what + " at " + int( pos[ 0 ] ) + " " + int( pos[ 1 ] ) + " " + int( pos[ 2 ] ) + ", level time " + GetTime() + ", voice " + voice );
 }
 
 life()
@@ -915,10 +917,10 @@ player_n( player )
 	return 1;
 }
 
-// ---- the line on the screen and the sound
+// ---- the line on the screen and the voice
 // The single player game has iPrintLn only as a function for everyone, not as a player's method (a player method made the script fail to compile, 2026-11-23): one
 // line for both (network co-op: each PC shows it to its player). The strings are the mod's (src/localize.c), "&&1" the player's name, "&&2" a weapon's.
-say( kind, title )
+say( kind, title, pos )
 {
 	name = "Alpha";
 	if ( player_n( self ) == 2 )
@@ -952,7 +954,119 @@ say( kind, title )
 		default: iPrintLn( &"MW2COOP_PING_PLACE", name ); break;
 	}
 	if ( kind == "cancel" )
-		return;
-	foreach ( viewer in level.players )
-		viewer PlayLocalSound( "SP_hit_alert" );
+		return "none";
+	alias = self voice_line( kind, pos );
+	if ( !isdefined( alias ) )
+		alias = "SP_hit_alert";
+	else
+		self.mw2coop_voice_at = GetTime();
+	// once on each machine: player 1's local sound on his, player 2's on his own in network co-op (on one machine, the split screen, player 1's is heard already;
+	// both would be two different takes of the line at once)
+	level.player PlayLocalSound( alias );
+	if ( isdefined( level.player2 ) && level.player2 != level.player && !GetDvarInt( "mw2coop_native_split" ) )
+		level.player2 PlayLocalSound( alias );
+	return alias;
+}
+
+// The squad's battle chatter (animscripts\battlechatter), the lines the level's own soldiers say, in the voice of the players' side (the allies' own: Rangers "US",
+// Task Force 141 "TF", SEALs "NS", SAS "UK"), player 1 with voice 1 and player 2 with voice 2 of it, so the two sound different. Only the
+// lines the level loads play (SoundExists; S.S.D.D. and Boneyard load none of the players' side); a marker the game has no line for keeps the short sound:
+//   an enemy, his vehicle or turret, the wheel's "enemy" -> "contact at your <n> o'clock" from the partner's view (the line the squad says to the player), else "contact,
+//                                                        <n> o'clock", else (SAS) "enemy machine gun" for a turret, "enemy in the open", "contact"
+//   a grenade                                            -> "grenade!" (what the squad shouts when one lands)
+//   the wheel's "attacking"                              -> the order to suppress (what a squad leader says in a fight)
+//   the wheel's "going here"                             -> the order to move in a fight (what a soldier says as he moves up)
+// Not more than one line every 1.5 s from one player (the next marker in that time gets the short sound): no lines over each other.
+voice_line( kind, pos )
+{
+	if ( isdefined( self.mw2coop_voice_at ) && GetTime() - self.mw2coop_voice_at < 1500 )
+		return undefined;
+	c = voice_country();
+	if ( c == "" )
+		return undefined;
+	v = c + "_" + player_n( self ) + "_";
+	lines = [];
+	switch ( kind )
+	{
+		case "enemy":
+		case "enemy_vehicle":
+		case "enemy_turret":
+			other = level.players[ 0 ];
+			if ( other == self )
+				other = level.players[ 1 ];
+			if ( isdefined( pos ) && isdefined( other ) )
+			{
+				clock = animscripts\battlechatter::getDirectionFacingClock( other GetPlayerAngles(), other.origin, pos );
+				lines[ lines.size ] = v + "callout_yourclock_" + clock;
+				lines[ lines.size ] = v + "callout_contactclock_" + clock;
+			}
+			if ( kind == "enemy_turret" )
+				lines[ lines.size ] = v + "threat_mg_generic";
+			lines[ lines.size ] = v + "threat_infantry_exposed";
+			lines[ lines.size ] = v + "exposed_open";
+			lines[ lines.size ] = v + "threat_infantry_generic";
+			break;
+		case "grenade":
+			lines[ lines.size ] = v + "inform_incoming_grenade";
+			break;
+		case "attack":
+			lines[ lines.size ] = v + "order_action_suppress";
+			break;
+		case "go":
+			lines[ lines.size ] = v + "order_move_combat";
+			break;
+	}
+	foreach ( alias in lines )
+		if ( SoundExists( alias ) )
+			return alias;
+	return undefined;
+}
+
+// the side whose voices the markers use: the one most of the allied soldiers speak with (their countryID, animscripts\battlechatter_ai), else the campaign's (as the
+// game picks the player's own; Contingency says "american" and loads no Rangers' lines: the QA of 2026-11-23), else the first of the four the level loads for both
+// voices; "" when none (decided at the first marker, when the level's soldiers are there)
+voice_country()
+{
+	if ( isdefined( level.mw2coop_voice_country ) )
+		return level.mw2coop_voice_country;
+	ids = [];
+	count = [];
+	best = undefined;
+	foreach ( ai in GetAIArray( "allies" ) )
+	{
+		if ( !isdefined( ai.countryID ) || !IsAlive( ai ) )
+			continue;
+		id = ai.countryID;
+		if ( !isdefined( count[ id ] ) )
+			count[ id ] = 0;
+		count[ id ]++;
+		if ( !isdefined( best ) || count[ id ] > count[ best ] )
+			best = id;
+	}
+	if ( isdefined( best ) )
+		ids[ ids.size ] = best;
+	if ( isdefined( level.campaign ) && isdefined( anim.countryIDs ) && isdefined( anim.countryIDs[ level.campaign ] ) )
+		ids[ ids.size ] = anim.countryIDs[ level.campaign ];
+	ids[ ids.size ] = "TF";
+	ids[ ids.size ] = "US";
+	ids[ ids.size ] = "NS";
+	ids[ ids.size ] = "UK";
+	level.mw2coop_voice_country = "";
+	foreach ( id in ids )
+		if ( SoundExists( id + "_1_inform_incoming_grenade" ) && SoundExists( id + "_2_inform_incoming_grenade" ) )
+		{
+			level.mw2coop_voice_country = id;
+			break;
+		}
+	campaign = "none";
+	if ( isdefined( level.campaign ) )
+		campaign = level.campaign;
+	allies = "none";
+	if ( isdefined( best ) )
+		allies = best + " (" + count[ best ] + ")";
+	what = level.mw2coop_voice_country;
+	if ( what == "" )
+		what = "none (the short sound)";
+	log_line( "ping voices: " + what + " (allies " + allies + ", campaign " + campaign + ")" );
+	return level.mw2coop_voice_country;
 }
