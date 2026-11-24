@@ -17,20 +17,21 @@
 // getter returned last, for each local client (a stub around it; the split screen asks it for both players in turn); before 2026-11-24 the blend followed the raw fraction and the weapon changed size before the view zoomed (owner:
 // "do it the way the view zooms", after Vlad's CoD UO weapon FOV, which follows the view's field of view). MW2COOP_WF_RAWADS=1: the raw fraction (QA).
 //
-// The muzzle flash (owner 2026-11-24, after the FoV changer of CoD SCZ): an effect drawn with the world's projection, so it does not scale with the weapon.
-// The game places it once, when the shot is fired (64-bit rva 0xc3a00, 32-bit VA 0x573f40: the weapon's view flash effect at the world position of the view
-// model's flash tag, from the tag position function 64-bit rva 0x9d800 / 32-bit VA 0x432ae0 called with the view model's pose), and the effect runs there.
-// A point at view depth z drawn with the weapon's projection (x and y scaled by k) lands where a point at depth z/k with the same x and y lands with the
-// world's, and at k times the size: so that one call's answer is moved along the view's forward axis to z/k (the view's origin and axis: the cgame's
-// refdef, 64-bit rva 0x42d310 / 32-bit VA 0x77fae8, forward at +0xc), with the k of the player whose cgame runs (his ADS fraction and zoom). The flash
-// then sits on the barrel at its size (QA with the effects frozen, fx_freeze 1 right after one shot, Exodus, SCAR-H, the tag 30.9 units ahead: at
-// cg_weaponFov 45 (k 1.54, the usual case: a wide view and the console's weapon) and 75 on every build). The view flash fades out with its distance from
-// the eye: a smaller weapon (k < 1) would push it out of sight (cg_weaponFov 90 at cg_fov 65: 48.5 units, not seen on any build; 64-bit 80 / 85: 40.7
-// faint, 44.4 gone), so it goes no deeper than 36 units (or the tag's own depth) and its sideways offset is scaled to keep its place on the screen; it is
-// then somewhat larger than the weapon's scale (90 at 65: 1.35 times). At 90 the 32-bit games (official and iw4x-sp) showed it on the barrel in three
-// runs of four; the 64-bit one in none, at 31, 33 or 36 units, nor where the game puts it (open, 2026-11-24). Known limits: the hands of scripted scenes
-// (climbs, the knife fight) are a world model and keep the view's FOV. QA switches: MW2COOP_FLASH_OFF=1 the flash where the game puts it,
-// MW2COOP_FLASH_ZMAX=<units> another depth limit, MW2COOP_FLASH_SIDE1=1 the sideways offset kept.
+// The weapon's effects (owner 2026-11-24, after the FoV changer of CoD SCZ): the muzzle flash, the barrel's smoke and the spent cases are effects bolted to
+// the view model's bones (the view weapon's draw, 64-bit rva 0xc0b80, plays the flash when the fire event has set the entity's flag +0x18c bit 4 or 8:
+// FX_PlayBoltedEffect 64-bit rva 0x119ee0 with the view model's DObj handle, 0x800 and up). The effects system finds a bolt's place with the game's bone
+// matrix (64-bit rva 0x9d470, 32-bit VA 0x501070: (pose, DObj, bone, axis out, origin out)) when it spawns one (64-bit FX_GetBoneOrientation rva 0x11dd90,
+// its call at 0x11ddff; 32-bit VA 0x4fd2a0, call at 0x4fd30a) and in every frame's update of an effect that runs relative to its bolt (64-bit rva 0x120230,
+// call at 0x12036b; 32-bit VA 0x598510 goes through 0x4fd2a0 too), and draws the effect with the world's projection: so it stayed where the weapon would be
+// without cg_weaponFov (a smaller weapon hid it behind itself, a larger one left it short of the barrel; until 2026-11-24 the mod moved the place of the
+// fire sound, 64-bit 0xc3acb, by mistake, and the frames looked at the flash's random size and time). A point at view depth z drawn with the weapon's
+// projection (x and y scaled by k) lands where a point at depth z/k with the same x and y lands with the world's, at k times the size: so the bone matrix's
+// origin is moved along the view's forward axis to z/k (the view's origin and axis: the cgame's refdef, 64-bit rva 0x42d310 / 32-bit VA 0x77fae8, forward at
+// +0xc) for the view model's poses only (64-bit rva 0x43b618 and the left hand's 0x43b688; 32-bit VA 0x78d618, 0x78d67c), with the k of the player whose
+// cgame runs. QA switches: MW2COOP_FLASH_OFF=1 the effects where the game puts them; MW2COOP_FLASH_ZMAX=<units> no deeper than that (MW2COOP_FLASH_SIDE1=1:
+// then the sideways offset kept); MW2COOP_FLASH_SHOT=<name> frames <name>-<n>.bmp when an effect is bolted to the view model (at most one in 0.3 s; 32-bit:
+// FX_PlayBoltedEffect's call at VA 0x596063 marks a spawn), 30 and 60 ms later (<n>b, <n>c), its place in the log. Known limits: the hands of scripted scenes (climbs, the knife fight) are a world model and keep the view's
+// FOV.
 //
 // The hook: 0x4fd00's caller (0x4fd60) goes on using RCX and R8 after the call (the whole-program optimiser's own convention), so the replacement is a small
 // machine code stub that keeps every register, calls the original through the trampoline, then the C step with the source state.
@@ -42,6 +43,7 @@
 #include <windows.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -49,6 +51,7 @@
 #include "hook.h"
 #include "log.h"
 #include "native.h"
+#include "shot.h"
 #include "weaponfov.h"
 
 #ifdef _WIN64
@@ -61,8 +64,11 @@
 #define WF_FLAGS 0x16b8			   // the source state's depth hack flag: 2 while the weapon's draws are made
 #define WF_MATRIX 0x100			   // the source state's projection (row vectors: clip = v * P)
 #define REF_WF_ZOOM 0xc3f70		   // float zoom(cg, weaponDef): the raw ADS fraction remapped by the weapon's zoom-in/out fractions (+0x448, +0x44c)
-#define REF_WF_FLASH_CALL 0xc3acb	   // the view muzzle flash's call of the tag position (pose = the view model's)
-#define REF_WF_TAGPOS 0x9d800		   // int (pose, dobj, tag, vec3 world position out)
+#define REF_WF_BONE 0x9d470		   // int (pose, DObj, bone, axis out, origin out): a bone's world matrix
+#define REF_WF_FX_SPAWN 0x11ddff	   // FX_GetBoneOrientation's call of it (a bolted effect is spawned)
+#define REF_WF_FX_UPDATE 0x12036b	   // the bolted effect's frame update's call of it
+#define REF_WF_VMPOSE 0x43b618	   // the view model's pose (the left hand's of akimbo at +0x70)
+#define WF_VMPOSE2 0x70
 #define REF_WF_REFDEF 0x42d310	   // the cgame's view origin, then its axis (forward, left, up)
 static const uint8_t zoom_head[14] = {0xf3, 0x0f, 0x10, 0x89, 0x60, 0x5c, 0x01, 0x00, 0x0f, 0x57, 0xd2, 0x0f, 0x2f, 0xd1}; // movss xmm1,[rcx+0x15c60]; xorps; comiss
 #else
@@ -73,8 +79,12 @@ static const uint8_t zoom_head[14] = {0xf3, 0x0f, 0x10, 0x89, 0x60, 0x5c, 0x01, 
 #define WF_FLAGS 0x1628			   // the source state's depth hack flag: 2 while the weapon's draws are made
 #define WF_MATRIX 0x100			   // the source state's projection
 #define REF_WF_ZOOM 0x1d630		   // VA 0x41d630, cdecl float zoom(cg, weaponDef) in st0 (the weapon's zoom-in/out fractions at +0x300, +0x304)
-#define REF_WF_FLASH_CALL 0x173fcd	   // VA 0x573fcd: the view muzzle flash's call of the tag position
-#define REF_WF_TAGPOS 0x32ae0		   // VA 0x432ae0, cdecl int (pose, dobj, tag, vec3 out)
+#define REF_WF_BONE 0x101070	   // VA 0x501070, cdecl int (pose, DObj, bone, axis out, origin out)
+#define REF_WF_FX_SPAWN 0xfd30a	   // VA 0x4fd30a: FX_GetBoneOrientation's call of it (the spawn and every frame's update go through it)
+#define REF_WF_FX_BOLT 0x196063	   // VA 0x596063: FX_PlayBoltedEffect's call of FX_GetBoneOrientation (VA 0x4fd2a0): tells a spawn from an update
+#define REF_WF_FX_BONEORIENT 0xfd2a0  // VA 0x4fd2a0, cdecl bool (local client, DObj handle, bone, orientation out)
+#define REF_WF_VMPOSE 0x38d618	   // VA 0x78d618: the view model's pose (the left hand's at +0x64)
+#define WF_VMPOSE2 0x64
 #define REF_WF_REFDEF 0x37fae8	   // VA 0x77fae8: the view origin, then the axis
 static const uint8_t zoom_head[10] = {0x8b, 0x4c, 0x24, 0x04, 0xd9, 0x81, 0x4c, 0x5c, 0x01, 0x00}; // mov ecx,[esp+4]; fld dword [ecx+0x15c4c]
 #endif
@@ -87,9 +97,8 @@ static float last_k = 1.0f;
 static void *zoom_original;		 // the zoom getter's trampoline
 static volatile float zoom_last[2]; // what it returned last for each local client (zoom_note, from the stub: the split screen asks it for both players in turn)
 static int zoom_hooked;
-static int (*tagpos_original)(void *pose, void *dobj, unsigned tag, float *out);
+static int (*bone_original)(void *pose, void *dobj, int bone, float *axis, float *origin);
 static volatile LONG flash_moved;
-#define FLASH_DEPTH_MAX 36.0f // units ahead of the eye: deeper, the view flash fades (flash_tagpos_hook)
 static float flash_last_k = 1.0f;
 
 #ifdef _WIN64
@@ -140,46 +149,121 @@ static float weapon_k(float ads, int player)
 	return k;
 }
 
-// The main thread, a shot of the player whose cgame runs: the muzzle flash's place (the view model's flash tag) moved to the depth the weapon's projection
-// shows it at (z/k along the view's forward axis), so the effect sits on the barrel at the weapon's size
-static int flash_tagpos_hook(void *pose, void *dobj, unsigned tag, float *out)
+static char flash_later_name[64];
+static DWORD WINAPI flash_later_shot(LPVOID name) // QA (MW2COOP_FLASH_SHOT): frames 30 and 60 ms after an effect is bolted to the view model (<name>b, <name>c)
 {
-	const int r = tagpos_original(pose, dobj, tag, out);
-	static int off = -1;
-	if (off < 0)
-		off = getenv("MW2COOP_FLASH_OFF") != NULL; // (QA: the flash where the game puts it)
-	if (!r || !out || !original || off)
-		return r;
-	const float k = weapon_k(*(volatile float *)(base + XR(REF_WF_CG) + WF_ADS_OFFSET), native_live_ctx());
-	if (k == 0.0f || fabsf(k - 1.0f) < 0.001f)
-		return r;
-	const float *rd = (const float *)(base + XR(REF_WF_REFDEF)); // origin [0..2], forward [3..5]
-	const float v[3] = {out[0] - rd[0], out[1] - rd[1], out[2] - rd[2]};
-	const float d = v[0] * rd[3] + v[1] * rd[4] + v[2] * rd[5];
-	if (d > 0.0f) {
-		// the depth z/k, but no deeper than FLASH_DEPTH_MAX (or the tag itself): the view flash fades out with its distance from the eye (above); the
-		// sideways offset then keeps the screen place (k * offset / z), and the flash is that much larger than the weapon's scale would make it
-		static float zcap = -1.0f;
-		static int side_keep = -1;
-		if (zcap < 0.0f) { // (QA: MW2COOP_FLASH_ZMAX=<units> another cap, MW2COOP_FLASH_SIDE1=1 the sideways offset kept)
-			const char *e = getenv("MW2COOP_FLASH_ZMAX");
-			zcap = e ? (float)atof(e) : FLASH_DEPTH_MAX;
-			side_keep = getenv("MW2COOP_FLASH_SIDE1") != NULL;
-		}
-		const float zmax = d > zcap ? d : zcap;
-		const float z = d / k < zmax ? d / k : zmax;
-		const float side = side_keep ? 1.0f : k * z / d; // the sideways offset's factor
-		for (int i = 0; i < 3; i++)
-			out[i] = rd[i] + rd[3 + i] * z + (v[i] - rd[3 + i] * d) * side;
-		const LONG n = InterlockedIncrement(&flash_moved);
-		if (fabsf(k - flash_last_k) > 0.01f) { // (the main thread: a line when the scale changes)
-			flash_last_k = k;
-			log_printf("weaponfov: a muzzle flash moved from %.1f to %.1f units in front of the eye, its sideways offset times %.3f (the weapon's scale %.3f; %ld so far)", d,
-				   z, side, k, (long)n);
-		}
-	}
+	char n[72];
+	Sleep(30);
+	snprintf(n, sizeof(n), "%sb", (const char *)name);
+	native_split_active() ? shot_request_present(n) : shot_request(n);
+	Sleep(30);
+	snprintf(n, sizeof(n), "%sc", (const char *)name);
+	native_split_active() ? shot_request_present(n) : shot_request(n);
+	return 0;
+}
+
+static int fx_off = -1, fx_side_keep;
+#ifndef _WIN64
+static int fx_spawning; // 32 bits: FX_PlayBoltedEffect's call of FX_GetBoneOrientation is under way
+static int (*boneorient_original)(int lc, int handle, int bone, float *orient);
+static int fx_bolt_hook(int lc, int handle, int bone, float *orient)
+{
+	fx_spawning = 1;
+	const int r = boneorient_original(lc, handle, bone, orient);
+	fx_spawning = 0;
 	return r;
 }
+#endif
+static float fx_zcap;
+static const char *fx_shot_prefix;
+
+// The main thread (the cgame of the player whose view it is): a bone of the view model as the effects system sees it, its origin moved to the depth the
+// weapon's projection shows it at (z/k along the view's forward axis); `spawn`: an effect is being bolted to it now
+static void fx_bone_move(float *origin, int spawn)
+{
+	if (fx_off < 0) {
+		fx_off = getenv("MW2COOP_FLASH_OFF") != NULL;
+		const char *e = getenv("MW2COOP_FLASH_ZMAX");
+		fx_zcap = e ? (float)atof(e) : 0.0f;
+		fx_side_keep = getenv("MW2COOP_FLASH_SIDE1") != NULL;
+		fx_shot_prefix = getenv("MW2COOP_FLASH_SHOT");
+	}
+	static LONG shots;
+	static DWORD shot_at;
+	int shot_now = 0;
+	if (spawn && fx_shot_prefix && *fx_shot_prefix && GetTickCount() - shot_at > 300) {
+		shot_at = GetTickCount();
+		char name[64];
+		const long sn = (long)InterlockedIncrement(&shots);
+		snprintf(name, sizeof(name), "%s-%ld", fx_shot_prefix, sn);
+		if (native_split_active()) // (the split screen: the composed picture, both views)
+			shot_request_present(name);
+		else
+			shot_request(name);
+		lstrcpynA(flash_later_name, name, sizeof(flash_later_name));
+		HANDLE t = CreateThread(NULL, 0, flash_later_shot, flash_later_name, 0, NULL);
+		if (t)
+			CloseHandle(t);
+		shot_now = 1;
+	}
+	if (fx_off || !original)
+		return;
+	const float k = weapon_k(*(volatile float *)(base + XR(REF_WF_CG) + WF_ADS_OFFSET), native_live_ctx());
+	if (k == 0.0f || fabsf(k - 1.0f) < 0.001f)
+		return;
+	const float *rd = (const float *)(base + XR(REF_WF_REFDEF)); // origin [0..2], forward [3..5]
+	const float v[3] = {origin[0] - rd[0], origin[1] - rd[1], origin[2] - rd[2]};
+	const float d = v[0] * rd[3] + v[1] * rd[4] + v[2] * rd[5];
+	if (d <= 0.0f)
+		return;
+	float z = d / k, side = 1.0f;
+	if (fx_zcap > 0.0f && z > fx_zcap && z > d) { // (QA: a depth limit, the sideways offset then scaled to keep the screen place)
+		z = fx_zcap > d ? fx_zcap : d;
+		side = fx_side_keep ? 1.0f : k * z / d;
+	}
+	const float at[3] = {origin[0], origin[1], origin[2]};
+	for (int i = 0; i < 3; i++)
+		origin[i] = rd[i] + rd[3 + i] * z + (v[i] - rd[3 + i] * d) * side;
+	const LONG n = InterlockedIncrement(&flash_moved);
+	if (shot_now)
+		log_printf("weaponfov: shot frame %ld: a bone of the view model at %.2f %.2f %.2f, moved to %.2f %.2f %.2f; the eye %.2f %.2f %.2f, forward %.4f %.4f %.4f (k %.3f)",
+			   (long)shots, at[0], at[1], at[2], origin[0], origin[1], origin[2], rd[0], rd[1], rd[2], rd[3], rd[4], rd[5], k);
+	if (spawn && fabsf(k - flash_last_k) > 0.01f) { // (a line when the scale changes)
+		flash_last_k = k;
+		log_printf("weaponfov: an effect on the weapon moved from %.1f to %.1f units in front of the eye (the weapon's scale %.3f; %ld bone places moved so far)", d, z, k,
+			   (long)n);
+	}
+}
+
+static int is_view_model_pose(const void *pose)
+{
+	const uint8_t *vm = base + XR(REF_WF_VMPOSE);
+	return pose == vm || pose == vm + WF_VMPOSE2;
+}
+
+// the effects system's call of the bone matrix when it bolts an effect (both builds) and, on 32 bits, in every frame's update too
+static int fx_bone_spawn_hook(void *pose, void *dobj, int bone, float *axis, float *origin)
+{
+	const int r = bone_original(pose, dobj, bone, axis, origin);
+	if (r && origin && is_view_model_pose(pose))
+#ifdef _WIN64
+		fx_bone_move(origin, 1);
+#else
+		fx_bone_move(origin, fx_spawning); // (the frame updates go through the same call)
+#endif
+	return r;
+}
+
+#ifdef _WIN64
+// 64 bits: the bolted effect's frame update has its own call
+static int fx_bone_update_hook(void *pose, void *dobj, int bone, float *axis, float *origin)
+{
+	const int r = bone_original(pose, dobj, bone, axis, origin);
+	if (r && origin && is_view_model_pose(pose))
+		fx_bone_move(origin, 0);
+	return r;
+}
+#endif
 
 // the render thread (or the game's backend thread): the weapon's projection was just made from the view's
 static void post_step(uint8_t *src)
@@ -409,14 +493,31 @@ void weaponfov_install(void)
 	}
 	log_printf("weaponfov: the weapon's projection goes through the mod (cg_weaponFov)");
 	zoom_install();
-	// the muzzle flash: the one call of the tag position in the view flash, checked to be that call
-	int flash = 0;
-	if (addr_resolved(REF_WF_FLASH_CALL) && addr_resolved(REF_WF_TAGPOS) && addr_resolved(REF_WF_REFDEF)) {
-		uint8_t *site = base + XR(REF_WF_FLASH_CALL);
-		if (site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == base + XR(REF_WF_TAGPOS))
-			flash = hook_call(site, (void *)flash_tagpos_hook, (void **)&tagpos_original);
+	// the weapon's effects: the effects system's calls of the bone matrix, each checked to be that call
+	int fx = 0;
+	if (addr_resolved(REF_WF_BONE) && addr_resolved(REF_WF_FX_SPAWN) && addr_resolved(REF_WF_VMPOSE) && addr_resolved(REF_WF_REFDEF)) {
+		uint8_t *bone_fn = base + XR(REF_WF_BONE), *site = base + XR(REF_WF_FX_SPAWN);
+		if (site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == bone_fn)
+			fx = hook_call(site, (void *)fx_bone_spawn_hook, (void **)&bone_original);
+#ifndef _WIN64
+		if (fx && addr_resolved(REF_WF_FX_BOLT) && addr_resolved(REF_WF_FX_BONEORIENT)) { // (only the spawn's mark: the effects move without it)
+			site = base + XR(REF_WF_FX_BOLT);
+			if (site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == base + XR(REF_WF_FX_BONEORIENT))
+				hook_call(site, (void *)fx_bolt_hook, (void **)&boneorient_original);
+		}
+#endif
+#ifdef _WIN64
+		if (fx && addr_resolved(REF_WF_FX_UPDATE)) {
+			void *again = NULL;
+			site = base + XR(REF_WF_FX_UPDATE);
+			if (!(site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == bone_fn && hook_call(site, (void *)fx_bone_update_hook, &again)))
+				fx = 0; // (half of it would bolt a flash to one place and run it at another)
+		} else
+			fx = 0;
+#endif
 	}
-	log_printf("weaponfov: %s", flash ? "the muzzle flash follows cg_weaponFov" : "the view flash's tag position call is not the expected code: the muzzle flash keeps the view's FOV");
+	log_printf("weaponfov: %s", fx ? "the weapon's effects (muzzle flash, smoke, spent cases) follow cg_weaponFov"
+				       : "the effects system's bone calls are not the expected code: the weapon's effects keep the view's FOV");
 }
 
 // the menu tick (main thread): cg_weaponFov once the game's dvars are there; a line in the log when the scale changes
