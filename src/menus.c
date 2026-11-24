@@ -222,6 +222,31 @@ static void log_handler_set(const char *label, const MenuEventHandlerSet *set, i
 }
 #endif
 
+#ifndef _WIN64
+// QA (32 bits): a handler set's scripts, into its if (ConditionalScript: the set, then the expression) and else sets
+static void log_action_set32(const MenuEventHandlerSet *set, int depth)
+{
+	if (!set || !game_mem_readable(set, sizeof(*set)) || depth > 4 || set->count < 1 || set->count > 24 ||
+	    !game_mem_readable(set->handlers, set->count * sizeof(void *)))
+		return;
+	for (int i = 0; i < set->count; i++) {
+		MenuEventHandler *h = set->handlers[i];
+		if (!h || !game_mem_readable(h, sizeof(*h)))
+			continue;
+		if (h->type == 0 && h->data && game_string_readable((const char *)h->data, 8))
+			log_printf("menus:   %*sscript: %.400s", depth * 2, "", (const char *)h->data);
+		else if (h->type == 1 && h->data && game_mem_readable(h->data, 2 * sizeof(void *))) {
+			log_printf("menus:   %*sif:", depth * 2, "");
+			log_action_set32(*(MenuEventHandlerSet **)h->data, depth + 1);
+		} else if (h->type == 2 && h->data) {
+			log_printf("menus:   %*selse:", depth * 2, "");
+			log_action_set32((MenuEventHandlerSet *)h->data, depth + 1);
+		} else
+			log_printf("menus:   %*shandler type %d", depth * 2, "", h->type);
+	}
+}
+#endif
+
 void menus_log_action(const char *menu_name, const char *item_name)
 {
 	uint8_t *menu = ui_find_menu(menu_name);
@@ -237,15 +262,9 @@ void menus_log_action(const char *menu_name, const char *item_name)
 	log_handler_set("action", set, 0);
 	log_handler_set("onFocus", *(MenuEventHandlerSet **)(item + ITEM_ON_FOCUS), 0);
 	log_handler_set("leaveFocus", *(MenuEventHandlerSet **)(item + ITEM_LEAVE_FOCUS), 0);
-	return;
+#else
+	log_action_set32(set, 0);
 #endif
-	for (int i = 0; set && i < set->count && i < 16; i++) {
-		MenuEventHandler *h = set->handlers[i];
-		if (h && h->type == 0 && h->data)
-			log_printf("menus:   script: %.400s", (const char *)h->data);
-		else if (h)
-			log_printf("menus:   handler type %d", h->type);
-	}
 }
 
 // QA: logs the names of the menus the UI has loaded ("!menus").
@@ -972,13 +991,13 @@ static int menu_script_replace_target(MenuEventHandlerSet *set, int depth, const
 			out[n] = 0;
 			h->data = out;
 			done++;
-#ifdef _WIN64
-		} else if (h->type == 1 && h->data && game_mem_readable(h->data, 16)) { // if (expression, set): a readable set at either place is followed
+		} else if (h->type == 1 && h->data && game_mem_readable(h->data, 2 * sizeof(void *))) {
+			// EVENT_IF: ConditionalScript {MenuEventHandlerSet *, Statement_s *} (a readable set at either place is followed). Both builds: the 32-bit build skipped
+			// these, and its main_selection's Campaign card (an if script) kept opening the game's main_text instead of the mod's Campaign page (owner, 2026-11-24)
 			done += menu_script_replace_target(*(MenuEventHandlerSet **)h->data, depth + 1, from, to);
-			done += menu_script_replace_target(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1, from, to);
-		} else if (h->type == 2 && h->data) {
+			done += menu_script_replace_target(*(MenuEventHandlerSet **)((uint8_t *)h->data + sizeof(void *)), depth + 1, from, to);
+		} else if (h->type == 2 && h->data) { // EVENT_ELSE: the else set itself
 			done += menu_script_replace_target((MenuEventHandlerSet *)h->data, depth + 1, from, to);
-#endif
 		}
 	}
 	return done;
@@ -998,14 +1017,12 @@ static int menu_script_has_target(MenuEventHandlerSet *set, int depth, const cha
 			if (script && game_string_readable(script, 8) && strstr(script, needle))
 				return 1;
 		}
-#ifdef _WIN64 // (the brace above was inside this block: the 32-bit build did not compile, nightly of b54776a)
-		else if (h->type == 1 && h->data && game_mem_readable(h->data, 16)) {
+		else if (h->type == 1 && h->data && game_mem_readable(h->data, 2 * sizeof(void *))) { // (EVENT_IF and EVENT_ELSE as in menu_script_replace_target)
 			if (menu_script_has_target(*(MenuEventHandlerSet **)h->data, depth + 1, needle) ||
-			    menu_script_has_target(*(MenuEventHandlerSet **)((uint8_t *)h->data + 8), depth + 1, needle))
+			    menu_script_has_target(*(MenuEventHandlerSet **)((uint8_t *)h->data + sizeof(void *)), depth + 1, needle))
 				return 1;
 		} else if (h->type == 2 && h->data && menu_script_has_target((MenuEventHandlerSet *)h->data, depth + 1, needle))
 			return 1;
-#endif
 	}
 	return 0;
 }
