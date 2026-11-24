@@ -4222,6 +4222,37 @@ static void brief_install(void)
 	log_printf("menus: the briefing of a network co-op waits for the film");
 }
 
+#ifndef _WIN64
+// The 32-bit game (the official exe and iw4x-sp's 1.0.159) tells its host about every console command a network co-op client runs: Cmd_ExecuteString (VA 0x4da360)
+// calls VA 0x4a2950, which queues "nt <command>" (or "n <index>" for one a script waits for with NotifyOnPlayerCommand) as a reliable client command, except for what
+// this test (VA 0x44b6e0, its one caller VA 0x4a2999) leaves out: "profile_*", "updategamerprofile" and "UpdateDvarsFromProfile". The 64-bit exe sends only "n <index>".
+// The mod's own work runs as console commands on the main thread (mw2coop_enh_tick 4 times a second, mw2coop_logo_tick, mw2coop_pause_routes_tick,
+// mw2coop_report_menu, ...), so a client queued about 4 reliable commands a second for its host. While a briefing waits the host runs no server frame and acknowledges
+// none of them: a 28 s wait passed the ring's 128 (EXE_ERR_CLIENT_CMD_OVERFLOW on the client), and after a 10 s wait the client's first messages carried about 50
+// (1.8 KB each), more than the host's input buffer of one game frame (4096 bytes, VA 0x431300) holds when three land in one frame: "Packet is 3290 bytes, unable to add
+// 1649 more" (VA 0x65b397). iw4x-sp sessions broke so right after the briefing, most often after a rejoin (QA rj10/rj11, 2026-11-24). The mod's commands are left out too.
+#define REF_CMD_NOTIFY_TEST 0x4b6e0
+static const uint8_t cmd_notify_test_bytes[] = {0x56, 0x8b, 0x74, 0x24, 0x08, 0x6a, 0x08, 0x68}; // push esi; mov esi, [esp+8]; push 8; push "profile_"
+static unsigned char cmd_notify_test(const char *name)
+{
+	if (!name || !_strnicmp(name, "profile_", 8) || !_stricmp(name, "updategamerprofile") || !_stricmp(name, "UpdateDvarsFromProfile"))
+		return 0;
+	return _strnicmp(name, "mw2coop_", 8) != 0;
+}
+
+static void cmd_notify_install(void)
+{
+	uint8_t *p = base + XR(REF_CMD_NOTIFY_TEST);
+	if (!addr_resolved(REF_CMD_NOTIFY_TEST) || memcmp(p, cmd_notify_test_bytes, sizeof(cmd_notify_test_bytes))) {
+		log_printf("menus: the test of which commands a co-op client tells its host about was not found: the mod's commands go to the host too");
+		return;
+	}
+	// (the one caller pushes the name, tests AL and keeps nothing in ECX or EDX across the call: the original calls two string compares)
+	hook_jump(p, 16, (void *)cmd_notify_test, 0xcc);
+	log_printf("menus: a co-op client keeps the mod's own commands from its host");
+}
+#endif
+
 
 void menus_poll(void)
 {
@@ -4911,6 +4942,9 @@ void menus_install(void)
 	CreateThread(NULL, 0, loading_thread, NULL, 0, NULL);
 	coop_launch_hook();
 	brief_install();
+#ifndef _WIN64
+	cmd_notify_install();
+#endif
 	// devmap is a server command: the console node's function is empty and the command goes on
 	// to this node (Cmd_AddServerCommand in SV_AddOperatorCommands, rva 0x22bef0)
 	cmd_function_t *sv_devmap = (cmd_function_t *)(base + RVA_SV_CMD_DEVMAP);

@@ -486,6 +486,8 @@ static int from_partner(const struct sockaddr *from)
 	return same;
 }
 
+static void hs_sent(const char *buf, int len, const struct sockaddr *to);
+
 static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen)
 {
 	if (len > 4 && *(const unsigned int *)buf == 0xffffffffu)
@@ -523,6 +525,7 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 			log_printf("net: the partner's goodbye to the host after the break is answered in the host's place (RA %u)", seq);
 	}
 	log_packet("send", to, buf, len);
+	hs_sent(buf, len, to);
 	return send_to(s, buf, len, flags, to, tolen);
 }
 
@@ -541,6 +544,101 @@ static int hold_head, hold_count;
 static CRITICAL_SECTION hold_lock;
 
 static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
+
+// Diagnostics of a briefing hold (the iw4x overflow hunt, 2026-11-24): the partner's game packets (not out of band) kept and dropped while the briefing waits, this
+// PC's game packets to the partner meanwhile, and the sizes of the game packets read from and sent to the partner in the 2 s after the hold.
+static struct {
+	LONG kept, dropped, kept_bytes, kept_max, sent, sent_bytes, sent_max;
+	DWORD released;
+	char read_after[400], sent_after[400];
+} hs;
+static CRITICAL_SECTION hs_lock;
+
+static void hs_add(char *list, int len)
+{
+	size_t n = strlen(list);
+	if (n < 380)
+		snprintf(list + n, 400 - n, "%s%d", n ? " " : "", len);
+}
+
+static void hs_sent(const char *buf, int len, const struct sockaddr *to)
+{
+	if (len < 4 || *(const unsigned int *)buf == 0xffffffffu || !from_partner(to))
+		return;
+	EnterCriticalSection(&hs_lock);
+	if (menus_briefing_holds()) {
+		hs.sent++;
+		hs.sent_bytes += len;
+		if (len > hs.sent_max)
+			hs.sent_max = len;
+	} else if (hs.released && GetTickCount() - hs.released < 2000)
+		hs_add(hs.sent_after, len);
+	LeaveCriticalSection(&hs_lock);
+}
+
+static void hs_read(const char *buf, int len, const struct sockaddr *from)
+{
+	if (len < 4 || *(const unsigned int *)buf == 0xffffffffu || !from_partner(from))
+		return;
+	EnterCriticalSection(&hs_lock);
+	if (hs.released && GetTickCount() - hs.released < 2000)
+		hs_add(hs.read_after, len);
+	LeaveCriticalSection(&hs_lock);
+}
+
+// QA: this PC's reliable command ring (the client's commands to its server, resent in every packet until the server has run them): how many wait and the newest texts
+static void hs_ring_log(DWORD now)
+{
+	static DWORD last;
+	static int last_pending = -1;
+	uint8_t *const base = (uint8_t *)GetModuleHandleA(NULL); // (the game image, as menus.c takes it)
+	if (now - last < 1000 || !base)
+		return;
+	last = now;
+#ifdef _WIN64
+	const uint8_t *ring = base + XR(0x545844); // (seq, acknowledged, 128 texts of 0x40 bytes)
+#else
+	const uint8_t *ring = base + XR(0x48c330) + 4;
+#endif
+	const int seq = *(volatile const int *)ring, ack = *(volatile const int *)(ring + 4), pending = seq - ack;
+	if (pending == last_pending || (pending < 4 && last_pending < 4)) {
+		last_pending = pending;
+		return;
+	}
+	last_pending = pending;
+	char t[3][48] = {"", "", ""};
+	for (int i = 0; i < 3 && i < pending; i++) {
+		const char *s = (const char *)ring + 8 + ((seq - i) & 127) * 0x40;
+		int k = 0;
+		for (; k < 47 && s[k]; k++)
+			t[i][k] = s[k] >= 0x20 && s[k] < 0x7f ? s[k] : '?';
+		t[i][k] = 0;
+	}
+	log_printf("net: reliable commands waiting for the server: %d (sequence %d), newest '%s' '%s' '%s'", pending, seq, t[0], t[1], t[2]);
+}
+
+static void hs_tick(int holding)
+{
+	static int was;
+	DWORD now = GetTickCount();
+	hs_ring_log(now);
+	EnterCriticalSection(&hs_lock);
+	if (was && !holding) {
+		log_printf("net: briefing hold over: partner's game packets kept %ld (%ld bytes, largest %ld), dropped %ld; this PC's game packets to the partner %ld (%ld bytes, largest %ld)",
+			   hs.kept, hs.kept_bytes, hs.kept_max, hs.dropped, hs.sent, hs.sent_bytes, hs.sent_max);
+		hs.released = now ? now : 1;
+		hs.read_after[0] = hs.sent_after[0] = 0;
+	}
+	if (holding && !was)
+		hs.kept = hs.dropped = hs.kept_bytes = hs.kept_max = hs.sent = hs.sent_bytes = hs.sent_max = 0;
+	if (hs.released && now - hs.released >= 2000) {
+		log_printf("net: game packets from the partner read in the 2 s after the hold: %s", hs.read_after[0] ? hs.read_after : "none");
+		log_printf("net: game packets to the partner sent in the 2 s after the hold: %s", hs.sent_after[0] ? hs.sent_after : "none");
+		hs.released = 0;
+	}
+	was = holding;
+	LeaveCriticalSection(&hs_lock);
+}
 
 // a packet the game reads next as if it had come from <from> (my_sendto's answer in the host's place)
 static void hold_push(const struct sockaddr *from, int fromlen, const char *data, int len)
@@ -576,11 +674,15 @@ static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
 			hold_head = (hold_head + 1) % HOLD_Q;
 			hold_count--;
 			LeaveCriticalSection(&hold_lock);
+			hs_read(buf, n, from);
 			return n;
 		}
 		LeaveCriticalSection(&hold_lock);
 	}
-	return recv_filtered(s, buf, len, flags, from, fromlen);
+	int r = recv_filtered(s, buf, len, flags, from, fromlen);
+	if (r > 0 && !(flags & MSG_PEEK))
+		hs_read(buf, r, from);
+	return r;
 }
 
 static DWORD WINAPI hold_drain_thread(LPVOID unused)
@@ -588,7 +690,9 @@ static DWORD WINAPI hold_drain_thread(LPVOID unused)
 	(void)unused;
 	for (;;) {
 		Sleep(5);
-		if (!menus_briefing_holds())
+		const int holding = menus_briefing_holds();
+		hs_tick(holding);
+		if (!holding)
 			continue;
 		EnterCriticalSection(&peer_lock);
 		SOCKET s = peer_socket;
@@ -607,6 +711,14 @@ static DWORD WINAPI hold_drain_thread(LPVOID unused)
 			if (hold_count == HOLD_Q || (!oob && hold_count >= 64)) { // drop the oldest
 				hold_head = (hold_head + 1) % HOLD_Q;
 				hold_count--;
+				if (!oob)
+					InterlockedIncrement(&hs.dropped);
+			}
+			if (!oob) {
+				InterlockedIncrement(&hs.kept);
+				InterlockedExchangeAdd(&hs.kept_bytes, r);
+				if (r > hs.kept_max)
+					hs.kept_max = r;
 			}
 			held_packet_t *h = &hold_q[(hold_head + hold_count) % HOLD_Q];
 			h->len = r;
@@ -762,6 +874,7 @@ void net_install(void)
 {
 	InitializeCriticalSection(&peer_lock);
 	InitializeCriticalSection(&hold_lock);
+	InitializeCriticalSection(&hs_lock);
 	CreateThread(NULL, 0, hold_drain_thread, NULL, 0, NULL);
 	lag_install(); // (QA: MW2COOP_QALAG and the others; nothing when unset)
 	relay_install(); // (QA: MW2COOP_QARELAY; nothing when unset)
