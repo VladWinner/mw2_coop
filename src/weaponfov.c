@@ -11,7 +11,11 @@
 // the world.
 //
 // Aiming down the sights: the game narrows the view to the weapon's own ADS field of view and the sights must sit where the game puts them, so k goes back to
-// 1 as the ADS fraction goes to 1 (k = 1 + (k_hip - 1) * (1 - ads)). Known limits: the muzzle flash and the barrel's smoke are sprites drawn with the
+// 1 as the view zooms in (k = 1 + (k_hip - 1) * (1 - zoom)). The zoom is the game's own fraction, the one its view's field of view is blended by: the raw
+// ADS fraction (the weapon on its way to the eye) remapped by the weapon's zoom-in and zoom-out fractions, so the view starts to narrow only once the weapon
+// is part of the way up (64-bit rva 0xc3f70, 32-bit VA 0x41d630: f(cg, weaponDef); every caller passes local client 0's cgame). The mod keeps what that
+// getter returned last (a stub around it); before 2026-11-24 the blend followed the raw fraction and the weapon changed size before the view zoomed (owner:
+// "do it the way the view zooms", after Vlad's CoD UO weapon FOV, which follows the view's field of view). MW2COOP_WF_RAWADS=1: the raw fraction (QA). Known limits: the muzzle flash and the barrel's smoke are sprites drawn with the
 // world's projection, so with a weapon FOV far from the view's they sit off the barrel; the hands of scripted scenes (climbs, the knife fight) are a world
 // model and keep the view's FOV.
 //
@@ -25,11 +29,13 @@
 #include <windows.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "game.h"
 #include "hook.h"
 #include "log.h"
+#include "native.h"
 #include "weaponfov.h"
 
 #ifdef _WIN64
@@ -41,6 +47,8 @@
 #define WF_ADS_OFFSET 0x15c60
 #define WF_FLAGS 0x16b8			   // the source state's depth hack flag: 2 while the weapon's draws are made
 #define WF_MATRIX 0x100			   // the source state's projection (row vectors: clip = v * P)
+#define REF_WF_ZOOM 0xc3f70		   // float zoom(cg, weaponDef): the raw ADS fraction remapped by the weapon's zoom-in/out fractions (+0x448, +0x44c)
+static const uint8_t zoom_head[14] = {0xf3, 0x0f, 0x10, 0x89, 0x60, 0x5c, 0x01, 0x00, 0x0f, 0x57, 0xd2, 0x0f, 0x2f, 0xd1}; // movss xmm1,[rcx+0x15c60]; xorps; comiss
 #else
 #define REF_WF_PROJECTION 0x141310	   // VA 0x541310: the weapon's projection from the view's (source state in EAX)
 #define REF_WF_CG 0x35f2a0		   // VA 0x75f2a0: the cgame's state (local client 0); +0x15c4c is the ADS fraction (0..1)
@@ -48,6 +56,8 @@
 #define WF_ADS_OFFSET 0x15c4c
 #define WF_FLAGS 0x1628			   // the source state's depth hack flag: 2 while the weapon's draws are made
 #define WF_MATRIX 0x100			   // the source state's projection
+#define REF_WF_ZOOM 0x1d630		   // VA 0x41d630, cdecl float zoom(cg, weaponDef) in st0 (the weapon's zoom-in/out fractions at +0x300, +0x304)
+static const uint8_t zoom_head[10] = {0x8b, 0x4c, 0x24, 0x04, 0xd9, 0x81, 0x4c, 0x5c, 0x01, 0x00}; // mov ecx,[esp+4]; fld dword [ecx+0x15c4c]
 #endif
 
 static uint8_t *base;
@@ -55,6 +65,9 @@ static dvar_t *weapon_fov;
 static void *original; // the trampoline (the stub calls through this variable)
 static volatile LONG scaled_count;
 static float last_k = 1.0f;
+static void *zoom_original;		 // the zoom getter's trampoline
+static volatile float zoom_last;	 // what it returned last (the stub writes it)
+static int zoom_hooked;
 
 #ifdef _WIN64
 static float dvar_float(uintptr_t rva_of_pointer, float fallback)
@@ -92,7 +105,14 @@ static void post_step(uint8_t *src)
 	float ads = *(volatile float *)(base + XR(REF_WF_CG) + WF_ADS_OFFSET);
 	if (!(ads >= 0.0f && ads <= 1.0f))
 		ads = 0.0f;
-	float k = 1.0f + (k_hip - 1.0f) * (1.0f - ads);
+	float zoom = ads;
+	if (zoom_hooked && ads > 0.0f && ads < 1.0f && !native_split_active()) { // (the split screen: both players ask the getter in turn, its last answer may be the other's: the raw fraction there)
+		// (at 0 and 1 the getter gives 0 and 1 itself; between them its last answer, this frame's: the view's field of view asks it)
+		zoom = zoom_last;
+		if (!(zoom >= 0.0f && zoom <= 1.0f))
+			zoom = ads;
+	}
+	float k = 1.0f + (k_hip - 1.0f) * (1.0f - zoom);
 	if (k < 0.3f)
 		k = 0.3f;
 	else if (k > 3.0f)
@@ -186,6 +206,76 @@ static uint8_t *make_stub(void)
 }
 #endif
 
+// the zoom getter's stub: the original runs (through the trampoline), its answer is kept in zoom_last and returned; every register is the original's
+#ifdef _WIN64
+static uint8_t *make_zoom_stub(void)
+{
+	uint8_t c[64];
+	size_t n = 0;
+#define B(...)                                                                                                                                                         \
+	do {                                                                                                                                                           \
+		const uint8_t b_[] = {__VA_ARGS__};                                                                                                                    \
+		memcpy(c + n, b_, sizeof(b_));                                                                                                                       \
+		n += sizeof(b_);                                                                                                                                      \
+	} while (0)
+	B(0x50);			    // push rax (entry rsp = 8 mod 16: now 0)
+	B(0x48, 0x83, 0xec, 0x20);	    // sub rsp, 0x20
+	B(0x48, 0xb8);			    // mov rax, &zoom_original
+	const uint64_t orig_var = (uint64_t)(uintptr_t)&zoom_original;
+	memcpy(c + n, &orig_var, 8), n += 8;
+	B(0xff, 0x10);			    // call [rax] (rcx, rdx are the caller's)
+	B(0x48, 0x83, 0xc4, 0x20);	    // add rsp, 0x20
+	B(0x48, 0xb8);			    // mov rax, &zoom_last
+	const uint64_t last_var = (uint64_t)(uintptr_t)&zoom_last;
+	memcpy(c + n, &last_var, 8), n += 8;
+	B(0xf3, 0x0f, 0x11, 0x00);	    // movss [rax], xmm0
+	B(0x58);			    // pop rax
+	B(0xc3);			    // ret
+#undef B
+	return hook_code(c, n);
+}
+#else
+static uint8_t *make_zoom_stub(void)
+{
+	uint8_t c[48];
+	size_t n = 0;
+#define B(...)                                                                                                                                                         \
+	do {                                                                                                                                                           \
+		const uint8_t b_[] = {__VA_ARGS__};                                                                                                                    \
+		memcpy(c + n, b_, sizeof(b_));                                                                                                                       \
+		n += sizeof(b_);                                                                                                                                      \
+	} while (0)
+	B(0xff, 0x74, 0x24, 0x08);	    // push dword [esp+8] (weaponDef)
+	B(0xff, 0x74, 0x24, 0x08);	    // push dword [esp+8] (cg)
+	B(0xff, 0x15);			    // call [&zoom_original]
+	const uint32_t orig_var = (uint32_t)(uintptr_t)&zoom_original;
+	memcpy(c + n, &orig_var, 4), n += 4;
+	B(0x83, 0xc4, 0x08);		    // add esp, 8
+	B(0xd9, 0x15);			    // fst dword [&zoom_last] (st0 stays the answer)
+	const uint32_t last_var = (uint32_t)(uintptr_t)&zoom_last;
+	memcpy(c + n, &last_var, 4), n += 4;
+	B(0xc3);			    // ret
+#undef B
+	return hook_code(c, n);
+}
+#endif
+
+static void zoom_install(void)
+{
+	if (getenv("MW2COOP_WF_RAWADS")) {
+		log_printf("weaponfov: the ADS blend follows the raw ADS fraction (MW2COOP_WF_RAWADS)");
+		return;
+	}
+	uint8_t *stub;
+	if (!addr_resolved(REF_WF_ZOOM) || !(stub = make_zoom_stub()) ||
+	    !hook_function(base + XR(REF_WF_ZOOM), zoom_head, sizeof(zoom_head), stub, &zoom_original)) {
+		log_printf("weaponfov: the game's ADS zoom fraction (rva 0x%x) was not found: the blend follows the raw ADS fraction", (unsigned)REF_WF_ZOOM);
+		return;
+	}
+	zoom_hooked = 1;
+	log_printf("weaponfov: the ADS blend follows the game's zoom fraction");
+}
+
 void weaponfov_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
@@ -208,6 +298,7 @@ void weaponfov_install(void)
 		return;
 	}
 	log_printf("weaponfov: the weapon's projection goes through the mod (cg_weaponFov)");
+	zoom_install();
 }
 
 // the menu tick (main thread): cg_weaponFov once the game's dvars are there; a line in the log when the scale changes
