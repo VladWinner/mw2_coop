@@ -756,6 +756,14 @@ REFERENCE           MW2COOP_VOICE_PARTNER
 LANG_ENGLISH        "Partner"
 LANG_RUSSIAN        "Напарник"
 
+REFERENCE           MW2COOP_CHAT_PROMPT
+LANG_ENGLISH        "Chat:"
+LANG_RUSSIAN        "Чат:"
+
+REFERENCE           MW2COOP_CHAT_LINE_FMT
+LANG_ENGLISH        "^5%s:^7 %s"
+LANG_RUSSIAN        "^5%s:^7 %s"
+
 REFERENCE           MW2COOP_SAVE_NO_PARTNER
 LANG_ENGLISH        "no partner"
 LANG_RUSSIAN        "без напарника"

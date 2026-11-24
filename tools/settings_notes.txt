@@ -39,3 +39,5 @@ voice.mic A part of the microphone's name as Windows lists it (default empty: Wi
 voice.talk_key The key that, held, talks to the partner in network co-op (default CAPSLOCK); the mod binds it to +mw2coop_talk once, when the player's config binds that key to nothing else. Empty: no key is bound.
 voice.volume_pct The partner's voice, 0 to 200 (default 100).
 native.pingmouse The markers' wheel holds the view while it is open: the mouse read of CL_MouseMove is hooked from the start, in network co-op too (default 1). 0: not hooked; the wheel then turns with the view and picks nothing by the mouse.
+chat.enabled The text chat of a network co-op session (default 1): the chat key opens a line in a level, Enter sends it to the partner, both see the lines at the left of the screen. 0: no chat.
+chat.key The key that opens the chat line in network co-op (default T); the mod binds it to mw2coop_chat once, when the player's config binds that key to nothing else. Empty: no key is bound.

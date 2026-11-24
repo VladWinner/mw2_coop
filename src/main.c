@@ -34,6 +34,7 @@
 #include "weaponfov.h"
 #include "markers.h"
 #include "voice.h"
+#include "chat.h"
 #include "saves.h"
 #include "scrdebug.h"
 #include "settings.h"
@@ -104,6 +105,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		weaponfov_install();
 		markers_install();
 		voice_install();
+		chat_install();
 		saves_install();
 		addr_scratch_check("after saves_install");
 		menus_install();

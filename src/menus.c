@@ -62,6 +62,7 @@
 #include "report.h"
 #include "weaponfov.h"
 #include "voice.h"
+#include "chat.h"
 #include "steamnet.h"
 
 // itemDef_t::textRect follows windowDef_t. The cached width/height must be invalidated
@@ -4801,6 +4802,7 @@ static void tick_f(void)
 	report_menu_tick();		       // the pause menu's "Report a bug" (report.c)
 	weaponfov_tick();		       // cg_weaponFov once the game's dvars are there (weaponfov.c)
 	voice_menu_tick();		       // the push-to-talk key bound once (voice.c)
+	chat_menu_tick();		       // the chat key bound once (chat.c)
 	patch_lobby(campaign, spec_split);
 	patch_role_popup(InterlockedCompareExchange(&split_mode, 0, 0) != 0); // (the game's role popup starts our session in a split screen lobby)
 	leave_warning_patch(campaign);

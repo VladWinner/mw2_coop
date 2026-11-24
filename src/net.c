@@ -24,6 +24,7 @@
 #include "rejoin.h"
 #include "report.h"
 #include "voice.h"
+#include "chat.h"
 #include "saves.h"
 #include "steamnet.h"
 
@@ -771,6 +772,12 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 	if (r > 0) {
 		log_packet("recv", from, buf, r);
 		if (from_partner(from)) {
+			static const char chat[] = "\xff\xff\xff\xffmw2coop_t";
+			if (r > (int)sizeof(chat) - 1 && memcmp(buf, chat, sizeof(chat) - 1) == 0) { // (chat.c: a chat line)
+				chat_on_packet(buf, r);
+				WSASetLastError(WSAEWOULDBLOCK);
+				return SOCKET_ERROR;
+			}
 			static const char voice[] = "\xff\xff\xff\xffmw2coop_v";
 			if (r > (int)sizeof(voice) - 1 && memcmp(buf, voice, sizeof(voice) - 1) == 0) { // (voice.c: his voice comes from a thread of its own, so it is not a sign of his game's life)
 				voice_on_packet(buf, r);

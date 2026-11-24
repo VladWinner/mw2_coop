@@ -500,6 +500,12 @@ static const ModString strings[] = {
 	// Напарник
 	{"MW2COOP_VOICE_PARTNER", "\xcd\xe0\xef\xe0\xf0\xed\xe8\xea",
 	 "Partner"},
+	// Чат:
+	{"MW2COOP_CHAT_PROMPT", "\xd7\xe0\xf2:",
+	 "Chat:"},
+	// ^5%s:^7 %s
+	{"MW2COOP_CHAT_LINE_FMT", "^5%s:^7 %s",
+	 "^5%s:^7 %s"},
 	// без напарника
 	{"MW2COOP_SAVE_NO_PARTNER", "\xe1\xe5\xe7 \xed\xe0\xef\xe0\xf0\xed\xe8\xea\xe0",
 	 "no partner"},

@@ -21,6 +21,7 @@
 #include "menus_ui.h"
 #include "scrdebug_stack.h"
 #include "native.h"
+#include "chat.h"
 #include "ping.h"
 #include "console.h"
 #include "control.h"
@@ -3476,6 +3477,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 		log_printf("native: svslice calls in %ld frames: context 0 %ld, context 1 %ld", svslice_draws, svslice_calls[0], svslice_calls[1]);
 #endif
 	cg_draw_hook_inner(local_client, a, b);
+	chat_draw(); // the co-op text chat's open line (chat.c; network co-op only: one cgame draw a frame there)
 	{ // [native] burn=<ms>: busy-wait this long after every cgame draw (QA: does a longer frame alone make the plain game jitter like the split screen?)
 		static int burn = -1;
 		if (burn < 0)

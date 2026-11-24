@@ -88,8 +88,8 @@ static int lan_session(void)
 	return game_is_iw4x() || lan_client || lan_partner;
 }
 
-// the name this PC gives; own: what the game's interface answers (the Steam name)
-static const char *name_for(const char *own)
+// the name this PC gives; own: what the game's interface answers (the Steam name); host: 1 / 0 the PC's part in a session, -1 the party's word for it
+static const char *name_with(const char *own, int host)
 {
 	static char out[NAME_LEN];
 	load();
@@ -98,8 +98,13 @@ static const char *name_for(const char *own)
 	else if (!lan_session() && own && own[0] && strcmp(own, unknown_soldier) != 0)
 		nick_clean(own, out, sizeof(out));
 	else
-		lstrcpynA(out, in_party() && !is_host() ? "Player 2" : "Player 1", sizeof(out));
+		lstrcpynA(out, (host < 0 ? in_party() && !is_host() : !host) ? "Player 2" : "Player 1", sizeof(out));
 	return out;
+}
+
+static const char *name_for(const char *own)
+{
+	return name_with(own, -1);
 }
 
 static const char *THISCALL persona_hook(void *self)
@@ -163,6 +168,11 @@ static int install(void)
 const char *nick_current(void)
 {
 	return name_for(persona_original ? persona_original(steam_friends()) : NULL);
+}
+
+const char *nick_in_session(int host)
+{
+	return name_with(persona_original ? persona_original(steam_friends()) : NULL, host ? 1 : 0);
 }
 
 static void write_slot(int slot, const char *name)

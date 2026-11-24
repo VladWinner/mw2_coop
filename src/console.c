@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "console.h"
+#include "chat.h"
 #include "dx/natboot.h"
 #include "game.h"
 #include "log.h"
@@ -6396,6 +6397,11 @@ static LRESULT CALLBACK console_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
 		LRESULT result = CallWindowProcA(game_proc, h, msg, w, l);
 		console_focus_changed(h, GetForegroundWindow() == h);
 		return result;
+	}
+	if (!is_open) { // the co-op text chat's open line (chat.c) takes the keyboard while the console is closed
+		LRESULT chat_result = 0;
+		if (chat_window_message(h, msg, w, l, &chat_result))
+			return chat_result;
 	}
 	if (is_open) {
 		if (msg == WM_SYSKEYDOWN && (GetKeyState(VK_MENU) & 0x8000) &&
