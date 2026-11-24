@@ -342,7 +342,7 @@ void menus_log_instances(const char *name, const char *mat)
 			continue;
 		int ic = *(int *)(menus[m] + MENU_ITEM_COUNT);
 		uint8_t **items = *(uint8_t ***)(menus[m] + MENU_ITEMS);
-		log_printf("menus: instance %d of %s at %p: %d items, window flags %x", m, name, (void *)menus[m], ic, *(uint32_t *)(menus[m] + 0x50));
+		log_printf("menus: instance %d of %s at %p: %d items, window flags %x", m, name, (void *)menus[m], ic, *(uint32_t *)(menus[m] + ITEM_DYNAMIC_FLAGS));
 		for (int i = 0; i < ic; i++) {
 			uint8_t *mt = *(uint8_t **)(items[i] + ITEM_BACKGROUND_PTR);
 			const char *mn = mt && !IsBadReadPtr(mt, 8) ? *(const char **)mt : NULL;
@@ -1506,7 +1506,7 @@ static void patch_selection_instance(uint8_t *sel, uint8_t *main)
 				label_x[i] = *(float *)(items[at] + ITEM_RECT);
 			}
 		}
-		int visible = (*(uint32_t *)(sel + 0x50) & WINDOW_VISIBLE) != 0;
+		int visible = (*(uint32_t *)(sel + ITEM_DYNAMIC_FLAGS) & WINDOW_VISIBLE) != 0;
 		log_printf("menus: main_selection row instance %p visible %d items %d; Quit draw %.1f hit %.1f w %.1f align %d/%d; buttons present %d/%d/%d drawX %.1f/%.1f/%.1f hitX %.1f/%.1f/%.1f align %d/%d/%d client %d/%d/%d; labels %.1f/%.1f/%.1f/%.1f textAlign 2/2; changed %d added %d focusHooks %d campaign %d",
 			   sel, visible, *(int *)(sel + MENU_ITEM_COUNT), q_draw, q_hit, q_width, q_draw_align, q_hit_align,
 			   present[0], present[1], present[2], draw_x[0], draw_x[1], draw_x[2], hit_x[0], hit_x[1], hit_x[2],
@@ -1555,7 +1555,7 @@ static void selection_logo_tick(void)
 	int count = ui_menu_instances("main_selection", menus, 64);
 	for (int i = 0; i < count; i++) {
 		uint8_t *menu = menus[i];
-		if (!menu || !(*(uint32_t *)(menu + 0x50) & WINDOW_VISIBLE))
+		if (!menu || !(*(uint32_t *)(menu + ITEM_DYNAMIC_FLAGS) & WINDOW_VISIBLE))
 			continue;
 		int focused = selection_focused_card(menu);
 		if (focused)
@@ -1570,10 +1570,11 @@ static void selection_logo_tick(void)
 		log_printf("menus: main_selection focus is %s (local mirror dvar '%s')", labels[last_selected], highlighted);
 		last_logged_selection = last_selected;
 	}
-	int enhanced = last_selected != 3;
+	// the Enhanced logo whatever card has the focus (owner, 2026-11-24: on the Multiplayer card the original came back and "ENHANCED" vanished, a bug to him)
+	const int enhanced = 1;
 	for (int i = 0; i < count; i++) {
 		uint8_t *menu = menus[i];
-		if (!menu || !(*(uint32_t *)(menu + 0x50) & WINDOW_VISIBLE))
+		if (!menu || !(*(uint32_t *)(menu + ITEM_DYNAMIC_FLAGS) & WINDOW_VISIBLE))
 			continue;
 		int n = *(int *)(menu + MENU_ITEM_COUNT);
 		uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);

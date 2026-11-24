@@ -714,9 +714,10 @@ static void run_line(char *line)
 			PostMessageA(game, WM_CLOSE, 0, 0);
 		return;
 	}
-	if (strncmp(line, "!key ", 5) == 0) { // QA: a key press posted to the game window ("!key 1b" is Escape; virtual key code in hex)
-		unsigned vk = 0;
-		if (sscanf(line + 5, "%x", &vk) == 1) {
+	if (strncmp(line, "!key ", 5) == 0) { // QA: a key press posted to the game window ("!key 1b" is Escape; virtual key code in hex; "!key 27 x": an extended key,
+		unsigned vk = 0;                    // the arrows and the like: without the flag the game reads the number pad's key of that scan code)
+		char ext = 0;
+		if (sscanf(line + 5, "%x %c", &vk, &ext) >= 1) {
 			HWND game = NULL;
 			struct find_data {
 				HWND *out;
@@ -724,9 +725,10 @@ static void run_line(char *line)
 			EnumWindows(qa_find_window, (LPARAM)&fd);
 			if (game) {
 				UINT scan = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
-				PostMessageA(game, WM_KEYDOWN, vk, 1 | (scan << 16));
+				const LPARAM x = ext == 'x' ? (1u << 24) : 0;
+				PostMessageA(game, WM_KEYDOWN, vk, 1 | (scan << 16) | x);
 				Sleep(80);
-				PostMessageA(game, WM_KEYUP, vk, 1 | (scan << 16) | (3u << 30));
+				PostMessageA(game, WM_KEYUP, vk, 1 | (scan << 16) | x | (3u << 30));
 				log_printf("control: key %02x posted to the game window", vk);
 			}
 		}
