@@ -11383,6 +11383,11 @@ void *native_ctx_addr(int ctx, unsigned rva)
 
 // weaponfov.c: whose view the render thread is drawing in the mode 11 split screen, 0 or 1 (player 2's renderer frame is the one whose frame data is p2_fd, as the
 // clears tell the halves apart), -1 outside one
+int native_live_ctx(void)
+{
+	return native_active && ctx_on && ctx_current == 1 ? 1 : 0;
+}
+
 int native_render_player(void)
 {
 	if (!native_active || mode != 11 || !split_on || !p2_fd)

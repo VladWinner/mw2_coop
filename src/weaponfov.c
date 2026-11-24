@@ -14,7 +14,7 @@
 // 1 as the view zooms in (k = 1 + (k_hip - 1) * (1 - zoom)). The zoom is the game's own fraction, the one its view's field of view is blended by: the raw
 // ADS fraction (the weapon on its way to the eye) remapped by the weapon's zoom-in and zoom-out fractions, so the view starts to narrow only once the weapon
 // is part of the way up (64-bit rva 0xc3f70, 32-bit VA 0x41d630: f(cg, weaponDef); every caller passes local client 0's cgame). The mod keeps what that
-// getter returned last (a stub around it); before 2026-11-24 the blend followed the raw fraction and the weapon changed size before the view zoomed (owner:
+// getter returned last, for each local client (a stub around it; the split screen asks it for both players in turn); before 2026-11-24 the blend followed the raw fraction and the weapon changed size before the view zoomed (owner:
 // "do it the way the view zooms", after Vlad's CoD UO weapon FOV, which follows the view's field of view). MW2COOP_WF_RAWADS=1: the raw fraction (QA). Known limits: the muzzle flash and the barrel's smoke are sprites drawn with the
 // world's projection, so with a weapon FOV far from the view's they sit off the barrel; the hands of scripted scenes (climbs, the knife fight) are a world
 // model and keep the view's FOV.
@@ -66,7 +66,7 @@ static void *original; // the trampoline (the stub calls through this variable)
 static volatile LONG scaled_count;
 static float last_k = 1.0f;
 static void *zoom_original;		 // the zoom getter's trampoline
-static volatile float zoom_last;	 // what it returned last (the stub writes it)
+static volatile float zoom_last[2]; // what it returned last for each local client (zoom_note, from the stub: the split screen asks it for both players in turn)
 static int zoom_hooked;
 
 #ifdef _WIN64
@@ -110,9 +110,9 @@ static void post_step(uint8_t *src)
 	if (!(ads >= 0.0f && ads <= 1.0f))
 		ads = 0.0f;
 	float zoom = ads;
-	if (zoom_hooked && ads > 0.0f && ads < 1.0f && !native_split_active()) { // (the split screen: both players ask the getter in turn, its last answer may be the other's: the raw fraction there)
-		// (at 0 and 1 the getter gives 0 and 1 itself; between them its last answer, this frame's: the view's field of view asks it)
-		zoom = zoom_last;
+	if (zoom_hooked && ads > 0.0f && ads < 1.0f) {
+		// (at 0 and 1 the getter gives 0 and 1 itself; between them its last answer for the player drawn, this frame's: the view's field of view asks it)
+		zoom = zoom_last[rp == 1 ? 1 : 0];
 		if (!(zoom >= 0.0f && zoom <= 1.0f))
 			zoom = ads;
 	}
@@ -210,11 +210,24 @@ static uint8_t *make_stub(void)
 }
 #endif
 
-// the zoom getter's stub: the original runs (through the trampoline), its answer is kept in zoom_last and returned; every register is the original's
+// the zoom getter's answer, for the local client whose client state is live (the getter runs on the main thread inside that client's view)
+#ifdef _WIN64
+static void zoom_note(float z)
+{
+	zoom_last[native_live_ctx()] = z;
+}
+#else
+static void zoom_note_bits(uint32_t bits) // (32 bits: the answer as its bits, copied as bits: no x87 use while the caller may hold values on that stack)
+{
+	memcpy((void *)&zoom_last[native_live_ctx()], &bits, 4);
+}
+#endif
+
+// the zoom getter's stub: the original runs (through the trampoline), its answer goes to zoom_note and is returned; every register is the original's
 #ifdef _WIN64
 static uint8_t *make_zoom_stub(void)
 {
-	uint8_t c[64];
+	uint8_t c[192];
 	size_t n = 0;
 #define B(...)                                                                                                                                                         \
 	do {                                                                                                                                                           \
@@ -222,26 +235,38 @@ static uint8_t *make_zoom_stub(void)
 		memcpy(c + n, b_, sizeof(b_));                                                                                                                       \
 		n += sizeof(b_);                                                                                                                                      \
 	} while (0)
-	B(0x50);			    // push rax (entry rsp = 8 mod 16: now 0)
-	B(0x48, 0x83, 0xec, 0x20);	    // sub rsp, 0x20
-	B(0x48, 0xb8);			    // mov rax, &zoom_original
+	B(0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x41, 0x52, 0x41, 0x53, 0x50); // push rcx, rdx, r8, r9, r10, r11, rax (entry rsp = 8 mod 16: now 0 mod 16)
+	B(0x48, 0x81, 0xec, 0x80, 0x00, 0x00, 0x00);			    // sub rsp, 0x80 (0x20 home space, 0x60 for xmm0-5)
+	B(0x48, 0xb8);								    // mov rax, &zoom_original
 	const uint64_t orig_var = (uint64_t)(uintptr_t)&zoom_original;
 	memcpy(c + n, &orig_var, 8), n += 8;
-	B(0xff, 0x10);			    // call [rax] (rcx, rdx are the caller's)
-	B(0x48, 0x83, 0xc4, 0x20);	    // add rsp, 0x20
-	B(0x48, 0xb8);			    // mov rax, &zoom_last
-	const uint64_t last_var = (uint64_t)(uintptr_t)&zoom_last;
-	memcpy(c + n, &last_var, 8), n += 8;
-	B(0xf3, 0x0f, 0x11, 0x00);	    // movss [rax], xmm0
-	B(0x58);			    // pop rax
-	B(0xc3);			    // ret
+	B(0xff, 0x10);							    // call [rax] (rcx, rdx are the caller's)
+	B(0xf3, 0x0f, 0x7f, 0x44, 0x24, 0x20);				    // movdqu [rsp+0x20], xmm0 (the answer)
+	B(0xf3, 0x0f, 0x7f, 0x4c, 0x24, 0x30);				    // ... xmm1-5 as the original left them
+	B(0xf3, 0x0f, 0x7f, 0x54, 0x24, 0x40);
+	B(0xf3, 0x0f, 0x7f, 0x5c, 0x24, 0x50);
+	B(0xf3, 0x0f, 0x7f, 0x64, 0x24, 0x60);
+	B(0xf3, 0x0f, 0x7f, 0x6c, 0x24, 0x70);
+	B(0x48, 0xb8);								    // mov rax, zoom_note (its float argument: xmm0)
+	const uint64_t note = (uint64_t)(uintptr_t)zoom_note;
+	memcpy(c + n, &note, 8), n += 8;
+	B(0xff, 0xd0);							    // call rax
+	B(0xf3, 0x0f, 0x6f, 0x44, 0x24, 0x20);				    // movdqu xmm0, [rsp+0x20]
+	B(0xf3, 0x0f, 0x6f, 0x4c, 0x24, 0x30);
+	B(0xf3, 0x0f, 0x6f, 0x54, 0x24, 0x40);
+	B(0xf3, 0x0f, 0x6f, 0x5c, 0x24, 0x50);
+	B(0xf3, 0x0f, 0x6f, 0x64, 0x24, 0x60);
+	B(0xf3, 0x0f, 0x6f, 0x6c, 0x24, 0x70);
+	B(0x48, 0x81, 0xc4, 0x80, 0x00, 0x00, 0x00);			    // add rsp, 0x80
+	B(0x58, 0x41, 0x5b, 0x41, 0x5a, 0x41, 0x59, 0x41, 0x58, 0x5a, 0x59); // pop rax, r11, r10, r9, r8, rdx, rcx
+	B(0xc3);								    // ret
 #undef B
 	return hook_code(c, n);
 }
 #else
 static uint8_t *make_zoom_stub(void)
 {
-	uint8_t c[48];
+	uint8_t c[64];
 	size_t n = 0;
 #define B(...)                                                                                                                                                         \
 	do {                                                                                                                                                           \
@@ -255,9 +280,18 @@ static uint8_t *make_zoom_stub(void)
 	const uint32_t orig_var = (uint32_t)(uintptr_t)&zoom_original;
 	memcpy(c + n, &orig_var, 4), n += 4;
 	B(0x83, 0xc4, 0x08);		    // add esp, 8
-	B(0xd9, 0x15);			    // fst dword [&zoom_last] (st0 stays the answer)
-	const uint32_t last_var = (uint32_t)(uintptr_t)&zoom_last;
-	memcpy(c + n, &last_var, 4), n += 4;
+	B(0x83, 0xec, 0x04);		    // sub esp, 4
+	B(0xd9, 0x1c, 0x24);		    // fstp dword [esp] (the answer off the x87 stack while C runs)
+	B(0x50, 0x51, 0x52);		    // push eax, ecx, edx (the original's, for the caller)
+	B(0xff, 0x74, 0x24, 0x0c);	    // push dword [esp+12] (the answer's bits)
+	B(0xb8);			    // mov eax, zoom_note_bits
+	const uint32_t note = (uint32_t)(uintptr_t)zoom_note_bits;
+	memcpy(c + n, &note, 4), n += 4;
+	B(0xff, 0xd0);			    // call eax
+	B(0x83, 0xc4, 0x04);		    // add esp, 4
+	B(0x5a, 0x59, 0x58);		    // pop edx, ecx, eax
+	B(0xd9, 0x04, 0x24);		    // fld dword [esp] (the answer back in st0)
+	B(0x83, 0xc4, 0x04);		    // add esp, 4
 	B(0xc3);			    // ret
 #undef B
 	return hook_code(c, n);
