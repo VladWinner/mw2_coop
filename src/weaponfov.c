@@ -28,7 +28,8 @@
 // projection (x and y scaled by k) lands where a point at depth z/k with the same x and y lands with the world's, at k times the size: so the bone matrix's
 // origin is moved along the view's forward axis to z/k (the view's origin and axis: the cgame's refdef, 64-bit rva 0x42d310 / 32-bit VA 0x77fae8, forward at
 // +0xc) for the view model's poses only (64-bit rva 0x43b618 and the left hand's 0x43b688; 32-bit VA 0x78d618, 0x78d67c), with the k of the player whose
-// cgame runs. QA switches: MW2COOP_FLASH_OFF=1 the effects where the game puts them; MW2COOP_FLASH_ZMAX=<units> no deeper than that (MW2COOP_FLASH_SIDE1=1:
+// cgame runs. The laser's beam starts at a view model tag the same way (64-bit rva 0xa5860, its bone call at 0xa58d4; 32-bit VA 0x4f2d40, call at 0x4f2dc7):
+// its start is moved too (Exodus' laser designator left a gap to a larger weapon's muzzle). QA switches: MW2COOP_FLASH_OFF=1 the effects where the game puts them; MW2COOP_FLASH_ZMAX=<units> no deeper than that (MW2COOP_FLASH_SIDE1=1:
 // then the sideways offset kept); MW2COOP_FLASH_SHOT=<name> frames <name>-<n>.bmp when an effect is bolted to the view model (at most one in 0.3 s; 32-bit:
 // FX_PlayBoltedEffect's call at VA 0x596063 marks a spawn), 30 and 60 ms later (<n>b, <n>c), its place in the log. Known limits: the hands of scripted scenes (climbs, the knife fight) are a world model and keep the view's
 // FOV.
@@ -67,6 +68,7 @@
 #define REF_WF_BONE 0x9d470		   // int (pose, DObj, bone, axis out, origin out): a bone's world matrix
 #define REF_WF_FX_SPAWN 0x11ddff	   // FX_GetBoneOrientation's call of it (a bolted effect is spawned)
 #define REF_WF_FX_UPDATE 0x12036b	   // the bolted effect's frame update's call of it
+#define REF_WF_LASER 0xa58d4		   // the laser's call of it: the beam's start (rva 0xa5860, tag_laser or tag_flash)
 #define REF_WF_VMPOSE 0x43b618	   // the view model's pose (the left hand's of akimbo at +0x70)
 #define WF_VMPOSE2 0x70
 #define REF_WF_REFDEF 0x42d310	   // the cgame's view origin, then its axis (forward, left, up)
@@ -81,6 +83,7 @@ static const uint8_t zoom_head[14] = {0xf3, 0x0f, 0x10, 0x89, 0x60, 0x5c, 0x01, 
 #define REF_WF_ZOOM 0x1d630		   // VA 0x41d630, cdecl float zoom(cg, weaponDef) in st0 (the weapon's zoom-in/out fractions at +0x300, +0x304)
 #define REF_WF_BONE 0x101070	   // VA 0x501070, cdecl int (pose, DObj, bone, axis out, origin out)
 #define REF_WF_FX_SPAWN 0xfd30a	   // VA 0x4fd30a: FX_GetBoneOrientation's call of it (the spawn and every frame's update go through it)
+#define REF_WF_LASER 0xf2dc7		   // VA 0x4f2dc7: the laser's call of it (VA 0x4f2d40, "Can't draw laser from ent")
 #define REF_WF_FX_BOLT 0x196063	   // VA 0x596063: FX_PlayBoltedEffect's call of FX_GetBoneOrientation (VA 0x4fd2a0): tells a spawn from an update
 #define REF_WF_FX_BONEORIENT 0xfd2a0  // VA 0x4fd2a0, cdecl bool (local client, DObj handle, bone, orientation out)
 #define REF_WF_VMPOSE 0x38d618	   // VA 0x78d618: the view model's pose (the left hand's at +0x64)
@@ -254,16 +257,14 @@ static int fx_bone_spawn_hook(void *pose, void *dobj, int bone, float *axis, flo
 	return r;
 }
 
-#ifdef _WIN64
-// 64 bits: the bolted effect's frame update has its own call
-static int fx_bone_update_hook(void *pose, void *dobj, int bone, float *axis, float *origin)
+// the bolted effect's frame update (64 bits: a call of its own) and the laser's beam start
+static int fx_bone_frame_hook(void *pose, void *dobj, int bone, float *axis, float *origin)
 {
 	const int r = bone_original(pose, dobj, bone, axis, origin);
 	if (r && origin && is_view_model_pose(pose))
 		fx_bone_move(origin, 0);
 	return r;
 }
-#endif
 
 // the render thread (or the game's backend thread): the weapon's projection was just made from the view's
 static void post_step(uint8_t *src)
@@ -510,13 +511,23 @@ void weaponfov_install(void)
 		if (fx && addr_resolved(REF_WF_FX_UPDATE)) {
 			void *again = NULL;
 			site = base + XR(REF_WF_FX_UPDATE);
-			if (!(site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == bone_fn && hook_call(site, (void *)fx_bone_update_hook, &again)))
+			if (!(site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == bone_fn && hook_call(site, (void *)fx_bone_frame_hook, &again)))
 				fx = 0; // (half of it would bolt a flash to one place and run it at another)
 		} else
 			fx = 0;
 #endif
 	}
-	log_printf("weaponfov: %s", fx ? "the weapon's effects (muzzle flash, smoke, spent cases) follow cg_weaponFov"
+	// the laser's beam starts at the weapon's tag too
+	int laser = 0;
+	if (fx && addr_resolved(REF_WF_LASER)) {
+		void *again = NULL;
+		uint8_t *site = base + XR(REF_WF_LASER);
+		if (site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == base + XR(REF_WF_BONE))
+			laser = hook_call(site, (void *)fx_bone_frame_hook, &again);
+	}
+	if (fx && !laser)
+		log_printf("weaponfov: the laser's bone call is not the expected code: the laser starts where the game puts it");
+	log_printf("weaponfov: %s", fx ? "the weapon's effects (muzzle flash, smoke, spent cases, laser) follow cg_weaponFov"
 				       : "the effects system's bone calls are not the expected code: the weapon's effects keep the view's FOV");
 }
 
