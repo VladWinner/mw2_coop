@@ -1570,8 +1570,8 @@ static void selection_logo_tick(void)
 		log_printf("menus: main_selection focus is %s (local mirror dvar '%s')", labels[last_selected], highlighted);
 		last_logged_selection = last_selected;
 	}
-	// the Enhanced logo whatever card has the focus (owner, 2026-11-24: on the Multiplayer card the original came back and "ENHANCED" vanished, a bug to him)
-	const int enhanced = 1;
+	// the Enhanced logo on Campaign and Spec Ops, the game's original on Multiplayer (the mod is not in the multiplayer game; owner, 2026-11-24: kept as Vlad made it)
+	const int enhanced = last_selected != 3;
 	for (int i = 0; i < count; i++) {
 		uint8_t *menu = menus[i];
 		if (!menu || !(*(uint32_t *)(menu + ITEM_DYNAMIC_FLAGS) & WINDOW_VISIBLE))
