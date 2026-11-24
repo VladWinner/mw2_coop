@@ -107,6 +107,9 @@
 //              after another through restarts: both up, not stuck, both can walk, player 1 runs to
 //              the two nearest story triggers and player 2 follows; both frames saved quietly at
 //              each stop (mw2coop\shots, src/shot.c)
+//   barrettpad - (dcburning, start "barrett", native split screen with player 2 on a pad: mw2coop_qa_pad2) player 2 gets on
+//              the Barrett and turns its scope with the right stick a little (a quarter of the way past the dead zone) for
+//              1 s: unzoomed, then zoomed in fully (the left stick forward); the turn in degrees and in screens, frames
 //   betrayal - (estate, start "ending"; MW2COOP_GOD=0, god mode swallows Shepherd's shot) Loose
 //              Ends' ending: both players go through Ghost's drag, the LZ, Shepherd's shot (it hits
 //              both), the body toss and the fire as Roach, at his place
@@ -598,6 +601,9 @@ main()
 			break;
 		case "partnerline":
 			partnerline();
+			break;
+		case "barrettpad":
+			barrettpad();
 			break;
 		case "wheelnew":
 			wheelnew();
@@ -6944,6 +6950,55 @@ qa_shot( label )
 	SetDvar( "mw2coop_qa_shot", level.script + "-" + level.start_point + "-" + label );
 	wait 0.6;
 }
+
+// The Barrett's scope on a pad (issue 28: "the sensitivity was 1000x, a very little movement of the pad moves the aim to the edge of the screen"):
+// player 2 gets on the rifle, the right stick is pushed a little for 1 s; the turn is reported, unzoomed and zoomed in (the left stick forward, as
+// the level teaches), with the scope's field of view (turretScopeZoom), so the turn can be read in screens.
+barrettpad()
+{
+	wait_intro();
+	wait 3;
+	p2 = level.player2;
+	if ( GetDvar( "mw2coop_qa_who" ) == "1" || !isdefined( p2 ) )
+		p2 = level.player;	// (player 1 gets on the rifle instead; his turn is not driven by the QA pad)
+	check( isdefined( p2 ), "the player for the rifle is here" );
+	trigger = GetEnt( "barrett_trigger", "targetname" );
+	check( isdefined( trigger ), "the Barrett's use trigger is here" );
+	p2 SetOrigin( trigger.origin );
+	wait 0.5;
+	trigger notify( "trigger", p2 );
+	wait 3;
+	check( flag( "player_is_on_turret" ), "player 2 is on the Barrett (" + maps\_mw2coop_dcburning::barrett_user() GetEntityNumber() + ")" );
+	SetDvar( "mw2coop_qa_shot", level.script + "-bp-on" );
+	wait 1;
+	barrettpad_turn( p2, "unzoomed", 14000 );
+	if ( GetDvar( "mw2coop_qa_zoomkey" ) == "1" )
+		press( p2, "forward", 3000 );	// (the Forward key, as the keyboard presses it)
+	else
+		SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 1" );	// the left stick forward: the scope zooms in
+	wait 3;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 1" );
+	wait 1;
+	SetDvar( "mw2coop_qa_shot", level.script + "-bp-zoomed" );
+	wait 1;
+	barrettpad_turn( p2, "zoomed", -14000 );	// (the other way: the rifle's arc ends not far to the right)
+	report( "done" );
+}
+
+barrettpad_turn( p, label, rx )
+{
+	a0 = p GetPlayerAngles();
+	SetDvar( "mw2coop_qa_pad2", "0 0 " + rx + " 0 0 0 0 1" );
+	wait 1;
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 1" );
+	wait 0.3;
+	a1 = p GetPlayerAngles();
+	turn = abs( AngleClamp180( a1[ 1 ] - a0[ 1 ] ) );
+	report( "barrettpad " + label + ": the stick a little for 1 s turned the view " + turn + " degrees (cg_fov " + GetDvarFloat( "cg_fov" ) + ")" );
+	SetDvar( "mw2coop_qa_shot", level.script + "-bp-" + label + "-after" );
+	wait 1;
+}
+
 
 // Loose Ends' ending (estate.gsc ending_moments(), maps\_mw2coop_estate): both players go through it
 // as Roach, at the same place, held there (Ghost's drag, the LZ, the body toss); Shepherd's shot

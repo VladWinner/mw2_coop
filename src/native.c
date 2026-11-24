@@ -5820,6 +5820,7 @@ typedef struct {
 } xin_state_t;
 static DWORD(WINAPI *xinput_get)(DWORD, xin_state_t *);
 static int pad_dev[2] = {-1, -1}; // per player: an XInput pad 0-3, or -1 (the keyboard and mouse)
+static float pad_zs_hip[2];       // per player: the game's look sensitivity unzoomed (the pad's turn by the zoom; reset at a level load)
 #define p1pad pad_dev[1]
 typedef struct {
 	int forward, right; // -127..127, for the usercmd of this frame
@@ -6473,7 +6474,32 @@ static void pad_frame_player(int pl, int play)
 	p->forward = (int)(ly * 127.0f);
 	p->right = (int)(lx * 127.0f);
 	const int rt = st.pad.rt > trig, lt = st.pad.lt > trig;
-	const float scale = (lt ? CFG_ONCE("padads", 42) / 100.0f : 1.0f) * o.sens / 3.0f; // sensitivity 3: the speeds of padyaw / padpitch
+	// A zoomed view turns slower, as the game turns the mouse: the game multiplies the mouse's turn by its look sensitivity (64-bit rva 0x533d04, 32-bit VA 0x925c24:
+	// the live client's, written each frame by 0x941b0 from cg's tan(view fov / 2) / tan(32.5), rva 0xbc1e0, the view fov being cg_fov or the zoom's, times cg_fovScale,
+	// cg_playerFovScale0/1 and a split screen adjustment). The pad's turn takes the same against the player's unzoomed view: the largest value seen since the level
+	// loaded while the aim key was up and no scene held the view (a level that starts zoomed keeps the full turn until the player has looked unzoomed once). The aim
+	// key's slower turn (padads) stays as it was where the zoom is less (a rifle's sights); a scope or a scoped turret turns by its zoom. Issue 28 (the official 32-bit
+	// split screen): on the Barrett of Of Their Own Accord a little stick swung the scope to the screen's edge: the stick turned 15 degrees a second there as on foot,
+	// while the game turned the mouse by 0.29 of its unzoomed turn there, by 0.06 zoomed in (QA barrettpad). [native] padzoom=0: a pad turns at one speed, zoomed or not.
+	float zoom_f = 1.0f;
+	if (CFG_ONCE("padzoom", 1)) {
+		const float zs = *(volatile float *)(base + RVA_ACC_PITCH - 0x10);
+		if (!lt && !(*(unsigned *)(base + RVA_PM_FLAGS) & 0x80800) && zs > pad_zs_hip[pl] && zs < 10.0f)
+			pad_zs_hip[pl] = zs;
+		if (zs > 0.0f && pad_zs_hip[pl] > 0.0f)
+			zoom_f = zs / pad_zs_hip[pl];
+		zoom_f = zoom_f > 1.0f ? 1.0f : zoom_f < 0.01f ? 0.01f : zoom_f;
+		static int zoomed_was[2];
+		static int zoom_lines;
+		const int zoomed = zoom_f < 0.4f;
+		if (zoomed != zoomed_was[pl] && zoom_lines < 100) {
+			zoomed_was[pl] = zoomed, zoom_lines++;
+			log_printf("native: pad %d: %s (the game's look sensitivity %.3f, unzoomed %.3f)", pl, zoomed ? "a zoomed view: the stick turns by the zoom" : "the zoom is off", zs,
+				   pad_zs_hip[pl]);
+		}
+	}
+	const float ads_f = lt ? CFG_ONCE("padads", 42) / 100.0f : 1.0f;
+	const float scale = (ads_f < zoom_f ? ads_f : zoom_f) * o.sens / 3.0f; // sensitivity 3: the speeds of padyaw / padpitch
 	float yaw = -rx * (float)CFG_ONCE("padyaw", 180) * scale * dt;                       // left is positive
 	float pitch = ((CFG_ONCE("padinvert", 0) != 0) != o.invert ? 1.0f : -1.0f) * ry * (float)CFG_ONCE("padpitch", 130) * scale * dt; // down is positive
 	// The engine's own look (CL_MouseMove, rva 0xcfcf0; 32-bit VA 0x578fe0) does nothing while the playerstate flag 0x800 is set (a scripted or linked scene: the car ride of Favela, the elevator of the
@@ -9602,10 +9628,14 @@ static void vol_off_hook(int prio, int fade)
 // time since the first (0, or less than 0 when player 2's client time was behind), and the engine sounds started a second time (QA 2026-11-21, Cliffhanger's
 // snowmobiles, sndcount=2: snowmobile_1_idle 642 / 642 starts a second in contexts 0 / 1; Spec Ops engine audit row I). Context 1 skips it: the state is the world's,
 // player 1's view keeps it and player 2's draw reads it. [native] vehupd1=0 off.
+// 32 bits: the call site (VA 0x42771a) lies in 0x418000-0x428000, which the official exe hashes when a turret is used (Turret_Use VA 0x42c911 -> 0x4ca740) and quits
+// with 0x8000dead when it differs: in the split screen every turret ended the game (the Barrett of Of Their Own Accord, QA barrettpad 2026-11-24, issue 28). The
+// callee (VA 0x662730) is hooked instead, and only its call from that site is held back.
 static void (*veh_update_original)(int, void *);
+static uint8_t *veh_update_ret; // the vehicle draw's return address after its call
 static void veh_update_hook(int lc, void *cent)
 {
-	if (ctx_current == 1 && native_active && CFG_ONCE("vehupd1", 1))
+	if (ctx_current == 1 && native_active && CFG_ONCE("vehupd1", 1) && __builtin_return_address(0) == (void *)veh_update_ret)
 		return;
 	veh_update_original(lc, cent);
 }
@@ -9613,10 +9643,14 @@ static void veh_update_install(void)
 {
 #ifdef _WIN64
 	uint8_t *at = base + XR(0x2808c1), *fn = base + XR(0x280fb0);
+	veh_update_ret = at + 5;
+	const int ok = at[0] == 0xe8 && at + 5 + *(const int32_t *)(at + 1) == fn && jhook_call(at, (void *)veh_update_hook, (void **)&veh_update_original);
 #else
 	uint8_t *at = base + XR(0x2771a), *fn = base + XR(0x262730);
+	static const uint8_t head[10] = {0x8b, 0x44, 0x24, 0x04, 0x53, 0x55, 0x8b, 0x6c, 0x24, 0x10}; // mov eax,[esp+4]; push ebx; push ebp; mov ebp,[esp+0x10]
+	veh_update_ret = at + 5;
+	const int ok = at[0] == 0xe8 && at + 5 + *(const int32_t *)(at + 1) == fn && jhook_function(fn, head, sizeof(head), (void *)veh_update_hook, (void **)&veh_update_original);
 #endif
-	const int ok = at[0] == 0xe8 && at + 5 + *(const int32_t *)(at + 1) == fn && jhook_call(at, (void *)veh_update_hook, (void **)&veh_update_original);
 	log_printf("native: the vehicles' client state and engine sounds %s", ok ? "are updated once a frame (context 0)" : "(the call at the vehicle draw) are not as expected: both views update them");
 }
 #ifdef _WIN64
@@ -11195,6 +11229,7 @@ static int text_pad_player(int *tactical)
 static uint8_t *volatile p2_gclient; // player 2's gclient as native_poll_players last saw it
 void native_level_load(void)
 {
+	pad_zs_hip[0] = pad_zs_hip[1] = 0.0f; // (the pad's unzoomed look sensitivity is seen again in the new level)
 #ifdef _WIN64
 	const unsigned ref_clients = 0x19ada98;
 #else

@@ -678,10 +678,28 @@ int saves_supported(void)
 	return supported;
 }
 
+#ifndef _WIN64
+// QA (env MW2COOP_HASHDIFF): the hashed ranges compared with the exe on disk at the start of a level too, from a thread a few seconds after the call
+static DWORD WINAPI hashdiff_later(LPVOID unused)
+{
+	(void)unused;
+	for (int i = 0; i < 6; i++) {
+		Sleep(15000);
+		hash_ranges_diff();
+	}
+	return 0;
+}
+#endif
+
 void saves_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
 #ifndef _WIN64
+	if (GetEnvironmentVariableA("MW2COOP_HASHDIFF", NULL, 0)) {
+		HANDLE t = CreateThread(NULL, 0, hashdiff_later, NULL, 0, NULL);
+		if (t)
+			CloseHandle(t);
+	}
 	// The official 32-bit exe quits with 0x8000dead when it loads a save, in single player too and with no co-op code of ours in the hashed ranges (QA 2026-11-17:
 	// nativesave in split screen and network co-op, and loadgame_continue in plain single player on mw2-32-b, all quit right after G_LoadGame restored the saved
 	// dvars; MW2COOP_HASHDIFF found no differing byte in the four known hashed ranges). Until that is understood the 32-bit builds keep the game's saves off and

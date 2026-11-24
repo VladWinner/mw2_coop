@@ -81,6 +81,7 @@ static const uint8_t zoom_head[14] = {0xf3, 0x0f, 0x10, 0x89, 0x60, 0x5c, 0x01, 
 #define WF_FLAGS 0x1628			   // the source state's depth hack flag: 2 while the weapon's draws are made
 #define WF_MATRIX 0x100			   // the source state's projection
 #define REF_WF_ZOOM 0x1d630		   // VA 0x41d630, cdecl float zoom(cg, weaponDef) in st0 (the weapon's zoom-in/out fractions at +0x300, +0x304)
+#define REF_WF_ZOOM_CALL 0x40dbc	   // VA 0x440dbc: the view's field of view (VA 0x440d20) calls it here; the getter itself lies in a range the official exe hashes
 #define REF_WF_BONE 0x101070	   // VA 0x501070, cdecl int (pose, DObj, bone, axis out, origin out)
 #define REF_WF_FX_SPAWN 0xfd30a	   // VA 0x4fd30a: FX_GetBoneOrientation's call of it (the spawn and every frame's update go through it)
 #define REF_WF_LASER 0xf2dc7		   // VA 0x4f2dc7: the laser's call of it (VA 0x4f2d40, "Can't draw laser from ent")
@@ -462,8 +463,17 @@ static void zoom_install(void)
 		return;
 	}
 	uint8_t *stub;
+#ifdef _WIN64
 	if (!addr_resolved(REF_WF_ZOOM) || !(stub = make_zoom_stub()) ||
 	    !hook_function(base + XR(REF_WF_ZOOM), zoom_head, sizeof(zoom_head), stub, &zoom_original)) {
+#else
+	// 32 bits: not the getter (VA 0x41d630 lies in 0x418000-0x428000, which the official exe hashes when a turret is used, Turret_Use VA 0x42c911 -> 0x4ca740, and
+	// quits with 0x8000dead when it differs: the Barrett of Of Their Own Accord ended the game, QA barrettpad 2026-11-24) but the view field of view's call of it,
+	// which is the one the blend follows; the getter's bytes are only checked
+	uint8_t *site = base + XR(REF_WF_ZOOM_CALL);
+	if (!addr_resolved(REF_WF_ZOOM) || !addr_resolved(REF_WF_ZOOM_CALL) || memcmp(base + XR(REF_WF_ZOOM), zoom_head, sizeof(zoom_head)) || site[0] != 0xe8 ||
+	    site + 5 + *(const int32_t *)(site + 1) != base + XR(REF_WF_ZOOM) || !(stub = make_zoom_stub()) || !hook_call(site, stub, &zoom_original)) {
+#endif
 		log_printf("weaponfov: the game's ADS zoom fraction (rva 0x%x) was not found: the blend follows the raw ADS fraction", (unsigned)REF_WF_ZOOM);
 		return;
 	}
