@@ -17,6 +17,11 @@
 //
 // The hook: 0x4fd00's caller (0x4fd60) goes on using RCX and R8 after the call (the whole-program optimiser's own convention), so the replacement is a small
 // machine code stub that keeps every register, calls the original through the trampoline, then the C step with the source state.
+//
+// The 32-bit game (the official exe and iw4x-sp's 1.0.159, 2026-11-24): the same function at VA 0x541310 (1.0.159 0x541b30), the source state in EAX (the
+// optimiser's own convention again): it copies the view's projection from +0x1390 to +0x100 and, when +0x1628 is 2, puts the weapon's near clip (+0x149c) in.
+// Its callers are VA 0x541360 (the weapon's matrices, while the flag is 2) and a tail jump from the matrix getter VA 0x5415c0. The ADS fraction is the cgame's
+// +0x15c4c (cg VA 0x75f2a0; VA 0x41d630 reads it, the view's field of view at VA 0x440d20 blends with it). cg_fov and cg_fovScale are found by name.
 #include <windows.h>
 #include <math.h>
 #include <stdint.h>
@@ -36,6 +41,14 @@
 #define WF_ADS_OFFSET 0x15c60
 #define WF_FLAGS 0x16b8			   // the source state's depth hack flag: 2 while the weapon's draws are made
 #define WF_MATRIX 0x100			   // the source state's projection (row vectors: clip = v * P)
+#else
+#define REF_WF_PROJECTION 0x141310	   // VA 0x541310: the weapon's projection from the view's (source state in EAX)
+#define REF_WF_CG 0x35f2a0		   // VA 0x75f2a0: the cgame's state (local client 0); +0x15c4c is the ADS fraction (0..1)
+#define REF_WF_REGISTER_FLOAT 0x9f700  // VA 0x49f700, cdecl: dvar_t *Dvar_RegisterFloat(name, value, min, max, flags, description)
+#define WF_ADS_OFFSET 0x15c4c
+#define WF_FLAGS 0x1628			   // the source state's depth hack flag: 2 while the weapon's draws are made
+#define WF_MATRIX 0x100			   // the source state's projection
+#endif
 
 static uint8_t *base;
 static dvar_t *weapon_fov;
@@ -43,11 +56,26 @@ static void *original; // the trampoline (the stub calls through this variable)
 static volatile LONG scaled_count;
 static float last_k = 1.0f;
 
+#ifdef _WIN64
 static float dvar_float(uintptr_t rva_of_pointer, float fallback)
 {
 	dvar_t *d = *(dvar_t **)(base + rva_of_pointer);
 	return d ? d->current.value : fallback;
 }
+
+static float view_fov(void)
+{
+	return dvar_float(XR(REF_WF_FOV_DVAR), 65.0f) * dvar_float(XR(REF_WF_FOVSCALE_DVAR), 1.0f);
+}
+#else
+static dvar_t *fov_dvar, *fovscale_dvar; // (found by name on the main thread, weaponfov_tick)
+
+static float view_fov(void)
+{
+	dvar_t *f = fov_dvar, *s = fovscale_dvar;
+	return (f ? f->current.value : 65.0f) * (s ? s->current.value : 1.0f);
+}
+#endif
 
 // the render thread (or the game's backend thread): the weapon's projection was just made from the view's
 static void post_step(uint8_t *src)
@@ -57,7 +85,7 @@ static void post_step(uint8_t *src)
 	const float g = weapon_fov->current.value;
 	if (g < 1.0f || g > 170.0f)
 		return; // 0: the game's way
-	const float f = dvar_float(XR(REF_WF_FOV_DVAR), 65.0f) * dvar_float(XR(REF_WF_FOVSCALE_DVAR), 1.0f);
+	const float f = view_fov();
 	if (f < 1.0f || f > 170.0f)
 		return;
 	const float k_hip = tanf(f * 3.14159265f / 360.0f) / tanf(g * 3.14159265f / 360.0f);
@@ -76,6 +104,7 @@ static void post_step(uint8_t *src)
 	InterlockedIncrement(&scaled_count);
 }
 
+#ifdef _WIN64
 // the stub: push rcx, rdx, r8-r11, rax; xmm0-5 to the stack; call [original]; keep its rax; rcx = the saved one; call post_step; everything back; ret
 static uint8_t *make_stub(void)
 {
@@ -117,18 +146,65 @@ static uint8_t *make_stub(void)
 #undef B
 	return hook_code(c, n);
 }
+#else
+// the stub: the original runs with the game's EAX; its EAX, ECX and EDX are kept for the caller; the x87 and SSE state is put aside (fxsave) and the
+// x87 stack emptied for the C step (the callers are x87 code that may keep values on that stack across the call); post_step(src); all of it back; ret
+static uint8_t *make_stub(void)
+{
+	uint8_t c[96];
+	size_t n = 0;
+#define B(...)                                                                                                                                                         \
+	do {                                                                                                                                                           \
+		const uint8_t b_[] = {__VA_ARGS__};                                                                                                                    \
+		memcpy(c + n, b_, sizeof(b_));                                                                                                                       \
+		n += sizeof(b_);                                                                                                                                      \
+	} while (0)
+	B(0x55);				 // push ebp
+	B(0x89, 0xe5);				 // mov ebp, esp
+	B(0x50);				 // push eax ([ebp-4]: the source state)
+	B(0xff, 0x15);				 // call [&original]
+	const uint32_t orig_var = (uint32_t)(uintptr_t)&original;
+	memcpy(c + n, &orig_var, 4), n += 4;
+	B(0x50, 0x51, 0x52);			 // push eax, ecx, edx (the original's, for the caller)
+	B(0x81, 0xec, 0x10, 0x02, 0x00, 0x00);	 // sub esp, 0x210
+	B(0x83, 0xe4, 0xf0);			 // and esp, -16
+	B(0x0f, 0xae, 0x04, 0x24);		 // fxsave [esp]
+	B(0xdb, 0xe3);				 // fninit
+	B(0xff, 0x75, 0xfc);			 // push dword [ebp-4]
+	B(0xb8);				 // mov eax, post_step
+	const uint32_t post = (uint32_t)(uintptr_t)post_step;
+	memcpy(c + n, &post, 4), n += 4;
+	B(0xff, 0xd0);				 // call eax
+	B(0x83, 0xc4, 0x04);			 // add esp, 4
+	B(0x0f, 0xae, 0x0c, 0x24);		 // fxrstor [esp]
+	B(0x8d, 0x65, 0xf0);			 // lea esp, [ebp-0x10]
+	B(0x5a, 0x59, 0x58);			 // pop edx, ecx, eax
+	B(0xc9);				 // leave
+	B(0xc3);				 // ret
+#undef B
+	return hook_code(c, n);
+}
+#endif
 
 void weaponfov_install(void)
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
+#ifdef _WIN64
 	if (!addr_resolved(REF_WF_PROJECTION) || !addr_resolved(REF_WF_FOV_DVAR) || !addr_resolved(REF_WF_FOVSCALE_DVAR) || !addr_resolved(REF_WF_CG)) {
 		log_printf("weaponfov: the weapon's projection was not found in this build: no cg_weaponFov");
 		return;
 	}
 	static const uint8_t head[14] = {0x0f, 0x10, 0x81, 0x00, 0x14, 0x00, 0x00, 0x0f, 0x29, 0x81, 0x00, 0x01, 0x00, 0x00}; // movups xmm0,[rcx+0x1400]; movaps [rcx+0x100],xmm0
+#else
+	if (!addr_resolved(REF_WF_PROJECTION) || !addr_resolved(REF_WF_CG)) {
+		log_printf("weaponfov: the weapon's projection was not found in this build: no cg_weaponFov");
+		return;
+	}
+	static const uint8_t head[14] = {0x56, 0x57, 0x8d, 0x90, 0x00, 0x01, 0x00, 0x00, 0x8d, 0xb0, 0x90, 0x13, 0x00, 0x00}; // push esi; push edi; lea edx,[eax+0x100]; lea esi,[eax+0x1390]
+#endif
 	uint8_t *stub = make_stub();
 	if (!stub || !hook_function(base + XR(REF_WF_PROJECTION), head, sizeof(head), stub, &original)) {
-		log_printf("weaponfov: the weapon's projection (0x4fd00) is not the expected code: no cg_weaponFov");
+		log_printf("weaponfov: the weapon's projection (rva 0x%x) is not the expected code: no cg_weaponFov", (unsigned)REF_WF_PROJECTION);
 		return;
 	}
 	log_printf("weaponfov: the weapon's projection goes through the mod (cg_weaponFov)");
@@ -145,18 +221,15 @@ void weaponfov_tick(void)
 				       "The weapon's own field of view (0: the weapon follows the view's, as the game draws it; 65: the console game's)");
 		log_printf("weaponfov: cg_weaponFov registered (%g)", weapon_fov ? weapon_fov->current.value : -1.0f);
 	}
+#ifndef _WIN64
+	if (!fov_dvar)
+		fov_dvar = game_find_dvar("cg_fov");
+	if (!fovscale_dvar)
+		fovscale_dvar = game_find_dvar("cg_fovScale");
+#endif
 	static float told_k = 1.0f;
 	if (fabsf(last_k - told_k) > 0.01f) {
 		told_k = last_k;
 		log_printf("weaponfov: the weapon's projection scaled by %.3f (%ld scaled so far)", last_k, (long)scaled_count);
 	}
 }
-#else
-void weaponfov_install(void)
-{
-}
-
-void weaponfov_tick(void)
-{
-}
-#endif
