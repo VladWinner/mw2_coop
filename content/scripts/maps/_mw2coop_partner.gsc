@@ -116,10 +116,13 @@ ammo_needed()
 	w = self GetCurrentWeapon();
 	if ( !isdefined( w ) || w == "none" || is_down( self ) || self IsLinked() )
 		return false;
+	stock = self GetWeaponAmmoStock( w );
+	if ( stock >= WeaponMaxAmmo( w ) )
+		return false; // (a full reserve takes nothing: asked or not, no offer; QA 2026-11-24: a full partner's "need ammo" cost the giver a magazine for nothing)
 	if ( isdefined( self.mw2coop_ammo_asked ) && GetTime() - self.mw2coop_ammo_asked < 30000 )
 		return true;
 	clip = WeaponClipSize( w );
-	return clip > 0 && self GetWeaponAmmoStock( w ) < clip;
+	return clip > 0 && stock < clip;
 }
 
 ammo_offer()
@@ -172,8 +175,20 @@ ammo_use_watch( taker )
 			giver thread tell( &"MW2COOP_AMMO_NONE" );
 			continue;
 		}
-		giver SetWeaponAmmoStock( gw, have - gclip );
-		taker SetWeaponAmmoStock( tw, taker GetWeaponAmmoStock( tw ) + tclip );
+		// the taker gets what fits in his reserve, up to a magazine, and the giver gives that share of one of his (rounded up)
+		room = WeaponMaxAmmo( tw ) - taker GetWeaponAmmoStock( tw );
+		if ( room <= 0 )
+			continue; // (full: the offer goes away with ammo_needed)
+		got = tclip;
+		if ( got > room )
+			got = room;
+		cost = gclip;
+		if ( got < tclip )
+			cost = int( ( gclip * got + tclip - 1 ) / tclip );
+		giver SetWeaponAmmoStock( gw, have - cost );
+		taker SetWeaponAmmoStock( tw, taker GetWeaponAmmoStock( tw ) + got );
+		gclip = cost;
+		tclip = got;
 		taker.mw2coop_ammo_asked = undefined;
 		iPrintLn( &"MW2COOP_AMMO_GIVEN", name_of( giver ), name_of( taker ) );
 		if ( SoundExists( "weap_pickup" ) )

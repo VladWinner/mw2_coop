@@ -4237,6 +4237,8 @@ static unsigned char cmd_notify_test(const char *name)
 {
 	if (!name || !_strnicmp(name, "profile_", 8) || !_stricmp(name, "updategamerprofile") || !_stricmp(name, "UpdateDvarsFromProfile"))
 		return 0;
+	if (*name == '+' || *name == '-') // (a held key's pair: +mw2coop_talk, -mw2coop_ping)
+		name++;
 	return _strnicmp(name, "mw2coop_", 8) != 0;
 }
 

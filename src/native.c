@@ -11347,10 +11347,15 @@ void native_menu_key(int key)
 	((void (*)(int, int, int, unsigned))(base + XR(0xd0f80)))(0, key, 1, t);
 	((void (*)(int, int, int, unsigned))(base + XR(0xd0f80)))(0, key, 0, t);
 #else
-	if (!key_event_original)
+	// (the key event's hook goes on with the split screen session; outside one, mw2coop_menukey calls the engine's key event itself, VA 0x4d2350, cdecl: QA of a
+	// network pair's menus, 2026-11-24)
+	void (*key_event)(int, int, int, unsigned) = key_event_original;
+	if (!key_event && addr_resolved(0xd2350))
+		key_event = (void (*)(int, int, int, unsigned))(base + XR(0xd2350));
+	if (!key_event)
 		return;
-	key_event_original(0, key, 1, t);
-	key_event_original(0, key, 0, t);
+	key_event(0, key, 1, t);
+	key_event(0, key, 0, t);
 	cbuf_run_now();
 #endif
 }

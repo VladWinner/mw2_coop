@@ -7212,8 +7212,11 @@ wheelnew()
 			player GiveMaxAmmo( level.gunPrimary );
 			player SwitchToWeapon( level.gunPrimary );
 		}
-	if ( isdefined( level.gunPrimary ) )
-		p2 SetWeaponAmmoStock( level.gunPrimary, 0 ); // (room for the magazine he is given)
+	cw = p2 GetCurrentWeapon();
+	if ( isdefined( level.gunPrimary ) && p2 HasWeapon( level.gunPrimary ) )
+		cw = level.gunPrimary; // (S.S.D.D.: the rifle just given, still being switched to)
+	if ( isdefined( cw ) && cw != "none" )
+		p2 SetWeaponAmmoStock( cw, 0 ); // (room for the magazine he is given, whatever the level hands out)
 	wait 1.5;
 	// player 2 500 units in front of player 1 (as partnerline: the start's tent has no room for a trace to find)
 	yaw = p1 GetPlayerAngles()[ 1 ];
@@ -7287,6 +7290,19 @@ wheelnew()
 		p2.mw2coop_ammo_use notify( "trigger", p1 );
 		wait 0.5;
 		check( p2 GetWeaponAmmoStock( w2 ) > before2, "the give itself works when the use entity is triggered (player 2 " + before2 + " -> " + p2 GetWeaponAmmoStock( w2 ) + ")" );
+	}
+	// a full reserve: asked or not, no offer, and a Use takes nothing from the giver (it cost him a magazine for nothing, QA 2026-11-24)
+	if ( w2 != "none" && w1 != "none" )
+	{
+		p2 SetWeaponAmmoStock( w2, WeaponMaxAmmo( w2 ) );
+		p2.mw2coop_ammo_asked = GetTime();
+		wait 0.8;
+		b1 = p1 GetWeaponAmmoStock( w1 );
+		if ( isdefined( p2.mw2coop_ammo_use ) )
+			p2.mw2coop_ammo_use notify( "trigger", p1 );
+		wait 0.5;
+		check( !( p2 maps\_mw2coop_partner::ammo_needed() ), "a full partner is offered no ammo" );
+		check( p1 GetWeaponAmmoStock( w1 ) == b1, "a full partner takes nothing from the giver (player 1 " + b1 + " -> " + p1 GetWeaponAmmoStock( w1 ) + ")" );
 	}
 	report( "done" );
 }
