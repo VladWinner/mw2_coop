@@ -4,6 +4,7 @@
 
 The release notes: the major changes since v1.5.2.
 
+- **The game's own main menu as the front door** (Vlad): its Campaign / Spec Ops / Multiplayer cards, one row of Settings, Credits, the mod's About page and Quit under them, and Campaign opens a page with the co-op rows (network co-op, join, split screen).
 - **Text chat in network co-op**: T opens a line, Enter sends it to your partner; both of you see the lines at the left of the screen.
 - **Push-to-talk voice in network co-op**: hold CapsLock to talk to your partner, no Discord needed.
 - **Markers for the partner**: tap Z (a pad's Back) to mark an enemy, a vehicle, a grenade, a weapon or a place for both of you; hold it for the wheel (enemy, going here, wait here, danger, on me, need ammo and more). The partner's own marker and the wheel's markers show the distance in metres.
