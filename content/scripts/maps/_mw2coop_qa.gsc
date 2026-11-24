@@ -6959,8 +6959,13 @@ barrettpad()
 	wait_intro();
 	wait 3;
 	p2 = level.player2;
+	pad = "mw2coop_qa_pad2";
 	if ( GetDvar( "mw2coop_qa_who" ) == "1" || !isdefined( p2 ) )
-		p2 = level.player;	// (player 1 gets on the rifle instead; his turn is not driven by the QA pad)
+	{
+		p2 = level.player;	// (player 1 gets on the rifle instead: his QA pad, [native] p0pad, or his keyboard with mw2coop_qa_zoomkey)
+		pad = "mw2coop_qa_pad1";
+	}
+	level.mw2coop_bp_pad = pad;
 	check( isdefined( p2 ), "the player for the rifle is here" );
 	trigger = GetEnt( "barrett_trigger", "targetname" );
 	check( isdefined( trigger ), "the Barrett's use trigger is here" );
@@ -6968,29 +6973,37 @@ barrettpad()
 	wait 0.5;
 	trigger notify( "trigger", p2 );
 	wait 3;
-	check( flag( "player_is_on_turret" ), "player 2 is on the Barrett (" + maps\_mw2coop_dcburning::barrett_user() GetEntityNumber() + ")" );
+	check( flag( "player_is_on_turret" ), "the player is on the Barrett (" + maps\_mw2coop_dcburning::barrett_user() GetEntityNumber() + ")" );
 	SetDvar( "mw2coop_qa_shot", level.script + "-bp-on" );
 	wait 1;
 	barrettpad_turn( p2, "unzoomed", 14000 );
 	if ( GetDvar( "mw2coop_qa_zoomkey" ) == "1" )
 		press( p2, "forward", 3000 );	// (the Forward key, as the keyboard presses it)
 	else
-		SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 1" );	// the left stick forward: the scope zooms in
+		SetDvar( pad, "0 32767 0 0 0 0 0 1" );	// the left stick forward: the scope zooms in
 	wait 3;
-	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 1" );
+	SetDvar( pad, "0 0 0 0 0 0 0 1" );
 	wait 1;
 	SetDvar( "mw2coop_qa_shot", level.script + "-bp-zoomed" );
 	wait 1;
 	barrettpad_turn( p2, "zoomed", -14000 );	// (the other way: the rifle's arc ends not far to the right)
+	// zoomed back out: the left stick back
+	SetDvar( pad, "0 -32767 0 0 0 0 0 1" );
+	wait 3;
+	SetDvar( pad, "0 0 0 0 0 0 0 1" );
+	wait 1;
+	SetDvar( "mw2coop_qa_shot", level.script + "-bp-zoomedout" );
+	wait 1;
 	report( "done" );
 }
 
 barrettpad_turn( p, label, rx )
 {
+	pad = level.mw2coop_bp_pad;
 	a0 = p GetPlayerAngles();
-	SetDvar( "mw2coop_qa_pad2", "0 0 " + rx + " 0 0 0 0 1" );
+	SetDvar( pad, "0 0 " + rx + " 0 0 0 0 1" );
 	wait 1;
-	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 1" );
+	SetDvar( pad, "0 0 0 0 0 0 0 1" );
 	wait 0.3;
 	a1 = p GetPlayerAngles();
 	turn = abs( AngleClamp180( a1[ 1 ] - a0[ 1 ] ) );

@@ -5820,7 +5820,7 @@ typedef struct {
 } xin_state_t;
 static DWORD(WINAPI *xinput_get)(DWORD, xin_state_t *);
 static int pad_dev[2] = {-1, -1}; // per player: an XInput pad 0-3, or -1 (the keyboard and mouse)
-static float pad_zs_hip[2];       // per player: the game's look sensitivity unzoomed (the pad's turn by the zoom; reset at a level load)
+static float pad_zs_hip[2];       // per player: the game's look sensitivity for his unzoomed view (the pad's turn by the zoom; logged)
 #define p1pad pad_dev[1]
 typedef struct {
 	int forward, right; // -127..127, for the usercmd of this frame
@@ -6476,16 +6476,23 @@ static void pad_frame_player(int pl, int play)
 	const int rt = st.pad.rt > trig, lt = st.pad.lt > trig;
 	// A zoomed view turns slower, as the game turns the mouse: the game multiplies the mouse's turn by its look sensitivity (64-bit rva 0x533d04, 32-bit VA 0x925c24:
 	// the live client's, written each frame by 0x941b0 from cg's tan(view fov / 2) / tan(32.5), rva 0xbc1e0, the view fov being cg_fov or the zoom's, times cg_fovScale,
-	// cg_playerFovScale0/1 and a split screen adjustment). The pad's turn takes the same against the player's unzoomed view: the largest value seen since the level
-	// loaded while the aim key was up and no scene held the view (a level that starts zoomed keeps the full turn until the player has looked unzoomed once). The aim
-	// key's slower turn (padads) stays as it was where the zoom is less (a rifle's sights); a scope or a scoped turret turns by its zoom. Issue 28 (the official 32-bit
+	// cg_playerFovScale0/1 and a split screen adjustment). The pad's turn takes the same against the player's unzoomed view: the same formula for cg_fov times
+	// cg_fovScale times cg_playerFovScale of his slot (a running maximum of the game's value took a level intro's wider view for the unzoomed one and made every
+	// zoom of that level 30% slower, QA barrettpad on the official 32-bit exe: 1.000 against 0.715). The aim key's slower turn (padads) stays as it was where the zoom is less (a rifle's sights); a scope or a scoped turret turns by its zoom. Issue 28 (the official 32-bit
 	// split screen): on the Barrett of Of Their Own Accord a little stick swung the scope to the screen's edge: the stick turned 15 degrees a second there as on foot,
 	// while the game turned the mouse by 0.29 of its unzoomed turn there, by 0.06 zoomed in (QA barrettpad). [native] padzoom=0: a pad turns at one speed, zoomed or not.
 	float zoom_f = 1.0f;
 	if (CFG_ONCE("padzoom", 1)) {
+		static dvar_t *fov_d, *fovs_d, *pfovs_d[2];
+		if (!fov_d)
+			fov_d = game_find_dvar("cg_fov");
+		if (!fovs_d)
+			fovs_d = game_find_dvar("cg_fovScale");
+		if (!pfovs_d[pl])
+			pfovs_d[pl] = game_find_dvar(pl ? "cg_playerFovScale1" : "cg_playerFovScale0");
+		const float hip = (fov_d ? fov_d->current.value : 65.0f) * (fovs_d ? fovs_d->current.value : 1.0f) * (pfovs_d[pl] ? pfovs_d[pl]->current.value : 1.0f);
 		const float zs = *(volatile float *)(base + RVA_ACC_PITCH - 0x10);
-		if (!lt && !(*(unsigned *)(base + RVA_PM_FLAGS) & 0x80800) && zs > pad_zs_hip[pl] && zs < 10.0f)
-			pad_zs_hip[pl] = zs;
+		pad_zs_hip[pl] = hip > 1.0f && hip < 170.0f ? tanf(hip * 0.0087266463f) / 0.63707024f : 1.0f;
 		if (zs > 0.0f && pad_zs_hip[pl] > 0.0f)
 			zoom_f = zs / pad_zs_hip[pl];
 		zoom_f = zoom_f > 1.0f ? 1.0f : zoom_f < 0.01f ? 0.01f : zoom_f;
@@ -10205,10 +10212,36 @@ static void loop_expire_install32(void)
 	log_printf("native: the looping sounds' expiry %s", jhook_function(base + XR(0x9da00), want, sizeof(want), (void *)loop_expire_hook, (void **)&loop_expire_original)
 		   ? "runs in context 0's frame only" : "(rva 0x9da00) is not as expected: it runs in both views' frames, and the looping streams start again in every frame");
 }
+// 32 bits: the scoped turret's zoom (VA 0x570d80, the cgame frame: cg's turret fov += frame time x the latest usercmd's forwardmove / 127 x the turret's zoom rate,
+// held to its min and max; the Barrett of Of Their Own Accord, "press Forward to zoom") reads the latest usercmd of cg's local client number through the client's
+// arrays (cmdNumber VA 0x4c1200, the command VA 0x4329e0: base + local client x 0xbe9c). Context 1's cg says local client 1, but the client arrays have one element
+// (context 1's statics are swapped into element 0), so player 2's zoom read past them, found no command and never zoomed (QA barrettpad 2026-11-24, a log of what it read: ring
+// forwardmove 127, cg turret fov stayed 20; player 1's pad zoomed it to 2). In context 1 both calls get local client 0. [native] turretcmd1=0: player 2 cannot zoom a turret's scope again.
+static int (*turret_cmdnum_orig)(int);
+static int (*turret_getcmd_orig)(int, unsigned, void *);
+static int turret_cmdnum_hook(int lc)
+{
+	return turret_cmdnum_orig(ctx_current == 1 && native_active ? 0 : lc);
+}
+static int turret_getcmd_hook(int lc, unsigned n, void *out)
+{
+	return turret_getcmd_orig(ctx_current == 1 && native_active ? 0 : lc, n, out);
+}
+static void turret_zoom_install32(void)
+{
+	if (!cfg("turretcmd1", 1))
+		return;
+	uint8_t *a = base + XR(0x170e1c), *b = base + XR(0x170e2b);
+	const int ok = a[0] == 0xe8 && a + 5 + *(const int32_t *)(a + 1) == base + XR(0xc1200) && b[0] == 0xe8 &&
+		       b + 5 + *(const int32_t *)(b + 1) == base + XR(0x329e0) && jhook_call(a, (void *)turret_cmdnum_hook, (void **)&turret_cmdnum_orig) &&
+		       jhook_call(b, (void *)turret_getcmd_hook, (void **)&turret_getcmd_orig);
+	log_printf("native: a scoped turret's zoom %s", ok ? "reads player 2's commands in his context" : "(VA 0x570d80) is not as expected: player 2 cannot zoom a turret's scope");
+}
 static void sound_once_install32(void)
 {
 	loop_expire_install32();
 	veh_update_install();
+	turret_zoom_install32();
 	if (!cfg("evsnd1", 1) && !cfg("sndcount", 0))
 		return;
 	snd_count32 = cfg("sndcount", 0) != 0;
@@ -11229,7 +11262,6 @@ static int text_pad_player(int *tactical)
 static uint8_t *volatile p2_gclient; // player 2's gclient as native_poll_players last saw it
 void native_level_load(void)
 {
-	pad_zs_hip[0] = pad_zs_hip[1] = 0.0f; // (the pad's unzoomed look sensitivity is seen again in the new level)
 #ifdef _WIN64
 	const unsigned ref_clients = 0x19ada98;
 #else
