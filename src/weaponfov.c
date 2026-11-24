@@ -102,7 +102,11 @@ static void post_step(uint8_t *src)
 	if (f < 1.0f || f > 170.0f)
 		return;
 	const float k_hip = tanf(f * 3.14159265f / 360.0f) / tanf(g * 3.14159265f / 360.0f);
-	float ads = *(volatile float *)(base + XR(REF_WF_CG) + WF_ADS_OFFSET);
+	// the split screen: the ADS fraction of the player whose view is being drawn (his context's copy of the cgame), not the live one: player 1 raising his
+	// sights grew player 2's weapon too (QA spwf 2026-11-24, 64-bit and iw4x-sp)
+	const int rp = native_split_active() ? native_render_player() : -1;
+	const volatile float *ap = rp >= 0 ? (const volatile float *)native_ctx_addr(rp, (unsigned)(XR(REF_WF_CG) + WF_ADS_OFFSET)) : NULL;
+	float ads = ap ? *ap : *(volatile float *)(base + XR(REF_WF_CG) + WF_ADS_OFFSET);
 	if (!(ads >= 0.0f && ads <= 1.0f))
 		ads = 0.0f;
 	float zoom = ads;

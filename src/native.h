@@ -26,6 +26,7 @@ int native_split_active(void);
 int native_kb_player(void);
 // Where context ctx (0 player 1, 1 player 2) keeps the bytes the game has at a reference rva of the client statics that a split screen keeps per context; NULL outside a session
 void *native_ctx_addr(int ctx, unsigned rva);
+int native_render_player(void); // whose view the render thread draws in the mode 11 split screen (0, 1), -1 outside one
 // One key press (down and up) through the engine's key event, for the split screen lobby's pad
 void native_menu_key(int key);
 // The Start of a split screen lobby: the game becomes a two local players game; the caller launches the mission. pad: the XInput pad of the second player, -1 none. Returns 1 on success.
