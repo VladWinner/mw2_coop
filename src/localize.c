@@ -461,18 +461,9 @@ static const ModString strings[] = {
 	// Связь с игрой игрока %s прервалась: / ждём, когда лобби хоста снова откроется
 	{"MW2COOP_REJOIN_WAITHOST_FMT", "\xd1\xe2\xff\xe7\xfc \xf1 \xe8\xe3\xf0\xee\xe9 \xe8\xe3\xf0\xee\xea\xe0 %s \xef\xf0\xe5\xf0\xe2\xe0\xeb\xe0\xf1\xfc:\n\xe6\xe4\xb8\xec, \xea\xee\xe3\xe4\xe0 \xeb\xee\xe1\xe1\xe8 \xf5\xee\xf1\xf2\xe0 \xf1\xed\xee\xe2\xe0 \xee\xf2\xea\xf0\xee\xe5\xf2\xf1\xff",
 	 "The connection to %s's game broke off:\nwaiting for the host's lobby to open again"},
-	// Ранен: &&1 м
-	{"MW2COOP_PARTNER_DOWN", "\xd0\xe0\xed\xe5\xed: &&1 \xec",
-	 "Down: &&1 m"},
-	// < &&1 м
-	{"MW2COOP_PARTNER_LEFT", "< &&1 \xec",
-	 "< &&1 m"},
-	// &&1 м >
-	{"MW2COOP_PARTNER_RIGHT", "&&1 \xec >",
-	 "&&1 m >"},
-	// &&1 м сзади
-	{"MW2COOP_PARTNER_BEHIND", "&&1 \xec \xf1\xe7\xe0\xe4\xe8",
-	 "&&1 m behind"},
+	// &&1 м
+	{"MW2COOP_MARKER_DIST", "&&1 \xec",
+	 "&&1 m"},
 	// Нужны патроны
 	{"MW2COOP_PING_W_NEEDAMMO", "\xcd\xf3\xe6\xed\xfb \xef\xe0\xf2\xf0\xee\xed\xfb",
 	 "Need ammo"},

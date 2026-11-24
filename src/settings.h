@@ -16,6 +16,9 @@ int settings_darktitle(void);
 // settings.ini [display] window_fit (default 1): a game window (windowed mode) that would not fit on the screen with its frame gets the largest of the
 // game's resolutions that does (window.c, 64-bit); 0 leaves the size the game picks (r_mode, by default the screen's own).
 int settings_window_fit(void);
+// settings.ini [display] marker_distance (default 1): the partner's marker and the marker wheel's markers show the distance in metres over the icon
+// (markers.c); 0: the icons alone, as the game draws them.
+int settings_marker_distance(void);
 // settings.ini [display] safearea_auto (default 1): on a screen wider than 16:9 the dvar safeArea_horizontal is lowered by 16:9 / the screen's ratio, so the menus keep the 16:9 margins (window.c); 0 leaves it as it is.
 int settings_safearea(void);
 // settings.ini [display] hwgamma (default 1): the game sets the display's hardware gamma ramp from r_gamma (default 0.8, a darker picture than the windowed and borderless modes, which have no ramp) in exclusive full screen; 0 sets r_ignorehwgamma so that full screen looks like them (guards.c).

@@ -33,6 +33,7 @@
 #include "rejoin.h"
 #include "report.h"
 #include "weaponfov.h"
+#include "markers.h"
 #include "voice.h"
 #include "saves.h"
 #include "scrdebug.h"
@@ -275,6 +276,7 @@ static void install_all(void)
 	rejoin_install();
 	report_install();
 	weaponfov_install();
+	markers_install();
 	voice_install();
 	saves_install();
 	addr_scratch_check("after saves_install");

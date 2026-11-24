@@ -15,9 +15,22 @@
 // ADS fraction (the weapon on its way to the eye) remapped by the weapon's zoom-in and zoom-out fractions, so the view starts to narrow only once the weapon
 // is part of the way up (64-bit rva 0xc3f70, 32-bit VA 0x41d630: f(cg, weaponDef); every caller passes local client 0's cgame). The mod keeps what that
 // getter returned last, for each local client (a stub around it; the split screen asks it for both players in turn); before 2026-11-24 the blend followed the raw fraction and the weapon changed size before the view zoomed (owner:
-// "do it the way the view zooms", after Vlad's CoD UO weapon FOV, which follows the view's field of view). MW2COOP_WF_RAWADS=1: the raw fraction (QA). Known limits: the muzzle flash and the barrel's smoke are sprites drawn with the
-// world's projection, so with a weapon FOV far from the view's they sit off the barrel; the hands of scripted scenes (climbs, the knife fight) are a world
-// model and keep the view's FOV.
+// "do it the way the view zooms", after Vlad's CoD UO weapon FOV, which follows the view's field of view). MW2COOP_WF_RAWADS=1: the raw fraction (QA).
+//
+// The muzzle flash (owner 2026-11-24, after the FoV changer of CoD SCZ): an effect drawn with the world's projection, so it does not scale with the weapon.
+// The game places it once, when the shot is fired (64-bit rva 0xc3a00, 32-bit VA 0x573f40: the weapon's view flash effect at the world position of the view
+// model's flash tag, from the tag position function 64-bit rva 0x9d800 / 32-bit VA 0x432ae0 called with the view model's pose), and the effect runs there.
+// A point at view depth z drawn with the weapon's projection (x and y scaled by k) lands where a point at depth z/k with the same x and y lands with the
+// world's, and at k times the size: so that one call's answer is moved along the view's forward axis to z/k (the view's origin and axis: the cgame's
+// refdef, 64-bit rva 0x42d310 / 32-bit VA 0x77fae8, forward at +0xc), with the k of the player whose cgame runs (his ADS fraction and zoom). The flash
+// then sits on the barrel at its size (QA with the effects frozen, fx_freeze 1 right after one shot, Exodus, SCAR-H, the tag 30.9 units ahead: at
+// cg_weaponFov 45 (k 1.54, the usual case: a wide view and the console's weapon) and 75 on every build). The view flash fades out with its distance from
+// the eye: a smaller weapon (k < 1) would push it out of sight (cg_weaponFov 90 at cg_fov 65: 48.5 units, not seen on any build; 64-bit 80 / 85: 40.7
+// faint, 44.4 gone), so it goes no deeper than 36 units (or the tag's own depth) and its sideways offset is scaled to keep its place on the screen; it is
+// then somewhat larger than the weapon's scale (90 at 65: 1.35 times). At 90 the 32-bit games (official and iw4x-sp) showed it on the barrel in three
+// runs of four; the 64-bit one in none, at 31, 33 or 36 units, nor where the game puts it (open, 2026-11-24). Known limits: the hands of scripted scenes
+// (climbs, the knife fight) are a world model and keep the view's FOV. QA switches: MW2COOP_FLASH_OFF=1 the flash where the game puts it,
+// MW2COOP_FLASH_ZMAX=<units> another depth limit, MW2COOP_FLASH_SIDE1=1 the sideways offset kept.
 //
 // The hook: 0x4fd00's caller (0x4fd60) goes on using RCX and R8 after the call (the whole-program optimiser's own convention), so the replacement is a small
 // machine code stub that keeps every register, calls the original through the trampoline, then the C step with the source state.
@@ -48,6 +61,9 @@
 #define WF_FLAGS 0x16b8			   // the source state's depth hack flag: 2 while the weapon's draws are made
 #define WF_MATRIX 0x100			   // the source state's projection (row vectors: clip = v * P)
 #define REF_WF_ZOOM 0xc3f70		   // float zoom(cg, weaponDef): the raw ADS fraction remapped by the weapon's zoom-in/out fractions (+0x448, +0x44c)
+#define REF_WF_FLASH_CALL 0xc3acb	   // the view muzzle flash's call of the tag position (pose = the view model's)
+#define REF_WF_TAGPOS 0x9d800		   // int (pose, dobj, tag, vec3 world position out)
+#define REF_WF_REFDEF 0x42d310	   // the cgame's view origin, then its axis (forward, left, up)
 static const uint8_t zoom_head[14] = {0xf3, 0x0f, 0x10, 0x89, 0x60, 0x5c, 0x01, 0x00, 0x0f, 0x57, 0xd2, 0x0f, 0x2f, 0xd1}; // movss xmm1,[rcx+0x15c60]; xorps; comiss
 #else
 #define REF_WF_PROJECTION 0x141310	   // VA 0x541310: the weapon's projection from the view's (source state in EAX)
@@ -57,6 +73,9 @@ static const uint8_t zoom_head[14] = {0xf3, 0x0f, 0x10, 0x89, 0x60, 0x5c, 0x01, 
 #define WF_FLAGS 0x1628			   // the source state's depth hack flag: 2 while the weapon's draws are made
 #define WF_MATRIX 0x100			   // the source state's projection
 #define REF_WF_ZOOM 0x1d630		   // VA 0x41d630, cdecl float zoom(cg, weaponDef) in st0 (the weapon's zoom-in/out fractions at +0x300, +0x304)
+#define REF_WF_FLASH_CALL 0x173fcd	   // VA 0x573fcd: the view muzzle flash's call of the tag position
+#define REF_WF_TAGPOS 0x32ae0		   // VA 0x432ae0, cdecl int (pose, dobj, tag, vec3 out)
+#define REF_WF_REFDEF 0x37fae8	   // VA 0x77fae8: the view origin, then the axis
 static const uint8_t zoom_head[10] = {0x8b, 0x4c, 0x24, 0x04, 0xd9, 0x81, 0x4c, 0x5c, 0x01, 0x00}; // mov ecx,[esp+4]; fld dword [ecx+0x15c4c]
 #endif
 
@@ -68,6 +87,10 @@ static float last_k = 1.0f;
 static void *zoom_original;		 // the zoom getter's trampoline
 static volatile float zoom_last[2]; // what it returned last for each local client (zoom_note, from the stub: the split screen asks it for both players in turn)
 static int zoom_hooked;
+static int (*tagpos_original)(void *pose, void *dobj, unsigned tag, float *out);
+static volatile LONG flash_moved;
+#define FLASH_DEPTH_MAX 36.0f // units ahead of the eye: deeper, the view flash fades (flash_tagpos_hook)
+static float flash_last_k = 1.0f;
 
 #ifdef _WIN64
 static float dvar_float(uintptr_t rva_of_pointer, float fallback)
@@ -90,29 +113,22 @@ static float view_fov(void)
 }
 #endif
 
-// the render thread (or the game's backend thread): the weapon's projection was just made from the view's
-static void post_step(uint8_t *src)
+// The weapon's scale k for a player (his ADS fraction, the zoom getter's last answer for him), or 0 when cg_weaponFov is 0 (the game's way)
+static float weapon_k(float ads, int player)
 {
-	if (!weapon_fov || *(volatile int *)(src + WF_FLAGS) != 2)
-		return;
-	const float g = weapon_fov->current.value;
+	const float g = weapon_fov ? weapon_fov->current.value : 0.0f;
 	if (g < 1.0f || g > 170.0f)
-		return; // 0: the game's way
+		return 0.0f;
 	const float f = view_fov();
 	if (f < 1.0f || f > 170.0f)
-		return;
+		return 0.0f;
 	const float k_hip = tanf(f * 3.14159265f / 360.0f) / tanf(g * 3.14159265f / 360.0f);
-	// the split screen: the ADS fraction of the player whose view is being drawn (his context's copy of the cgame), not the live one: player 1 raising his
-	// sights grew player 2's weapon too (QA spwf 2026-11-24, 64-bit and iw4x-sp)
-	const int rp = native_split_active() ? native_render_player() : -1;
-	const volatile float *ap = rp >= 0 ? (const volatile float *)native_ctx_addr(rp, (unsigned)(XR(REF_WF_CG) + WF_ADS_OFFSET)) : NULL;
-	float ads = ap ? *ap : *(volatile float *)(base + XR(REF_WF_CG) + WF_ADS_OFFSET);
 	if (!(ads >= 0.0f && ads <= 1.0f))
 		ads = 0.0f;
 	float zoom = ads;
 	if (zoom_hooked && ads > 0.0f && ads < 1.0f) {
 		// (at 0 and 1 the getter gives 0 and 1 itself; between them its last answer for the player drawn, this frame's: the view's field of view asks it)
-		zoom = zoom_last[rp == 1 ? 1 : 0];
+		zoom = zoom_last[player];
 		if (!(zoom >= 0.0f && zoom <= 1.0f))
 			zoom = ads;
 	}
@@ -121,6 +137,62 @@ static void post_step(uint8_t *src)
 		k = 0.3f;
 	else if (k > 3.0f)
 		k = 3.0f;
+	return k;
+}
+
+// The main thread, a shot of the player whose cgame runs: the muzzle flash's place (the view model's flash tag) moved to the depth the weapon's projection
+// shows it at (z/k along the view's forward axis), so the effect sits on the barrel at the weapon's size
+static int flash_tagpos_hook(void *pose, void *dobj, unsigned tag, float *out)
+{
+	const int r = tagpos_original(pose, dobj, tag, out);
+	static int off = -1;
+	if (off < 0)
+		off = getenv("MW2COOP_FLASH_OFF") != NULL; // (QA: the flash where the game puts it)
+	if (!r || !out || !original || off)
+		return r;
+	const float k = weapon_k(*(volatile float *)(base + XR(REF_WF_CG) + WF_ADS_OFFSET), native_live_ctx());
+	if (k == 0.0f || fabsf(k - 1.0f) < 0.001f)
+		return r;
+	const float *rd = (const float *)(base + XR(REF_WF_REFDEF)); // origin [0..2], forward [3..5]
+	const float v[3] = {out[0] - rd[0], out[1] - rd[1], out[2] - rd[2]};
+	const float d = v[0] * rd[3] + v[1] * rd[4] + v[2] * rd[5];
+	if (d > 0.0f) {
+		// the depth z/k, but no deeper than FLASH_DEPTH_MAX (or the tag itself): the view flash fades out with its distance from the eye (above); the
+		// sideways offset then keeps the screen place (k * offset / z), and the flash is that much larger than the weapon's scale would make it
+		static float zcap = -1.0f;
+		static int side_keep = -1;
+		if (zcap < 0.0f) { // (QA: MW2COOP_FLASH_ZMAX=<units> another cap, MW2COOP_FLASH_SIDE1=1 the sideways offset kept)
+			const char *e = getenv("MW2COOP_FLASH_ZMAX");
+			zcap = e ? (float)atof(e) : FLASH_DEPTH_MAX;
+			side_keep = getenv("MW2COOP_FLASH_SIDE1") != NULL;
+		}
+		const float zmax = d > zcap ? d : zcap;
+		const float z = d / k < zmax ? d / k : zmax;
+		const float side = side_keep ? 1.0f : k * z / d; // the sideways offset's factor
+		for (int i = 0; i < 3; i++)
+			out[i] = rd[i] + rd[3 + i] * z + (v[i] - rd[3 + i] * d) * side;
+		const LONG n = InterlockedIncrement(&flash_moved);
+		if (fabsf(k - flash_last_k) > 0.01f) { // (the main thread: a line when the scale changes)
+			flash_last_k = k;
+			log_printf("weaponfov: a muzzle flash moved from %.1f to %.1f units in front of the eye, its sideways offset times %.3f (the weapon's scale %.3f; %ld so far)", d,
+				   z, side, k, (long)n);
+		}
+	}
+	return r;
+}
+
+// the render thread (or the game's backend thread): the weapon's projection was just made from the view's
+static void post_step(uint8_t *src)
+{
+	if (!weapon_fov || *(volatile int *)(src + WF_FLAGS) != 2)
+		return;
+	// the split screen: the ADS fraction of the player whose view is being drawn (his context's copy of the cgame), not the live one: player 1 raising his
+	// sights grew player 2's weapon too (QA spwf 2026-11-24, 64-bit and iw4x-sp)
+	const int rp = native_split_active() ? native_render_player() : -1;
+	const volatile float *ap = rp >= 0 ? (const volatile float *)native_ctx_addr(rp, (unsigned)(XR(REF_WF_CG) + WF_ADS_OFFSET)) : NULL;
+	const float k = weapon_k(ap ? *ap : *(volatile float *)(base + XR(REF_WF_CG) + WF_ADS_OFFSET), rp == 1 ? 1 : 0);
+	if (k == 0.0f)
+		return; // 0: the game's way
 	float *m = (float *)(src + WF_MATRIX);
 	for (int r = 0; r < 4; r++)
 		m[r * 4 + 0] *= k, m[r * 4 + 1] *= k;
@@ -337,6 +409,14 @@ void weaponfov_install(void)
 	}
 	log_printf("weaponfov: the weapon's projection goes through the mod (cg_weaponFov)");
 	zoom_install();
+	// the muzzle flash: the one call of the tag position in the view flash, checked to be that call
+	int flash = 0;
+	if (addr_resolved(REF_WF_FLASH_CALL) && addr_resolved(REF_WF_TAGPOS) && addr_resolved(REF_WF_REFDEF)) {
+		uint8_t *site = base + XR(REF_WF_FLASH_CALL);
+		if (site[0] == 0xe8 && site + 5 + *(const int32_t *)(site + 1) == base + XR(REF_WF_TAGPOS))
+			flash = hook_call(site, (void *)flash_tagpos_hook, (void **)&tagpos_original);
+	}
+	log_printf("weaponfov: %s", flash ? "the muzzle flash follows cg_weaponFov" : "the view flash's tag position call is not the expected code: the muzzle flash keeps the view's FOV");
 }
 
 // the menu tick (main thread): cg_weaponFov once the game's dvars are there; a line in the log when the scale changes

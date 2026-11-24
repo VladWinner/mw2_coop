@@ -704,21 +704,9 @@ REFERENCE           MW2COOP_REJOIN_WAITHOST_FMT
 LANG_ENGLISH        "The connection to %s's game broke off:\nwaiting for the host's lobby to open again"
 LANG_RUSSIAN        "Связь с игрой игрока %s прервалась:\nждём, когда лобби хоста снова откроется"
 
-REFERENCE           MW2COOP_PARTNER_DOWN
-LANG_ENGLISH        "Down: &&1 m"
-LANG_RUSSIAN        "Ранен: &&1 м"
-
-REFERENCE           MW2COOP_PARTNER_LEFT
-LANG_ENGLISH        "< &&1 m"
-LANG_RUSSIAN        "< &&1 м"
-
-REFERENCE           MW2COOP_PARTNER_RIGHT
-LANG_ENGLISH        "&&1 m >"
-LANG_RUSSIAN        "&&1 м >"
-
-REFERENCE           MW2COOP_PARTNER_BEHIND
-LANG_ENGLISH        "&&1 m behind"
-LANG_RUSSIAN        "&&1 м сзади"
+REFERENCE           MW2COOP_MARKER_DIST
+LANG_ENGLISH        "&&1 m"
+LANG_RUSSIAN        "&&1 м"
 
 REFERENCE           MW2COOP_PING_W_NEEDAMMO
 LANG_ENGLISH        "Need ammo"

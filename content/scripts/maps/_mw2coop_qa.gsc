@@ -97,8 +97,8 @@
 //   invertq  - (trainer, start "") the hip fire part: both get the range's rifle, player 1 faces the targets and each target
 //              that pops up is hit for him; the level goes on to the sights training without single player's question
 //              whether to invert the look (it froze player 1 alone)
-//   partnerline - (any map; MW2COOP_GOD=0) the partner's distance by the game's edge marker and "Down: N m" while he is down:
-//              frames with player 2 out of player 1's view, in it, down in it and down out of it
+//   partnerline - (any map; MW2COOP_GOD=0) the partner's distance drawn on the game's marker of him (src/markers.c answers in the log,
+//              "qa: markers <step>: PASS|FAIL"): frames with player 2 out of player 1's view, in it, down in it and down out of it
 //   wheelnew - (any map; Invasion for the voices) the wheel's "on me" brings player 2 beside player 1, and after player 2's
 //              "need ammo" player 1's Use (real input) gives him a magazine from his own reserve
 //   introfreeze - (a map's default start with an intro title) under the title neither player
@@ -7144,9 +7144,10 @@ invertq()
 	report( "done" );
 }
 
-// The partner's distance by the game's edge marker of him, and "Down: N m" while he is down (maps\_mw2coop_partner): player 2 stands 500 units in front of
-// player 1, who looks away (frames: the distance at the edge on player 1's screen), at him (no distance: he is on the screen), then player 2 is downed (the
-// red line over him) and player 1 looks away again (the red line at the edge). Run with MW2COOP_GOD=0 (a down needs damage).
+// The partner's distance on the game's marker of him (src/markers.c draws it with the icon and answers markers_expect() in the log, "qa: markers <step>:
+// PASS|FAIL"): player 2 stands 500 units (13 m) in front of player 1, who looks at him (the game shows no marker of a partner in view, so no distance
+// either), away (the marker at the screen's edge with "13 m"), round (behind him), then player 2 is downed (in view: no marker, the game's "Partner down"
+// line is in the middle) and player 1 looks away again (the health icon at the edge with "13 m"). Run with MW2COOP_GOD=0 (a down needs damage).
 partnerline()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
@@ -7161,18 +7162,17 @@ partnerline()
 	level.player2 SetPlayerAngles( ( 0, yaw + 180, 0 ) );
 	level.player SetPlayerAngles( ( 0, yaw, 0 ) );
 	wait 1;
-	check( isdefined( level.player.mw2coop_partner_side ) && level.player.mw2coop_partner_side == "seen" && !isdefined( level.player.mw2coop_partner_line ),
-		"player 1 looks at player 2: no line (" + level.player.mw2coop_partner_side + ")" );
+	markers_expect( "seen", "coop_player_location", -1, -1 );
 	SetDvar( "mw2coop_qa_shot", level.script + "-pl-seen" );
 	wait 1.5;
 	level.player SetPlayerAngles( ( 0, yaw + 100, 0 ) );	// (turned left: the partner is on his right)
 	wait 1;
-	check( isdefined( level.player.mw2coop_partner_line ) && level.player.mw2coop_partner_side == "right", "player 1 turned left: the line at the right edge (" + level.player.mw2coop_partner_side + ")" );
+	markers_expect( "away", "coop_player_location", 11, 15 );
 	SetDvar( "mw2coop_qa_shot", level.script + "-pl-away" );
 	wait 1.5;
 	level.player SetPlayerAngles( ( 0, yaw + 180, 0 ) );
 	wait 1;
-	check( isdefined( level.player.mw2coop_partner_line ) && level.player.mw2coop_partner_side == "behind", "player 1 turned round: the line says behind (" + level.player.mw2coop_partner_side + ")" );
+	markers_expect( "behind", "coop_player_location", 11, 15 );
 	SetDvar( "mw2coop_qa_shot", level.script + "-pl-behind" );
 	wait 1.5;
 	level.player SetPlayerAngles( ( 0, yaw, 0 ) );
@@ -7181,14 +7181,24 @@ partnerline()
 	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
 	wait 1.5;
 	check( level.player2 ent_flag_exist( "coop_downed" ) && level.player2 ent_flag( "coop_downed" ), "player 2 is down" );
-	check( isdefined( level.player.mw2coop_partner_line ) && level.player.mw2coop_partner_line_down, "player 1's line says player 2 is down" );
+	markers_expect( "down-seen", "hint_health", -1, -1 );
 	SetDvar( "mw2coop_qa_shot", level.script + "-pl-down" );
 	wait 1.5;
 	level.player SetPlayerAngles( ( 0, yaw + 120, 0 ) );
 	wait 1;
+	markers_expect( "down-away", "hint_health", 11, 15 );
 	SetDvar( "mw2coop_qa_shot", level.script + "-pl-downaway" );
 	wait 1.5;
 	report( "done" );
+}
+
+// Asks the mod what the markers' draws show on player 1's screen: src/markers.c answers half a second later in the log, "qa: markers <tag>: PASS|FAIL"
+// (least -1: the icon must not be drawn). The answer is not read back here: a value that differs between the PCs of a network session must not reach the
+// script (the game adds what GetDvar returns to the lockstep state hash, and netwatch then reloads a checkpoint).
+markers_expect( tag, icon, least, most )
+{
+	SetDvar( "mw2coop_qa_markers_expect", tag + " " + icon + " " + least + " " + most );
+	wait 0.8;
 }
 
 // The wheel's "on me" and "need ammo" (maps\_mw2coop_ping, maps\_mw2coop_partner): player 2 is put some way off, player 1 picks "on me" on the wheel (sector 9)
@@ -7266,6 +7276,7 @@ wheelnew()
 	p1 SetPlayerAngles( VectorToAngles( ( p2.origin + ( 0, 0, 40 ) ) - p1 GetEye() ) );
 	wait 1;
 	qa_shot( "wheel-ammohint" );
+	markers_expect( "ammo", "waypoint_ammo", 0, 3 );	// (the marker over player 2's head, 50 units away, with its distance: src/markers.c)
 	held = 0;
 	foreach ( button in StrTok( "activate usereload", " " ) )
 	{

@@ -9,4 +9,5 @@ void netwatch_on_packet(const char *text);	// net.c: "mw2coop_nw <word> [n]" fro
 void netwatch_resync_started(void);		// saves.c: the client got the host's mw2coop_resync
 void netwatch_level_switch(void);		// saves.c: a fast_restart or a map command runs here: the level before it ends
 unsigned netwatch_level_gen(void);		// saves.c: the number of such switches so far
+int netwatch_this_pc_hosts(void);			// 1: this PC hosts the lockstep session (markers.c QA)
 void netwatch_say(const char *text);		// report.c: a line in the game's message window while a level runs (main thread; Windows-1251)

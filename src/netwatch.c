@@ -570,3 +570,8 @@ unsigned netwatch_level_gen(void)
 {
 	return (unsigned)level_gen;
 }
+
+int netwatch_this_pc_hosts(void)
+{
+	return base && base[NW_IS_HOST];
+}

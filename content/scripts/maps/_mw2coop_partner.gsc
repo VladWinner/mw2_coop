@@ -1,21 +1,15 @@
 // The partner's distance, and a mark while he is down (owner 2026-11-23, the night list: "an arrow to the partner at the screen's edge with the distance, when he
-// is not seen; a mark of its own when he is down and needs reviving").
+// is not seen; a mark of its own when he is down and needs reviving"), and the marker wheel's partner orders ("on me", "need ammo").
 //
 // The arrow itself is the game's: maps\_coop gives each player a waypoint of the other (friendlyIcon: the co-op player marker, pinned to the screen's edge and
 // shown only while he is off the screen; the health icon while he is down), and while he is down the game writes "Partner down" with the bleed-out time in
-// the middle. Here each player gets a line with the partner's distance in metres by the edge of the screen on his side while he is out of view ("< 13 m" at
-// the left edge, "13 m >" at the right, "13 m behind" at the bottom), and "Down: 13 m" in red under the game's own line while he is down. (A text pinned to
-// him the way the icon is does not work: the game draws a text waypoint at the screen's top left corner, QA partnerline 2026-11-23.) The line hides where the
-// mod hides the game's marker (the flag coop_show_constant_icon: scenes, the end of a mission) and in menus.
+// the middle. The distance in metres is drawn on that icon by the game's own waypoint text (src/markers.c, owner 2026-11-24: "put the distance on the
+// markers that are there, rather than build extra things"); the edge lines this file drew before ("< 13 m", "13 m >", "13 m behind", "Down: 13 m") are gone.
 #include common_scripts\utility;
 #include maps\_utility;
 
 partner_precache()
 {
-	PrecacheString( &"MW2COOP_PARTNER_LEFT" );
-	PrecacheString( &"MW2COOP_PARTNER_RIGHT" );
-	PrecacheString( &"MW2COOP_PARTNER_BEHIND" );
-	PrecacheString( &"MW2COOP_PARTNER_DOWN" );
 	PrecacheString( &"MW2COOP_AMMO_GIVE_HINT" );
 	PrecacheString( &"MW2COOP_AMMO_GIVEN" );
 	PrecacheString( &"MW2COOP_AMMO_NONE" );
@@ -32,7 +26,6 @@ init()
 		return;
 	foreach ( player in level.players )
 	{
-		player thread partner_line();
 		player thread ammo_offer();
 	}
 }
@@ -200,97 +193,4 @@ ammo_use_watch( taker )
 		maps\_mw2coop_ping::log_line( "ammo: " + name_of( giver ) + " gave " + gclip + " of " + gw + " (" + have + " left before), " + name_of( taker ) + " got " + tclip + " of " + tw + " (" + taker GetWeaponAmmoStock( tw ) + " now), level time " + GetTime() );
 		wait 1;
 	}
-}
-
-// where the partner is for this player: "left", "right", "behind", "seen" (in the view: his name is over him), "down" (the game's own line is in the middle)
-partner_side( other, down )
-{
-	if ( down )
-		return "down";
-	d = other.origin - self.origin;
-	a = AngleClamp180( VectorToAngles( d )[ 1 ] - self GetPlayerAngles()[ 1 ] ); // (positive: to the left)
-	if ( abs( a ) <= 38 )
-		return "seen";
-	if ( abs( a ) >= 140 )
-		return "behind";
-	if ( a > 0 )
-		return "left";
-	return "right";
-}
-
-partner_line()
-{
-	self endon( "death" );
-	other = get_other_player( self );
-	if ( !isdefined( other ) )
-		return;
-	h = undefined;
-	shown = "";
-	for ( ;; )
-	{
-		wait 0.25;
-		if ( !isdefined( other ) || !isalive( other ) )
-			break;
-		show = !flag_exist( "coop_show_constant_icon" ) || flag( "coop_show_constant_icon" );
-		down = other ent_flag_exist( "coop_downed" ) && other ent_flag( "coop_downed" );
-		side = self partner_side( other, down );
-		self.mw2coop_partner_side = side; // (QA partnerline)
-		self.mw2coop_partner_line_down = down;
-		if ( !show || side == "seen" )
-		{
-			if ( isdefined( h ) )
-				h Destroy();
-			h = undefined;
-			shown = "";
-			self.mw2coop_partner_line = undefined;
-			continue;
-		}
-		if ( !isdefined( h ) || shown != side )
-		{
-			if ( isdefined( h ) )
-				h Destroy();
-			h = NewClientHudElem( self );
-			h.font = "default";
-			h.fontscale = 1.3;
-			h.alpha = 0.9;
-			h.hidewheninmenu = true;
-			h.foreground = false;
-			h.vertAlign = "middle";
-			h.alignY = "middle";
-			h.color = ( 0.78, 1, 0.78 );
-			switch ( side )
-			{
-				case "left":
-					h.horzAlign = "left";
-					h.alignX = "left";
-					h.x = 12;
-					h.label = &"MW2COOP_PARTNER_LEFT";
-					break;
-				case "right":
-					h.horzAlign = "right";
-					h.alignX = "right";
-					h.x = -12;
-					h.label = &"MW2COOP_PARTNER_RIGHT";
-					break;
-				case "behind":
-					h.horzAlign = "center";
-					h.alignX = "center";
-					h.y = 120;
-					h.label = &"MW2COOP_PARTNER_BEHIND";
-					break;
-				default: // down: under the game's "Partner down" and its time
-					h.horzAlign = "center";
-					h.alignX = "center";
-					h.y = 165;
-					h.label = &"MW2COOP_PARTNER_DOWN";
-					h.color = ( 1, 0.35, 0.3 );
-					break;
-			}
-			shown = side;
-			self.mw2coop_partner_line = h; // (QA partnerline)
-		}
-		h SetValue( int( Distance( self.origin, other.origin ) * 0.0254 + 0.5 ) ); // (inches to metres)
-	}
-	if ( isdefined( h ) )
-		h Destroy();
 }
