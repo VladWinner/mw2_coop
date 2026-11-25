@@ -5,7 +5,7 @@
 //
 // Three kinds of rows:
 //   - a dvar of the game itself (com_maxfps): the row only shows it;
-//   - a dvar of this page that the game saves in players\config.cfg (the field of view): applied here while the game runs;
+//   - a game dvar with a slider (cg_fov): the slider edits it directly, and the game saves it in players\config.cfg;
 //   - a dvar that mirrors settings.ini: read from the file when the page is made, written back when the player changes it. Some take effect at once (the upscaler's sharpening,
 //     the HUD text sizes: settings.c has setters for them); the rest are read while the graphics device is created, so a change of one of them opens a pop-up that suggests
 //     restarting the game (owner, 2026-11-11: no "(restart)" in the rows' names, a pop-up instead).
@@ -21,7 +21,6 @@
 #include "game.h"
 #include "log.h"
 #include "menus_ui.h"
-#include "native.h"
 #include "settings.h"
 
 #ifdef _WIN64
@@ -59,7 +58,7 @@
 #define ITEM_TYPE_MULTI 12
 
 enum { K_SLIDER, K_YESNO, K_UPSCALER, K_DIRECTX }; // K_UPSCALER and K_DIRECTX: choice rows
-enum { LIVE_NONE, LIVE_FOV, LIVE_SHARP, LIVE_HUDTEXT, LIVE_NAMETAG, LIVE_FALL };
+enum { LIVE_NONE, LIVE_SHARP, LIVE_HUDTEXT, LIVE_NAMETAG, LIVE_FALL };
 // What a row applies to; the page lists the rows by these groups (in this order), each under its name, not by how a change takes effect.
 enum { GROUP_PICTURE, GROUP_WINDOW, GROUP_UPSCALING, GROUP_HUD, GROUP_CONTROLS, GROUP_COOP, GROUP_MOD, GROUPS };
 static const char *const group_names[GROUPS] = {"@MW2COOP_ENH_G_PICTURE", "@MW2COOP_ENH_G_WINDOW", "@MW2COOP_ENH_G_UPSCALING", "@MW2COOP_ENH_G_HUD", "@MW2COOP_ENH_G_CONTROLS", "@MW2COOP_ENH_G_COOP", "@MW2COOP_ENH_G_MOD"};
@@ -79,7 +78,7 @@ typedef struct {
 } opt_t;
 
 static const opt_t opts[] = {
-    {"mw2coop_opt_fov", "@MW2COOP_ENH_FOV", K_SLIDER, 65, 120, 65, NULL, NULL, 1, LIVE_FOV, 0, "Enhanced: field of view in degrees (65: the game's own)", GROUP_PICTURE},
+    {"cg_fov", "@MW2COOP_ENH_FOV", K_SLIDER, 65, 120, 65, NULL, NULL, 0, LIVE_NONE, 0, "Enhanced: the game's field of view in degrees (the cg_fov dvar)", GROUP_PICTURE},
     {"com_maxfps", "@MW2COOP_ENH_MAXFPS", K_SLIDER, 0, 300, 0, NULL, NULL, 0, LIVE_NONE, 0, NULL, GROUP_PICTURE},
 #ifdef _WIN64
     {"mw2coop_opt_upscaler", "@MW2COOP_ENH_UPSCALER", K_UPSCALER, 0, UPSCALERS - 1, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: the upscaler, 0 off, 1 FSR 3, 2 DLSS (next start)", GROUP_UPSCALING},
@@ -158,7 +157,8 @@ static void register_dvars(void)
 {
 	if (registered)
 		return;
-	if (!game_find_dvar("com_maxfps")) // the game's dvar table is not there yet
+	dvar_t *fov = game_find_dvar("cg_fov");
+	if (!game_find_dvar("com_maxfps") || !fov || fov->type != DVAR_TYPE_FLOAT) // wait until the game's dvars are registered
 		return;
 	registered = 1;
 	// on a build whose addresses moved, a register function that was not found is a `ret` block handing back no dvar: the options stay at their defaults, as
@@ -174,8 +174,8 @@ static void register_dvars(void)
 	for (int o = 0; o < OPTS; o++) {
 		const opt_t *t = &opts[o];
 		if (!t->own) {
-			// Engine-owned dvars are only mirrored here; console.c prepares com_maxfps flags
-			// before the page reads or changes it.
+			// Engine-owned dvars are bound directly by the page; console.c prepares com_maxfps
+			// flags before the page reads or changes it.
 			dvars[o] = game_find_dvar(t->dvar);
 			last[o] = value_of(o);
 			continue;
@@ -199,36 +199,9 @@ static void register_dvars(void)
 	log_printf("enhopts: %d options registered (field of view %.0f, sharpening %.0f)", OPTS, value_of(OPT_FOV), is >= 0 ? value_of(is) : -1.0f);
 }
 
-// The field of view: the game's cg_fov is 65 across a 4:3 picture and its scripts write it (and cg_fovScale, at each level load); cg_fovScale multiplies every view's angle, the
-// sights' zoom included, so the wanted angle is held there as want / 65. Not while the picture is split: the split screen has its own scale (native.c).
-static void hold_fov(void)
-{
-	static dvar_t *scale;
-	static int logged, held;
-	const float want = value_of(OPT_FOV);
-	if (native_split_active())
-		return;
-	if (!scale)
-		scale = game_find_dvar("cg_fovScale");
-	if (!scale || scale->type != DVAR_TYPE_FLOAT)
-		return;
-	const float s = want / 65.0f;
-	if (want <= 65.5f) { // the game's own: only undo what this page set
-		if (held) {
-			scale->current.value = 1.0f;
-			scale->modified = 1;
-			held = 0;
-		}
-		return;
-	}
-	if (scale->current.value != s) {
-		scale->current.value = s;
-		scale->modified = 1;
-		held = 1;
-		if (logged++ < 4)
-			log_printf("enhopts: field of view %.0f degrees (cg_fovScale %.3f)", want, s);
-	}
-}
+// The Enhanced page binds its field-of-view slider to the game's cg_fov itself. cg_fovScale remains
+// under the game's control (notably for split screen and scripted views); weaponfov.c reads the live
+// cg_fov * cg_fovScale pair, so its weapon projection follows changes made by this slider too.
 
 // FSR 3 and DLSS run on the Direct3D 12 layer (settings.c switches it on for them, fsr3.c does nothing without it). The two rows follow that: choosing FSR 3 or DLSS sets DirectX to 12,
 // choosing DirectX 9 while one of them is on turns the upscaler off (the plain game needs no layer). The one that was changed last decides.
@@ -256,15 +229,17 @@ static void follow_changes(void)
 	int changed_upscaler = 0, changed_directx = 0;
 	for (int o = 0; o < OPTS; o++) {
 		const opt_t *t = &opts[o];
-		if (!dvars[o] || !t->own)
+		if (!dvars[o])
 			continue;
-		if (t->kind == K_SLIDER && dvars[o]->type == DVAR_TYPE_FLOAT) { // whole numbers: the number beside the bar shows no fractions
+		if (t->kind == K_SLIDER && dvars[o]->type == DVAR_TYPE_FLOAT && t->own) { // whole numbers for our own sliders; engine-owned dvars retain their own updates
 			const float whole = (float)(int)(dvars[o]->current.value + 0.5f);
 			if (whole != dvars[o]->current.value) {
 				dvars[o]->current.value = whole;
 				dvars[o]->modified = 1;
 			}
 		}
+		if (!t->own)
+			continue; // cg_fov is changed by the game's slider itself; only our own dvars need persistence work here
 		float v = value_of(o);
 		if (t->kind != K_YESNO)
 			v = (float)(int)(v + 0.5f); // whole numbers in the file
@@ -717,8 +692,7 @@ static void dim_rows(void)
 	}
 }
 
-// What follows the player's changes, in the menus and in a level alike (a level's frame does not run the menus' tick; the page itself is reached from the main menu: the pause menu's Settings is a copy of the options menu that this page's button is not in, see docs/enhanced-page.md): the keys of the changed
-// rows, the live effects, the field of view, the pop-up after the page was left. Two threads may call it (the menus' tick, the level's poll): one at a time.
+// What follows the player's changes, in the menus and in a level alike (a level's frame does not run the menus' tick; the page itself is reached from the main menu: the pause menu's Settings is a copy of the options menu that this page's button is not in, see docs/enhanced-page.md): settings.ini keys, live effects and the pop-up after the page was left. cg_fov is changed directly by the game's slider. Two threads may call this (the menus' tick, the level's poll): one at a time.
 static void follow_all(void)
 {
 	static volatile LONG busy;
@@ -729,7 +703,6 @@ static void follow_all(void)
 	patch_options();
 	follow_changes();
 	dim_rows();
-	hold_fov();
 	// the page was left (its onClose set mw2coop_enh_left): a row that waits for the next start now differs from what the running game uses -> the pop-up
 	char left[8];
 	if (game_dvar_raw("mw2coop_enh_left", left, sizeof(left)) && left[0] == '1') {
@@ -746,14 +719,13 @@ static void follow_all(void)
 	InterlockedExchange(&busy, 0);
 }
 
-// (the control thread, every 250 ms, also in a level where the menu tick does not run) The field of view is held here; the menu work (the page,
-// the pop-up, the rows: the game's menu list, which a level load rebuilds on the main thread) is asked of the main thread as a command. It was
-// done on this thread and could race the game's own changes of that list (audit 2026-11-18, menus F2).
+// (the control thread, every 250 ms, also in a level where the menu tick does not run) The menu work (the page, the pop-up, the rows: the game's
+// menu list, which a level load rebuilds on the main thread) is asked of the main thread as a command. It was done on this thread and could race
+// the game's own changes of that list (audit 2026-11-18, menus F2). The field-of-view slider edits cg_fov directly; no polling override is needed.
 void enhopts_level_tick(void)
 {
 	if (!registered)
 		return;
-	hold_fov();
 	game_cbuf_addtext("mw2coop_enh_tick\n");
 }
 

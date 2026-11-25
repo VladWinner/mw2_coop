@@ -1,5 +1,6 @@
-// A field of view of its own for the weapon in the player's hands: the dvar cg_weaponFov (Vlad, 0.6.0 ideas; the owner's night list 2026-11-23). 0 (the default)
-// keeps the game's way: the weapon follows the view's field of view; 65 is the console game's weapon whatever the view's FOV; 1..160 any other.
+// A field of view of its own for the weapon in the player's hands: the dvar cg_weaponFov (Vlad, 0.6.0 ideas; the owner's night list 2026-11-23). 65 (the default)
+// gives the weapon the console's field of view; 0 keeps the game's way (the weapon follows the view's field of view); 1..160 any other value. The view FOV
+// is read from the game's cg_fov * cg_fovScale, so the weapon's correction follows the Enhanced page's direct cg_fov slider.
 //
 // How the game draws the weapon (static reading of the 64-bit exe, 2026-11-23): one set of view parameters for the scene; the weapon's draws (the view model,
 // "depth hack") run in the depth range 0..1/64 with a projection of their own that the game derives from the world's at rva 0x4fd00, the only reader of the
@@ -145,12 +146,11 @@ static float weapon_k(float ads, int player)
 		if (!(zoom >= 0.0f && zoom <= 1.0f))
 			zoom = ads;
 	}
-	float k = 1.0f + (k_hip - 1.0f) * (1.0f - zoom);
-	if (k < 0.3f)
-		k = 0.3f;
-	else if (k > 3.0f)
-		k = 3.0f;
-	return k;
+	// Keep the full projection ratio. Capping k (previously to 0.3..3.0) makes the weapon
+	// drift with cg_fov again at the extremes: for cg_weaponFov 65 those caps are reached
+	// at view FOVs of about 21.6 and 124.8 degrees. The game FOV validity checks above
+	// already keep tan() away from its singularities; no arbitrary scale cap is needed.
+	return 1.0f + (k_hip - 1.0f) * (1.0f - zoom);
 }
 
 static char flash_later_name[64];
@@ -546,10 +546,10 @@ void weaponfov_tick(void)
 {
 	if (!base || !original)
 		return;
-	if (!weapon_fov && game_find_dvar("com_maxfps") && addr_resolved(REF_WF_REGISTER_FLOAT)) { // (flags 1: archived, the game saves it in its config)
+	if (!weapon_fov && game_find_dvar("com_maxfps") && addr_resolved(REF_WF_REGISTER_FLOAT)) { // archived in the game's config; 65 is the console-like default
 		dvar_t *(*reg_float)(const char *, float, float, float, unsigned, const char *) = (void *)(base + XR(REF_WF_REGISTER_FLOAT));
-		weapon_fov = reg_float("cg_weaponFov", 0.0f, 0.0f, 160.0f, 1,
-				       "The weapon's own field of view (0: the weapon follows the view's, as the game draws it; 65: the console game's)");
+		weapon_fov = reg_float("cg_weaponFov", 65.0f, 0.0f, 160.0f, 1,
+				       "The weapon's own field of view (65: console-like default; 0: follow the view's field of view)");
 		log_printf("weaponfov: cg_weaponFov registered (%g)", weapon_fov ? weapon_fov->current.value : -1.0f);
 	}
 #ifndef _WIN64

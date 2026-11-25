@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Weapon FOV at extreme view angles:** removed the arbitrary 0.3–3.0 projection-scale clamp. With `cg_weaponFov 65`, the clamp was reached at about 21.6° and 124.8° of effective view FOV, making the weapon start following `cg_fov` again outside that range. The full tangent-based projection ratio is now kept throughout the valid game FOV range.
+- **Field of view:** the Enhanced slider now edits the game's `cg_fov` dvar directly; the separate `mw2coop_opt_fov` dvar and the `cg_fovScale` override are removed. `cg_weaponFov` recalculates its weapon-projection correction from the live `cg_fov * cg_fovScale` and now defaults to 65 (the console-like weapon FOV). The Predator view restores the pilot's previous `cg_fov` after its script reset.
 - **Advanced video menu:** the original MSAA list now includes 8x and 16x, with localized `MENU_8X` and `MENU_16X` labels.
 - **Developer console:** `!`-prefixed diagnostics/control commands from `commands.txt` can be entered directly. Their immediate log output is shown in the custom console even when ordinary mod messages are hidden.
 - **Command history:** Up/Down now browse older and newer commands correctly after loading an entry; prefix-based history search remains available when starting from typed input.
