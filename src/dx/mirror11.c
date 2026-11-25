@@ -210,7 +210,6 @@ ORIG(set_vs_b, HRESULT, (IDirect3DDevice9 *, UINT, const BOOL *, UINT));
 ORIG(set_ps_b, HRESULT, (IDirect3DDevice9 *, UINT, const BOOL *, UINT));
 ORIG(set_stream, HRESULT, (IDirect3DDevice9 *, UINT, IDirect3DVertexBuffer9 *, UINT, UINT));
 ORIG(set_indices, HRESULT, (IDirect3DDevice9 *, IDirect3DIndexBuffer9 *));
-ORIG(get_backbuffer, HRESULT, (IDirect3DDevice9 *, UINT, UINT, D3DBACKBUFFER_TYPE, IDirect3DSurface9 **));
 ORIG(get_surface_level, HRESULT, (IDirect3DTexture9 *, UINT, IDirect3DSurface9 **));
 ORIG(lock_rect, HRESULT, (IDirect3DTexture9 *, UINT, D3DLOCKED_RECT *, const RECT *, DWORD));
 ORIG(unlock_rect, HRESULT, (IDirect3DTexture9 *, UINT));

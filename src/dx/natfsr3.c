@@ -53,7 +53,6 @@ static int g_new_ok, g_prev_ok;
 static float g_minz, g_maxz;       // the depth range of the viewport the matrix came with
 static float g_jit_x, g_jit_y;     // this frame's jitter in render pixels (what FSR asked for)
 static float g_pjit_x, g_pjit_y;   // the previous frame's
-static unsigned g_frame_count;
 static float g_cam_a, g_cam_bw;
 extern float nd_lod_bias; // natdraw11.c: the world pass's texture LOD bias
 
@@ -1259,6 +1258,5 @@ void natfsr3_frame_end(void)
 	g_pjit_x = g_jit_x;
 	g_pjit_y = g_jit_y;
 	S.frame++;
-	g_frame_count++;
 	next_jitter();
 }

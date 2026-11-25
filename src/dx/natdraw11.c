@@ -178,6 +178,7 @@ struct nd_shader {
 
 nd_shader *nd_shader_create(nd *d, const uint32_t *code, size_t dwords)
 {
+	(void)d; // kept for the shared D3D11/D3D12 backend interface
 	nat_shader_prewarm(code, dwords);
 	nd_shader *s = calloc(1, sizeof(*s));
 	obj_vts_init();

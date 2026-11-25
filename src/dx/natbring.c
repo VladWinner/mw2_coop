@@ -248,7 +248,6 @@ void nbr_display_params(nbr *n, uint8_t *p)
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ 0x10550
-static const char *dev_error;
 static uint8_t *g_exe;
 static nd_shader *res_shader(void *p) { return p; }
 static nd_decl *res_decl(void *p) { return p; }
@@ -356,7 +355,6 @@ int nbr_start(nbr *n, uint8_t *p)
 	log_printf("native11: nbr_start: window %p, %ux%u, mode %d, refresh %u, samples %d", np.hwnd, np.width, np.height, RD_I32(p, 0xc), np.refresh, np.msaa);
 	if (!nat_create(&np, &n->dev, err, sizeof(err))) {
 		log_printf("native11: nat_create failed: %s", err);
-		dev_error = "nat_create failed";
 		RD_U8(e, G_STARTED) = 1;
 		return 0;
 	}

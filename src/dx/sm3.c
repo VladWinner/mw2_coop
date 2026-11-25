@@ -649,7 +649,7 @@ int sm3_last_const_count(void) { return last_nconst; }
 int sm3_translate_vs(const uint32_t *code, size_t count, int flags, const sm3_int_input *ints, int nints, char **hlsl, int *is_vs, char *err, size_t err_size)
 {
 	shader_t *sh = calloc(1, sizeof(*sh));
-	ctx_t c = {{0}};
+	ctx_t c = {0};
 	c.shadow = ((unsigned)flags >> 8) & 0xffffu;
 	sb_t L = {0};
 	int ok = 0;

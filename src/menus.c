@@ -575,7 +575,6 @@ static int is_selection_logo(const char *name)
 #define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
 #define ITEM_TEXT_SCALE (ITEM_FONT + 16)
 static void set_page_esc(uint8_t *page);
-static void append_on_open(uint8_t *menu, const char *script);
 #define ALIGN_MIDDLE_CENTER 5
 #define ITEM_TEXT_STYLE (ITEM_FONT + 0x14) // int textStyle after textscale: 3 = shadowed
 #define TEXT_STYLE_SHADOWED 3
@@ -804,22 +803,6 @@ static void iw4x_mp_f(void)
 	game_cbuf_addtext("quit\n");
 }
 
-// The game's own Multiplayer entry: the action of the "game_mp" item of its selection menu (main_selection). The mod's Multiplayer button runs that, so it does what the game's
-// button does; the mod's own modes (co-op, split screen) are on the Campaign page only. NULL if the item is not there.
-static void *original_multiplayer_action(void)
-{
-	uint8_t *selection = ui_find_menu("main_selection");
-	if (!selection)
-		return NULL;
-	uint8_t **si = *(uint8_t ***)(selection + MENU_ITEMS);
-	for (int i = 0; i < *(int *)(selection + MENU_ITEM_COUNT); i++) {
-		const char *name = *(const char **)si[i];
-		if (name && !strcmp(name, "game_mp"))
-			return *(void **)(si[i] + ITEM_ACTION);
-	}
-	return NULL;
-}
-
 static int name_in(const char *name, const char *const *list)
 {
 	for (; *list; list++)
@@ -949,12 +932,6 @@ static void append_menu_event(uint8_t *menu, size_t event_offset, const char *sc
 	set->count = n + 1;
 	set->handlers = list;
 	*(MenuEventHandlerSet **)(menu + event_offset) = set;
-}
-
-// One more handler at the end of a menu's onOpen / onESC event.
-static void append_on_open(uint8_t *menu, const char *script)
-{
-	append_menu_event(menu, MENU_ON_OPEN, script);
 }
 
 static void append_on_esc(uint8_t *menu, const char *script)

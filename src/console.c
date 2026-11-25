@@ -230,7 +230,6 @@ static int completion_slider_left, completion_slider_right;
 static float completion_slider_min, completion_slider_max;
 static char completion_slider_name[COMPLETION_NAME_LEN];
 static int completion_slider_integer;
-static float completion_slider_default;
 /* The detail popup of the dvar the input or the highlighted completion refers to: description, value, a slider or a switch. */
 static RECT console_detail_rect, console_detail_reset_rect, console_detail_toggle_rect;
 static int console_hscroll_max;
@@ -8419,7 +8418,6 @@ static int paint(int w, int panel_h)
 						completion_slider_min = lo;
 						completion_slider_max = hi;
 						completion_slider_integer = slider_integer;
-						completion_slider_default = reset;
 						lstrcpynA(completion_slider_name, detail->name, sizeof(completion_slider_name));
 						completion_slider_rect.left = left - 8;
 						completion_slider_rect.right = right + 8;

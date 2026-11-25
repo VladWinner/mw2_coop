@@ -747,11 +747,6 @@ static HRESULT STDMETHODCALLTYPE set_indices_hook(IDirect3DDevice9 *d, IDirect3D
 	st.ib = b;
 	return set_indices_o(d, b);
 }
-static HRESULT STDMETHODCALLTYPE get_backbuffer_hook(IDirect3DDevice9 *d, UINT chain, UINT i, D3DBACKBUFFER_TYPE t, IDirect3DSurface9 **out)
-{
-	return get_backbuffer_o(d, chain, i, t, out);
-}
-
 // ---- the comparison at Present
 static void save_bmp(const char *path, const uint8_t *bgra, UINT w, UINT h, UINT stride)
 {
