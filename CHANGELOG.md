@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Co-op diagnostics overhead:** detailed state-hash addition recording is now off by default. The silence and divergence checks remain enabled; `[native] netwatchrec=1` explicitly opts into twelve instrumentation hooks and the 65,536-entry trace ring when investigating a desync.
 - **Release-build warnings:** removed write-only FSR 3 / native-backend state, obsolete menu helpers, and the write-only console slider-default variable; dropped an uninstalled Direct3D 9 hook, zero-initialized the SM3 context fully, and marked the unused D3D11 parameter explicitly. Existing console command routing, diagnostic output mirroring, command history, and `com_maxfps` save-flag handling are retained.
 - **Weapon FOV at extreme view angles:** removed the arbitrary 0.3–3.0 projection-scale clamp. With `cg_weaponFov 65`, the clamp was reached at about 21.6° and 124.8° of effective view FOV, making the weapon start following `cg_fov` again outside that range. The full tangent-based projection ratio is now kept throughout the valid game FOV range.
 - **Field of view:** the Enhanced slider now edits the game's `cg_fov` dvar directly; the separate `mw2coop_opt_fov` dvar and the `cg_fovScale` override are removed. `cg_weaponFov` recalculates its weapon-projection correction from the live `cg_fov * cg_fovScale` and now defaults to 65 (the console-like weapon FOV). The Predator view restores the pilot's previous `cg_fov` after its script reset.

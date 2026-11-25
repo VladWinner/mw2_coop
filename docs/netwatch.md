@@ -31,7 +31,7 @@ nothing of the lockstep game changes, so the watch cannot itself make the PCs di
 main thread by the mod's command `mw2coop_netnotice`, which the control thread queues. Flags 0 show the line at once (0x11, as the game's "Game saved", types it
 out letter by letter). The texts are `MW2COOP_NET_*` in `src/localize.c` (Russian in Windows-1251).
 
-`[native] netwatch=0` turns both checks off; `netwatchlog=1` logs every 20th frame's hashes. QA commands: `mw2coop_netpause <ms>` (this PC sends the partner
+`[native] netwatch=0` turns both checks off; `netwatchlog=1` logs every 20th frame's hashes. The detailed per-addition recorder is **off by default**: set `[native] netwatchrec=1` only when investigating a divergence. That option installs twelve hooks on the hash's addition call sites and stores each value in a 65,536-entry ring so that the two PCs' dumps can be compared. With it off, those hooks are not installed; the silence and divergence checks still work. QA commands: `mw2coop_netpause <ms>` (this PC sends the partner
 nothing for that long), `mw2coop_netqa_desync` (64-bit: player 1's value at gentity +0x90 changes on this PC only), `mw2coop_netqa_say <flags> <text name>`.
 
 ## Bringing the games together again (`saves_resync`, owner 2026-11-19)
@@ -80,10 +80,10 @@ another path on the other PC.
 
 The byte that turns the additions on (`0x192d8f9`) is not a resolver address: it is read from the adder's own first instruction (`0x22dee0`: `cmp byte [rip+disp32], 0`), so the records work on a game build the mod was not made for too (checked with `MW2COOP_FORCE_UNKNOWN=1` on both copies: 495 of 495 addresses found by signature, a desync made on purpose on the host named by `netwatch_compare.py` as player 1's health).
 
-All twelve calls are hooked (`hook_call`) and each addition is kept in a ring (65536 entries) with the level time of the lockstep frame executed last. When the
+With `[native] netwatchrec=1`, all twelve calls are hooked (`hook_call`) and each addition is kept in a ring (65536 entries) with the level time of the lockstep frame executed last. When the
 games go apart, both PCs write the additions of the steps before the first differing frame to the log (`netwatch: add t <time> ent <n> type .. health .. pos ..
 angles ..`, `netwatch: add t <time> at <rva> string ".."`): the client when it finds the difference, the host when the client's report comes. At most four
-dumps a level; `[native] netwatchrec=0` off. `python -I tools/netwatch_compare.py <host log> <client log>` puts the two dumps side by side and lists what differs.
+dumps a level. The recorder is off by default; without it, the two hash checks still run but no per-addition ring is collected. `python -I tools/netwatch_compare.py <host log> <client log>` puts the two dumps side by side and lists what differs.
 
 ## QA over an internet-like link
 

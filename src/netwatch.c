@@ -89,7 +89,8 @@ enum { NOTE_NONE, NOTE_SILENT, NOTE_BACK, NOTE_DESYNC, NOTE_INSYNC, NOTE_RESYNC,
 // 0x17161d, 0x171633; 32: VA 0x4bf8b0 at 0x4bfa01, 0x4bfb4d, 0x4bfb61, 0x4bfb75) and strings (the string adder: 64 0x22df10 at 0x190ee9 and the script's GetDvar
 // 0x231026, 0x23103b; 32 VA 0x42ecc0 at GetDvar's 0x4e4cd7, 0x4e4ce7). All are (value, file, line); on 32 bits cdecl, the caller pops. Each addition is kept in a ring
 // with the level time of the lockstep frame executed last; when the games go apart, both PCs write the additions of the step before the first differing frame to the
-// log (the client when it finds it, the host when the client tells it): the two logs side by side name the entity and the value. [native] netwatchrec=0 off.
+// log (the client when it finds it, the host when the client tells it): the two logs side by side name the entity and the value. This diagnostic recorder is off by
+// default; [native] netwatchrec=1 enables its twelve call-site hooks and per-addition ring writes for a desync investigation.
 // The byte that says the hash takes additions (64: rva 0x192d8f9, 32: VA 0x1a93324) is read where the int adder reads it: it begins with `cmp byte [addr], 0` (80 3d,
 // 64: rip+disp32, 32: an absolute address), so the resolver needs no signature for it. When the adder does not begin so, every call is recorded.
 #ifdef _WIN64
@@ -145,8 +146,10 @@ static void nw_add_str(const char *s, const char *file, int line)
 }
 static void nw_rec_install(void)
 {
-	if (!cfg("netwatchrec", 1))
+	if (!cfg("netwatchrec", 0)) {
+		log_printf("netwatch: detailed hash-addition recording is off ([native] netwatchrec=1 enables it)");
 		return;
+	}
 #ifdef _WIN64
 	uint8_t *const ints[] = {base + XR(0x1714d2), base + XR(0x171607), base + XR(0x17161d), base + XR(0x171633), base + XR(0x174a82), base + XR(0x174a98), base + XR(0x174ab0)};
 	uint8_t *const vecs[] = {base + XR(0x174ac9), base + XR(0x174ae2)};
