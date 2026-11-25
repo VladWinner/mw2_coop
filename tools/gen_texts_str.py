@@ -90,7 +90,12 @@ def parse_fixed(src):
     out = []
     for e in re.finditer(r'\{\s*("[A-Z0-9_]+")\s*,(.*?)\}\s*,', body, re.S):
         name = e.group(1).strip('"')
-        out.append((name, unescape(c_literals(e.group(2)), "cp1251")))
+        parts = re.findall(r'"((?:[^"\\]|\\.)*)"', e.group(2))
+        if len(parts) not in (1, 2):
+            raise SystemExit("cannot split the fixed entry %s into ru and optional en (%d parts)" % (name, len(parts)))
+        ru = unescape(parts[0], "cp1251")
+        en = unescape(parts[1], "utf-8") if len(parts) == 2 else None
+        out.append((name, ru, en))
     return out
 
 
@@ -104,10 +109,12 @@ def build():
         lines.append("")
     fixed = parse_fixed(src)
     if fixed:
-        lines.append("// The game's own texts the mod words differently in the Russian game (no English line: the English game keeps its own).")
+        lines.append("// Stock game text corrections and localized labels used by the original menus.")
         lines.append("")
-        for name, ru in fixed:
+        for name, ru, en in fixed:
             lines.append("REFERENCE           " + name)
+            if en is not None:
+                lines.append("LANG_ENGLISH        " + quote(en))
             lines.append("LANG_RUSSIAN        " + quote(ru))
             lines.append("")
     return (chr(13) + chr(10)).join(lines)

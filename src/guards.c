@@ -214,9 +214,8 @@ void guards_invalidate_caches(void)
 	InterlockedIncrement(&cache_generation);
 }
 
-// Dvars the game does not keep in its config but should (v0.6.0 report): the ARCHIVE flag (bit 0) makes the config writer save them. com_maxfps is registered early; the lookup
-// is repeated for a while in case it is not there yet when the mod starts.
-static DWORD WINAPI saved_dvars_thread(LPVOID unused)
+// Keep the hardware-gamma setting applied while the renderer and its dvars come up.
+static DWORD WINAPI hwgamma_thread(LPVOID unused)
 {
 	(void)unused;
 	if (!settings_hwgamma()) { // [display] hwgamma=0: the hardware gamma ramp of exclusive full screen is ignored (r_ignorehwgamma), as the windowed modes have none
@@ -230,24 +229,6 @@ static DWORD WINAPI saved_dvars_thread(LPVOID unused)
 			}
 			Sleep(500);
 		}
-	}
-	static const char *const names[] = {"com_maxfps"};
-	for (int tries = 0; tries < 40; tries++) {
-		int missing = 0;
-		for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-			dvar_t *d = game_find_dvar(names[i]);
-			if (!d) {
-				missing++;
-				continue;
-			}
-			if (!(d->flags & 1)) {
-				d->flags |= 1;
-				log_printf("guards: dvar %s is saved now (archive flag)", names[i]);
-			}
-		}
-		if (!missing)
-			return 0;
-		Sleep(500);
 	}
 	return 0;
 }
@@ -421,7 +402,7 @@ void guards_install(void)
 {
 	CreateThread(NULL, 0, hud_text_thread, NULL, 0, NULL);
 #ifdef _WIN64
-	CreateThread(NULL, 0, saved_dvars_thread, NULL, 0, NULL);
+	CreateThread(NULL, 0, hwgamma_thread, NULL, 0, NULL);
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	if (!settings_hotguards()) {
 		log_printf("guards: [native] hotguards=0: the entity table and weapon definition lookups are not guarded");

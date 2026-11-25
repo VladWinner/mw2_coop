@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "console.h"
+#include "control.h"
 #include "chat.h"
 #include "dx/natboot.h"
 #include "game.h"
@@ -2021,6 +2022,13 @@ static void run_line(char *cmd)
 	history_pos = history_count;
 	history_draft_valid = 0;
 	LeaveCriticalSection(&lock);
+	int control_result = control_console_command(cmd);
+	if (control_result > 0)
+		return;
+	if (control_result < 0) {
+		printf_line("^1Could not queue the control command (queue unavailable or full)");
+		return;
+	}
 	if (!_stricmp(cmd, "clear") || !_stricmp(cmd, "cls")) {
 		EnterCriticalSection(&lock);
 		line_count = line_next = 0;
@@ -2299,6 +2307,7 @@ static void console_load_layout(void)
 	if (!console_settings_path_init()) {
 		InterlockedExchange(&console_legacy_layout, 0);
 		InterlockedExchange(&console_ui_language, -1);
+		console_apply_mod_messages();
 		log_printf("console: settings path unavailable; using game language, Enhanced layout and Pause mode off");
 		return;
 	}
@@ -2360,7 +2369,7 @@ static void console_mirror_log(const char *line)
 {
 	char text[LINE_LEN];
 	size_t n;
-	if (console_mirror_busy)
+	if (console_mirror_busy || (!console_show_mod_messages && !control_console_output_active()))
 		return;
 	console_mirror_busy = 1;
 	n = (size_t)snprintf(text, sizeof(text), "^4%s", line);
@@ -2372,7 +2381,8 @@ static void console_mirror_log(const char *line)
 
 static void console_apply_mod_messages(void)
 {
-	log_set_mirror(console_show_mod_messages ? console_mirror_log : NULL);
+	// Keep the mirror installed: queued !-commands must show their own results even if ordinary mod messages are hidden.
+	log_set_mirror(console_mirror_log);
 }
 
 static void console_save_view(void)
@@ -3481,7 +3491,7 @@ static void edit_key(WPARAM vk)
 		return;
 	}
 	case VK_BACK:
-		if (has_selection() || cursor > 0) input_undo_push(2);
+		if (has_selection() || cursor > 0) { history_pos = history_count; history_draft_valid = 0; history_filter_active = 0; input_undo_push(2); }
 		if (has_selection())
 			delete_selection();
 		else if (cursor > 0) {
@@ -3491,7 +3501,7 @@ static void edit_key(WPARAM vk)
 		clear_selection(); refresh_completions(0);
 		break;
 	case VK_DELETE:
-		if (has_selection() || cursor < input_len) input_undo_push(3);
+		if (has_selection() || cursor < input_len) { history_pos = history_count; history_draft_valid = 0; history_filter_active = 0; input_undo_push(3); }
 		if (has_selection())
 			delete_selection();
 		else if (cursor < input_len) {
@@ -3545,12 +3555,25 @@ static void edit_key(WPARAM vk)
 	case VK_UP:
 		input_undo_last_group = 0;
 		if (output_search_mode) break;
-		if (completion_count > 1) {
+		if (history_filter_active) {
+			(void)console_history_filter_step(-1);
+		} else if (history_pos < history_count) {
+			int oldest = history_count > HISTORY ? history_count - HISTORY : 0;
+			if (history_pos > oldest) {
+				history_pos--;
+				input_undo_count = input_redo_count = 0;
+				input_undo_last_group = 0;
+				lstrcpynA(input, history[history_pos % HISTORY], INPUT_LEN + 1);
+				input_len = cursor = (int)strlen(input);
+				clear_selection();
+				refresh_completions(0);
+			}
+		} else if (completion_count > 1) {
 			int step = completion_columns > 0 ? completion_columns : 1;
 			if (completion_selected < 0) completion_selected = 0;
 			else completion_selected -= step;
 			if (completion_selected < 0) completion_selected = 0;
-		} else if (input_len > 0 || history_filter_active) {
+		} else if (input_len > 0) {
 			(void)console_history_filter_step(-1);
 		} else {
 			int oldest = history_count > HISTORY ? history_count - HISTORY : 0;
@@ -3572,12 +3595,7 @@ static void edit_key(WPARAM vk)
 	case VK_DOWN:
 		input_undo_last_group = 0;
 		if (output_search_mode) break;
-		if (completion_count > 1) {
-			int step = completion_columns > 0 ? completion_columns : 1;
-			if (completion_selected < 0) completion_selected = 0;
-			else completion_selected += step;
-			if (completion_selected >= completion_count) completion_selected = completion_count - 1;
-		} else if (history_filter_active) {
+		if (history_filter_active) {
 			(void)console_history_filter_step(1);
 		} else if (history_pos < history_count) {
 			history_pos++;
@@ -3594,6 +3612,11 @@ static void edit_key(WPARAM vk)
 			input_len = cursor = (int)strlen(input);
 			clear_selection();
 			refresh_completions(0);
+		} else if (completion_count > 1) {
+			int step = completion_columns > 0 ? completion_columns : 1;
+			if (completion_selected < 0) completion_selected = 0;
+			else completion_selected += step;
+			if (completion_selected >= completion_count) completion_selected = completion_count - 1;
 		}
 		break;
 	case VK_TAB:
@@ -3668,6 +3691,8 @@ static void edit_char(WPARAM ch)
 	EnterCriticalSection(&lock);
 	InterlockedExchange(&context_menu_open, 0);
 	history_filter_active = 0;
+	history_pos = history_count;
+	history_draft_valid = 0;
 	if (has_selection() || input_len < (output_search_mode ? OUTPUT_SEARCH_LEN - 1 : INPUT_LEN)) input_undo_push(1);
 	if (has_selection())
 		delete_selection();
@@ -9163,10 +9188,42 @@ static void console_sv_cheats_unprotect(void)
 	log_printf("console: sv_cheats is a changeable, unsaved dvar (flags 0x%08x -> 0x%08x)", (unsigned)old_flags, (unsigned)d->flags);
 }
 
+// com_maxfps is an engine dvar the player changes in the Enhanced options page. In the
+// iw4x-sp / single-player dvar profile, persistent client options use ARCHIVE | SAVED;
+// ARCHIVE alone leaves the dvar shown as archived but does not give it the same saved state.
+// Clear INIT/ROM and add both persistence flags in one atomic update, preserving every
+// unrelated flag. Retry with the console's dvar polling because the engine can register it
+// later or recreate it.
+static void console_com_maxfps_save(void)
+{
+	const LONG clear_mask = (LONG)(CONSOLE_DVAR_INIT_FLAG | DVAR_ROM_FLAG);
+	const LONG save_mask = (LONG)(DVAR_ARCHIVE_FLAG | DVAR_SAVED_FLAG);
+	dvar_t *d = game_find_dvar("com_maxfps");
+	if (!d)
+		return;
+	if (d->type != DVAR_TYPE_INT) {
+		static LONG type_warning;
+		if (InterlockedCompareExchange(&type_warning, 1, 0) == 0)
+			log_printf("console: com_maxfps has unexpected dvar type %u; save flags were not changed", (unsigned)d->type);
+		return;
+	}
+	for (;;) {
+		LONG old_flags = InterlockedCompareExchange((volatile LONG *)&d->flags, 0, 0);
+		LONG new_flags = (old_flags & ~clear_mask) | save_mask;
+		if (new_flags == old_flags)
+			return;
+		if (InterlockedCompareExchange((volatile LONG *)&d->flags, new_flags, old_flags) == old_flags) {
+			log_printf("console: com_maxfps is a changeable, archived/saved dvar (flags 0x%08x -> 0x%08x)", (unsigned)old_flags, (unsigned)new_flags);
+			return;
+		}
+	}
+}
+
 static void queue_default_sv_cheats(void)
 {
 	dvar_t *d;
 	console_sv_cheats_unprotect();
+	console_com_maxfps_save();
 	if (!console_sv_cheats_default_wanted())
 		return;
 	LONG state = InterlockedCompareExchange(&auto_cheats_queued, 0, 0);

@@ -780,7 +780,15 @@ REFERENCE           MW2COOP_MUSEUM_DESC
 LANG_ENGLISH        "Bonus level: freely explore the museum and its campaign exhibits."
 LANG_RUSSIAN        "Бонусный уровень: свободное исследование музея с экспонатами кампании."
 
-// The game's own texts the mod words differently in the Russian game (no English line: the English game keeps its own).
+// Stock game text corrections and localized labels used by the original menus.
+
+REFERENCE           MENU_8X
+LANG_ENGLISH        "8x"
+LANG_RUSSIAN        "8x"
+
+REFERENCE           MENU_16X
+LANG_ENGLISH        "16x"
+LANG_RUSSIAN        "16x"
 
 REFERENCE           FAVELA_ESCAPE_OBJ_FOLLOW_SOAP
 LANG_RUSSIAN        "Доберитесь с капитаном Мактавишем и отрядом до зоны посадки."

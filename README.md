@@ -161,7 +161,7 @@ Two copies of the game on one PC (host + client), driven by in-game bots: each c
 <details>
 <summary>⌨ <b>Hosting and joining by hand (console)</b></summary>
 
-For testing, these lines go into `mw2coop\commands.txt`, which the mod runs in order (appended lines run as they arrive; `!sleep <ms>` waits). The game must show its online connection first (about 10 s after start).
+For scripted tests, these lines can go into `mw2coop\commands.txt`, which the mod runs in order (appended lines run as they arrive; `!sleep <ms>` waits). For one-off use, enter the same game commands in the developer console; `!`-prefixed diagnostics from the command file (such as `!cmds`, `!dvars` and `!menus`) also work there directly. The game must show its online connection first (about 10 s after start).
 
 Host:
 ```

@@ -174,13 +174,9 @@ static void register_dvars(void)
 	for (int o = 0; o < OPTS; o++) {
 		const opt_t *t = &opts[o];
 		if (!t->own) {
+			// Engine-owned dvars are only mirrored here; console.c prepares com_maxfps flags
+			// before the page reads or changes it.
 			dvars[o] = game_find_dvar(t->dvar);
-			// A game dvar on this page is one the player sets here, so the game saves it in its config like the page's own (Vlad, 2026-11-20: the frame rate limit
-			// was lost at every start; the game registers com_maxfps without ARCHIVE). sv_cheats goes the other way (console.c).
-			if (dvars[o] && !(dvars[o]->flags & DVAR_ARCHIVE)) {
-				InterlockedOr((volatile LONG *)&dvars[o]->flags, DVAR_ARCHIVE);
-				log_printf("enhopts: %s is saved in the game's config now", t->dvar);
-			}
 			last[o] = value_of(o);
 			continue;
 		}
@@ -332,6 +328,54 @@ static uint8_t *item_by_type(uint8_t *menu, int type)
 		if (*(int *)(items[i] + ITEM_TYPE) == type)
 			return items[i];
 	return NULL;
+}
+
+// The stock advanced-video menu limits ui_r_aasamples to 4x. Its multiDef_s has 32 fixed slots,
+// so append 8x and 16x to the existing list rather than replacing the game's menu or its handlers.
+static void patch_advanced_video_aa(void)
+{
+	static void *warned_data;
+	uint8_t *menu = ui_find_menu("pc_options_advanced_video");
+	if (!menu)
+		return;
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	if (count <= 0 || count > 1024 || !items)
+		return;
+	for (int i = 0; i < count; i++) {
+		uint8_t *item = items[i];
+		const char *dvar = item ? *(const char **)(item + ITEM_DVAR) : NULL;
+		if (!item || *(int *)(item + ITEM_TYPE) != ITEM_TYPE_MULTI || !dvar || strcmp(dvar, "ui_r_aasamples"))
+			continue;
+		uint8_t *multi = *(uint8_t **)(item + ITEM_TYPE_DATA);
+		if (!multi)
+			return;
+		const char **names = (const char **)multi;
+		float *values = (float *)(multi + MULTI_VALUE);
+		int n = *(int *)(multi + MULTI_COUNT);
+		if (n == 5 && names[0] && names[1] && names[2] && names[3] && names[4] &&
+		    !strcmp(names[0], "@MENU_OFF") && !strcmp(names[1], "@MENU_2X") && !strcmp(names[2], "@MENU_4X") &&
+		    !strcmp(names[3], "@MENU_8X") && !strcmp(names[4], "@MENU_16X") &&
+		    values[0] == 1.0f && values[1] == 2.0f && values[2] == 4.0f && values[3] == 8.0f && values[4] == 16.0f) {
+			return;
+		}
+		if (n != 3 || !names[0] || !names[1] || !names[2] ||
+		    strcmp(names[0], "@MENU_OFF") || strcmp(names[1], "@MENU_2X") || strcmp(names[2], "@MENU_4X") ||
+		    values[0] != 1.0f || values[1] != 2.0f || values[2] != 4.0f) {
+			if (warned_data != multi) {
+				log_printf("enhopts: ui_r_aasamples list has an unexpected layout; 8x / 16x were not added");
+				warned_data = multi;
+			}
+			return;
+		}
+		names[3] = "@MENU_8X";
+		names[4] = "@MENU_16X";
+		values[3] = 8.0f;
+		values[4] = 16.0f;
+		*(int *)(multi + MULTI_COUNT) = 5;
+		log_printf("enhopts: the original advanced-video menu now offers MSAA 8x and 16x");
+		return;
+	}
 }
 
 static void place(uint8_t *item, float y)
@@ -737,6 +781,7 @@ int enhopts_sharpness(void)
 
 void enhopts_tick(void)
 {
+	patch_advanced_video_aa();
 	register_dvars();
 	if (!registered)
 		return;

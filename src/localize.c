@@ -570,19 +570,23 @@ static LocalizeEntry entries[sizeof(strings) / sizeof(strings[0])];
 // The game's own strings that read wrong in the Russian build. The text is Windows-1251 like the rest.
 typedef struct {
 	const char *name;
-	const char *ru;
+	const char *ru; // Windows-1251
+	const char *en; // Windows-1251, or NULL when only the Russian game is overridden
 	LocalizeEntry entry;
 } FixedString;
 
 static FixedString fixed[] = {
+	// The stock game's advanced-video MSAA list: labels added to its original choice row at run time.
+	{"MENU_8X", "8x", "8x", {NULL, NULL}},
+	{"MENU_16X", "16x", "16x", {NULL, NULL}},
 	// The stock text names Price, who has not been introduced yet at this point of the story
 	// (issue #6): "Доберитесь с капитаном Мактавишем и отрядом до зоны посадки."
-	{"FAVELA_ESCAPE_OBJ_FOLLOW_SOAP", "\xc4\xee\xe1\xe5\xf0\xe8\xf2\xe5\xf1\xfc \xf1 \xea\xe0\xef\xe8\xf2\xe0\xed\xee\xec \xcc\xe0\xea\xf2\xe0\xe2\xe8\xf8\xe5\xec \xe8 \xee\xf2\xf0\xff\xe4\xee\xec \xe4\xee \xe7\xee\xed\xfb \xef\xee\xf1\xe0\xe4\xea\xe8.", {NULL, NULL}},
+	{"FAVELA_ESCAPE_OBJ_FOLLOW_SOAP", "\xc4\xee\xe1\xe5\xf0\xe8\xf2\xe5\xf1\xfc \xf1 \xea\xe0\xef\xe8\xf2\xe0\xed\xee\xec \xcc\xe0\xea\xf2\xe0\xe2\xe8\xf8\xe5\xec \xe8 \xee\xf2\xf0\xff\xe4\xee\xec \xe4\xee \xe7\xee\xed\xfb \xef\xee\xf1\xe0\xe4\xea\xe8.", NULL, {NULL, NULL}},
 	// The title of the role popup of Overwatch (so_character_select_coop, specOpsTable.csv column 12): the stock text calls the AC-130 an attack helicopter, and the rows are the players (the one who takes the gunner's seat):
 	// "Выбрать боевой вертолет AC130" (owner, 2026-11-21: illiterate).
-	{"SPECIAL_OPS_SO_SELECT_AC130_GUNNER", "\xc2\xfb\xe1\xf0\xe0\xf2\xfc \xf1\xf2\xf0\xe5\xeb\xea\xe0 AC-130", {NULL, NULL}},
+	{"SPECIAL_OPS_SO_SELECT_AC130_GUNNER", "\xc2\xfb\xe1\xf0\xe0\xf2\xfc \xf1\xf2\xf0\xe5\xeb\xea\xe0 AC-130", NULL, {NULL, NULL}},
 	// The same popup in Big Brother: the stock "Выбрать боевой вертолет" (the rows are the players, not helicopters).
-	{"SPECIAL_OPS_SO_SELECT_CHOPPER_GUNNER", "\xc2\xfb\xe1\xf0\xe0\xf2\xfc \xf1\xf2\xf0\xe5\xeb\xea\xe0 \xe2\xe5\xf0\xf2\xee\xeb\xb8\xf2\xe0", {NULL, NULL}},
+	{"SPECIAL_OPS_SO_SELECT_CHOPPER_GUNNER", "\xc2\xfb\xe1\xf0\xe0\xf2\xfc \xf1\xf2\xf0\xe5\xeb\xea\xe0 \xe2\xe5\xf0\xf2\xee\xeb\xb8\xf2\xe0", NULL, {NULL, NULL}},
 };
 #define FIXED_COUNT (int)(sizeof(fixed) / sizeof(fixed[0]))
 
@@ -635,7 +639,8 @@ static LocalizeEntry *command_fix(int i, LocalizeEntry *stock)
 // localizedstrings/mw2coop.str holds all of them and is made from the table above by tools/gen_texts_str.py.
 static char *over_en[sizeof(strings) / sizeof(strings[0])];
 static char *over_ru[sizeof(strings) / sizeof(strings[0])];
-static char *over_fixed[sizeof(fixed) / sizeof(fixed[0])];
+static char *over_fixed_en[sizeof(fixed) / sizeof(fixed[0])];
+static char *over_fixed_ru[sizeof(fixed) / sizeof(fixed[0])];
 
 // <text> (UTF-8, <len> bytes) as Windows-1251, in a heap block; NULL if it is empty or does not fit
 static char *utf8_to_1251(const char *text, int len)
@@ -709,8 +714,10 @@ static void str_apply(const char *name, char *en, char *ru)
 		if (ru)
 			over_ru[i] = to_1251(ru);
 	} else if (f >= 0) {
+		if (en)
+			over_fixed_en[f] = to_1251(en);
 		if (ru)
-			over_fixed[f] = to_1251(ru);
+			over_fixed_ru[f] = to_1251(ru);
 	} else if (!ctexts_set(name, en, ru))
 		log_printf("localize: %s is not a text of the mod, ignored", name);
 }
@@ -908,14 +915,18 @@ static void *find_header(int type, const char *name)
 			if (!strcmp(name, command_fixes[i].name))
 				return command_fix(i, original(type, name));
 		for (int i = 0; i < FIXED_COUNT; i++) {
-			if (strcmp(name, fixed[i].name) != 0 || !game_is_russian())
+			if (strcmp(name, fixed[i].name) != 0)
 				continue;
+			const int is_russian = game_is_russian();
+			if (!is_russian && !fixed[i].en && !over_fixed_en[i])
+				continue; // keep the game's English text for the Russian-only fixes
 			if (!fixed[i].entry.name) {
 				LocalizeEntry *stock = original(type, name);
 				log_printf("localize: %s replaced (stock text: %s)", name, stock && stock->value ? stock->value : "?");
 			}
 			fixed[i].entry.name = fixed[i].name;
-			fixed[i].entry.value = over_fixed[i] ? over_fixed[i] : fixed[i].ru;
+			fixed[i].entry.value = is_russian ? (over_fixed_ru[i] ? over_fixed_ru[i] : fixed[i].ru) :
+				(over_fixed_en[i] ? over_fixed_en[i] : fixed[i].en);
 			return &fixed[i].entry;
 		}
 	}

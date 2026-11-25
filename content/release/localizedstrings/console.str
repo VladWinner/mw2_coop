@@ -130,8 +130,8 @@ LANG_ENGLISH        "Pin any number of dvars from autocomplete; hover a favorite
 LANG_RUSSIAN        "Закрепляйте любое число dvar в автодополнении; для открепления наведите курсор на избранный dvar и нажмите появившуюся справа иконку. Команды: watch, unwatch, watchlist, dvarcompare."
 
 REFERENCE           CON_HELP_22
-LANG_ENGLISH        "cmdlist [filter], dvarlist [filter], dvardump [filter], find <text>, clear, echo, condump"
-LANG_RUSSIAN        "cmdlist [фильтр], dvarlist [фильтр], dvardump [фильтр], find <текст>, clear, echo, condump"
+LANG_ENGLISH        "cmdlist [filter], dvarlist [filter], dvardump [filter], find <text>, clear, echo, condump; commands.txt diagnostics can be typed here with ! (for example: !cmds, !dvars, !loc, !menus, !party)"
+LANG_RUSSIAN        "cmdlist [фильтр], dvarlist [фильтр], dvardump [фильтр], find <текст>, clear, echo, condump; диагностику из commands.txt можно вводить здесь с ! (например: !cmds, !dvars, !loc, !menus, !party)"
 
 REFERENCE           CON_PAUSE_OFF_COOP
 LANG_ENGLISH        "Pause mode is off in a co-op session (it would stop the partner)."

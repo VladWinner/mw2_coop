@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Advanced video menu:** the original MSAA list now includes 8x and 16x, with localized `MENU_8X` and `MENU_16X` labels.
+- **Developer console:** `!`-prefixed diagnostics/control commands from `commands.txt` can be entered directly. Their immediate log output is shown in the custom console even when ordinary mod messages are hidden.
+- **Command history:** Up/Down now browse older and newer commands correctly after loading an entry; prefix-based history search remains available when starting from typed input.
+- **Saved frame-rate limit:** `console.c` now clears `com_maxfps` `INIT/ROM` protection and sets both `ARCHIVE` and `SAVED` in one atomic flag update. This follows the `ARCHIVE | SAVED` combination used by the iw4x-sp single-player profile; no extra `settings.ini` option is added.
+
+
 ## v1.6.0 (2026-11-24)
 
 The release notes: the major changes since v1.5.2.

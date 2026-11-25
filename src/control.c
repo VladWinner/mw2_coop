@@ -44,6 +44,15 @@
 #include "shot.h"
 
 #define MAX_WATCH 24
+#define CONTROL_CONSOLE_QUEUE 16
+#define CONTROL_CONSOLE_LINE 256
+
+static CRITICAL_SECTION control_console_lock;
+static volatile LONG control_console_ready;
+static HANDLE control_console_event; // wakes the control thread as soon as the console queues a command
+static char control_console_lines[CONTROL_CONSOLE_QUEUE][CONTROL_CONSOLE_LINE];
+static unsigned control_console_read, control_console_write, control_console_count;
+static __thread int control_console_output;
 
 static BOOL CALLBACK qa_find_window(HWND h, LPARAM data)
 {
@@ -776,6 +785,55 @@ static void run_line(char *line)
 	game_cbuf_addtext(cmd);
 }
 
+int control_console_command(const char *line)
+{
+	const char *p = line;
+	if (!p)
+		return 0;
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (*p != '!')
+		return 0;
+	if (InterlockedCompareExchange(&control_console_ready, 0, 0) != 1 || strlen(p) >= CONTROL_CONSOLE_LINE)
+		return -1;
+	EnterCriticalSection(&control_console_lock);
+	if (control_console_count == CONTROL_CONSOLE_QUEUE) {
+		LeaveCriticalSection(&control_console_lock);
+		return -1;
+	}
+	lstrcpynA(control_console_lines[control_console_write], p, CONTROL_CONSOLE_LINE);
+	control_console_write = (control_console_write + 1) % CONTROL_CONSOLE_QUEUE;
+	control_console_count++;
+	LeaveCriticalSection(&control_console_lock);
+	if (control_console_event)
+		SetEvent(control_console_event);
+	return 1;
+}
+
+int control_console_output_active(void)
+{
+	return control_console_output;
+}
+
+static void control_console_run_pending(void)
+{
+	for (int i = 0; i < CONTROL_CONSOLE_QUEUE; i++) {
+		char line[CONTROL_CONSOLE_LINE];
+		EnterCriticalSection(&control_console_lock);
+		if (!control_console_count) {
+			LeaveCriticalSection(&control_console_lock);
+			break;
+		}
+		lstrcpynA(line, control_console_lines[control_console_read], sizeof(line));
+		control_console_read = (control_console_read + 1) % CONTROL_CONSOLE_QUEUE;
+		control_console_count--;
+		LeaveCriticalSection(&control_console_lock);
+		control_console_output = 1;
+		run_line(line);
+		control_console_output = 0;
+	}
+}
+
 // The command file (QA: tools/qa_pair.sh) runs console commands, so it is read only when the file is
 // already there at start-up: a file that shows up in the game folder later is not run, and a normal
 // session does not look for it four times a second.
@@ -788,7 +846,11 @@ static DWORD WINAPI control_thread(LPVOID path_arg)
 	char pending[4096];
 	int plen = 0;
 	for (;;) {
-		Sleep(250);
+		if (control_console_event)
+			WaitForSingleObject(control_console_event, 250);
+		else
+			Sleep(250);
+		control_console_run_pending();
 		watch_poll();
 		menus_poll();
 		if (!commands_enabled)
@@ -890,10 +952,19 @@ void control_start(void)
 		n--;
 	path[n] = 0;
 	lstrcatA(path, "mw2coop\\commands.txt");
+	InitializeCriticalSection(&control_console_lock);
+	control_console_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+	InterlockedExchange(&control_console_ready, 1);
 	commands_enabled = GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
 	if (commands_enabled)
 		log_printf("control: reading %s (QA)", path);
 	else
 		log_printf("control: no %s at start-up, the command file is not read", path);
-	CloseHandle(CreateThread(NULL, 0, control_thread, path, 0, NULL));
+	HANDLE thread = CreateThread(NULL, 0, control_thread, path, 0, NULL);
+	if (thread) {
+		InterlockedExchange(&control_console_ready, 1);
+		CloseHandle(thread);
+	} else {
+		log_printf("control: could not start the control thread; direct !-commands are unavailable");
+	}
 }
